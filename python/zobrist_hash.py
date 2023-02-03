@@ -143,11 +143,23 @@ class GoBoard:
            self.find_liberties(group, i, j + 1, color, visited)
 
   def print(self):
-    index = 19
-    for row in self.board:
-      print('{:2d}'.format(index),
-            ' '.join([['⋅', '●', '○'][piece] for piece in row]))
-      index -= 1
+
+    def is_star_point(i, j) -> bool:
+      coords = [3, 9, 15]
+      # print(i, j, i in coords and j in coords)
+      return (i in coords and j in coords)
+
+    def char_at(i, j):
+      if self.board[i][j] == EMPTY:
+        return '+' if is_star_point(i, j) else '⋅'
+      elif self.board[i][j] == BLACK:
+        return '●'
+      else:
+        return '○'
+
+    for i in range(BOARD_SIZE):
+      print('{:2d}'.format(BOARD_SIZE - i),
+            ' '.join([char_at(i, j) for j in range(BOARD_SIZE)]))
 
     print('  ', ' '.join(list('ABCDEFGHIJKLMNOPQRS')))
 
@@ -169,6 +181,9 @@ if __name__ == '__main__':
   board.print()
   while True:
     move = input()
+    if move == None:
+      continue
+
     if move == 'pass':
       board.print()
       turn ^= 1
