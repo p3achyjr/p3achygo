@@ -1,3 +1,5 @@
 .DS_Store
-.pdf
-.sgf
+*.pdf
+*.sgf
+dummy_data/*
+*.pyc

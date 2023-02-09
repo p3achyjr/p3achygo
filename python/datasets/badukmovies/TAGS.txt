@@ -1,0 +1,5 @@
+content.data-type.graph # Contains graph data.
+content.data-type.image # Contains image data.
+content.data-type.time-series # Contains time-series data.
+content.subject.arts-and-entertainment # Relates to arts and entertainment.
+ml.task.reinforcement-learning # Relates to Reinforcement Learning (RL), a machine learning task.

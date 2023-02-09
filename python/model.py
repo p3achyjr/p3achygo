@@ -26,6 +26,10 @@ import tensorflow as tf
 
 from model_config import ModelConfig
 
+L2 = tf.keras.regularizers.L2
+
+C_L2 = 1e-4
+
 
 class ConvBlock(tf.keras.layers.Layer):
   ''' 
@@ -41,10 +45,11 @@ class ConvBlock(tf.keras.layers.Layer):
     self.conv = tf.keras.layers.Conv2D(output_channels,
                                        conv_size,
                                        activation=None,
+                                       kernel_regularizer=L2(C_L2),
                                        padding='same')
     self.batch_norm = tf.keras.layers.BatchNormalization(scale=False,
                                                          momentum=.999,
-                                                         eps=1e-3)
+                                                         epsilon=1e-3)
     self.activation = activation
 
   def call(self, x):
@@ -103,13 +108,12 @@ class BottleneckResidualConvBlock(ResidualBlock):
                stack_size=3,
                name=None):
     blocks = []
-    self.blocks.append(
+    blocks.append(
         ConvBlock(bottleneck_channels, 1, name=f'res_id_reduce_dim_begin'))
     for i in range(stack_size - 2):
-      self.blocks.append(
+      blocks.append(
           ConvBlock(bottleneck_channels, conv_size, name=f'res_id_inner_{i}'))
-    self.blocks.append(
-        ConvBlock(output_channels, 1, name=f'res_id_expand_dim_end'))
+    blocks.append(ConvBlock(output_channels, 1, name=f'res_id_expand_dim_end'))
     super(BottleneckResidualConvBlock, self).__init__(blocks, name=name)
 
 
@@ -134,18 +138,29 @@ class BroadcastResidualBlock(ResidualBlock):
     with the same dimensions.
     '''
 
-    def __init__(self, name=None):
+    def __init__(self, n: int, c: int, h: int, w: int, name=None):
       super(BroadcastResidualBlock.Broadcast, self).__init__(name=name)
+      self.channel_flatten = tf.keras.layers.Reshape((c, h * w),
+                                                     name='broadcast_flatten')
+      self.dense = tf.keras.layers.Dense(
+          h * w,
+          name='broadcast_linear',
+          kernel_regularizer=L2(C_L2),
+      )
+      self.channel_expand = tf.keras.layers.Reshape((c, h, w),
+                                                    name='broadcast_expand')
 
     def call(self, x):
       assert (len(x.shape) == 4)
       n, h, w, c = x.shape
 
       x = tf.transpose(x, perm=(0, 3, 1, 2))  # NHWC -> NCHW
-      x = tf.reshape(x, (n, c, h * w))  # flatten
-      x = tf.keras.layers.Dense(h * w, name='broadcast_linear')(x)  # mix
+      # x = tf.reshape(x, (n, c, h * w))  # flatten
+      x = self.channel_flatten(x)
+      x = self.dense(x)  # mix
       x = tf.keras.activations.relu(x)
-      x = tf.reshape(x, (n, c, h, w))  # expand
+      # x = tf.reshape(x, (n, c, h, w))  # expand
+      x = self.channel_expand(x)
       x = tf.transpose(x, perm=(0, 2, 3, 1))  # NCHW -> NHWC
 
       return x
@@ -156,7 +171,11 @@ class BroadcastResidualBlock(ResidualBlock):
                name=None):
     blocks = [
         ConvBlock(output_channels, 1, name='broadcast_conv_first'),
-        BroadcastResidualBlock.Broadcast(name='broadcast_mix'),
+        BroadcastResidualBlock.Broadcast(32,
+                                         output_channels,
+                                         19,
+                                         19,
+                                         name='broadcast_mix'),
         ConvBlock(output_channels, 1, name='broadcast_conv_last')
     ]
 
@@ -171,15 +190,17 @@ class GlobalPoolBias(tf.keras.layers.Layer):
     outputs a tensor of shape (n, 2c).
     '''
 
-    def __init__(self, name=None):
+    def __init__(self, c: int, h: int, w: int, name=None):
       super(GlobalPoolBias.GlobalPool, self).__init__(name=name)
+      self.channel_flatten = tf.keras.layers.Reshape((c, h * w),
+                                                     name='gpool_flatten')
 
     def call(self, x):
       assert (len(x.shape) == 4)
       n, h, w, c = x.shape
 
       x = tf.transpose(x, perm=(0, 3, 1, 2))  # NHWC -> NCHW
-      x = tf.reshape(x, (n, c, h * w))  # flatten
+      x = self.channel_flatten(x)  # flatten
       x_mean = tf.math.reduce_mean(x, axis=2)
       x_max = tf.math.reduce_max(x, axis=2)
 
@@ -189,8 +210,8 @@ class GlobalPoolBias(tf.keras.layers.Layer):
     super(GlobalPoolBias, self).__init__(name=name)
     self.channels = channels
     self.batch_norm_g = tf.keras.layers.BatchNormalization(
-        scale=False, momentum=.999, eps=1e-3, name='batch_norm_gpool')
-    self.gpool = GlobalPoolBias.GlobalPool(name='gpool')
+        scale=False, momentum=.999, epsilon=1e-3, name='batch_norm_gpool')
+    self.gpool = GlobalPoolBias.GlobalPool(channels, 19, 19, name='gpool')
     self.dense = tf.keras.layers.Dense(channels)
 
   def call(self, x, g):
@@ -201,36 +222,64 @@ class GlobalPoolBias(tf.keras.layers.Layer):
     g = self.batch_norm_g(g)
     g = tf.keras.activations.relu(g)
     g_pooled = self.gpool(g)
-    g_biases = self.dense(g_pooled)
+    g_biases = self.dense(g_pooled)  # shape = (N, C)
+
+    x = tf.transpose(x, (1, 2, 0, 3))  # NHWC -> HWNC
 
     x = x + g_biases
+
+    x = tf.transpose(x, (2, 0, 1, 3))  # HWNC -> NHWC
 
     return (x, g_pooled)
 
 
 class PolicyHead(tf.keras.layers.Layer):
+  '''
+  Implementation of policy head from KataGo.
+
+  Input: b x b x c feature matrix
+  Output: b x b + 1 length vector indicating logits for each move (incl. pass)
+
+  Layers:
+
+  1) 2 parallel convolutions outputting P, G, tensors of dim b x b x `channels`
+  2) A global pooling bias layer biasing G to P (i.e. P = P + gpool(G))
+  3) Batch normalization of P
+  4) A 1x1 convolution outputting a single b x b matrix with move logits
+  5) A dense layer for gpool(G) to a single output containing the pass logit
+  '''
 
   def __init__(self, channels=32, name=None):
     super(PolicyHead, self).__init__(name=name)
-    self.conv_v = tf.keras.layers.Conv2D(channels,
+    self.conv_p = tf.keras.layers.Conv2D(channels,
                                          1,
                                          padding='same',
+                                         kernel_regularizer=L2(C_L2),
                                          name='policy_conv_v')
     self.conv_g = tf.keras.layers.Conv2D(channels,
                                          1,
                                          padding='same',
+                                         kernel_regularizer=L2(C_L2),
                                          name='policy_conv_g')
     self.gpool = GlobalPoolBias(channels)
     self.batch_norm = tf.keras.layers.BatchNormalization(
-        scale=False, momentum=.999, eps=1e-3, name='batch_norm_gpool')
+        scale=False, momentum=.999, epsilon=1e-3, name='batch_norm_gpool')
+    self.flatten = tf.keras.layers.Flatten()
     self.output_moves = tf.keras.layers.Conv2D(1,
                                                1,
                                                padding='same',
+                                               kernel_regularizer=L2(C_L2),
                                                name='policy_output_moves')
-    self.output_pass = tf.keras.layers.Dense(1, name='policy_output_pass')
+    self.output_pass = tf.keras.layers.Dense(
+        1,
+        name='policy_output_pass',
+        kernel_regularizer=L2(C_L2),
+    )
+    self.scaling_pass = tf.keras.layers.Rescaling(3e-1,
+                                                  name='policy_output_scale')
 
   def call(self, x):
-    p = self.conv_v(x)
+    p = self.conv_p(x)
     g = self.conv_g(x)
 
     (p, g_pooled) = self.gpool(p, g)
@@ -240,15 +289,33 @@ class PolicyHead(tf.keras.layers.Layer):
     p = self.output_moves(p)
 
     pass_logit = self.output_pass(g_pooled)
+    pass_logit = self.scaling_pass(pass_logit)
 
-    p = tf.keras.layers.Flatten(tf.squeeze(p))
+    p = self.flatten(tf.squeeze(p))
 
     return tf.concat([p, pass_logit], axis=1)
 
 
 class P3achyGoModel(tf.keras.Model):
+  '''
+  Input:
 
-  def __init__(self, config=ModelConfig(), name=None):
+  At move k, pass in 7 19 x 19 binary feature planes containing:
+
+  1. Location has own stone
+  2. Location has opponent stone
+  3. {k - 5}th move (one hot)
+  4. {k - 4}th move
+  5. {k - 3}rd move
+  6. {k - 2}nd move
+  7. {k - 1}st move
+
+  Output:
+
+  One (19, 19) feature plane of logits, where softmax(logits) = policy
+  '''
+
+  def __init__(self, config=ModelConfig(), shape=(19, 19, 7), name=None):
     assert (config.kBlocks > 1)
 
     super(P3achyGoModel, self).__init__(name=name)
@@ -265,11 +332,23 @@ class P3achyGoModel(tf.keras.Model):
                                    name=f'broadcast_res_{i}'))
       else:
         self.blocks.append(
-            BottleneckResidualConvBlock(
-                config.kChannels,
-                config.kBottleneckChannels,
-                config.kConvSize,
-                inner_stack_size=config.kBottleneckLength - 2,
-                name=f'bottleneck_res_{i}'))
+            BottleneckResidualConvBlock(config.kChannels,
+                                        config.kBottleneckChannels,
+                                        config.kConvSize,
+                                        stack_size=config.kBottleneckLength,
+                                        name=f'bottleneck_res_{i}'))
 
     self.policy_head = PolicyHead(config.kPolicyHeadChannels)
+
+  def call(self, x):
+    for block in self.blocks:
+      x = block(x)
+
+    pi_logits = self.policy_head(x)
+
+    return pi_logits
+
+  def summary(self):
+    x = tf.keras.layers.Input(shape=(19, 19, 7))
+    model = tf.keras.Model(inputs=[x], outputs=self.call(x))
+    return model.summary()

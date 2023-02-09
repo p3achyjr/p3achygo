@@ -29,3 +29,7 @@ class ModelConfig:
                        channels=16,
                        bottleneck_channels=8,
                        policy_head_channels=8)
+
+  @staticmethod
+  def small():
+    return ModelConfig()
