@@ -237,6 +237,14 @@ class GoBoard:
     s.append('   ' + ' '.join(list('ABCDEFGHIJKLMNOPQRS')))
     return '\n'.join(s)
 
+  @staticmethod
+  def move_as_tuple(move: int):
+    assert 0 <= move <= BOARD_LEN * BOARD_LEN
+    if move == BOARD_LEN * BOARD_LEN:
+      return PASS_MOVE
+
+    return (move // BOARD_LEN, move % BOARD_LEN)
+
 
 class GoBoardTrainingUtils:
   '''
@@ -328,14 +336,16 @@ class GameResult:
 
 
 def parse_move(move):
+  if move is None:
+    return
   if len(move) < 2 or len(move) > 3:
     return
   if not move[0] in 'abcdefghijklmnopqrs':
     return
-  if not move[1] in '123456789':
+  if not move[1] in '0123456789':
     return
 
-  return (abs(int(move[1:]) - BOARD_LEN), ord(move[0]) - ord('a'))
+  return (abs(int(move[1:])), ord(move[0]) - ord('a'))
 
 
 if __name__ == '__main__':

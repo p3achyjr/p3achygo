@@ -6,27 +6,59 @@ We will train our model on samples generated from professional games.
 
 import tensorflow as tf
 import tensorflow_datasets as tfds
+
+import glob
+import os
 import time
 
+from absl import app, flags, logging
 from board import GoBoard, GoBoardTrainingUtils
 from training_config import TrainingConfig
 from model import P3achyGoModel
 from model_config import ModelConfig
+from google.cloud import storage
 
 import matplotlib.pyplot as plt
 
 LEARNING_RATE_INTERVAL = 200000
 LEARNING_RATE_CUTOFF = 800000
-LOG_INTERVAL = 2
-SAVE_INTERVAL = 100000
+LOG_INTERVAL = 5
+SAVE_INTERVAL = 5000
+
+LOCAL_SAVED_MODEL_PATH = '/tmp/model_{}'
+LOCAL_CHECKPOINT_DIR = '/tmp/model_checkpoint_{}'
+LOCAL_CHECKPOINT_PATH = '/tmp/model_checkpoint_{}/checkpoint_{}'
+GCP_BUCKET = 'p3achygo_models'
+
+FLAGS = flags.FLAGS
+
+flags.DEFINE_string('gcp_credentials_path', '', 'DO NOT HARDCODE')
+flags.DEFINE_string('model_path', '',
+                    'Folder under which to save model configs')
+
+
+def upload_dir_to_gcs(gcs_client, directory_path: str, dest_blob_name: str):
+  if not gcs_client:
+    logging.warning(
+        f'No GCS client passed in. Not uploading {directory_path} to gcs.')
+
+  rel_paths = glob.glob(directory_path + '/**', recursive=True)
+  bucket = gcs_client.get_bucket(GCP_BUCKET)
+  for local_file in rel_paths:
+    remote_path = f'{dest_blob_name}/{"/".join(local_file.split(os.sep)[1:])}'
+    if os.path.isfile(local_file):
+      logging.info(f'Uploading file {local_file} to dest {remote_path}')
+      blob = bucket.blob(remote_path)
+      blob.upload_from_filename(local_file)
 
 
 @tf.function
 def train_step(input, policy, model, optimizer, loss_fn):
   with tf.GradientTape() as g:
-    preds = model(input)
+    preds = model(input, training=True)
     training_loss = loss_fn(policy, preds)
     regularization_loss = tf.math.add_n(model.losses)
+
     loss = training_loss + regularization_loss
 
   gradients = g.gradient(loss, model.trainable_variables)
@@ -86,6 +118,11 @@ class PeriodicPlotter:
 
 
 class SupervisedTrainingManager:
+  '''
+  Training routine for supervised learning.
+
+  Initializes dataset and holds method for training loop.
+  '''
 
   def __init__(self, training_config=TrainingConfig()):
     self.training_config = training_config
@@ -108,18 +145,13 @@ class SupervisedTrainingManager:
 
   # @tf.function
   def train(self):
-    model = P3achyGoModel(config=ModelConfig.small(), name='p3achy_test')
+    model = P3achyGoModel.create(config=ModelConfig.small(), name='p3achy_test')
     loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
     optimizer = tf.keras.optimizers.Adam(
         learning_rate=self.training_config.kInitLearningRate)
 
     print(model.summary())
 
-    # plotter = PeriodicPlotter(sec=2,
-    #                           xlabel='Iterations',
-    #                           ylabel='Loss',
-    #                           scale='semilogy')
-    # loss_history = LossHistory()
     batch_num = 0
     for _ in range(self.training_config.kEpochs):
       for (input, policy) in self.train_ds:
@@ -145,9 +177,19 @@ class SupervisedTrainingManager:
                                      optimizer.learning_rate / 10)
 
         if batch_num % SAVE_INTERVAL == 0:
-          model.save(f'/Users/axlui/p3achyGo/models/small_step_{batch_num}')
-        # loss_history.append(current_loss.numpy().mean())
-        # plotter.plot(loss_history.get())
+          local_path = LOCAL_SAVED_MODEL_PATH.format(batch_num)
+          remote_path = self.training_config.kGcsCheckpointPath.format(
+              batch_num)
+          model.save(local_path)
+          upload_dir_to_gcs(self.training_config.kGcsClient, local_path,
+                            remote_path)
+
+          local_path_ckpt = LOCAL_CHECKPOINT_PATH.format(batch_num, batch_num)
+          local_path_ckpt_dir = LOCAL_CHECKPOINT_DIR.format(batch_num)
+          remote_path_ckpt = remote_path + '_checkpoint'
+          model.save_weights(local_path_ckpt)
+          upload_dir_to_gcs(self.training_config.kGcsClient,
+                            local_path_ckpt_dir, remote_path_ckpt)
 
         batch_num += 1
 
@@ -183,7 +225,33 @@ class SupervisedTrainingManager:
     return input, policy
 
 
-if __name__ == '__main__':
+def main(argv):
+  if FLAGS.gcp_credentials_path == '':
+    logging.warning('Please provide a path to GCP credentials.')
+    return
+
+  if FLAGS.model_path == '':
+    logging.warning('Please provide a path under which to store your model')
+    return
+
+  os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = FLAGS.gcp_credentials_path
+  checkpoint_path = os.path.join(FLAGS.model_path, "batch_{}")
+
+  if tf.config.list_physical_devices('GPU'):
+    tf.keras.mixed_precision.set_global_policy('mixed_float16')
+
+  logging.info('Compute Policy dtype: %s' %
+               tf.keras.mixed_precision.global_policy().compute_dtype)
+  logging.info('Variable Policy dtype: %s' %
+               tf.keras.mixed_precision.global_policy().variable_dtype)
+
   training_manager = SupervisedTrainingManager(
-      training_config=TrainingConfig(init_learning_rate=1e-2, epochs=1))
+      training_config=TrainingConfig(init_learning_rate=1e-2,
+                                     epochs=1,
+                                     gcs_checkpoint_path=checkpoint_path,
+                                     gcs_client=storage.Client()))
   training_manager.train()
+
+
+if __name__ == '__main__':
+  app.run(main)

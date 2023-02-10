@@ -42,22 +42,42 @@ class ConvBlock(tf.keras.layers.Layer):
                activation=tf.keras.activations.relu,
                name=None):
     super(ConvBlock, self).__init__(name=name)
-    self.conv = tf.keras.layers.Conv2D(output_channels,
-                                       conv_size,
-                                       activation=None,
-                                       kernel_regularizer=L2(C_L2),
-                                       padding='same')
+    self.conv = tf.keras.layers.Conv2D(
+        output_channels,
+        conv_size,
+        activation=None,  # defer until later
+        kernel_regularizer=L2(C_L2),
+        padding='same')
     self.batch_norm = tf.keras.layers.BatchNormalization(scale=False,
                                                          momentum=.999,
                                                          epsilon=1e-3)
     self.activation = activation
 
-  def call(self, x):
+    # save for serialization
+    self.output_channels = output_channels
+    self.conv_size = conv_size
+
+  def call(self, x, training=False):
     x = self.conv(x)
-    x = self.batch_norm(x)
+    x = self.batch_norm(x, training=training)
     x = self.activation(x)
 
     return x
+
+  def get_config(self):
+    return {
+        'output_channels': self.output_channels,
+        'conv_size': self.conv_size,
+        'activation': tf.keras.activations.serialize(self.activation),
+        'name': self.name
+    }
+
+  @classmethod
+  def from_config(cls, config):
+    cls(config['output_channels'],
+        config['conv_size'],
+        tf.keras.activations.deserialize(config['activation']),
+        name=config['name'])
 
 
 class ResidualBlock(tf.keras.layers.Layer):
@@ -70,6 +90,9 @@ class ResidualBlock(tf.keras.layers.Layer):
   2. An activation (activation)
 
   ResidualBlock(x) = activation(blocks(x) + x)
+
+  IMPORTANT: This block is impossible to serialize. Calling this block
+  directly in a model definition will cause issues.
   '''
 
   def __init__(self,
@@ -80,10 +103,10 @@ class ResidualBlock(tf.keras.layers.Layer):
     self.blocks = inner_blocks
     self.activation = activation
 
-  def call(self, x):
+  def call(self, x, training=False):
     res = x
     for block in self.blocks:
-      x = block(x)
+      x = block(x, training=training)
 
     return self.activation(x + res)
 
@@ -116,6 +139,21 @@ class BottleneckResidualConvBlock(ResidualBlock):
     blocks.append(ConvBlock(output_channels, 1, name=f'res_id_expand_dim_end'))
     super(BottleneckResidualConvBlock, self).__init__(blocks, name=name)
 
+    # save for serialization
+    self.output_channels = output_channels
+    self.bottleneck_channels = bottleneck_channels
+    self.conv_size = conv_size
+    self.stack_size = stack_size
+
+  def get_config(self):
+    return {
+        'output_channels': self.output_channels,
+        'bottleneck_channels': self.bottleneck_channels,
+        'conv_size': self.conv_size,
+        'stack_size': self.stack_size,
+        'name': self.name,
+    }
+
 
 class BroadcastResidualBlock(ResidualBlock):
   '''
@@ -138,7 +176,7 @@ class BroadcastResidualBlock(ResidualBlock):
     with the same dimensions.
     '''
 
-    def __init__(self, n: int, c: int, h: int, w: int, name=None):
+    def __init__(self, c: int, h: int, w: int, name=None):
       super(BroadcastResidualBlock.Broadcast, self).__init__(name=name)
       self.channel_flatten = tf.keras.layers.Reshape((c, h * w),
                                                      name='broadcast_flatten')
@@ -150,7 +188,10 @@ class BroadcastResidualBlock(ResidualBlock):
       self.channel_expand = tf.keras.layers.Reshape((c, h, w),
                                                     name='broadcast_expand')
 
-    def call(self, x):
+      # save for serialization
+      self.c, self.h, self.w = c, h, w
+
+    def call(self, x, training=False):
       assert (len(x.shape) == 4)
       n, h, w, c = x.shape
 
@@ -165,21 +206,42 @@ class BroadcastResidualBlock(ResidualBlock):
 
       return x
 
+    def get_config(self):
+      return {'c': self.c, 'h': self.h, 'w': self.w, 'name': self.name}
+
   def __init__(self,
                output_channels: int,
                activation=tf.keras.activations.linear,
                name=None):
     blocks = [
         ConvBlock(output_channels, 1, name='broadcast_conv_first'),
-        BroadcastResidualBlock.Broadcast(32,
-                                         output_channels,
+        BroadcastResidualBlock.Broadcast(output_channels,
                                          19,
                                          19,
                                          name='broadcast_mix'),
         ConvBlock(output_channels, 1, name='broadcast_conv_last')
     ]
 
-    super(BroadcastResidualBlock, self).__init__(blocks, activation=activation)
+    super(BroadcastResidualBlock, self).__init__(blocks,
+                                                 activation=activation,
+                                                 name=name)
+
+    # save for serialization
+    self.output_channels = output_channels
+    self.activation_serialized = tf.keras.activations.serialize(activation)
+
+  def get_config(self):
+    return {
+        'output_channels': self.output_channels,
+        'activation': self.activation_serialized,
+        'name': self.name,
+    }
+
+  @classmethod
+  def from_config(cls, config):
+    return cls(config['output_channels'],
+               tf.keras.activations.deserialize(config['activation']),
+               config['name'])
 
 
 class GlobalPoolBias(tf.keras.layers.Layer):
@@ -195,7 +257,10 @@ class GlobalPoolBias(tf.keras.layers.Layer):
       self.channel_flatten = tf.keras.layers.Reshape((c, h * w),
                                                      name='gpool_flatten')
 
-    def call(self, x):
+      # save parameters for serialization
+      self.c, self.h, self.w = c, h, w
+
+    def call(self, x, training=False):
       assert (len(x.shape) == 4)
       n, h, w, c = x.shape
 
@@ -206,20 +271,30 @@ class GlobalPoolBias(tf.keras.layers.Layer):
 
       return tf.concat([x_mean, x_max], axis=1)
 
+    def get_config(self):
+      return {
+          'c': self.c,
+          'h': self.h,
+          'w': self.w,
+          'name': self.name,
+      }
+
   def __init__(self, channels: int, name=None):
     super(GlobalPoolBias, self).__init__(name=name)
-    self.channels = channels
     self.batch_norm_g = tf.keras.layers.BatchNormalization(
         scale=False, momentum=.999, epsilon=1e-3, name='batch_norm_gpool')
     self.gpool = GlobalPoolBias.GlobalPool(channels, 19, 19, name='gpool')
     self.dense = tf.keras.layers.Dense(channels)
 
-  def call(self, x, g):
+    # save for serialization
+    self.channels = channels
+
+  def call(self, x, g, training=False):
     assert (x.shape == g.shape)
     assert (len(x.shape) == 4)
     assert (x.shape[3] == g.shape[3])
 
-    g = self.batch_norm_g(g)
+    g = self.batch_norm_g(g, training=training)
     g = tf.keras.activations.relu(g)
     g_pooled = self.gpool(g)
     g_biases = self.dense(g_pooled)  # shape = (N, C)
@@ -231,6 +306,9 @@ class GlobalPoolBias(tf.keras.layers.Layer):
     x = tf.transpose(x, (2, 0, 1, 3))  # HWNC -> NHWC
 
     return (x, g_pooled)
+
+  def get_config(self):
+    return {'channels': self.channels, 'name': self.name}
 
 
 class PolicyHead(tf.keras.layers.Layer):
@@ -278,12 +356,15 @@ class PolicyHead(tf.keras.layers.Layer):
     self.scaling_pass = tf.keras.layers.Rescaling(3e-1,
                                                   name='policy_output_scale')
 
-  def call(self, x):
+    # save parameters for serialization
+    self.channels = channels
+
+  def call(self, x, training=False):
     p = self.conv_p(x)
     g = self.conv_g(x)
 
     (p, g_pooled) = self.gpool(p, g)
-    p = self.batch_norm(p)
+    p = self.batch_norm(p, training=training)
     p = tf.keras.activations.relu(p)
 
     p = self.output_moves(p)
@@ -291,9 +372,15 @@ class PolicyHead(tf.keras.layers.Layer):
     pass_logit = self.output_pass(g_pooled)
     pass_logit = self.scaling_pass(pass_logit)
 
-    p = self.flatten(tf.squeeze(p))
+    p = self.flatten(tf.squeeze(p, axis=3))
 
     return tf.concat([p, pass_logit], axis=1)
+
+  def get_config(self):
+    return {
+        'channels': self.channels,
+        'name': self.name,
+    }
 
 
 class P3achyGoModel(tf.keras.Model):
@@ -315,40 +402,93 @@ class P3achyGoModel(tf.keras.Model):
   One (19, 19) feature plane of logits, where softmax(logits) = policy
   '''
 
-  def __init__(self, config=ModelConfig(), shape=(19, 19, 7), name=None):
-    assert (config.kBlocks > 1)
+  def __init__(self,
+               num_blocks,
+               num_channels,
+               num_bottleneck_channels,
+               num_policy_channels,
+               bottleneck_length,
+               conv_size,
+               broadcast_interval,
+               name=None):
+    assert (num_blocks > 1)
 
     super(P3achyGoModel, self).__init__(name=name)
 
     self.blocks = []
-    for i in range(config.kBlocks - 1):
+    for i in range(num_blocks - 1):
       if i == 0:
+        self.blocks.append(ConvBlock(num_channels, conv_size, name='init_conv'))
+      elif i % broadcast_interval == 0:
         self.blocks.append(
-            ConvBlock(config.kChannels, config.kConvSize, name='init_conv'))
-      elif i % config.kBroadcastInterval == 0:
-        self.blocks.append(
-            BroadcastResidualBlock(config.kChannels,
+            BroadcastResidualBlock(num_channels,
                                    activation=tf.keras.activations.relu,
                                    name=f'broadcast_res_{i}'))
       else:
         self.blocks.append(
-            BottleneckResidualConvBlock(config.kChannels,
-                                        config.kBottleneckChannels,
-                                        config.kConvSize,
-                                        stack_size=config.kBottleneckLength,
+            BottleneckResidualConvBlock(num_channels,
+                                        num_bottleneck_channels,
+                                        conv_size,
+                                        stack_size=bottleneck_length,
                                         name=f'bottleneck_res_{i}'))
 
-    self.policy_head = PolicyHead(config.kPolicyHeadChannels)
+    self.policy_head = PolicyHead(num_policy_channels)
 
-  def call(self, x):
+    # store parameters so we can serialize model correctly
+    self.num_blocks = num_blocks
+    self.num_channels = num_channels
+    self.num_bottleneck_channels = num_bottleneck_channels
+    self.num_policy_channels = num_policy_channels
+    self.bottleneck_length = bottleneck_length
+    self.conv_size = conv_size
+    self.broadcast_interval = broadcast_interval
+
+  def call(self, x, training=False):
     for block in self.blocks:
-      x = block(x)
+      x = block(x, training=training)
 
-    pi_logits = self.policy_head(x)
+    pi_logits = self.policy_head(x, training=training)
 
     return pi_logits
+
+  def get_config(self):
+    return {
+        'num_blocks': self.num_blocks,
+        'num_channels': self.num_channels,
+        'num_bottleneck_channels': self.num_bottleneck_channels,
+        'num_policy_channels': self.num_policy_channels,
+        'bottleneck_length': self.bottleneck_length,
+        'conv_size': self.conv_size,
+        'broadcast_interval': self.broadcast_interval,
+        'name': self.name,
+    }
 
   def summary(self):
     x = tf.keras.layers.Input(shape=(19, 19, 7))
     model = tf.keras.Model(inputs=[x], outputs=self.call(x))
     return model.summary()
+
+  @staticmethod
+  def create(config: ModelConfig, name: str):
+    return P3achyGoModel(config.kBlocks,
+                         config.kChannels,
+                         config.kBottleneckChannels,
+                         config.kPolicyHeadChannels,
+                         config.kBottleneckLength,
+                         config.kConvSize,
+                         config.kBroadcastInterval,
+                         name=name)
+
+
+def custom_objects_dict_for_serialization():
+  return {
+      'ConvBlock': ConvBlock,
+      'ResidualBlock': ResidualBlock,
+      'BottleneckResidualConvBlock': BottleneckResidualConvBlock,
+      'BroadcastResidualBlock': BroadcastResidualBlock,
+      'Broadcast': BroadcastResidualBlock.Broadcast,
+      'GlobalPoolBias': GlobalPoolBias,
+      'GlobalPool': GlobalPoolBias.GlobalPool,
+      'PolicyHead': PolicyHead,
+      'P3achyGoModel': P3achyGoModel,
+  }
