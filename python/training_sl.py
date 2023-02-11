@@ -147,8 +147,9 @@ class SupervisedTrainingManager:
   def train(self):
     model = P3achyGoModel.create(config=ModelConfig.small(), name='p3achy_test')
     loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
-    optimizer = tf.keras.optimizers.Adam(
-        learning_rate=self.training_config.kInitLearningRate)
+    optimizer = tf.keras.optimizers.experimental.SGD(
+        learning_rate=self.training_config.kInitLearningRate,
+        momentum=self.training_config.kLearningRateMomentum)
 
     print(model.summary())
 
