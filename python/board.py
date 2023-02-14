@@ -1,8 +1,8 @@
+from __future__ import annotations
+
 import bitstring, random
 import numpy as np
 import tensorflow as tf
-
-from sgf_parser import get_main_line
 
 BITSTRING_LEN = 128
 UINT_MAX = 2**128 - 1
@@ -346,41 +346,3 @@ def parse_move(move):
     return
 
   return (abs(int(move[1:])), ord(move[0]) - ord('a'))
-
-
-if __name__ == '__main__':
-  # board = GoBoard(BOARD_LEN)
-  # turn = 0  # 0 if black, 1 if white
-  # board.print()
-  # while True:
-  #   move = input()
-  #   if move == None:
-  #     continue
-
-  #   if move == 'pass':
-  #     board.print()
-  #     turn ^= 1
-  #     continue
-
-  #   i, j = parse_move(move)
-
-  #   if board.move(2 if turn else 1, i, j):
-  #     turn ^= 1
-
-  #   board.print()
-
-  board = GoBoard(BOARD_LEN)
-  for node in get_main_line(
-      '/Users/axlui/p3achyGo/sgf/TangWeixing-ShiYue59637.sgf'):
-    try:
-      (c, (i, j)) = node.get_move()
-    except:
-      continue
-
-    input()
-    if c == 'b':
-      board.move(BLACK, i, j)
-    else:
-      board.move(WHITE, i, j)
-
-    board.print()

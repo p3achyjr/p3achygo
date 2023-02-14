@@ -1,9 +1,7 @@
 """
-badukmovies dataset.
+badukmovies_scored_games dataset.
 
-Only contains unscored games!!!!
-
-Dividing the dataset into scored/unscored games for faster loss calculations.
+Contains only scored games!!
 """
 
 from __future__ import annotations
@@ -12,12 +10,15 @@ import numpy as np
 import resource
 import tensorflow_datasets as tfds
 
+# from datasets.common.example_generator import *
+# from datasets.common.constants import *
+
 low, high = resource.getrlimit(resource.RLIMIT_NOFILE)
 resource.setrlimit(resource.RLIMIT_NOFILE, (low * 4, high))
 
 
 class Builder(tfds.core.GeneratorBasedBuilder):
-  """DatasetBuilder for badukmovies dataset."""
+  """DatasetBuilder for badukmovies_scored_games dataset."""
 
   MANUAL_DOWNLOAD_INSTRUCTIONS = """
   Download zip from badukmovies.com
@@ -31,6 +32,7 @@ class Builder(tfds.core.GeneratorBasedBuilder):
   def _info(self) -> tfds.core.DatasetInfo:
     """Returns the dataset metadata."""
     import datasets.common.constants as constants
+    # TODO(badukmovies): Specifies the tfds.core.DatasetInfo object
     return self.dataset_info_from_configs(
         features=tfds.features.FeaturesDict({
             'metadata':
@@ -82,7 +84,6 @@ class Builder(tfds.core.GeneratorBasedBuilder):
     """Returns SplitGenerators."""
     path = dl_manager.manual_dir / 'baduk'
 
-    # TODO(badukmovies): Returns the Dict[split names, Iterator[Key, Example]]
     return {
         'train': self._generate_examples(path),
     }
@@ -91,5 +92,5 @@ class Builder(tfds.core.GeneratorBasedBuilder):
     """Yields examples."""
     import datasets.common.example_generator as example_generator
     generator = example_generator.ExampleGenerator(
-        path, mode=example_generator.GeneratorMode.UNSCORED)
+        path, mode=example_generator.GeneratorMode.SCORED)
     return generator.generate()

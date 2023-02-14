@@ -4,6 +4,8 @@ Routines for supervised learning.
 We will train our model on samples generated from professional games.
 '''
 
+from __future__ import annotations
+
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
@@ -13,6 +15,7 @@ import time
 
 from absl import app, flags, logging
 from board import GoBoard, GoBoardTrainingUtils
+from constants import *
 from training_config import TrainingConfig
 from model import P3achyGoModel
 from model_config import ModelConfig
@@ -20,21 +23,37 @@ from google.cloud import storage
 
 import matplotlib.pyplot as plt
 
-LEARNING_RATE_INTERVAL = 200000
-LEARNING_RATE_CUTOFF = 800000
-LOG_INTERVAL = 5
-SAVE_INTERVAL = 5000
-
-LOCAL_SAVED_MODEL_PATH = '/tmp/model_{}'
-LOCAL_CHECKPOINT_DIR = '/tmp/model_checkpoint_{}'
-LOCAL_CHECKPOINT_PATH = '/tmp/model_checkpoint_{}/checkpoint_{}'
 GCP_BUCKET = 'p3achygo_models'
 
 FLAGS = flags.FLAGS
 
-flags.DEFINE_string('gcp_credentials_path', '', 'DO NOT HARDCODE')
-flags.DEFINE_string('model_path', '',
-                    'Folder under which to save model configs')
+# Flags for GCS
+flags.DEFINE_boolean('upload_to_gcs', False,
+                     'Whether to upload model checkpoints to GCS.')
+flags.DEFINE_string('gcp_credentials_path', '',
+                    'Path to GCS credentials. DO NOT HARDCODE.')
+
+# Flags for local storage
+flags.DEFINE_string('local_path', '/tmp',
+                    'Folder under which to save models and checkpoints')
+flags.DEFINE_string('gcs_path', '',
+                    'Remote folder under which to save models and checkpoints')
+
+# Flags for training configuration
+flags.DEFINE_integer('batch_size', 32, 'Mini-batch size')
+flags.DEFINE_integer('epochs', 10, 'Number of Epochs')
+flags.DEFINE_float('learning_rate', 1e-3, 'Initial Learning Rate')
+flags.DEFINE_integer(
+    'learning_rate_interval', 200000,
+    'Interval at which to anneal learning rate (in mini-batches)')
+flags.DEFINE_integer(
+    'learning_rate_cutoff', 800000,
+    'Point after which to stop annealing learning rate (in mini-batches)')
+flags.DEFINE_integer(
+    'log_interval', 100,
+    'Interval at which to log training information (in mini-batches)')
+flags.DEFINE_integer('model_save_interval', 5000,
+                     'Interval at which to save a new model/model checkpoint')
 
 
 def upload_dir_to_gcs(gcs_client, directory_path: str, dest_blob_name: str):
@@ -53,10 +72,13 @@ def upload_dir_to_gcs(gcs_client, directory_path: str, dest_blob_name: str):
 
 
 @tf.function
-def train_step(input, policy, model, optimizer, loss_fn):
+def train_step(input, komi, score, policy, model, optimizer):
   with tf.GradientTape() as g:
-    preds = model(input, training=True)
-    training_loss = loss_fn(policy, preds)
+    pi_logits, game_outcome, game_ownership, score_logits, gamma = model(
+        input, tf.expand_dims(komi, axis=1), training=True)
+    training_loss = model.loss(pi_logits, game_outcome, score_logits, gamma,
+                               policy, score)
+
     regularization_loss = tf.math.add_n(model.losses)
 
     loss = training_loss + regularization_loss
@@ -64,7 +86,7 @@ def train_step(input, policy, model, optimizer, loss_fn):
   gradients = g.gradient(loss, model.trainable_variables)
   optimizer.apply_gradients(zip(gradients, model.trainable_variables))
 
-  return preds, loss
+  return pi_logits, game_outcome, score_logits, loss
 
 
 class LossHistory:
@@ -127,7 +149,9 @@ class SupervisedTrainingManager:
   def __init__(self, training_config=TrainingConfig()):
     self.training_config = training_config
     self.train_ds, self.test_ds = tfds.load(
-        'badukmovies', split=['train[:80%]', 'train[80%:]'], shuffle_files=True)
+        'badukmovies_scored',
+        split=['train[:80%]', 'train[80%:]'],
+        shuffle_files=True)
 
     # setup training dataset
     self.train_ds = self.train_ds.map(SupervisedTrainingManager.expand,
@@ -145,58 +169,76 @@ class SupervisedTrainingManager:
 
   # @tf.function
   def train(self):
-    model = P3achyGoModel.create(config=ModelConfig.small(), name='p3achy_test')
-    loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+    model = P3achyGoModel.create(config=ModelConfig.small(),
+                                 board_len=BOARD_LEN,
+                                 num_input_planes=NUM_INPUT_PLANES,
+                                 num_input_features=NUM_INPUT_FEATURES,
+                                 name='p3achy_test')
     optimizer = tf.keras.optimizers.experimental.SGD(
         learning_rate=self.training_config.kInitLearningRate,
         momentum=self.training_config.kLearningRateMomentum)
 
-    print(model.summary())
+    print(model.summary(batch_size=self.training_config.kBatchSize))
 
     batch_num = 0
     for _ in range(self.training_config.kEpochs):
-      for (input, policy) in self.train_ds:
-        preds, current_loss = train_step(input, policy, model, optimizer,
-                                         loss_fn)
-        if batch_num % LOG_INTERVAL == 0:
-          top_preds = tf.math.top_k(preds[0], k=5).indices
-          top_vals = tf.math.top_k(preds[0], k=5).values
+      for (input, komi, score, policy) in self.train_ds:
+        pi_logits, game_outcome, score_logits, current_loss = train_step(
+            input, komi, score, policy, model, optimizer)
+        if batch_num % self.training_config.kLogInterval == 0:
+          top_policy_indices = tf.math.top_k(pi_logits[0], k=5).indices
+          top_policy_values = tf.math.top_k(pi_logits[0], k=5).values
           board = tf.transpose(input, (0, 3, 1, 2))  # NHWC -> NCHW
           board = tf.cast(board[0][0] + (2 * board[0][1]), dtype=tf.int32)
+          top_score_indices = tf.math.top_k(score_logits[0], k=5).indices - 400
+          top_score_values = tf.math.top_k(score_logits[0], k=5).values
 
-          print(f'---------- Example {batch_num} -----------')
-          print(f'Learning Rate: {optimizer.learning_rate}')
+          print(f'---------- Batch {batch_num} -----------')
+          print(f'Learning Rate: {optimizer.learning_rate.numpy()}')
           print(f'Loss: {current_loss}')
-          print(f'Top 5 Moves: {top_preds}')
-          print(f'Top 5 Move Values: {top_vals}')
-          print(f'Policy: {policy[0]}')
+          print(f'Predicted Outcome: {tf.nn.softmax(game_outcome[0])}')
+          print(f'Predicted Scores: {top_score_indices}')
+          print(f'Predicted Score Values: {top_score_values}')
+          print(f'Actual Score: {score[0].numpy()}')
+          print(f'Predicted Top 5 Moves: {top_policy_indices}')
+          print(f'Predicted Top 5 Move Values: {top_policy_values}')
+          print(f'Actual Policy: {policy[0]}')
           print(f'Board:')
           print(GoBoard.to_string(board.numpy()))
 
-        if 0 < batch_num < LEARNING_RATE_CUTOFF and batch_num % LEARNING_RATE_INTERVAL == 0:
+        if (0 < batch_num < self.training_config.kLearningRateInterval and
+            batch_num % self.training_config.kLearningRateInterval == 0):
           tf.keras.backend.set_value(optimizer.learning_rate,
                                      optimizer.learning_rate / 10)
 
-        if batch_num % SAVE_INTERVAL == 0:
-          local_path = LOCAL_SAVED_MODEL_PATH.format(batch_num)
-          remote_path = self.training_config.kGcsCheckpointPath.format(
-              batch_num)
+        if batch_num % self.training_config.kModelSaveInterval == 0:
+          local_path = self.training_config.kLocalModelPath.format(batch_num)
           model.save(local_path)
-          upload_dir_to_gcs(self.training_config.kGcsClient, local_path,
-                            remote_path)
+          if self.training_config.kUploadingToGcs:
+            remote_path = self.training_config.kGcsModelPath.format(batch_num)
+            upload_dir_to_gcs(self.training_config.kGcsClient, local_path,
+                              remote_path)
 
-          local_path_ckpt = LOCAL_CHECKPOINT_PATH.format(batch_num, batch_num)
-          local_path_ckpt_dir = LOCAL_CHECKPOINT_DIR.format(batch_num)
-          remote_path_ckpt = remote_path + '_checkpoint'
+          local_path_ckpt = self.training_config.kLocalCheckpointPath.format(
+              batch_num)
+          local_path_ckpt_dir = self.training_config.kLocalCheckpointDir.format(
+              batch_num)
+
           model.save_weights(local_path_ckpt)
-          upload_dir_to_gcs(self.training_config.kGcsClient,
-                            local_path_ckpt_dir, remote_path_ckpt)
+          if self.training_config.kUploadingToGcs:
+            remote_path_ckpt = self.training_config.kGcsCheckpointPath.format(
+                batch_num)
+            upload_dir_to_gcs(self.training_config.kGcsClient,
+                              local_path_ckpt_dir, remote_path_ckpt)
 
         batch_num += 1
 
   @staticmethod
   def expand(ex):
-    board, last_moves, policy = ex['board'], ex['last_moves'], ex['policy']
+    board, komi, color, score, last_moves, policy = (ex['board'], ex['komi'],
+                                                     ex['color'], ex['result'],
+                                                     ex['last_moves'],
+                                                     ex['policy'])
 
     assert (last_moves.shape == (5, 2))
 
@@ -223,20 +265,41 @@ class SupervisedTrainingManager:
 
     input = tf.transpose(input, perm=(1, 2, 0))  # CHW -> HWC
 
-    return input, policy
+    return input, komi, score, policy
 
 
 def main(argv):
-  if FLAGS.gcp_credentials_path == '':
-    logging.warning('Please provide a path to GCP credentials.')
-    return
-
-  if FLAGS.model_path == '':
+  if FLAGS.local_path == '':
     logging.warning('Please provide a path under which to store your model')
     return
 
-  os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = FLAGS.gcp_credentials_path
-  checkpoint_path = os.path.join(FLAGS.model_path, "batch_{}")
+  gcs_client = None
+  if FLAGS.upload_to_gcs:
+    if FLAGS.gcp_credentials_path == '':
+      logging.warning(
+          'Requesting gcs upload, but no path to GCS credentials provided. \
+           Please provide a path to GCP credentials via --gcp_credentials_path')
+      return
+
+    if FLAGS.gcs_path == '':
+      logging.warning('Requesting gcs upload, but no remote path provided. \
+           Please provide a remote path via --gcs_path')
+
+      return
+
+    os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = FLAGS.gcp_credentials_path
+    gcs_client = storage.Client()
+
+  local_model_path = os.path.join(FLAGS.local_path, "model_{}")
+
+  # need two of these b/c TF does not create a new folder for each checkpoint.
+  local_checkpoint_dir = os.path.join(FLAGS.local_path, 'model_checkpoint_{}')
+  local_checkpoint_path = os.path.join(FLAGS.local_path, 'model_checkpoint_{}',
+                                       'checkpoint')
+  gcs_model_path = os.path.join(FLAGS.gcs_path,
+                                'model_{}') if FLAGS.upload_to_gcs else None
+  gcs_checkpoint_path = os.path.join(
+      FLAGS.gcs_path, 'model_checkpoint_{}') if FLAGS.upload_to_gcs else None
 
   if tf.config.list_physical_devices('GPU'):
     tf.keras.mixed_precision.set_global_policy('mixed_float16')
@@ -246,11 +309,20 @@ def main(argv):
   logging.info('Variable Policy dtype: %s' %
                tf.keras.mixed_precision.global_policy().variable_dtype)
 
-  training_manager = SupervisedTrainingManager(
-      training_config=TrainingConfig(init_learning_rate=1e-2,
-                                     epochs=1,
-                                     gcs_checkpoint_path=checkpoint_path,
-                                     gcs_client=storage.Client()))
+  training_manager = SupervisedTrainingManager(training_config=TrainingConfig(
+      batch_size=FLAGS.batch_size,
+      epochs=FLAGS.epochs,
+      init_learning_rate=FLAGS.learning_rate,
+      learning_rate_interval=FLAGS.learning_rate_interval,
+      learning_rate_cutoff=FLAGS.learning_rate_cutoff,
+      log_interval=FLAGS.log_interval,
+      local_model_path=local_model_path,
+      local_checkpoint_dir=local_checkpoint_dir,
+      local_checkpoint_path=local_checkpoint_path,
+      uploading_to_gcs=FLAGS.upload_to_gcs,
+      gcs_model_path=gcs_model_path,
+      gcs_checkpoint_path=gcs_checkpoint_path,
+      gcs_client=gcs_client))
   training_manager.train()
 
 

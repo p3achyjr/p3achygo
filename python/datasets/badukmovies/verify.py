@@ -4,14 +4,16 @@ Janky script to verify training examples.
 Please do not use :)
 '''
 
+from __future__ import annotations
+
 import datasets.badukmovies
 import tensorflow_datasets as tfds
 
 from board import GoBoard
 
-NUM_EXAMPLES_TO_PRINT = 10
+NUM_EXAMPLES_TO_PRINT = 20
 
-ds = tfds.load('badukmovies', split='train')
+ds = tfds.load('badukmovies', split='train[99%:100%]')
 
 if __name__ == '__main__':
   goban = GoBoard()
@@ -21,24 +23,29 @@ if __name__ == '__main__':
     if ex_count > NUM_EXAMPLES_TO_PRINT:
       break
 
-    board, last_moves, policy = ex['board'].numpy().tolist(
-    ), ex['last_moves'].numpy().tolist(), ex['policy'].numpy().tolist()
+    metadata, board, komi, color, result, last_moves, policy = (
+        ex['metadata'], ex['board'].numpy().tolist(), ex['komi'].numpy(),
+        ex['color'].numpy(), ex['result'].numpy(),
+        ex['last_moves'].numpy().tolist(), ex['policy'].numpy().tolist())
     goban.board = board
 
     print('--------------------')
-    print(ex['metadata'].numpy())
-    print('last_moves: ', last_moves)
+    print(f'Metadata: {metadata}')
+    print(f'Komi: {komi}')
+    print(f'Color: {color}')
+    print(f'Result: {result}')
+    print(f'Last Moves: {last_moves}')
     goban.print()
 
     if policy[1] == 19:
-      print('move: PASS')
+      print('Move: PASS')
       continue
 
-    print('move:', policy[0], 'ABCDEFGHIJKLMNOPQRS'[policy[1]])
+    print('Move:', policy[0], 'ABCDEFGHIJKLMNOPQRS'[policy[1]])
 
     if not goban.move_black(policy[0], policy[1]):
       print(ex['metadata'].numpy())
-      print('move: ', policy[0], 'ABCDEFGHIJKLMNOPQRS'[policy[1]])
+      print('Move: ', policy[0], 'ABCDEFGHIJKLMNOPQRS'[policy[1]])
       goban.print()
 
     # goban.print()
