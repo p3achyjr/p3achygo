@@ -89,6 +89,26 @@ def train_step(input, komi, score, policy, model, optimizer):
   return pi_logits, game_outcome, score_logits, loss
 
 
+@tf.function(jit_compile=True)
+def train_step_gpu(input, komi, score, policy, model, optimizer):
+  with tf.GradientTape() as g:
+    pi_logits, game_outcome, game_ownership, score_logits, gamma = model(
+        input, tf.expand_dims(komi, axis=1), training=True)
+    training_loss = model.loss(pi_logits, game_outcome, score_logits, gamma,
+                               policy, score)
+
+    regularization_loss = tf.cast(tf.math.add_n(model.losses), dtype=tf.float16)
+
+    loss = training_loss + regularization_loss
+    scaled_loss = optimizer.get_scaled_loss(loss)
+
+  scaled_gradients = g.gradient(scaled_loss, model.trainable_variables)
+  gradients = optimizer.get_unscaled_gradients(scaled_gradients)
+  optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+
+  return pi_logits, game_outcome, score_logits, loss
+
+
 class LossHistory:
 
   def __init__(self, smoothing_factor=0.95):
@@ -168,7 +188,7 @@ class SupervisedTrainingManager:
     self.test_ds = self.test_ds.prefetch(tf.data.AUTOTUNE)
 
   # @tf.function
-  def train(self):
+  def train(self, train_fn, is_gpu=False):
     model = P3achyGoModel.create(config=ModelConfig.small(),
                                  board_len=BOARD_LEN,
                                  num_input_planes=NUM_INPUT_PLANES,
@@ -177,13 +197,15 @@ class SupervisedTrainingManager:
     optimizer = tf.keras.optimizers.experimental.SGD(
         learning_rate=self.training_config.kInitLearningRate,
         momentum=self.training_config.kLearningRateMomentum)
+    if is_gpu:
+      optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
 
     print(model.summary(batch_size=self.training_config.kBatchSize))
 
     batch_num = 0
     for _ in range(self.training_config.kEpochs):
       for (input, komi, score, policy) in self.train_ds:
-        pi_logits, game_outcome, score_logits, current_loss = train_step(
+        pi_logits, game_outcome, score_logits, current_loss = train_fn(
             input, komi, score, policy, model, optimizer)
         if batch_num % self.training_config.kLogInterval == 0:
           top_policy_indices = tf.math.top_k(pi_logits[0], k=5).indices
@@ -301,14 +323,6 @@ def main(argv):
   gcs_checkpoint_path = os.path.join(
       FLAGS.gcs_path, 'model_checkpoint_{}') if FLAGS.upload_to_gcs else None
 
-  if tf.config.list_physical_devices('GPU'):
-    tf.keras.mixed_precision.set_global_policy('mixed_float16')
-
-  logging.info('Compute Policy dtype: %s' %
-               tf.keras.mixed_precision.global_policy().compute_dtype)
-  logging.info('Variable Policy dtype: %s' %
-               tf.keras.mixed_precision.global_policy().variable_dtype)
-
   training_manager = SupervisedTrainingManager(training_config=TrainingConfig(
       batch_size=FLAGS.batch_size,
       epochs=FLAGS.epochs,
@@ -323,7 +337,16 @@ def main(argv):
       gcs_model_path=gcs_model_path,
       gcs_checkpoint_path=gcs_checkpoint_path,
       gcs_client=gcs_client))
-  training_manager.train()
+
+  if tf.config.list_physical_devices('GPU'):
+    tf.keras.mixed_precision.set_global_policy('mixed_float16')
+    logging.info('Compute Policy dtype: %s' %
+                 tf.keras.mixed_precision.global_policy().compute_dtype)
+    logging.info('Variable Policy dtype: %s' %
+                 tf.keras.mixed_precision.global_policy().variable_dtype)
+    training_manager.train(train_step_gpu, is_gpu=True)
+  else:
+    training_manager.train(train_step, is_gpu=False)
 
 
 if __name__ == '__main__':

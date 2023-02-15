@@ -450,6 +450,8 @@ class ValueHead(tf.keras.layers.Layer):
     self.score_min, self.score_max = -score_range // 2, score_range // 2
     self.scores = .05 * tf.range(self.score_min + .5,
                                  self.score_max + .5)  # [-399.5 ... 399.5]
+    self.score_identity = tf.keras.layers.Activation(
+        'linear')  # need for mixed-precision
     self.score_pre = tf.keras.layers.Dense(c_val,
                                            kernel_regularizer=L2(C_L2),
                                            name='score_distribution_pre')
@@ -486,7 +488,7 @@ class ValueHead(tf.keras.layers.Layer):
     # [[-399.5]
     #   ...
     #   399.5]]
-    scores = tf.expand_dims(self.scores, axis=1)
+    scores = self.score_identity(tf.expand_dims(self.scores, axis=1))
     # [[[-399.5]
     #   ...
     #   399.5]]]
@@ -631,7 +633,7 @@ class P3achyGoModel(tf.keras.Model):
 
     # print('Policy Loss:', policy_loss.numpy())
 
-    outcome_clip_max = 5.0
+    outcome_clip_max = 100.0
     did_win = score >= 0
     outcome_loss = tf.clip_by_value(
         c_outcome * self.scce(did_win, game_outcome), -outcome_clip_max,
