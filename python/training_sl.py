@@ -71,13 +71,13 @@ def upload_dir_to_gcs(gcs_client, directory_path: str, dest_blob_name: str):
       blob.upload_from_filename(local_file)
 
 
-@tf.function
-def train_step(input, komi, score, policy, model, optimizer):
+# @tf.function
+def train_step(input, komi, score, score_one_hot, policy, model, optimizer):
   with tf.GradientTape() as g:
     pi_logits, game_outcome, game_ownership, score_logits, gamma = model(
         input, tf.expand_dims(komi, axis=1), training=True)
     training_loss = model.loss(pi_logits, game_outcome, score_logits, gamma,
-                               policy, score)
+                               policy, score, score_one_hot)
 
     regularization_loss = tf.math.add_n(model.losses)
 
@@ -90,12 +90,12 @@ def train_step(input, komi, score, policy, model, optimizer):
 
 
 @tf.function(jit_compile=True)
-def train_step_gpu(input, komi, score, policy, model, optimizer):
+def train_step_gpu(input, komi, score, score_one_hot, policy, model, optimizer):
   with tf.GradientTape() as g:
     pi_logits, game_outcome, game_ownership, score_logits, gamma = model(
         input, tf.expand_dims(komi, axis=1), training=True)
     training_loss = model.loss(pi_logits, game_outcome, score_logits, gamma,
-                               policy, score)
+                               policy, score, score_one_hot)
 
     regularization_loss = tf.cast(tf.math.add_n(model.losses), dtype=tf.float16)
 
@@ -204,9 +204,9 @@ class SupervisedTrainingManager:
 
     batch_num = 0
     for _ in range(self.training_config.kEpochs):
-      for (input, komi, score, policy) in self.train_ds:
+      for (input, komi, score, score_one_hot, policy) in self.train_ds:
         pi_logits, game_outcome, score_logits, current_loss = train_fn(
-            input, komi, score, policy, model, optimizer)
+            input, komi, score, score_one_hot, policy, model, optimizer)
         if batch_num % self.training_config.kLogInterval == 0:
           top_policy_indices = tf.math.top_k(pi_logits[0], k=5).indices
           top_policy_values = tf.math.top_k(pi_logits[0], k=5).values
@@ -221,7 +221,7 @@ class SupervisedTrainingManager:
           print(f'Predicted Outcome: {tf.nn.softmax(game_outcome[0])}')
           print(f'Predicted Scores: {top_score_indices}')
           print(f'Predicted Score Values: {top_score_values}')
-          print(f'Actual Score: {score[0].numpy()}')
+          print(f'Actual Score: {score[0]}')
           print(f'Predicted Top 5 Moves: {top_policy_indices}')
           print(f'Predicted Top 5 Move Values: {top_policy_values}')
           print(f'Actual Policy: {policy[0]}')
@@ -277,6 +277,10 @@ class SupervisedTrainingManager:
     first_move_before = GoBoardTrainingUtils.as_one_hot(
         tf.cast(last_moves[4], dtype=tf.int32))
 
+    score_index = tf.cast([[score + SCORE_RANGE_MIDPOINT]], dtype=tf.int32)
+    score_one_hot = tf.cast(tf.scatter_nd(score_index, [1.0],
+                                          shape=(SCORE_RANGE,)),
+                            dtype=tf.float32)
     policy = GoBoardTrainingUtils.as_index(tf.cast(policy, dtype=tf.int32))
 
     input = tf.convert_to_tensor([
@@ -287,7 +291,7 @@ class SupervisedTrainingManager:
 
     input = tf.transpose(input, perm=(1, 2, 0))  # CHW -> HWC
 
-    return input, komi, score, policy
+    return input, komi, score, score_one_hot, policy
 
 
 def main(argv):

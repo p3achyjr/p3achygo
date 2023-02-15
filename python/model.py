@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import tensorflow as tf
 
+from constants import *
 from model_config import ModelConfig
 
 L2 = tf.keras.regularizers.L2
@@ -412,7 +413,7 @@ class ValueHead(tf.keras.layers.Layer):
   - (800, ) logits representing score difference
   '''
 
-  def __init__(self, channels=32, c_val=64, score_range=800, name=None):
+  def __init__(self, channels=32, c_val=64, score_range=SCORE_RANGE, name=None):
     super(ValueHead, self).__init__(name=name)
 
     ## Initialize Model Layers ##
@@ -589,7 +590,9 @@ class P3achyGoModel(tf.keras.Model):
     self.value_head = ValueHead(num_head_channels, c_val, name='value_head')
 
     ## Initialize Loss Objects. Defer reduction strategy to loss objects ##
-    self.scce = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+    self.scce_logits = tf.keras.losses.SparseCategoricalCrossentropy(
+        from_logits=True)
+    self.scce = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)
 
     # store parameters so we can serialize model correctly
     self.board_len = board_len
@@ -622,28 +625,38 @@ class P3achyGoModel(tf.keras.Model):
 
     return pi_logits, game_outcome, game_ownership, score_logits, gamma
 
-  def loss(self, pi_logits, game_outcome, score_logits, gamma, policy, score):
+  def loss(self, pi_logits, game_outcome, score_logits, gamma, policy, score,
+           score_one_hot):
     # constants weighting each loss component
     c_outcome = 1.5
     c_score = .02
     c_gamma_scaling = .0005
 
     # compute actual loss value
-    policy_loss = self.scce(policy, pi_logits)
+    policy_loss = self.scce_logits(policy, pi_logits)
 
     # print('Policy Loss:', policy_loss.numpy())
 
     outcome_clip_max = 100.0
     did_win = score >= 0
     outcome_loss = tf.clip_by_value(
-        c_outcome * self.scce(did_win, game_outcome), -outcome_clip_max,
+        c_outcome * self.scce_logits(did_win, game_outcome), -outcome_clip_max,
         outcome_clip_max)
 
     # print('Outcome Loss:', outcome_loss.numpy())
 
-    score_index = score + 400
-    score_loss = c_score * self.scce(score_index, score_logits)
+    score_index = score + SCORE_RANGE_MIDPOINT
+    score_distribution = tf.keras.activations.softmax(score_logits)
+    score_pdf_loss = self.scce(score_index, score_distribution)
+    score_cdf_loss = tf.math.reduce_mean(
+        tf.math.reduce_sum(tf.math.square(
+            tf.math.cumsum(score_one_hot, axis=1) -
+            tf.math.cumsum(score_distribution, axis=1)),
+                           axis=1))
 
+    score_loss = c_score * (score_pdf_loss + score_cdf_loss)
+    # print('Score PDF Loss:', score_pdf_loss.numpy())
+    # print('Score CDF Loss:', score_cdf_loss.numpy())
     # print('Score Loss:', score_loss.numpy())
 
     gamma = tf.squeeze(gamma, axis=-1)
