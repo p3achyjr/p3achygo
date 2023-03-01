@@ -3,3 +3,6 @@
 *.sgf
 dummy_data/*
 *.pyc
+bazel-*
+third_party/testU01
+.vscode

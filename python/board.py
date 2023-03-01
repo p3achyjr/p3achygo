@@ -4,16 +4,10 @@ import bitstring, random
 import numpy as np
 import tensorflow as tf
 
+from constants import *
+
 BITSTRING_LEN = 128
 UINT_MAX = 2**128 - 1
-
-BOARD_LEN = 19
-EMPTY = 0
-BLACK = 1
-WHITE = 2
-
-NON_MOVE = (-1, -1)
-PASS_MOVE = (BOARD_LEN - 1, BOARD_LEN)
 
 
 def is_star_point(board, i, j) -> bool:
@@ -100,6 +94,9 @@ class GoBoard:
     return self.move(WHITE, i, j)
 
   def move(self, color: int, i: int, j: int) -> bool:
+    if color not in [BLACK, WHITE]:
+      print(f'Invalid Color: {color}')
+
     if (self.board[i][j] != EMPTY):
       print('Invalid Move! Board Position Not Empty.')
       return False

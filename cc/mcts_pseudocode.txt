@@ -1,0 +1,59 @@
+class MctsExecutor(MctsEvaluator evaluator):
+  def search():
+    state = evaluator.initial_state()
+    while not state.terminal():
+      state' = evaluator.transition()
+
+NUM_TRANSITIONS = 362
+
+struct ActionMap:
+  N: uint32[NUM_TRANSITIONS]
+  W: float32[NUM_TRANSITIONS]
+  Q: float32[NUM_TRANSITIONS]
+  P: float32[NUM_TRANSITIONS]
+
+
+class GoMctsEvaluator:
+  def __init__():
+    position_eval_table_ = Table<uint128, ActionMap>
+
+  def search_from_root(state: GoMctsState, k: int): # we want to search from the current board pos
+    for _ in range(k):
+      move = state.get_root_move()
+      state' = state.transition(move)
+      search_non_root(state)
+
+  def search_non_root(state: GoMctsState):
+    if state.is_leaf():
+      nn_eval = NNEvaluate(state)
+      position_eval_table_.insert(state, ActionMap(N=[0s], W=[0.0s], Q=[0.0s], P=nn_eval.pi_logits))
+      backup(state, nn_eval.value)
+
+      return
+
+    move = state.get_non_root_move()
+
+
+class GoGumbelMctsEvaluator:
+  position_eval_table_ = Table<uint128, ActionMap>
+
+  def search_from_root(state: GoMctsState, num_rounds: int, num_per_round: int): # we want to search from the current board pos
+    n = 2 ^ num_rounds * num_per_round
+    m = 2 ^ num_rounds
+
+    g = [x ~ Gumbel(0) for 0 ... 361]
+    logits = state.pi + g
+    a_top_m = top_m(logits, m)
+    sigma = (50 + max(position_eval_table_(state).N))
+    for _ in num_rounds:
+
+
+  def search_non_root(state: GoMctsState):
+    if state.is_leaf():
+      nn_eval = NNEvaluate(state)
+      position_eval_table_.insert(state, ActionMap(N=[0s], W=[0.0s], Q=[0.0s], P=nn_eval.pi_logits))
+      backup(state, nn_eval.value)
+
+      return
+
+    move = state.get_non_root_move()

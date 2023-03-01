@@ -71,7 +71,7 @@ def upload_dir_to_gcs(gcs_client, directory_path: str, dest_blob_name: str):
       blob.upload_from_filename(local_file)
 
 
-# @tf.function
+@tf.function
 def train_step(input, komi, score, score_one_hot, policy, model, optimizer):
   with tf.GradientTape() as g:
     pi_logits, game_outcome, game_ownership, score_logits, gamma = model(
@@ -174,17 +174,17 @@ class SupervisedTrainingManager:
         shuffle_files=True)
 
     # setup training dataset
+    self.train_ds = self.train_ds.batch(self.training_config.kBatchSize)
     self.train_ds = self.train_ds.map(SupervisedTrainingManager.expand,
                                       num_parallel_calls=tf.data.AUTOTUNE)
     self.train_ds = self.train_ds.shuffle(
         self.training_config.kDatasetShuffleSize)
-    self.train_ds = self.train_ds.batch(self.training_config.kBatchSize)
     self.train_ds = self.train_ds.prefetch(tf.data.AUTOTUNE)
 
     # setup test dataset
+    self.test_ds = self.test_ds.batch(self.training_config.kBatchSize)
     self.test_ds = self.test_ds.map(SupervisedTrainingManager.expand,
                                     num_parallel_calls=tf.data.AUTOTUNE)
-    self.test_ds = self.test_ds.batch(self.training_config.kBatchSize)
     self.test_ds = self.test_ds.prefetch(tf.data.AUTOTUNE)
 
   # @tf.function

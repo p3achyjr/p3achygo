@@ -593,6 +593,8 @@ class P3achyGoModel(tf.keras.Model):
     self.scce_logits = tf.keras.losses.SparseCategoricalCrossentropy(
         from_logits=True)
     self.scce = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)
+    self.identity = tf.keras.layers.Activation(
+        'linear')  # need for mixed-precision
 
     # store parameters so we can serialize model correctly
     self.board_len = board_len
@@ -650,7 +652,7 @@ class P3achyGoModel(tf.keras.Model):
     score_pdf_loss = self.scce(score_index, score_distribution)
     score_cdf_loss = tf.math.reduce_mean(
         tf.math.reduce_sum(tf.math.square(
-            tf.math.cumsum(score_one_hot, axis=1) -
+            tf.math.cumsum(self.identity(score_one_hot), axis=1) -
             tf.math.cumsum(score_distribution, axis=1)),
                            axis=1))
 

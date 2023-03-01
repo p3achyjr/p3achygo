@@ -1,0 +1,23 @@
+build:default --copt="-std=c++17"
+
+build:asan --strip=never
+build:asan --copt="-std=c++17"
+build:asan --copt -fsanitize=address
+build:asan --copt -DADDRESS_SANITIZER
+build:asan --copt -O1
+build:asan --copt -g
+build:asan --copt -fno-omit-frame-pointer
+build:asan --linkopt -fsanitize=address
+
+build:debug --copt="-std=c++17"
+build:debug --copt -g
+build:debug --strip=never
+build:debug --compilation_mode=dbg
+
+build:opt --copt="-std=c++17"
+build:opt --compilation_mode=opt
+
+build:O3 --compilation_mode=opt
+build:O3 --copt="-std=c++17"
+build:O3 --copt -O3
+build:O3 --strip=always
