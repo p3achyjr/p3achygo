@@ -1,6 +1,0 @@
-module(
-    name = "p3achygo",
-    version = "0.0.1",
-)
-
-bazel_dep(name = "abseil-cpp", version = "20210324.2", repo_name = "absl")

@@ -4,5 +4,6 @@
 dummy_data/*
 *.pyc
 bazel-*
+external/*
 third_party/testU01
 .vscode
