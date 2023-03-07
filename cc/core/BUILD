@@ -3,6 +3,7 @@ package(default_visibility = ["//visibility:public"])
 cc_library(
     name = "core",
     deps = [
+        ":probability",
         ":rand",
     ],
 )
@@ -10,6 +11,12 @@ cc_library(
 cc_library(
     name = "types",
     hdrs = ["types.h"],
+)
+
+cc_library(
+    name = "probability",
+    srcs = ["probability.cc"],
+    hdrs = ["probability.h"],
 )
 
 cc_library(

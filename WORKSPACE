@@ -1,16 +1,28 @@
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+load("tensorflow_http_archive.bzl", "tensorflow_http_archive")
 
-http_archive(
-    name = "absl",
-    strip_prefix = "abseil-cpp-a0f9b465212aea24d3264b82d315b8ee59e8d7a0",
-    urls = ["https://github.com/abseil/abseil-cpp/archive/a0f9b465212aea24d3264b82d315b8ee59e8d7a0.zip"],
+tensorflow_http_archive(
+    name = "org_tensorflow",
+    sha256 = "99c732b92b1b37fc243a559e02f9aef5671771e272758aa4aec7f34dc92dac48",
+    version = "2.11.0",
 )
 
-http_archive(
-    name = "bazel_skylib",
-    sha256 = "f7be3474d42aae265405a592bb7da8e171919d74c16f082a5457840f06054728",
-    urls = ["https://github.com/bazelbuild/bazel-skylib/releases/download/1.2.1/bazel-skylib-1.2.1.tar.gz"],
-)
+# Initialize TensorFlow's external dependencies.
+load("@org_tensorflow//tensorflow:workspace3.bzl", "workspace")
+
+workspace()
+
+load("@org_tensorflow//tensorflow:workspace2.bzl", "workspace")
+
+workspace()
+
+load("@org_tensorflow//tensorflow:workspace1.bzl", "workspace")
+
+workspace()
+
+load("@org_tensorflow//tensorflow:workspace0.bzl", "workspace")
+
+workspace()
 
 # Hedron's Compile Commands Extractor for Bazel
 # https://github.com/hedronvision/bazel-compile-commands-extractor
@@ -27,3 +39,20 @@ http_archive(
 load("@hedron_compile_commands//:workspace_setup.bzl", "hedron_compile_commands_setup")
 
 hedron_compile_commands_setup()
+
+# Initialize bazel package rules' external dependencies.
+load("@rules_pkg//:deps.bzl", "rules_pkg_dependencies")
+
+rules_pkg_dependencies()
+
+load("@rules_proto//proto:repositories.bzl", "rules_proto_dependencies", "rules_proto_toolchains")
+
+rules_proto_dependencies()
+
+rules_proto_toolchains()
+
+http_archive(
+    name = "absl",
+    strip_prefix = "abseil-cpp-a0f9b465212aea24d3264b82d315b8ee59e8d7a0",
+    urls = ["https://github.com/abseil/abseil-cpp/archive/a0f9b465212aea24d3264b82d315b8ee59e8d7a0.zip"],
+)

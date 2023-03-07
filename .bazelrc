@@ -1,7 +1,38 @@
-build:default --copt="-std=c++17"
+common --experimental_repo_remote_exec
+
+build --apple_platform_type=macos
+build --announce_rc
+build --experimental_cc_shared_library
+build --keep_going
+build --cxxopt=-std=c++17
+build --host_cxxopt=-std=c++17
+build --enable_platform_specific_config
+build --verbose_failures=true
+build --spawn_strategy=standalone
+build --genrule_strategy=standalone
+
+build --define=grpc_no_ares=true
+
+build --define=tsl_link_protobuf=true
+
+# Disable enabled-by-default TensorFlow features that we don't care about.
+build --define=no_aws_support=true
+build --define=no_kafka_support=true
+build --define=no_ignite_support=true
+
+build --crosstool_top=//toolchain:clang_suite
+# build --host_crosstool_top=@bazel_tools//tools/cpp:toolchain
+
+# Adding "--cxxopt=-D_GLIBCXX_USE_CXX11_ABI=0" creates parity with TF
+# compilation options. It also addresses memory use due to
+# copy-on-write semantics of std::strings of the older ABI.
+# build --cxxopt=-D_GLIBCXX_USE_CXX11_ABI=0
+
+build:macos --cpu=darwin
+
 
 build:asan --strip=never
-build:asan --copt="-std=c++17"
+build:asan --spawn_strategy=local
 build:asan --copt -fsanitize=address
 build:asan --copt -DADDRESS_SANITIZER
 build:asan --copt -O1
@@ -9,15 +40,12 @@ build:asan --copt -g
 build:asan --copt -fno-omit-frame-pointer
 build:asan --linkopt -fsanitize=address
 
-build:debug --copt="-std=c++17"
 build:debug --copt -g
 build:debug --strip=never
 build:debug --compilation_mode=dbg
 
-build:opt --copt="-std=c++17"
 build:opt --compilation_mode=opt
 
 build:O3 --compilation_mode=opt
-build:O3 --copt="-std=c++17"
 build:O3 --copt -O3
 build:O3 --strip=always
