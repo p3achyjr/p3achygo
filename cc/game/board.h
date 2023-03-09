@@ -8,6 +8,10 @@
 #include "cc/game/constants.h"
 #include "cc/game/zobrist_hash.h"
 
+namespace nn {
+class NNBoardUtils;
+}
+
 namespace game {
 
 using groupid = int;
@@ -124,6 +128,7 @@ class Board final {
   float Score(int color) const;
 
   friend std::ostream& operator<<(std::ostream& os, const Board& board);
+  friend class ::nn::NNBoardUtils;
 
  private:
   int AtLoc(Loc loc) const;
@@ -180,13 +185,19 @@ inline std::ostream& operator<<(std::ostream& os,
 }
 
 inline std::ostream& operator<<(std::ostream& os, const Board& board) {
+  auto is_star_point = [](int i, int j) {
+    return (i == 3 || i == 9 || i == 15) && (j == 3 || j == 9 || j == 15);
+  };
+
   for (auto i = 0; i < board.length_; i++) {
     if (i < 10)
       os << i << "  ";
     else
       os << i << " ";
     for (auto j = 0; j < board.length_; j++) {
-      if (board.at(i, j) == EMPTY) {
+      if (board.at(i, j) == EMPTY && is_star_point(i, j)) {
+        os << "+ ";
+      } else if (board.at(i, j) == EMPTY) {
         os << "⋅ ";
       } else if (board.at(i, j) == BLACK) {
         os << "○ ";
@@ -198,7 +209,7 @@ inline std::ostream& operator<<(std::ostream& os, const Board& board) {
     os << "\n";
   }
 
-  os << "  "
+  os << "   "
      << "A B C D E F G H I J K L M N O P Q R S";
 
   return os;

@@ -23,6 +23,10 @@ build --define=no_ignite_support=true
 build --crosstool_top=//toolchain:clang_suite
 # build --host_crosstool_top=@bazel_tools//tools/cpp:toolchain
 
+# Tensorflow flags to enable speedup
+build --copt -march=native
+build --copt -mavx
+
 # Adding "--cxxopt=-D_GLIBCXX_USE_CXX11_ABI=0" creates parity with TF
 # compilation options. It also addresses memory use due to
 # copy-on-write semantics of std::strings of the older ABI.
@@ -30,6 +34,7 @@ build --crosstool_top=//toolchain:clang_suite
 
 build:macos --cpu=darwin
 
+build:linux --cpu=k8
 
 build:asan --strip=never
 build:asan --spawn_strategy=local
