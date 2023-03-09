@@ -17,6 +17,7 @@ cc_library(
     name = "probability",
     srcs = ["probability.cc"],
     hdrs = ["probability.h"],
+    deps = [":rand"],
 )
 
 cc_library(
@@ -24,7 +25,7 @@ cc_library(
     srcs = ["rand.cc"],
     hdrs = ["rand.h"],
     deps = [
-        "@absl//absl/numeric:int128",
+        "@com_google_absl//absl/numeric:int128",
     ],
 )
 

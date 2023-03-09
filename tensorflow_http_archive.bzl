@@ -8,8 +8,7 @@ def _tensorflow_http_archive(ctx):
 
     strip_prefix = "tensorflow-%s" % version
     urls = [
-        "https://mirror.bazel.build/github.com/tensorflow/tensorflow/archive/%s.tar.gz" % version,
-        "https://github.com/tensorflow/tensorflow/archive/%s.tar.gz" % version,
+        "https://github.com/tensorflow/tensorflow/archive/refs/tags/v%s.tar.gz" % version,
     ]
     ctx.download_and_extract(
         urls,

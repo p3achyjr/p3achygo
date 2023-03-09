@@ -14,43 +14,9 @@ all_link_actions = [
 ]
 
 def _impl(ctx):
-    tool_paths = [
-        tool_path(
-            name = "gcc",
-            path = "/usr/local/opt/llvm/bin/clang",
-        ),
-        tool_path(
-            name = "ld",
-            path = "/usr/local/opt/llvm/bin/lld",
-        ),
-        tool_path(
-            name = "ar",
-            path = "/usr/local/opt/llvm/bin/llvm-ar",
-        ),
-        tool_path(
-            name = "cpp",
-            path = "/bin/false",
-        ),
-        tool_path(
-            name = "gcov",
-            path = "/usr/local/opt/llvm/bin/llvm-gcov",
-        ),
-        tool_path(
-            name = "nm",
-            path = "/usr/local/opt/llvm/bin/llvm-nm",
-        ),
-        tool_path(
-            name = "objdump",
-            path = "/usr/local/opt/llvm/bin/llvm-objdump",
-        ),
-        tool_path(
-            name = "strip",
-            path = "/usr/local/opt/llvm/bin/llvm-strip",
-        ),
-    ]
+    tool_paths = [tool_path(name = name, path = path) for name, path in ctx.attr.tool_paths.items()]
 
     features = [
-        # NEW
         feature(
             name = "default_linker_flags",
             enabled = True,
@@ -71,18 +37,12 @@ def _impl(ctx):
 
     return cc_common.create_cc_toolchain_config_info(
         ctx = ctx,
-        features = features,  # NEW
-        cxx_builtin_include_directories = [
-            "/usr/local/opt/llvm/lib/clang/12.0.0/include",
-            "/usr/local/Cellar/llvm/12.0.0/lib/clang/12.0.0/include",
-            "/usr/local/opt/llvm/include/c++/v1",
-            "/Library/Developer/CommandLineTools/SDKs/MacOSX10.15.sdk/usr/include/",
-            "/Library/Developer/CommandLineTools/SDKs/MacOSX10.15.sdk/System/Library/Frameworks",
-        ],
+        features = features,
+        cxx_builtin_include_directories = ctx.attr.include_paths,
         toolchain_identifier = "local",
         host_system_name = "local",
         target_system_name = "local",
-        target_cpu = "darwin",
+        target_cpu = ctx.attr.cpu,
         target_libc = "unknown",
         compiler = "clang",
         abi_version = "unknown",
@@ -92,6 +52,10 @@ def _impl(ctx):
 
 cc_toolchain_config = rule(
     implementation = _impl,
-    attrs = {},
+    attrs = {
+        "include_paths": attr.string_list(),
+        "tool_paths": attr.string_dict(),
+        "cpu": attr.string(),
+    },
     provides = [CcToolchainConfigInfo],
 )
