@@ -159,6 +159,40 @@ class PeriodicPlotter:
       self.tic = time.time()
 
 
+class CyclicLearningRate:
+  '''
+  Class implementing cyclic learning rate.
+
+  https://arxiv.org/pdf/1803.09820.pdf
+  '''
+
+  def __init__(self, learning_rate, max_learning_rate, total_iterations):
+    self.iteration = 0
+    self.learning_rate_min = learning_rate
+    self.learning_rate = learning_rate
+    self.learning_rate_max = max_learning_rate
+    self.total_iterations = total_iterations
+
+    # decay learning rate for end of training cycle
+    self.learning_rate_final = learning_rate * .25
+
+    self.cycle_len = int(self.total_iterations * .45)
+    self.lr_delta = (max_learning_rate - learning_rate) / self.cycle_len
+    self.lr_decay_delta = (learning_rate - self.learning_rate_final) / (
+        self.total_iterations * .1)
+
+  def update_lr(self):
+    if self.iteration < self.cycle_len:
+      # first phase, increase
+      self.learning_rate += self.lr_delta
+    elif self.iteration < self.cycle_len * 2:
+      # second phase, decrease
+      self.learning_rate -= self.lr_delta
+    else:
+      # final decay phase. linear decay to `learning_rate_final`
+      self.learning_rate -= self.lr_decay_delta
+
+
 class SupervisedTrainingManager:
   '''
   Training routine for supervised learning.
@@ -174,17 +208,17 @@ class SupervisedTrainingManager:
         shuffle_files=True)
 
     # setup training dataset
-    self.train_ds = self.train_ds.batch(self.training_config.kBatchSize)
     self.train_ds = self.train_ds.map(SupervisedTrainingManager.expand,
                                       num_parallel_calls=tf.data.AUTOTUNE)
+    self.train_ds = self.train_ds.batch(self.training_config.kBatchSize)
     self.train_ds = self.train_ds.shuffle(
         self.training_config.kDatasetShuffleSize)
     self.train_ds = self.train_ds.prefetch(tf.data.AUTOTUNE)
 
     # setup test dataset
-    self.test_ds = self.test_ds.batch(self.training_config.kBatchSize)
     self.test_ds = self.test_ds.map(SupervisedTrainingManager.expand,
                                     num_parallel_calls=tf.data.AUTOTUNE)
+    self.test_ds = self.test_ds.batch(self.training_config.kBatchSize)
     self.test_ds = self.test_ds.prefetch(tf.data.AUTOTUNE)
 
   # @tf.function
@@ -194,8 +228,13 @@ class SupervisedTrainingManager:
                                  num_input_planes=NUM_INPUT_PLANES,
                                  num_input_features=NUM_INPUT_FEATURES,
                                  name='p3achy_test')
+    cyclic_learning_rate = CyclicLearningRate(
+        self.training_config.kInitLearningRate,
+        self.training_config.kInitLearningRate * 10,
+        len(self.train_ds) // self.training_config.kBatchSize *
+        self.training_config.kEpochs)
     optimizer = tf.keras.optimizers.experimental.SGD(
-        learning_rate=self.training_config.kInitLearningRate,
+        learning_rate=cyclic_learning_rate.learning_rate,
         momentum=self.training_config.kLearningRateMomentum)
     if is_gpu:
       optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
@@ -204,7 +243,9 @@ class SupervisedTrainingManager:
 
     batch_num = 0
     for _ in range(self.training_config.kEpochs):
+      # train
       for (input, komi, score, score_one_hot, policy) in self.train_ds:
+        break
         pi_logits, game_outcome, score_logits, current_loss = train_fn(
             input, komi, score, score_one_hot, policy, model, optimizer)
         if batch_num % self.training_config.kLogInterval == 0:
@@ -228,10 +269,10 @@ class SupervisedTrainingManager:
           print(f'Board:')
           print(GoBoard.to_string(board.numpy()))
 
-        if (0 < batch_num < self.training_config.kLearningRateInterval and
-            batch_num % self.training_config.kLearningRateInterval == 0):
-          tf.keras.backend.set_value(optimizer.learning_rate,
-                                     optimizer.learning_rate / 10)
+        # update learning rate
+        cyclic_learning_rate.update_lr()
+        tf.keras.backend.set_value(optimizer.learning_rate,
+                                   cyclic_learning_rate.learning_rate)
 
         if batch_num % self.training_config.kModelSaveInterval == 0:
           local_path = self.training_config.kLocalModelPath.format(batch_num)
@@ -255,13 +296,50 @@ class SupervisedTrainingManager:
 
         batch_num += 1
 
+      # validation
+      correct_moves = 0
+      correct_outcomes = 0
+      total_moves = 0
+      total_outcomes = 0
+      test_batch_num = 0
+      for (input, komi, score, score_one_hot, policy) in self.test_ds:
+        pi_logits, game_outcome, game_ownership, score_logits, gamma = model(
+            input, tf.expand_dims(komi, axis=1), training=False)
+
+        predicted_move = tf.math.argmax(pi_logits, axis=1, output_type=tf.int32)
+        predicted_outcome = tf.math.argmax(game_outcome,
+                                           axis=1,
+                                           output_type=tf.int32)
+
+        correct_move = tf.cast(tf.equal(policy, predicted_move), dtype=tf.int32)
+        correct_outcome = tf.cast(tf.equal(
+            tf.where(score >= 0, tf.ones_like(predicted_outcome,
+                                              dtype=tf.int32),
+                     tf.zeros_like(predicted_outcome, dtype=tf.int32)),
+            predicted_outcome),
+                                  dtype=tf.int32)
+
+        correct_moves += tf.reduce_sum(correct_move).numpy()
+        correct_outcomes += tf.size(predicted_move).numpy()
+        total_moves += tf.reduce_sum(correct_outcome).numpy()
+        total_outcomes += tf.size(predicted_outcome).numpy()
+
+        if test_batch_num % self.training_config.kLogInterval == 0:
+          print("Correct Moves: ", correct_moves, ", Total Moves: ",
+                total_moves)
+          print("Correct Outcomes: ", correct_outcomes, ", Total Outcomes: ",
+                total_outcomes)
+          print("Prediction Moves Percentage: ",
+                float(correct_moves) / total_moves)
+          print("Prediction Outcome Percentage: ",
+                float(correct_outcomes) / total_outcomes)
+
   @staticmethod
   def expand(ex):
     board, komi, color, score, last_moves, policy = (ex['board'], ex['komi'],
                                                      ex['color'], ex['result'],
                                                      ex['last_moves'],
                                                      ex['policy'])
-
     assert (last_moves.shape == (5, 2))
 
     black_stones = GoBoardTrainingUtils.get_black(board)
