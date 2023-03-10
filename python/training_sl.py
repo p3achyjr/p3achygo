@@ -245,7 +245,6 @@ class SupervisedTrainingManager:
     for _ in range(self.training_config.kEpochs):
       # train
       for (input, komi, score, score_one_hot, policy) in self.train_ds:
-        break
         pi_logits, game_outcome, score_logits, current_loss = train_fn(
             input, komi, score, score_one_hot, policy, model, optimizer)
         if batch_num % self.training_config.kLogInterval == 0:
