@@ -11,9 +11,6 @@ sudo ./llvm.sh 12
 # Install Python
 sudo apt install python-pip3
 
-# Install Tensorflow Python
-sudo pip3 install tensorflow==2.11.0
-
 # Install Bazel
 wget https://github.com/bazelbuild/bazelisk/releases/download/v1.16.0/bazelisk-linux-amd64
 chmod +x bazelisk-linux-amd64

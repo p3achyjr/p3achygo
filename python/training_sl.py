@@ -11,6 +11,7 @@ import tensorflow_datasets as tfds
 
 import glob
 import os
+import sys
 import time
 
 from absl import app, flags, logging
@@ -22,6 +23,9 @@ from model_config import ModelConfig
 from google.cloud import storage
 
 import matplotlib.pyplot as plt
+
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
 
 GCP_BUCKET = 'p3achygo_models'
 
@@ -89,7 +93,7 @@ def train_step(input, komi, score, score_one_hot, policy, model, optimizer):
   return pi_logits, game_outcome, score_logits, loss
 
 
-@tf.function(jit_compile=True)
+@tf.function()
 def train_step_gpu(input, komi, score, score_one_hot, policy, model, optimizer):
   with tf.GradientTape() as g:
     pi_logits, game_outcome, game_ownership, score_logits, gamma = model(
@@ -181,6 +185,12 @@ class CyclicLearningRate:
     self.lr_decay_delta = (learning_rate - self.learning_rate_final) / (
         self.total_iterations * .1)
 
+    print("Cyclic Learning Rate, Learning Rate Min: ", learning_rate,
+          ", Learning Rate Max: ", self.learning_rate_max,
+          ", Total Iterations: ", self.total_iterations, "Cycle Len, ",
+          self.cycle_len, ", LR_Delta: ", self.lr_delta, ", LR_Delta_Decay: ",
+          self.lr_decay_delta)
+
   def update_lr(self):
     if self.iteration < self.cycle_len:
       # first phase, increase
@@ -191,6 +201,8 @@ class CyclicLearningRate:
     else:
       # final decay phase. linear decay to `learning_rate_final`
       self.learning_rate -= self.lr_decay_delta
+
+    self.iteration += 1
 
 
 class SupervisedTrainingManager:
@@ -231,8 +243,7 @@ class SupervisedTrainingManager:
     cyclic_learning_rate = CyclicLearningRate(
         self.training_config.kInitLearningRate,
         self.training_config.kInitLearningRate * 10,
-        len(self.train_ds) // self.training_config.kBatchSize *
-        self.training_config.kEpochs)
+        len(self.train_ds) * self.training_config.kEpochs)
     optimizer = tf.keras.optimizers.experimental.SGD(
         learning_rate=cyclic_learning_rate.learning_rate,
         momentum=self.training_config.kLearningRateMomentum)
@@ -275,7 +286,11 @@ class SupervisedTrainingManager:
 
         if batch_num % self.training_config.kModelSaveInterval == 0:
           local_path = self.training_config.kLocalModelPath.format(batch_num)
-          model.save(local_path)
+          model.save(local_path,
+                     signatures={
+                         'infer_float': model.infer_float,
+                         'infer_mixed': model.infer_mixed
+                     })
           if self.training_config.kUploadingToGcs:
             remote_path = self.training_config.kGcsModelPath.format(batch_num)
             upload_dir_to_gcs(self.training_config.kGcsClient, local_path,
@@ -319,11 +334,12 @@ class SupervisedTrainingManager:
                                   dtype=tf.int32)
 
         correct_moves += tf.reduce_sum(correct_move).numpy()
-        correct_outcomes += tf.size(predicted_move).numpy()
-        total_moves += tf.reduce_sum(correct_outcome).numpy()
+        correct_outcomes += tf.reduce_sum(correct_outcome).numpy()
+        total_moves += tf.size(predicted_move).numpy()
         total_outcomes += tf.size(predicted_outcome).numpy()
 
         if test_batch_num % self.training_config.kLogInterval == 0:
+          print(f"---------- Batch {test_batch_num} ----------")
           print("Correct Moves: ", correct_moves, ", Total Moves: ",
                 total_moves)
           print("Correct Outcomes: ", correct_outcomes, ", Total Outcomes: ",
@@ -332,6 +348,8 @@ class SupervisedTrainingManager:
                 float(correct_moves) / total_moves)
           print("Prediction Outcome Percentage: ",
                 float(correct_outcomes) / total_outcomes)
+
+        test_batch_num += 1
 
   @staticmethod
   def expand(ex):

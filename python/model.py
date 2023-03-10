@@ -695,17 +695,17 @@ class P3achyGoModel(tf.keras.Model):
     return model.summary()
 
   @tf.function(input_signature=[
-      tf.TensorSpec([None, BOARD_LEN, BOARD_LEN, NUM_INPUT_PLANES], tf.float16),
-      tf.TensorSpec([None, NUM_INPUT_FEATURES], tf.float16)
-  ])
-  def infer_mixed(self, board_state, game_state):
-    return self(board_state, game_state, training=False)
-
-  @tf.function(input_signature=[
       tf.TensorSpec([None, BOARD_LEN, BOARD_LEN, NUM_INPUT_PLANES], tf.float32),
       tf.TensorSpec([None, NUM_INPUT_FEATURES], tf.float32)
   ])
   def infer_float(self, board_state, game_state):
+    return self(board_state, game_state, training=False)
+
+  @tf.function(input_signature=[
+      tf.TensorSpec([None, BOARD_LEN, BOARD_LEN, NUM_INPUT_PLANES], tf.float16),
+      tf.TensorSpec([None, NUM_INPUT_FEATURES], tf.float16)
+  ])
+  def infer_mixed(self, board_state, game_state):
     return self(board_state, game_state, training=False)
 
   @staticmethod
