@@ -12,6 +12,7 @@
 #include "cc/nn/nn_evaluator.h"
 #include "tensorflow/cc/client/client_session.h"
 #include "tensorflow/cc/framework/scope.h"
+#include "tensorflow/cc/ops/array_ops.h"
 #include "tensorflow/cc/ops/math_ops.h"
 #include "tensorflow/cc/ops/nn_ops.h"
 
@@ -20,9 +21,15 @@ using ::game::Loc;
 
 ABSL_FLAG(std::string, model_path, "", "Path to model");
 
+// @TODO add switch for whether to use float or half
 const static std::vector<std::string> kInputNames = {
     "infer_mixed_board_state:0",
     "infer_mixed_game_state:0",
+};
+
+const static std::vector<std::string> kPlaceHolderNames = {
+    "infer_float_board_state:0",
+    "infer_float_game_state:0",
 };
 
 const static std::vector<std::string> kOutputNames = {
@@ -73,8 +80,17 @@ int main(int argc, char** argv) {
   std::string line;
   while (!board.IsGameOver()) {
     // model move
+
+    // Get input
     nn_input = nn::NNBoardUtils::ConstructNNInput(session, root_scope, board,
                                                   BLACK, moves, kInputNames);
+
+    // insert placeholders b/c TF requires it
+    for (auto& key : kPlaceHolderNames) {
+      nn_input.emplace_back(std::make_pair(key, placeholder));
+    }
+
+    // Feed to session
     status = nn_evaluator.Infer(nn_input, kOutputNames, &output_buf);
     if (!status.ok()) {
       LOG(ERROR) << "Eval Failed: " << status.code()

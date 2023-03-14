@@ -339,7 +339,7 @@ class SupervisedTrainingManager:
 
   def save_model(self, model: P3achyGoModel, batch_num: int):
     local_path = self.training_config.kLocalModelPath.format(batch_num)
-    model.save(local_path)
+    model.save(local_path, signatures={'infer_mixed': model.infer_mixed})
     if self.training_config.kUploadingToGcs:
       remote_path = self.training_config.kGcsModelPath.format(batch_num)
       upload_dir_to_gcs(self.training_config.kGcsClient, local_path,
