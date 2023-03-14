@@ -6,5 +6,7 @@ dummy_data/*
 bazel-*
 external/*
 third_party/testU01
+python/third_party/**
+python/scripts/estimate_score.py
 .vscode
 models/**

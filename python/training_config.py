@@ -8,6 +8,7 @@ from __future__ import annotations
 class TrainingConfig:
 
   def __init__(self,
+               dataset_name='',
                batch_size=32,
                epochs=10,
                init_learning_rate=1e-2,
@@ -25,6 +26,7 @@ class TrainingConfig:
                gcs_checkpoint_path=None,
                gcs_client=None):
     # training related
+    self.kDatasetName = dataset_name
     self.kBatchSize = batch_size
     self.kEpochs = epochs
     self.kInitLearningRate = init_learning_rate

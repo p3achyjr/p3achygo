@@ -32,11 +32,19 @@ def model_move(model, board, last_moves, game_state, color):
                                        num_samples=5).numpy() - 399.5
 
   chosen_move = None
-  logging.info(f'Moves: {tf.nn.softmax(move_logits).numpy()}')
+  # logging.info(f'Moves: {tf.nn.softmax(move_logits).numpy()}')
+  top_policy_indices = tf.math.top_k(move_logits, k=10).indices
+  top_policy_values = tf.math.top_k(move_logits, k=10).values
+  logging.info(
+      f'Predicted Top 5 Moves: {[GoBoard.move_as_tuple(move.numpy()) for move in top_policy_indices[0]]}'
+  )
+  logging.info(f'Predicted Top 5 Move Values: {top_policy_values}')
   while True:
-    move_sample = tf.random.categorical(logits=move_logits, num_samples=1)
-    moves = [GoBoard.move_as_tuple(move_sample[0, 0].numpy())]
-    move = moves[0]
+    # move_sample = tf.random.categorical(logits=move_logits, num_samples=1)
+    # moves = [GoBoard.move_as_tuple(move_sample[0, 0].numpy())]
+    # move = moves[0]
+    move_sample = tf.argmax(move_logits, axis=1).numpy()[0]
+    move = GoBoard.move_as_tuple(move_sample)
     logging.info(f'P3achyGo Considering Move: {move}')
     if board.move(color, move[0], move[1]):
       chosen_move = move

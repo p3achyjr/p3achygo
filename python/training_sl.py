@@ -58,6 +58,7 @@ flags.DEFINE_integer(
     'Interval at which to log training information (in mini-batches)')
 flags.DEFINE_integer('model_save_interval', 5000,
                      'Interval at which to save a new model/model checkpoint')
+flags.DEFINE_string('dataset', 'badukmovies_all', 'Which dataset to use.')
 
 
 def upload_dir_to_gcs(gcs_client, directory_path: str, dest_blob_name: str):
@@ -215,9 +216,12 @@ class SupervisedTrainingManager:
   def __init__(self, training_config=TrainingConfig()):
     self.training_config = training_config
     self.train_ds, self.test_ds = tfds.load(
-        'badukmovies_scored',
+        self.training_config.kDatasetName,
         split=['train[:80%]', 'train[80%:]'],
         shuffle_files=True)
+
+    logging.info(f"Dataset: {self.training_config.kDatasetName}, \
+          Length: {len(self.train_ds) + len(self.test_ds)}")
 
     # setup training dataset
     self.train_ds = self.train_ds.map(SupervisedTrainingManager.expand,
@@ -233,7 +237,6 @@ class SupervisedTrainingManager:
     self.test_ds = self.test_ds.batch(self.training_config.kBatchSize)
     self.test_ds = self.test_ds.prefetch(tf.data.AUTOTUNE)
 
-  # @tf.function
   def train(self, train_fn, is_gpu=False):
     model = P3achyGoModel.create(config=ModelConfig.small(),
                                  board_len=BOARD_LEN,
@@ -285,28 +288,7 @@ class SupervisedTrainingManager:
                                    cyclic_learning_rate.learning_rate)
 
         if batch_num % self.training_config.kModelSaveInterval == 0:
-          local_path = self.training_config.kLocalModelPath.format(batch_num)
-          model.save(local_path,
-                     signatures={
-                         'infer_float': model.infer_float,
-                         'infer_mixed': model.infer_mixed
-                     })
-          if self.training_config.kUploadingToGcs:
-            remote_path = self.training_config.kGcsModelPath.format(batch_num)
-            upload_dir_to_gcs(self.training_config.kGcsClient, local_path,
-                              remote_path)
-
-          local_path_ckpt = self.training_config.kLocalCheckpointPath.format(
-              batch_num)
-          local_path_ckpt_dir = self.training_config.kLocalCheckpointDir.format(
-              batch_num)
-
-          model.save_weights(local_path_ckpt)
-          if self.training_config.kUploadingToGcs:
-            remote_path_ckpt = self.training_config.kGcsCheckpointPath.format(
-                batch_num)
-            upload_dir_to_gcs(self.training_config.kGcsClient,
-                              local_path_ckpt_dir, remote_path_ckpt)
+          self.save_model(model, batch_num)
 
         batch_num += 1
 
@@ -350,6 +332,30 @@ class SupervisedTrainingManager:
                 float(correct_outcomes) / total_outcomes)
 
         test_batch_num += 1
+
+    # save final model
+    print("Saving Final Model...")
+    self.save_model(model, batch_num)
+
+  def save_model(self, model: P3achyGoModel, batch_num: int):
+    local_path = self.training_config.kLocalModelPath.format(batch_num)
+    model.save(local_path)
+    if self.training_config.kUploadingToGcs:
+      remote_path = self.training_config.kGcsModelPath.format(batch_num)
+      upload_dir_to_gcs(self.training_config.kGcsClient, local_path,
+                        remote_path)
+
+    local_path_ckpt = self.training_config.kLocalCheckpointPath.format(
+        batch_num)
+    local_path_ckpt_dir = self.training_config.kLocalCheckpointDir.format(
+        batch_num)
+
+    model.save_weights(local_path_ckpt)
+    if self.training_config.kUploadingToGcs:
+      remote_path_ckpt = self.training_config.kGcsCheckpointPath.format(
+          batch_num)
+      upload_dir_to_gcs(self.training_config.kGcsClient, local_path_ckpt_dir,
+                        remote_path_ckpt)
 
   @staticmethod
   def expand(ex):
@@ -423,6 +429,7 @@ def main(argv):
       FLAGS.gcs_path, 'model_checkpoint_{}') if FLAGS.upload_to_gcs else None
 
   training_manager = SupervisedTrainingManager(training_config=TrainingConfig(
+      dataset_name=FLAGS.dataset,
       batch_size=FLAGS.batch_size,
       epochs=FLAGS.epochs,
       init_learning_rate=FLAGS.learning_rate,

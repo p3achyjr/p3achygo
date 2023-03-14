@@ -15,6 +15,7 @@ from collections import deque
 from sgfmill import sgf
 
 from board import GoBoard, GameResult
+from constants import *
 from datasets.common.constants import *
 
 
@@ -100,7 +101,12 @@ class ExampleGenerator:
 
     with path.open(mode='rb') as f:
       game = sgf.Sgf_game.from_bytes(f.read())
+      board_size = game.get_root().get_size()
       main_line = game.get_main_sequence()
+
+    if board_size != BOARD_LEN:
+      # ignore non 19 x 19 games
+      return
 
     handicap = game.get_handicap()
     if handicap != None and handicap > 0:

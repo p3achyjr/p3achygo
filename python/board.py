@@ -87,6 +87,9 @@ class GoBoard:
     self.zobrist_hash = ZobristHash(self, self.len, self.zobrist_table)
     self.table = set(self.zobrist_hash.hash())
 
+  def at(self, i: int, j: int) -> int:
+    return self.board[i][j]
+
   def move_black(self, i: int, j: int) -> bool:
     return self.move(BLACK, i, j)
 
