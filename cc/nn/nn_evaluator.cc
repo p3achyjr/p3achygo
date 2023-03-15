@@ -8,7 +8,10 @@ using ::tensorflow::Tensor;
 namespace nn {
 
 NNEvaluator::NNEvaluator()
-    : session_options_(SessionOptions()), run_options_(RunOptions()) {}
+    : session_options_(SessionOptions()), run_options_(RunOptions()) {
+  auto* device_count = session_options_.config.mutable_device_count();
+  device_count->insert({"GPU", 1});
+}
 
 Status NNEvaluator::InitFromPath(std::string&& path) {
   return LoadSavedModel(session_options_, run_options_, path,

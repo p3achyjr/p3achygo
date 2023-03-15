@@ -59,6 +59,11 @@ std::vector<std::pair<std::string, Tensor>> NNBoardUtils::ConstructNNInput(
                         {1, BOARD_LEN, BOARD_LEN, kNumInputFeatures});
   auto raw = input_features.shaped<float, 4>(
       {1, BOARD_LEN, BOARD_LEN, kNumInputFeatures});
+
+  // zero initialize
+  int total_size = BOARD_LEN * BOARD_LEN * kNumInputFeatures;
+  auto flat_data = input_features.flat<float>().data();
+  std::fill(flat_data, flat_data + total_size, 0);
   for (auto i = 0; i < BOARD_LEN; ++i) {
     for (auto j = 0; j < BOARD_LEN; ++j) {
       if (board.board_[i][j] == color) {
@@ -72,7 +77,8 @@ std::vector<std::pair<std::string, Tensor>> NNBoardUtils::ConstructNNInput(
   auto offset = 2;
   for (auto i = 0; i < kNumLastMoves; ++i) {
     game::Loc loc = moves[moves.size() - kNumLastMoves + i];
-    if (loc.i == 0 && loc.j == 0) continue;
+    if (loc == game::kNoopLoc) continue;
+    if (loc == game::kPassLoc) continue;
 
     raw(0, loc.i, loc.j, i + offset) = 1;
   }

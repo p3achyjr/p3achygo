@@ -24,6 +24,16 @@ cc_binary(
         "@com_google_absl//absl/flags:parse",
         "@com_google_absl//absl/log",
         "@org_tensorflow//tensorflow/cc:client_session",
-        "@org_tensorflow//tensorflow/core:framework",
+        "@org_tensorflow//tensorflow/core",
+    ],
+)
+
+cc_binary(
+    name = "play_game",
+    srcs = ["play_game.cc"],
+    linkopts = ["-lm"],
+    deps = [
+        "//cc/core",
+        "//cc/game",
     ],
 )

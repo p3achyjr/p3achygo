@@ -15,21 +15,18 @@
 #include "tensorflow/cc/ops/array_ops.h"
 #include "tensorflow/cc/ops/math_ops.h"
 #include "tensorflow/cc/ops/nn_ops.h"
+#include "tensorflow/core/graph/default_device.h"
+#include "tensorflow/core/public/session.h"
 
 using namespace ::tensorflow;
 using ::game::Loc;
 
-ABSL_FLAG(std::string, model_path, "", "Path to model");
+ABSL_FLAG(std::string, model_path, "", "Path to model.");
 
 // @TODO add switch for whether to use float or half
 const static std::vector<std::string> kInputNames = {
     "infer_mixed_board_state:0",
     "infer_mixed_game_state:0",
-};
-
-const static std::vector<std::string> kPlaceHolderNames = {
-    "infer_float_board_state:0",
-    "infer_float_game_state:0",
 };
 
 const static std::vector<std::string> kOutputNames = {
@@ -42,6 +39,7 @@ static constexpr auto kNumInputFeatures = 7;
 static constexpr auto kNumLastMoves = 5;
 static constexpr auto kNumScoreTargets = 800;
 static constexpr auto kPassMove = 362;
+static constexpr auto kMovesToTest = 10;
 
 int main(int argc, char** argv) {
   absl::ParseCommandLine(argc, argv);
@@ -78,17 +76,13 @@ int main(int argc, char** argv) {
   };
 
   std::string line;
+  int color_to_move = BLACK;
   while (!board.IsGameOver()) {
     // model move
 
     // Get input
-    nn_input = nn::NNBoardUtils::ConstructNNInput(session, root_scope, board,
-                                                  BLACK, moves, kInputNames);
-
-    // insert placeholders b/c TF requires it
-    for (auto& key : kPlaceHolderNames) {
-      nn_input.emplace_back(std::make_pair(key, placeholder));
-    }
+    nn_input = nn::NNBoardUtils::ConstructNNInput(
+        session, root_scope, board, color_to_move, moves, kInputNames);
 
     // Feed to session
     status = nn_evaluator.Infer(nn_input, kOutputNames, &output_buf);
@@ -100,9 +94,10 @@ int main(int argc, char** argv) {
 
     std::vector<Tensor> output;
     status = session.Run(
-        {ops::ArgMax(root_scope,
-                     ops::Cast(root_scope, output_buf[0], DataType::DT_FLOAT),
-                     Input(1)),
+        {ops::TopK(root_scope,
+                   ops::Cast(root_scope, output_buf[0], DataType::DT_FLOAT),
+                   Input(kMovesToTest))
+             .indices,
          ops::Softmax(root_scope, ops::Cast(root_scope, output_buf[1],
                                             DataType::DT_FLOAT))},
         &output);
@@ -113,35 +108,33 @@ int main(int argc, char** argv) {
       return 1;
     }
 
-    int64_t move = output[0].flat<int64>()(0);
-    if (output[0].flat<int64>()(0) == kPassMove) {
-      board.MovePass(BLACK);
-    } else {
-      board.Move(board.MoveAsLoc(move), BLACK);
+    int k = 0;
+    int move;
+    Loc move_loc;
+    while (k < kMovesToTest) {
+      move = output[0].flat<int32>()(k);
+      move_loc = board.MoveAsLoc(move);
+      if (board.Move(move_loc, color_to_move)) {
+        break;
+      }
+
+      ++k;
     }
 
     LOG(INFO) << "------- Model Stats -------";
-    LOG(INFO) << "Top Move: " << board.MoveAsLoc(move);
+    LOG(INFO) << "Top Move: " << move_loc;
     LOG(INFO) << "Win: " << output[1].matrix<float>()(0, 1)
               << " Loss: " << output[1].matrix<float>()(0, 0);
     LOG(INFO) << "-----Board-----\n" << board;
 
-    // human move
-    // while (true) {
-    //   LOG(INFO) << "Enter Move: ";
-    //   std::getline(std::cin, line);
-    //   game::Loc human_move = convert_to_move(line);
-
-    //   moves.emplace_back(human_move);
-    //   if (board.Move(human_move, WHITE)) {
-    //     LOG(INFO) << "-----Board-----\n" << board;
-    //     break;
-    //   }
-    // }
-    break;
+    moves.emplace_back(move_loc);
+    color_to_move = game::OppositeColor(color_to_move);
+    sleep(1);
   }
 
-  LOG(INFO) << output_buf[0].DebugString(362);
+  LOG(INFO) << "Game Over: ";
+  LOG(INFO) << "  Black Score: " << board.Score(BLACK);
+  LOG(INFO) << "  White Score: " << board.Score(WHITE);
 
   return 0;
 }

@@ -14,7 +14,6 @@ namespace {
 
 static constexpr groupid kInvalidGroupId = -1;
 static constexpr int kInvalidLiberties = -1;
-static constexpr Loc kPassLoc = {19, 0};
 
 inline unsigned ZobristState(int state) { return state + 1; }
 
@@ -74,11 +73,15 @@ groupid GroupTracker::NewGroup(Loc loc, int color) {
   // precondition: loc is not connected to any other group.
   groupid group_id = next_group_id_;
   int liberties = 0;
+  std::vector<groupid> seen_groups;  // can only subtract up to 1 liberty from
+                                     // each adjacent group
   for (const Loc& adj_loc : Adjacent(loc, length_)) {
     if (GroupAt(adj_loc) == kInvalidGroupId) {
       liberties++;
     } else if (group_info_map_[GroupAt(adj_loc)].color ==
                OppositeColor(color)) {
+      if (VecContains(seen_groups, GroupAt(adj_loc))) continue;
+      seen_groups.emplace_back(GroupAt(adj_loc));
       group_info_map_[GroupAt(adj_loc)].liberties--;
     }
   }
@@ -245,6 +248,12 @@ groupid GroupTracker::CoalesceGroups(const std::vector<groupid>& groups) {
       SetLoc(next_loc, canonical_group_id);
       seen.emplace_back(next_loc);
     }
+  }
+
+  // mark all absorbed groups as invalid.
+  for (auto& groupid : groups) {
+    if (groupid == canonical_group_id) continue;
+    group_info_map_[groupid].is_valid = false;
   }
 
   group_info_map_[canonical_group_id].liberties = liberties;

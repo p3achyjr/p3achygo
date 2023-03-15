@@ -27,6 +27,9 @@ build --crosstool_top=//toolchain:clang_suite
 build --copt -march=native
 build --copt -mavx
 
+# Use lld
+build --linkopt=-fuse-ld=lld
+
 # Adding "--cxxopt=-D_GLIBCXX_USE_CXX11_ABI=0" creates parity with TF
 # compilation options. It also addresses memory use due to
 # copy-on-write semantics of std::strings of the older ABI.
@@ -43,6 +46,7 @@ build:asan --copt -DADDRESS_SANITIZER
 build:asan --copt -O1
 build:asan --copt -g
 build:asan --copt -fno-omit-frame-pointer
+build:asan --copt -fno-sanitize-blacklist
 build:asan --linkopt -fsanitize=address
 
 build:debug --copt -g

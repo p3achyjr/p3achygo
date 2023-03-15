@@ -63,6 +63,9 @@ inline std::ostream& operator<<(std::ostream& os,
 
 inline int OppositeColor(int color) { return -color; }
 
+static constexpr Loc kNoopLoc = Loc{-1, -1};
+static constexpr Loc kPassLoc = Loc{19, 0};
+
 /*
  * Tracks groups and liberties throughout game.
  *
@@ -211,6 +214,9 @@ inline std::ostream& operator<<(std::ostream& os, const Board& board) {
 
   os << "   "
      << "A B C D E F G H I J K L M N O P Q R S";
+
+  // os << "\n------ Group Tracker ------\n";
+  // os << board.group_tracker_ << "\n";
 
   return os;
 }
