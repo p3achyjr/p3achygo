@@ -8,7 +8,7 @@ class BadukmoviesAllTest(tfds.testing.DatasetBuilderTestCase):
   """Tests for badukmovies_all dataset."""
   DATASET_CLASS = badukmovies_all_dataset_builder.Builder
   SPLITS = {
-      'train': 6536,  # Number of fake train example
+      'train': 7864,  # Number of fake train example
   }
 
 

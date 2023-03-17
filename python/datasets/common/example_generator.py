@@ -8,6 +8,7 @@ import enum
 import itertools
 import math
 import numpy as np
+import random
 import tensorflow_datasets as tfds
 
 from absl import logging
@@ -69,16 +70,32 @@ class ExampleGenerator:
         raise ValueError(f'Unknown Color: {encoding}')
 
     def score_for_player(result: GameResult, player: int):
-      if result.is_unknown():
-        raise Exception('Unknown Result. Should skip game.')
+      if result.is_unknown() or result.is_by_resignation():
+        raise Exception('Unknown Score.')
 
       player_did_win = result.winner == player
-      if player_did_win:
-        return RESIGN_WIN_SCORE if result.is_by_resignation() else math.floor(
-            result.score_diff)
-      else:
-        return RESIGN_LOSS_SCORE if result.is_by_resignation() else math.floor(
-            -result.score_diff)
+      return math.floor(
+          result.score_diff if player_did_win else -result.score_diff)
+
+    def score_est_for_resign(move_count: int):
+
+      def bound(lb, ub, x):
+        return min(max(x, lb), ub)
+
+      if result.is_unknown() or not result.is_by_resignation():
+        raise Exception(
+            'Result is Unknown, or getting score est for scored game')
+
+      min_mc, bound_range, bound_scale = 150, 100, 5
+      # adjust bound based on move count.
+      # move count < 150: no adjustment.
+      # uniform scaling up to 250 moves, where at >250, sub 5 from bound.
+      bound_adjustment = math.floor(
+          bound(0, bound_range, move_count - min_mc) * bound_scale /
+          bound_range)
+      score_est = random.randint(RESIGN_SCORE_EST_LB - bound_adjustment,
+                                 RESIGN_SCORE_EST_UB - bound_adjustment)
+      return score_est
 
     def rot90_points(i, j, k):
       if (i, j) == NON_MOVE or (i, j) == PASS_MOVE:
@@ -132,6 +149,19 @@ class ExampleGenerator:
     move_num = 0
     move_queue = [NON_MOVE] * NUM_LAST_MOVES
     color_to_move = 0  # 0 for Black, 1 for White
+    total_move_count = len(main_line)
+
+    # fill score for resigned game
+    if result.is_by_resignation():
+      score_est = score_est_for_resign(total_move_count)
+      score_black =\
+        score_est if result.winner == GameResult.BLACK else -score_est - 1
+      score_white =\
+        score_est if result.winner == GameResult.WHITE else -score_est - 1
+    else:
+      score_black = score_for_player(result, GameResult.BLACK)
+      score_white = score_for_player(result, GameResult.WHITE)
+
     for node in main_line:
       move = node.get_move()
       if move is None or move[0] is None or move[1] is None:
@@ -150,7 +180,8 @@ class ExampleGenerator:
         i_prime, j_prime = rot90_points(i, j, rot_index)
 
         current_player = player_from_encoding(c)
-        current_player_score_diff = score_for_player(result, current_player)
+        current_player_score_diff =\
+          score_black if current_player == GameResult.BLACK else score_white
         komi_as_player = komi if current_player == GameResult.WHITE else 0.0
 
         yield key, {
@@ -208,7 +239,8 @@ class ExampleGenerator:
     if not result.is_unknown() and not result.is_by_resignation():
       # add two pass moves, since this is a scored game.
       current_player = GameResult.BLACK if color_to_move == 0 else GameResult.WHITE
-      current_player_score_diff = score_for_player(result, current_player)
+      current_player_score_diff =\
+        score_black if current_player == GameResult.BLACK else score_white
       komi_as_player = komi if current_player == GameResult.WHITE else 0.0
 
       num_rotations = 4
