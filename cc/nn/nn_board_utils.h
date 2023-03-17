@@ -4,8 +4,8 @@
 #include <string>
 #include <vector>
 
+#include "cc/constants/constants.h"
 #include "cc/game/board.h"
-#include "cc/game/constants.h"
 #include "tensorflow/cc/client/client_session.h"
 #include "tensorflow/cc/framework/scope.h"
 #include "tensorflow/core/framework/tensor.h"

@@ -1,5 +1,5 @@
-#ifndef __PROBABILITY_H_
-#define __PROBABILITY_H_
+#ifndef __CORE_PROBABILITY_H_
+#define __CORE_PROBABILITY_H_
 
 #include "cc/core/rand.h"
 
@@ -10,6 +10,9 @@ namespace core {
  */
 class Probability final {
  public:
+  Probability() = default;
+  ~Probability() = default;
+
   // Disable Copy
   Probability(Probability const&) = delete;
   Probability& operator=(Probability const&) = delete;
@@ -23,4 +26,4 @@ class Probability final {
 
 }  // namespace core
 
-#endif  // __PROBABILITY_H_
+#endif  // __CORE_PROBABILITY_H_

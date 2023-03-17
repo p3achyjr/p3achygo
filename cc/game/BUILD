@@ -8,10 +8,10 @@ cc_library(
     ],
     hdrs = [
         "board.h",
-        "constants.h",
         "zobrist_hash.h",
     ],
     deps = [
+        "//cc/constants",
         "//cc/core:rand",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/log",

@@ -4,7 +4,7 @@
 #include <cstdint>
 
 #include "absl/numeric/int128.h"
-#include "cc/game/constants.h"
+#include "cc/constants/constants.h"
 
 namespace game {
 

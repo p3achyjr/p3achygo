@@ -1,5 +1,12 @@
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
 load("tensorflow_http_archive.bzl", "tensorflow_http_archive")
+
+git_repository(
+    name = "doctest",
+    commit = "f25235f4c2f8a5fcf8e888114a90864ef5e4bf56",
+    remote = "https://github.com/doctest/doctest.git",
+)
 
 http_archive(
     name = "com_google_absl",

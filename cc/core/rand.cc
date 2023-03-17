@@ -18,8 +18,6 @@ using ::absl::uint128;
 
 namespace {
 
-std::uniform_int_distribution<> distrib(1, 6);
-
 struct RandResult {
   uint64_t new_state;
   uint32_t rand;

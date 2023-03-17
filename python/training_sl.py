@@ -58,7 +58,7 @@ flags.DEFINE_integer(
     'Interval at which to log training information (in mini-batches)')
 flags.DEFINE_integer('model_save_interval', 5000,
                      'Interval at which to save a new model/model checkpoint')
-flags.DEFINE_string('dataset', 'badukmovies_all', 'Which dataset to use.')
+flags.DEFINE_string('dataset', '', 'Which dataset to use.')
 
 
 def upload_dir_to_gcs(gcs_client, directory_path: str, dest_blob_name: str):
@@ -396,6 +396,10 @@ class SupervisedTrainingManager:
 
 
 def main(argv):
+  if FLAGS.dataset == '':
+    logging.warning('Please provide a dataset from ~/tensorflow_datasets')
+    return
+
   if FLAGS.local_path == '':
     logging.warning('Please provide a path under which to store your model')
     return

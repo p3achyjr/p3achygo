@@ -1,16 +1,11 @@
 #include "cc/nn/nn_board_utils.h"
 
 #include "absl/log/check.h"
+#include "cc/constants/constants.h"
 #include "tensorflow/cc/ops/array_ops.h"
 #include "tensorflow/cc/ops/math_ops.h"
 
 namespace nn {
-namespace {
-
-static constexpr auto kNumInputFeatures = 7;
-static constexpr auto kNumLastMoves = 5;
-
-}  // namespace
 
 using namespace ::tensorflow;
 
@@ -55,13 +50,14 @@ std::vector<std::pair<std::string, Tensor>> NNBoardUtils::ConstructNNInput(
   DCHECK(input_names.size() == 2);
   DCHECK(moves.size() >= 5);
 
-  Tensor input_features(DataType::DT_FLOAT,
-                        {1, BOARD_LEN, BOARD_LEN, kNumInputFeatures});
+  Tensor input_features(
+      DataType::DT_FLOAT,
+      {1, BOARD_LEN, BOARD_LEN, constants::kNumInputFeaturePlanes});
   auto raw = input_features.shaped<float, 4>(
-      {1, BOARD_LEN, BOARD_LEN, kNumInputFeatures});
+      {1, BOARD_LEN, BOARD_LEN, constants::kNumInputFeaturePlanes});
 
   // zero initialize
-  int total_size = BOARD_LEN * BOARD_LEN * kNumInputFeatures;
+  int total_size = BOARD_LEN * BOARD_LEN * constants::kNumInputFeaturePlanes;
   auto flat_data = input_features.flat<float>().data();
   std::fill(flat_data, flat_data + total_size, 0);
   for (auto i = 0; i < BOARD_LEN; ++i) {
@@ -75,8 +71,8 @@ std::vector<std::pair<std::string, Tensor>> NNBoardUtils::ConstructNNInput(
   }
 
   auto offset = 2;
-  for (auto i = 0; i < kNumLastMoves; ++i) {
-    game::Loc loc = moves[moves.size() - kNumLastMoves + i];
+  for (auto i = 0; i < constants::kNumLastMoves; ++i) {
+    game::Loc loc = moves[moves.size() - constants::kNumLastMoves + i];
     if (loc == game::kNoopLoc) continue;
     if (loc == game::kPassLoc) continue;
 

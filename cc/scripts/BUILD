@@ -2,6 +2,7 @@ cc_binary(
     name = "ucb_scratch",
     srcs = ["ucb_scratch.cc"],
     deps = [
+        "//cc/constants",
         "//cc/core",
         "//cc/game",
         "@com_google_absl//absl/container:flat_hash_map",
@@ -17,6 +18,7 @@ cc_binary(
     name = "play_model",
     srcs = ["play_model.cc"],
     deps = [
+        "//cc/constants",
         "//cc/core",
         "//cc/game",
         "//cc/nn",
@@ -33,6 +35,7 @@ cc_binary(
     srcs = ["play_game.cc"],
     linkopts = ["-lm"],
     deps = [
+        "//cc/constants",
         "//cc/core",
         "//cc/game",
     ],

@@ -41,7 +41,7 @@ cc_test(
 cc_library(
     name = "doctest",
     hdrs = [
-        "doctest.h",
         "doctest_include.h",
     ],
+    deps = ["@doctest//doctest"],
 )

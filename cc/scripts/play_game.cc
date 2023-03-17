@@ -5,8 +5,8 @@
  */
 #include <iostream>
 
+#include "cc/constants/constants.h"
 #include "cc/game/board.h"
-#include "cc/game/constants.h"
 #include "cc/game/zobrist_hash.h"
 
 static constexpr game::Loc kInvalidMove = game::Loc{-1, -1};

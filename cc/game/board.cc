@@ -415,7 +415,7 @@ int Board::LocAsMove(Loc loc) const { return loc.i * length_ + loc.j; }
 
 float Board::BlackScore() const { return Score(BLACK); }
 
-float Board::WhiteScore() const { return Score(WHITE) + komi_; }
+float Board::WhiteScore() const { return Score(WHITE); }
 
 float Board::Score(int color) const {
   bool seen[BOARD_LEN][BOARD_LEN]{};
@@ -458,7 +458,7 @@ float Board::Score(int color) const {
     }
   }
 
-  return static_cast<float>(score);
+  return static_cast<float>(score) + (color == WHITE ? komi_ : 0);
 }
 
 int Board::AtLoc(Loc loc) const { return board_[loc.i][loc.j]; }

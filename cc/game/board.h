@@ -5,7 +5,7 @@
 #include <optional>
 
 #include "absl/container/flat_hash_set.h"
-#include "cc/game/constants.h"
+#include "cc/constants/constants.h"
 #include "cc/game/zobrist_hash.h"
 
 namespace nn {

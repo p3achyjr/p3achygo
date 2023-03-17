@@ -1,5 +1,5 @@
-#ifndef __NN_WRAPPER_H_
-#define __NN_WRAPPER_H_
+#ifndef __NN_EVALUATOR_H_
+#define __NN_EVALUATOR_H_
 
 #include <string>
 
@@ -31,4 +31,4 @@ class NNEvaluator final {
 
 }  // namespace nn
 
-#endif  // __NN_WRAPPER_H_
+#endif  // __NN_EVALUATOR_H_
