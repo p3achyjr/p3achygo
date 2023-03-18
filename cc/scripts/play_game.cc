@@ -5,16 +5,35 @@
  */
 #include <iostream>
 
+#include "absl/flags/flag.h"
+#include "absl/flags/parse.h"
+#include "absl/log/check.h"
+#include "absl/log/initialize.h"
+#include "absl/log/log.h"
+#include "absl/status/statusor.h"
 #include "cc/constants/constants.h"
 #include "cc/game/board.h"
 #include "cc/game/zobrist_hash.h"
+#include "cc/nn/nn_interface.h"
+
+ABSL_FLAG(std::string, model_path, "", "Path to model.");
 
 static constexpr game::Loc kInvalidMove = game::Loc{-1, -1};
 static constexpr game::Loc kPassMove = game::Loc{19, 0};
 
 int main(int argc, char** argv) {
+  absl::ParseCommandLine(argc, argv);
+  absl::InitializeLog();
+  if (absl::GetFlag(FLAGS_model_path) == "") {
+    LOG(WARNING) << "No Model Path Specified.";
+    return 1;
+  }
+
   game::ZobristTable zobrist_table;
   game::Board board(&zobrist_table);
+  std::unique_ptr<nn::NNInterface> nn_interface =
+      std::make_unique<nn::NNInterface>(1);
+  CHECK_OK(nn_interface->Initialize(absl::GetFlag(FLAGS_model_path)));
 
   auto convert_to_move = [](const std::string& move) {
     if (move == "pass") {
@@ -31,6 +50,9 @@ int main(int argc, char** argv) {
     return loc;
   };
 
+  std::vector<game::Loc> move_history = {game::Loc{-1, -1}, game::Loc{-1, -1},
+                                         game::Loc{-1, -1}, game::Loc{-1, -1},
+                                         game::Loc{-1, -1}};
   int color_to_move = BLACK;
   while (!board.IsGameOver()) {
     while (true) {
@@ -49,10 +71,16 @@ int main(int argc, char** argv) {
         continue;
       }
 
+      move_history.emplace_back(move);
       break;
     }
 
     std::cout << board << "\n";
+    CHECK_OK(nn_interface->LoadBatch(0, board, move_history, color_to_move));
+    nn::NNInferResult nn_result = nn_interface->GetInferenceResult(0);
+
+    LOG(INFO) << "Loss: " << nn_result.value_probability[0]
+              << "Win: " << nn_result.value_probability[1];
     color_to_move = game::OppositeColor(color_to_move);
   }
 }

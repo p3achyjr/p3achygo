@@ -43,60 +43,38 @@ Tensor NNBoardUtils::AsOneHot(game::Loc loc) {
   return t;
 }
 
-std::vector<std::pair<std::string, Tensor>> NNBoardUtils::ConstructNNInput(
-    ClientSession& session, const Scope& scope, const game::Board& board,
-    int color, const std::vector<game::Loc> moves,
-    const std::vector<std::string>& input_names) {
-  DCHECK(input_names.size() == 2);
+/* static */ void NNBoardUtils::FillNNInput(
+    ClientSession& session, const Scope& scope, int batch_id, int batch_size,
+    Tensor& input_features, Tensor& input_state, const game::Board& board,
+    int color, const std::vector<game::Loc> moves) {
   DCHECK(moves.size() >= 5);
 
-  Tensor input_features(
-      DataType::DT_FLOAT,
-      {1, BOARD_LEN, BOARD_LEN, constants::kNumInputFeaturePlanes});
   auto raw = input_features.shaped<float, 4>(
-      {1, BOARD_LEN, BOARD_LEN, constants::kNumInputFeaturePlanes});
+      {batch_size, BOARD_LEN, BOARD_LEN, constants::kNumInputFeaturePlanes});
 
-  // zero initialize
-  int total_size = BOARD_LEN * BOARD_LEN * constants::kNumInputFeaturePlanes;
-  auto flat_data = input_features.flat<float>().data();
-  std::fill(flat_data, flat_data + total_size, 0);
+  // fill board state
   for (auto i = 0; i < BOARD_LEN; ++i) {
     for (auto j = 0; j < BOARD_LEN; ++j) {
       if (board.board_[i][j] == color) {
-        raw(0, i, j, 0) = 1;
+        raw(batch_id, i, j, 0) = 1;
       } else if (board.board_[i][j] == game::OppositeColor(color)) {
-        raw(0, i, j, 1) = 1;
+        raw(batch_id, i, j, 1) = 1;
       }
     }
   }
 
+  // fill moves
   auto offset = 2;
   for (auto i = 0; i < constants::kNumLastMoves; ++i) {
     game::Loc loc = moves[moves.size() - constants::kNumLastMoves + i];
     if (loc == game::kNoopLoc) continue;
     if (loc == game::kPassLoc) continue;
 
-    raw(0, loc.i, loc.j, i + offset) = 1;
+    raw(batch_id, loc.i, loc.j, i + offset) = 1;
   }
 
-  Tensor input_state(DataType::DT_FLOAT, {1, 1});
-  input_state.matrix<float>()(0, 0) = board.komi_ / 15.0;
-
-  // @TODO add parameter for whether to cast.
-  std::vector<Tensor> cast_output;
-  Status status =
-      session.Run({ops::Cast(scope, input_features, DataType::DT_HALF),
-                   ops::Cast(scope, input_state, DataType::DT_HALF)},
-                  &cast_output);
-
-  if (!status.ok()) {
-    LOG(ERROR) << "Failed to cast: " << status.error_message();
-  }
-
-  return std::vector<std::pair<std::string, Tensor>>{
-      std::make_pair(input_names[0], cast_output[0]),
-      std::make_pair(input_names[1], cast_output[1]),
-  };
+  // fill game state (just komi for now)
+  input_state.matrix<float>()(batch_id, 0) = board.komi_ / 15.0;
 }
 
 }  // namespace nn

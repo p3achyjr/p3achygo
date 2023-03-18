@@ -3,9 +3,8 @@
 #include <stdlib.h>
 
 #include "absl/log/check.h"
+#include "absl/synchronization/mutex.h"
 #include "cc/nn/nn_board_utils.h"
-#include "tensorflow/cc/client/client_session.h"
-#include "tensorflow/cc/framework/scope.h"
 #include "tensorflow/cc/ops/array_ops.h"
 #include "tensorflow/cc/ops/math_ops.h"
 #include "tensorflow/cc/ops/nn_ops.h"
@@ -22,7 +21,7 @@ static constexpr auto kMoveIndex = 0;
 static constexpr auto kValueIndex = 1;
 static constexpr auto kOwnershipIndex = 2;
 static constexpr auto kScoreIndex = 3;
-static constexpr auto kMoveProbabilitiesIndex = 4;
+static constexpr auto kMoveProbsIndex = 4;
 
 static const std::vector<std::string> kInputNames = {
     "infer_mixed_board_state:0",
@@ -37,24 +36,56 @@ static const std::vector<std::string> kOutputNames = {
 
 }  // namespace
 
-NNInterface::NNInterface() {
-  nn_output_buf_ = {// move logits
-                    Tensor(DataType::DT_HALF, {1, constants::kMaxNumMoves}),
-                    // win percent
-                    Tensor(DataType::DT_HALF, {1, constants::kNumValueLogits}),
-                    // ownership
-                    Tensor(DataType::DT_HALF, {1, BOARD_LEN, BOARD_LEN, 1}),
-                    // score prediction
-                    Tensor(DataType::DT_HALF, {1, constants::kNumScoreLogits}),
-                    // gamma, just ignore
-                    Tensor(DataType::DT_HALF, {1, 1})};
+NNInterface::NNInterface(int num_threads)
+    : is_initialized_(false),
+      num_threads_(num_threads),
+      load_counter_(std::make_unique<absl::BlockingCounter>(num_threads)),
+      infer_result_ready_(
+          std::vector<char>(num_threads_, static_cast<char>(false))),
+      running_(true) {
+  input_feature_buf_ = Tensor(
+      DataType::DT_FLOAT,
+      {num_threads_, BOARD_LEN, BOARD_LEN, constants::kNumInputFeaturePlanes});
+  input_state_buf_ = Tensor(DataType::DT_FLOAT, {num_threads_, 1});
+  nn_input_buf_ = {
+      Tensor(DataType::DT_HALF, {num_threads_, BOARD_LEN, BOARD_LEN,
+                                 constants::kNumInputFeaturePlanes}),
+      Tensor(DataType::DT_HALF, {num_threads_, 1})};
 
-  // mirrors `nn_output_buf_`, but omits gamma and casts to float.
-  result_buf_ = {Tensor(DataType::DT_FLOAT, {1, constants::kMaxNumMoves}),
-                 Tensor(DataType::DT_FLOAT, {1, constants::kNumValueLogits}),
-                 Tensor(DataType::DT_FLOAT, {1, constants::kMaxNumBoardLocs}),
-                 Tensor(DataType::DT_FLOAT, {1, constants::kNumScoreLogits}),
-                 Tensor(DataType::DT_FLOAT, {1, constants::kMaxNumMoves})};
+  input_feature_buf_.flat<float>().setZero();
+  input_state_buf_.flat<float>().setZero();
+
+  nn_output_buf_ = {
+      // move logits
+      Tensor(DataType::DT_HALF, {num_threads_, constants::kMaxNumMoves}),
+      // win percent
+      Tensor(DataType::DT_HALF, {num_threads_, constants::kNumValueLogits}),
+      // ownership
+      Tensor(DataType::DT_HALF, {num_threads_, BOARD_LEN, BOARD_LEN, 1}),
+      // score prediction
+      Tensor(DataType::DT_HALF, {num_threads_, constants::kNumScoreLogits}),
+      // gamma, just ignore
+      Tensor(DataType::DT_HALF, {num_threads_, 1})};
+
+  result_buf_ = {
+      // move logits
+      Tensor(DataType::DT_FLOAT, {num_threads_, constants::kMaxNumMoves}),
+      // win percent
+      Tensor(DataType::DT_FLOAT, {num_threads_, constants::kNumValueLogits}),
+      // ownership
+      Tensor(DataType::DT_FLOAT, {num_threads_, BOARD_LEN, BOARD_LEN, 1}),
+      // score prediction
+      Tensor(DataType::DT_FLOAT, {num_threads_, constants::kNumScoreLogits}),
+      // move softmax
+      Tensor(DataType::DT_FLOAT, {num_threads_, constants::kMaxNumMoves})};
+}
+
+NNInterface::~NNInterface() {
+  running_.store(false, std::memory_order_release);
+
+  if (infer_thread_.joinable()) {
+    infer_thread_.join();
+  }
 }
 
 absl::Status NNInterface::Initialize(std::string&& model_path) {
@@ -65,12 +96,15 @@ absl::Status NNInterface::Initialize(std::string&& model_path) {
   }
 
   is_initialized_ = true;
+
+  infer_thread_ = std::move(std::thread(&NNInterface::InferLoop, this));
+  infer_thread_.detach();
   return absl::OkStatus();
 }
 
-absl::StatusOr<NNInferResult> NNInterface::GetInferenceResult(
-    const game::Board& board, const std::vector<game::Loc> last_moves,
-    int color_to_move) {
+absl::Status NNInterface::LoadBatch(int thread_id, const game::Board& board,
+                                    const std::vector<game::Loc> last_moves,
+                                    int color_to_move) {
   if (!is_initialized_) {
     return absl::Status(
         absl::StatusCode::kInternal,
@@ -80,16 +114,82 @@ absl::StatusOr<NNInferResult> NNInterface::GetInferenceResult(
   DCHECK(last_moves.size() >= constants::kNumLastMoves);
   Scope scope = Scope::NewRootScope();
   ClientSession session(scope);
-  std::vector<std::pair<std::string, Tensor>> nn_input =
-      NNBoardUtils::ConstructNNInput(session, scope, board, color_to_move,
-                                     last_moves, kInputNames);
-  auto status = nn_evaluator_.Infer(nn_input, kOutputNames, &nn_output_buf_);
-  if (!status.ok()) {
-    return ToAbslStatus(status);
+  NNBoardUtils::FillNNInput(session, scope, thread_id, num_threads_,
+                            input_feature_buf_, input_state_buf_, board,
+                            color_to_move, last_moves);
+
+  load_counter_->DecrementCount();
+  return absl::OkStatus();
+}
+
+NNInferResult NNInterface::GetInferenceResult(int thread_id) {
+  mu_.LockWhen(absl::Condition(
+      reinterpret_cast<bool*>(infer_result_ready_.data() + thread_id)));
+  infer_result_ready_[thread_id] = false;
+  mu_.Unlock();
+
+  const auto move_logits =
+      result_buf_[kMoveIndex].SubSlice(thread_id).unaligned_flat<float>();
+  const auto value_probability =
+      result_buf_[kValueIndex].SubSlice(thread_id).unaligned_flat<float>();
+  const auto ownership =
+      result_buf_[kOwnershipIndex].SubSlice(thread_id).unaligned_flat<float>();
+  const auto score_probabilities =
+      result_buf_[kScoreIndex].SubSlice(thread_id).unaligned_flat<float>();
+  const auto move_probabilities =
+      result_buf_[kMoveProbsIndex].SubSlice(thread_id).unaligned_flat<float>();
+
+  // need hand-rolled for loops b/c of potential alignment issues.
+  NNInferResult infer_result;
+  for (int i = 0; i < constants::kMaxNumMoves; ++i) {
+    infer_result.move_logits[i] = move_logits(i);
+  }
+  for (int i = 0; i < constants::kMaxNumMoves; ++i) {
+    infer_result.move_probabilities[i] = move_probabilities(i);
+  }
+  for (int i = 0; i < constants::kNumValueLogits; ++i) {
+    infer_result.value_probability[i] = value_probability(i);
+  }
+  for (int i = 0; i < constants::kMaxNumBoardLocs; ++i) {
+    infer_result.ownership[i] = ownership(i);
+  }
+  for (int i = 0; i < constants::kNumScoreLogits; ++i) {
+    infer_result.score_probabilities[i] = score_probabilities(i);
   }
 
+  return infer_result;
+}
+
+void NNInterface::InferLoop() {
+  Scope scope = Scope::NewRootScope();
+  ClientSession session(scope);
+
+  while (running_.load(std::memory_order_acquire)) {
+    Infer(scope, session);
+  }
+}
+
+void NNInterface::Infer(Scope& scope, ClientSession& session) {
+  load_counter_->Wait();
+  absl::MutexLock l(&mu_);
+
+  // Cast to half.
+  CHECK_OK(ToAbslStatus(
+      session.Run({ops::Cast(scope, input_feature_buf_, DataType::DT_HALF),
+                   ops::Cast(scope, input_state_buf_, DataType::DT_HALF)},
+                  &nn_input_buf_)));
+
+  std::vector<std::pair<std::string, Tensor>> nn_input = {
+      {kInputNames[0], nn_input_buf_[0]}, {kInputNames[1], nn_input_buf_[1]}};
+
+  CHECK_OK(ToAbslStatus(
+      nn_evaluator_.Infer(nn_input, kOutputNames, &nn_output_buf_)));
+
+  input_feature_buf_.flat<float>().setZero();
+  input_state_buf_.flat<float>().setZero();
+
   // cast back to float
-  status = session.Run(
+  CHECK_OK(ToAbslStatus(session.Run(
       {ops::Cast(scope, nn_output_buf_[kMoveIndex], DataType::DT_FLOAT),
        ops::Softmax(scope, ops::Cast(scope, nn_output_buf_[kValueIndex],
                                      DataType::DT_FLOAT)),
@@ -98,30 +198,11 @@ absl::StatusOr<NNInferResult> NNInterface::GetInferenceResult(
                                      DataType::DT_FLOAT)),
        ops::Softmax(scope, ops::Cast(scope, nn_output_buf_[kMoveIndex],
                                      DataType::DT_FLOAT))},
-      &result_buf_);
+      &result_buf_)));
 
-  const auto move_logits = result_buf_[kMoveIndex].flat<float>().data();
-  const auto value_probability = result_buf_[kValueIndex].flat<float>().data();
-  const auto ownership = result_buf_[kOwnershipIndex].flat<float>().data();
-  const auto score_probabilities =
-      result_buf_[kScoreIndex].flat<float>().data();
-  const auto move_probabilities =
-      result_buf_[kMoveProbabilitiesIndex].flat<float>().data();
-  NNInferResult infer_result;
-
-  std::copy(move_logits, move_logits + constants::kMaxNumMoves,
-            infer_result.move_logits);
-  std::copy(move_probabilities, move_probabilities + constants::kMaxNumMoves,
-            infer_result.move_probabilities);
-  std::copy(value_probability, value_probability + constants::kNumValueLogits,
-            infer_result.value_probability);
-  std::copy(ownership, ownership + constants::kMaxNumBoardLocs,
-            infer_result.ownership);
-  std::copy(score_probabilities,
-            score_probabilities + constants::kNumScoreLogits,
-            infer_result.score_probabilities);
-
-  return absl::OkStatus();
+  load_counter_ = std::make_unique<absl::BlockingCounter>(num_threads_);
+  std::fill(infer_result_ready_.begin(), infer_result_ready_.end(),
+            static_cast<char>(true));
 }
 
 }  // namespace nn

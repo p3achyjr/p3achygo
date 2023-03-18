@@ -4,9 +4,9 @@
 #include <sstream>
 #include <stack>
 
-#include "absl/debugging/stacktrace.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "cc/core/util.h"
 #include "cc/game/zobrist_hash.h"
 
 namespace game {
@@ -42,19 +42,6 @@ inline std::vector<Loc> Adjacent(Loc loc, int board_length) {
 template <typename T>
 inline bool VecContains(const std::vector<T> vec, T x) {
   return std::find(vec.begin(), vec.end(), x) != vec.end();
-}
-
-template <typename T>
-inline std::string VecToString(const std::vector<T> vec) {
-  std::stringstream ss;
-  ss << "<";
-  for (auto& x : vec) {
-    ss << x << ", ";
-  }
-  ss << ">";
-
-  // convert the stream buffer into a string
-  return ss.str();
 }
 
 }  // namespace
@@ -286,6 +273,10 @@ int Board::at(int i, int j) const { return AtLoc(Loc{i, j}); }
 HashKey Board::hash() const { return hash_; }
 
 bool Board::IsValidMove(Loc loc, int color) const {
+  if (loc == kPassLoc) {
+    return true;
+  }
+
   return MoveDry(loc, color).has_value();
 }
 
@@ -357,7 +348,10 @@ bool Board::MovePass(int color) {
 }
 
 std::optional<MoveInfo> Board::MoveDry(Loc loc, int color) const {
-  if (color != BLACK && color != WHITE) {
+  if (loc == kPassLoc) {
+    return MoveInfo{Transition{loc, color, color}, std::vector<Transition>(),
+                    hash_};
+  } else if (color != BLACK && color != WHITE) {
     DLOG_EVERY_N_SEC(INFO, 5) << "Unknown Color: " << color;
     return std::nullopt;
   } else if (loc.i < 0 || loc.i >= length_ || loc.j < 0 || loc.j >= length_) {
@@ -434,14 +428,15 @@ float Board::Score(int color) const {
       // empty location, dfs to find strongly contiguous region.
       std::vector<Loc> dfs_stack{Loc{i, j}};
       int contiguous_region_size = 0;
+      bool saw_opposite_color = false;
       while (!dfs_stack.empty()) {
         Loc loc = dfs_stack.back();
         dfs_stack.pop_back();
         if (seen[loc.i][loc.j]) {
           continue;
         } else if (AtLoc(loc) == OppositeColor(color)) {
-          contiguous_region_size = 0;
-          break;
+          saw_opposite_color = true;
+          continue;
         } else if (AtLoc(loc) == color) {
           continue;
         }
@@ -454,11 +449,18 @@ float Board::Score(int color) const {
         dfs_stack.insert(dfs_stack.end(), adjacent.begin(), adjacent.end());
       }
 
-      score += contiguous_region_size;
+      score += saw_opposite_color ? 0 : contiguous_region_size;
     }
   }
 
   return static_cast<float>(score) + (color == WHITE ? komi_ : 0);
+}
+
+std::string Board::ToString() const {
+  std::stringstream ss;
+  ss << *this;
+
+  return ss.str();
 }
 
 int Board::AtLoc(Loc loc) const { return board_[loc.i][loc.j]; }

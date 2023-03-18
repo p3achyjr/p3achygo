@@ -1,11 +1,17 @@
 #ifndef __NN_INTERFACE_H_
 #define __NN_INTERFACE_H_
 
+#include <atomic>
+#include <thread>
+
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/synchronization/blocking_counter.h"
 #include "cc/constants/constants.h"
 #include "cc/game/board.h"
 #include "cc/nn/nn_evaluator.h"
+#include "tensorflow/cc/client/client_session.h"
+#include "tensorflow/cc/framework/scope.h"
 
 namespace tensorflow {
 class Tensor;
@@ -23,29 +29,55 @@ struct NNInferResult {
 
 /*
  * Bridge between `Board` and other game objects to NN evaluation.
+ *
+ * This is an interface containing a single model. Each thread will fill its
+ * slot in the neural network batch, and when the batch is full, inference will
+ * be performed.
  */
 class NNInterface final {
  public:
-  NNInterface();
-  ~NNInterface() = default;
+  NNInterface(int num_threads);
+  ~NNInterface();
 
-  // Disable Copy and Move
+  // Disable Copy
   NNInterface(NNInterface const&) = delete;
   NNInterface& operator=(NNInterface const&) = delete;
-  NNInterface(NNInterface&&) = delete;
-  NNInterface& operator=(NNInterface&&) = delete;
 
   absl::Status Initialize(std::string&& model_path);
-  absl::StatusOr<NNInferResult> GetInferenceResult(
-      const game::Board& board, const std::vector<game::Loc> last_moves,
-      int color_to_move);
+
+  // In order to ensure thread safety, threads must first call `LoadBatch`, and
+  // then get the result for the corresponding thread index from
+  // `GetInferenceResult`.
+  // `GetInferenceResult` will block until the result for all threads is ready.
+  absl::Status LoadBatch(int thread_id, const game::Board& board,
+                         const std::vector<game::Loc> last_moves,
+                         int color_to_move);
+  NNInferResult GetInferenceResult(int thread_id) ABSL_LOCKS_EXCLUDED(mu_);
 
  private:
+  void InferLoop();
+  void Infer(::tensorflow::Scope& scope, ::tensorflow::ClientSession& session)
+      ABSL_LOCKS_EXCLUDED(mu_);
+
   NNEvaluator nn_evaluator_;
+  ::tensorflow::Tensor input_feature_buf_;
+  ::tensorflow::Tensor input_state_buf_;
+  std::vector<::tensorflow::Tensor> nn_input_buf_;
   std::vector<::tensorflow::Tensor> nn_output_buf_;
   std::vector<::tensorflow::Tensor> result_buf_;
 
-  bool is_initialized_ = false;
+  bool is_initialized_;
+  int num_threads_;
+
+  // Synchronization
+  std::unique_ptr<absl::BlockingCounter> load_counter_;
+  absl::Mutex mu_;
+  std::vector<char> infer_result_ready_;  // index `i` indicates whether result
+                                          // for thread `i` is ready.
+
+  // inference thread. Runs inference until told to stop.
+  std::thread infer_thread_;
+  std::atomic<bool> running_;
 };
 
 }  // namespace nn

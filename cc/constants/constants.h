@@ -48,7 +48,7 @@ static constexpr auto kScoreInflectionPoint = 400;
 static constexpr auto kNumLastMoves = 5;
 
 /* Integer value for pass move encoding, from NN. */
-static constexpr auto kPassMoveEncoding = 362;
+static constexpr auto kPassMoveEncoding = 361;
 
 /* Integer value for an illegal move encoding. */
 static constexpr auto kNoopMoveEncoding = -1;

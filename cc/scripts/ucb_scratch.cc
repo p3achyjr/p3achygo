@@ -67,14 +67,9 @@ MoveBucket::MoveBucket(const std::vector<int>& elems) {
     if (dfs_node.i >= 2 * kMaxMoveBucketSize) {
       continue;
     } else if (dfs_node.i >= kMaxMoveBucketSize) {
-      // LOG(INFO) << "<<axlui>> Writing Node: " << dfs_node.arr_index
-      //           << ", value: " << elems[dfs_node.arr_index]
-      //           << ", i: " << dfs_node.i;
       arr_[dfs_node.i] = Node{1, elems[dfs_node.arr_index]};
       continue;
     }
-
-    // LOG(INFO) << "<<axlui>> Internal Node. i: " << dfs_node.i;
 
     // internal node
     arr_[dfs_node.i] = Node{dfs_node.subtree_size, 0};
@@ -99,22 +94,10 @@ int MoveBucket::at(int i) {
   DCHECK(i < size_);
   int k = 1;
   while (k < kMaxMoveBucketSize) {
-    // if (log) {
-    //   LOG(INFO) << "<<axlui>> MoveInfo::at k: " << k << ", i: " << i
-    //             << ", subtree_size: " << arr_[k].subtree_size
-    //             << ", left_subtree_size: " << arr_[2 * k].subtree_size
-    //             << ", right_subtree_size: " << arr_[2 * k + 1].subtree_size;
-    // }
     size_t left_size = arr_[2 * k].subtree_size;
     k = i < left_size ? 2 * k : 2 * k + 1;
     i = i < left_size ? i : i - left_size;
   }
-
-  // if (log) {
-  //   LOG(INFO) << "<<axlui>> MoveInfo::at k: " << k << ", i: " << i
-  //             << ", subtree_size: " << arr_[k].subtree_size
-  //             << ", value: " << arr_[k].value;
-  // }
 
   return arr_[k].value;
 }
@@ -125,32 +108,14 @@ void MoveBucket::RemoveAt(int i) {
   DCHECK(i < size_);
   int k = 1;
   while (k < kMaxMoveBucketSize) {
-    // LOG(INFO) << "<<axlui>> MoveInfo::RemoveAt k: " << k << ", i: " << i
-    //           << ", subtree_size: " << arr_[k].subtree_size
-    //           << ", left_subtree_size: " << arr_[2 * k].subtree_size
-    //           << ", right_subtree_size: " << arr_[2 * k + 1].subtree_size;
     size_t left_size = arr_[2 * k].subtree_size;
     arr_[k].subtree_size -= 1;
     k = i < left_size ? 2 * k : 2 * k + 1;
     i = i < left_size ? i : i - left_size;
-    // LOG(INFO) << "<<axlui>> MoveInfo::RemoveAt Post Mutation: k: " << tmp_k
-    //           << ", i: " << i << ", subtree_size: " <<
-    //           arr_[tmp_k].subtree_size
-    //           << ", left_subtree_size: " << arr_[2 * tmp_k].subtree_size
-    //           << ", right_subtree_size: " << arr_[2 * tmp_k +
-    //           1].subtree_size;
   }
-
-  // LOG(INFO) << "<<axlui>> MoveInfo::RemoveAt k: " << k;
-
-  // LOG(INFO) << "<<axlui>> MoveInfo::RemoveAt k: " << k << ", i: " << i
-  //           << ", subtree_size: " << arr_[k].subtree_size
-  //           << ", value: " << arr_[k].value;
 
   // should now be at leaf node
   arr_[k].subtree_size -= 1;
-  // LOG(INFO) << "<<axlui>> MoveInfo::RemoveAt Post Mutation: k: " << k
-  //           << ", subtree_size: " << arr_[k].subtree_size;
   size_ -= 1;
 }
 
@@ -159,17 +124,11 @@ void MoveBucket::Insert(int x) {
   int k = 1;
   int full_size = kMaxMoveBucketSize;
   while (full_size > 1) {
-    // LOG(INFO) << "<<axlui>> MoveInfo::Insert k: " << k << ", x: " << x
-    //           << ", subtree_size: " << arr_[k].subtree_size
-    //           << ", left_subtree_size: " << arr_[2 * k].subtree_size
-    //           << ", right_subtree_size: " << arr_[2 * k + 1].subtree_size;
     size_t left_size = arr_[2 * k].subtree_size;
     arr_[k].subtree_size += 1;
     k = left_size < full_size / 2 ? 2 * k : 2 * k + 1;
     full_size /= 2;
   }
-
-  // LOG(INFO) << "<<axlui>> MoveInfo::Insert k: " << k;
 
   // should now be at leaf node
   arr_[k].subtree_size += 1;
@@ -236,14 +195,9 @@ int UcbRandomPlayout(game::Board& board, Tree& tree, int color_to_move,
   while (!board.IsGameOver() && board.move_count() < 400) {
     int move_index = core::RandRange(prng, 0, move_bucket.size());
     int move = move_bucket.at(move_index);
-    // LOG(INFO) << "<<axlui>> move_index: " << move_index;
-    // LOG(INFO) << "<<axlui>> move: " << move;
-    // LOG(INFO) << "<<axlui>> move_count: " << board.move_count();
-    // LOG(INFO) << "<<axlui>> Next Move: " << board.MoveAsLoc(move);
-    // LOG(INFO) << "\n" << board;
+
     if (move == kPassMove) {
       // pass move
-      // LOG(INFO) << "<<axlui>> Next Move: " << board.MoveAsLoc(move);
       board.MovePass(color);
       color = game::OppositeColor(color);
     } else {
@@ -393,8 +347,8 @@ Loc Ucb(game::Board root_board, Tree& tree, int color_to_move,
   UcbState& root_state = tree.at(game_state);
   DCHECK(root_state.actions_unexplored.empty());
 
-  LOG(INFO) << "<<axlui>> UcbState N:" << root_state.N
-            << ", Q: " << root_state.Q << ", W: " << root_state.W
+  LOG(INFO) << "UcbState N:" << root_state.N << ", Q: " << root_state.Q
+            << ", W: " << root_state.W
             << ", explored_size: " << root_state.actions_explored.size()
             << ", unexplored_size: " << root_state.actions_unexplored.size();
 

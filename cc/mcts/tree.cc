@@ -1,5 +1,7 @@
 #include "cc/mcts/tree.h"
 
+#include <iostream>
+
 namespace mcts {
 
 void AdvanceState(TreeNode* node) {
@@ -23,19 +25,14 @@ float Q(TreeNode* node) {
   return node == nullptr ? -1.5 : node->q;
 }
 
-int MaxN(TreeNode* node) {
+float MaxN(TreeNode* node) {
   if (node == nullptr) return 0;
 
   return node->max_child_n;
 }
 
-void UpdateParentFromChild(TreeNode* parent, TreeNode* child) {
-  parent->n += 1;
-  parent->w += child->q;
-  parent->q = parent->w / parent->n;
-  if (child->n > parent->max_child_n) {
-    parent->max_child_n = child->n;
-  }
-}
+// Each node is visited once when expanded, and once per search path. Thus, the
+// total visit count of its children should be N(node) - 1
+float SumChildrenN(TreeNode* node) { return node == nullptr ? 0 : node->n - 1; }
 
 }  // namespace mcts

@@ -21,11 +21,14 @@ class NNBoardUtils final {
   static ::tensorflow::Tensor GetWhite(const game::Board& board);
   static ::tensorflow::Tensor AsOneHot(game::Loc loc);
 
-  static std::vector<std::pair<std::string, ::tensorflow::Tensor>>
-  ConstructNNInput(::tensorflow::ClientSession& session,
-                   const ::tensorflow::Scope& scope, const game::Board& board,
-                   int color, const std::vector<game::Loc> moves,
-                   const std::vector<std::string>& input_names);
+  // Fills `input_features` and `input_state` at batch `batch_id`.
+  // Assumes tensors are float tensors.
+  static void FillNNInput(::tensorflow::ClientSession& session,
+                          const ::tensorflow::Scope& scope, int batch_id,
+                          int batch_size, ::tensorflow::Tensor& input_features,
+                          ::tensorflow::Tensor& input_state,
+                          const game::Board& board, int color,
+                          const std::vector<game::Loc> moves);
 };
 
 }  // namespace nn

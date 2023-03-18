@@ -10,6 +10,7 @@ namespace core {
  */
 class Probability final {
  public:
+  explicit Probability(int seed);
   Probability() = default;
   ~Probability() = default;
 

@@ -258,6 +258,17 @@ TEST_CASE("GroupTrackerTest") {
     CHECK(group_tracker.GroupAt(Loc{4, 3}) == final_gid);
     CHECK(group_tracker.LibertiesForGroup(final_gid) == 10);
   }
+
+  SUBCASE("EdgeKo") {
+    groupid gid0 = group_tracker.NewGroup(Loc{0, 2}, BLACK);
+    group_tracker.AddToGroup(Loc{1, 2}, gid0);
+    group_tracker.AddToGroup(Loc{1, 1}, gid0);
+
+    CHECK(group_tracker.LibertiesForGroup(gid0) == 6);
+
+    groupid gid1 = group_tracker.NewGroup(Loc{0, 1}, WHITE);
+    CHECK(group_tracker.LibertiesForGroup(gid0) == 5);
+  }
 }
 
 }  // namespace game
