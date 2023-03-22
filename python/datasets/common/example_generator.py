@@ -116,21 +116,26 @@ class ExampleGenerator:
 
       return (i, BOARD_LEN - 1 - j)
 
-    with path.open(mode='rb') as f:
-      game = sgf.Sgf_game.from_bytes(f.read())
-      board_size = game.get_root().get_size()
-      main_line = game.get_main_sequence()
+    try:
+      with path.open(mode='rb') as f:
+        game = sgf.Sgf_game.from_bytes(f.read())
+        board_size = game.get_root().get_size()
+        main_line = game.get_main_sequence()
+
+      handicap = game.get_handicap()
+      result = game.get_root().get('RE')
+      komi = game.get_komi()
+    except:
+      return
 
     if board_size != BOARD_LEN:
       # ignore non 19 x 19 games
       return
 
-    handicap = game.get_handicap()
     if handicap != None and handicap > 0:
       # skip handicap games for now
       return
 
-    result = game.get_root().get('RE')
     result = GameResult.parse_score(result)
     if result.is_unknown():
       # skip game for simplicity when training
@@ -144,7 +149,6 @@ class ExampleGenerator:
       if not result.is_by_resignation():
         return
 
-    komi = game.get_komi()
     board = GoBoard(BOARD_LEN)
     move_num = 0
     move_queue = [NON_MOVE] * NUM_LAST_MOVES
@@ -162,27 +166,31 @@ class ExampleGenerator:
       score_black = score_for_player(result, GameResult.BLACK)
       score_white = score_for_player(result, GameResult.WHITE)
 
+    year, month = path.parent.parent.name, path.parent.name
     for node in main_line:
       move = node.get_move()
       if move is None or move[0] is None or move[1] is None:
         continue
 
       (c, (i, j)) = move
-      board_arr = np.array(board.as_black() if c ==
-                           'b' else board.as_white()).astype(np.int8)
+      board_arr = board.as_black() if c == 'b' else board.as_white()
+
+      current_player = player_from_encoding(c)
+      current_player_score_diff =\
+        score_black if current_player == GameResult.BLACK else score_white
+      komi_as_player = komi if current_player == GameResult.WHITE else 0.0
 
       # total of 8 unique rotation + reflection combinations
       num_rotations = 4
-      year, month = path.parent.parent.name, path.parent.name
+      symmetries = random.sample(range(8), REUSE_FACTOR)
+      last_moves = move_queue[-NUM_LAST_MOVES:]
+
       for rot_index in range(num_rotations):
+        if rot_index not in symmetries:
+          continue
         key = f'y{year}_m{month}_{path.name}_mv{move_num}_rot{rot_index}_ref0'
         b = np.rot90(board_arr, rot_index)
         i_prime, j_prime = rot90_points(i, j, rot_index)
-
-        current_player = player_from_encoding(c)
-        current_player_score_diff =\
-          score_black if current_player == GameResult.BLACK else score_white
-        komi_as_player = komi if current_player == GameResult.WHITE else 0.0
 
         yield key, {
             'metadata': key,
@@ -191,16 +199,18 @@ class ExampleGenerator:
             'color': color_to_move,
             'result': current_player_score_diff,
             'last_moves': [
-                rot90_points(i, j, rot_index)
-                for (i, j) in move_queue[-NUM_LAST_MOVES:]
+                rot90_points(i, j, rot_index) for (i, j) in last_moves
             ],
             'policy': (i_prime, j_prime)
         }
 
       # now reflect and repeat operations
       board_arr = np.fliplr(board_arr)
+      last_moves = [fliplr_points(i, j) for (i, j) in last_moves]
       i_ref, j_ref = fliplr_points(i, j)
       for rot_index in range(num_rotations):
+        if rot_index + 4 not in symmetries:
+          continue
         key = f'y{year}_m{month}_{path.name}_mv{move_num}_rot{rot_index}_ref1'
         b = np.rot90(board_arr, rot_index)
         i_prime, j_prime = rot90_points(i_ref, j_ref, rot_index)
@@ -212,8 +222,7 @@ class ExampleGenerator:
             'color': color_to_move,
             'result': current_player_score_diff,
             'last_moves': [
-                rot90_points(i, j, rot_index)
-                for (i, j) in move_queue[-NUM_LAST_MOVES:]
+                rot90_points(i, j, rot_index) for (i, j) in last_moves
             ],
             'policy': (i_prime, j_prime)
         }
@@ -245,7 +254,12 @@ class ExampleGenerator:
 
       num_rotations = 4
       for _ in range(2):
+        last_moves = move_queue[-NUM_LAST_MOVES:]
+        symmetries = random.sample(range(8), REUSE_FACTOR)
         for rot_index in range(num_rotations):
+          if rot_index not in symmetries:
+            continue
+
           key = f'y{year}_m{month}_{path.name}_mv{move_num}_rot{rot_index}_ref0'
           b = np.rot90(board_arr, rot_index)
 
@@ -256,14 +270,16 @@ class ExampleGenerator:
               'color': color_to_move,
               'result': current_player_score_diff,
               'last_moves': [
-                  rot90_points(i, j, rot_index)
-                  for (i, j) in move_queue[-NUM_LAST_MOVES:]
+                  rot90_points(i, j, rot_index) for (i, j) in last_moves
               ],
               'policy': PASS_MOVE,
           }
 
         board_arr = np.fliplr(board_arr)
+        last_moves = [fliplr_points(i, j) for (i, j) in last_moves]
         for rot_index in range(num_rotations):
+          if rot_index + 4 not in symmetries:
+            continue
           key = f'y{year}_m{month}_{path.name}_mv{move_num}_rot{rot_index}_ref1'
           b = np.rot90(board_arr, rot_index)
 
@@ -274,8 +290,7 @@ class ExampleGenerator:
               'color': color_to_move,
               'result': current_player_score_diff,
               'last_moves': [
-                  rot90_points(i, j, rot_index)
-                  for (i, j) in move_queue[-NUM_LAST_MOVES:]
+                  rot90_points(i, j, rot_index) for (i, j) in last_moves
               ],
               'policy': PASS_MOVE,
           }

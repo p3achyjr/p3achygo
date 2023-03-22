@@ -10,6 +10,10 @@ BITSTRING_LEN = 128
 UINT_MAX = 2**128 - 1
 
 
+def opposite_color(color: int) -> int:
+  return WHITE if color == BLACK else BLACK
+
+
 def is_star_point(board, i, j) -> bool:
   coords = [3, 9, 15]
   # print(i, j, i in coords and j in coords)
@@ -82,7 +86,7 @@ class GoBoard:
 
   def __init__(self, b=BOARD_LEN) -> None:
     self.len = b
-    self.board = [[EMPTY for _ in range(b)] for _ in range(b)]
+    self.board = np.full(shape=(b, b), fill_value=EMPTY, dtype=np.int8)
     self.zobrist_table = ZobristTable(self.len, 3)
     self.zobrist_hash = ZobristHash(self, self.len, self.zobrist_table)
     self.table = set(self.zobrist_hash.hash())
@@ -166,9 +170,6 @@ class GoBoard:
     if i < 0 or j < 0 or i >= self.len or j >= self.len:
       return 0
 
-    # print(i, j, group, visited, color, self.board[i][j],
-    #       self.board[i][j] == EMPTY)
-
     visited.add((i, j))
     if self.board[i][j] != color:
       return 1 if self.board[i][j] == EMPTY else 0
@@ -179,20 +180,10 @@ class GoBoard:
            self.find_liberties(group, i, j - 1, color, visited) + \
            self.find_liberties(group, i, j + 1, color, visited)
 
-  def as_color(self, color: int) -> list[list[int]]:
-    board = [[EMPTY
-              for _ in range(len(self.board))]
-             for _ in range(len(self.board[0]))]
-
-    for i in range(len(board)):
-      for j in range(len(board[0])):
-        if self.board[i][j] == color:
-          # kind of hacky. Encode "self" player as black
-          board[i][j] = BLACK
-        elif self.board[i][j] != EMPTY:
-          board[i][j] = WHITE
-
-    return board
+  def as_color(self, color: int) -> np.ndarray:
+    player = (self.board == color).astype(np.int8) * BLACK
+    opp = (self.board == opposite_color(color)).astype(np.int8) * WHITE
+    return player + opp
 
   def as_black(self):
     return self.as_color(BLACK)
