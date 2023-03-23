@@ -257,7 +257,6 @@ class SupervisedTrainingManager:
     self.train_ds, self.test_ds = tfds.load(
         self.training_config.kDatasetName,
         split=['train[:95%]', 'train[95%:]'],
-        # split=['train[0:2000]', 'train[2000:3000]'],
         shuffle_files=True)
 
     logging.info(f"Dataset: {self.training_config.kDatasetName}, \
