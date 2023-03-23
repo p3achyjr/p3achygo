@@ -634,6 +634,10 @@ class P3achyGoModel(tf.keras.Model):
     c_score = .02
     c_gamma_scaling = .0005
 
+    # overall weighting for value loss
+    # TODO: make this configurable
+    c_value = .01
+
     # compute actual loss value
     policy_loss = self.scce_logits(policy, pi_logits)
 
@@ -641,9 +645,9 @@ class P3achyGoModel(tf.keras.Model):
 
     outcome_clip_max = 100.0
     did_win = score >= 0
-    outcome_loss = tf.clip_by_value(
-        c_outcome * self.scce_logits(did_win, game_outcome), -outcome_clip_max,
-        outcome_clip_max)
+    outcome_loss = c_outcome * self.scce_logits(did_win, game_outcome)
+    # outcome_loss = tf.clip_by_value(outcome_loss, -outcome_clip_max,
+    #                                 outcome_clip_max)
 
     # print('Outcome Loss:', outcome_loss.numpy())
 
@@ -656,7 +660,7 @@ class P3achyGoModel(tf.keras.Model):
             tf.math.cumsum(score_distribution, axis=1)),
                            axis=1))
 
-    score_loss = c_score * (score_pdf_loss + score_cdf_loss)
+    score_loss = c_score * (c_value * score_pdf_loss + score_cdf_loss)
     # print('Score PDF Loss:', score_pdf_loss.numpy())
     # print('Score CDF Loss:', score_cdf_loss.numpy())
     # print('Score Loss:', score_loss.numpy())
@@ -666,8 +670,8 @@ class P3achyGoModel(tf.keras.Model):
 
     # print('Gamme Loss:', gamma_loss.numpy())
 
-    loss = policy_loss + outcome_loss + score_loss + gamma_loss
-    return loss
+    loss = policy_loss + c_value * outcome_loss + score_loss + gamma_loss
+    return loss, policy_loss, outcome_loss, score_pdf_loss
 
   def get_config(self):
     return {

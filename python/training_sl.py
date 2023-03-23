@@ -81,8 +81,9 @@ def train_step(input, komi, score, score_one_hot, policy, model, optimizer):
   with tf.GradientTape() as g:
     pi_logits, game_outcome, game_ownership, score_logits, gamma = model(
         input, tf.expand_dims(komi, axis=1), training=True)
-    training_loss = model.loss(pi_logits, game_outcome, score_logits, gamma,
-                               policy, score, score_one_hot)
+    training_loss, policy_loss, outcome_loss, score_pdf_loss = model.loss(
+        pi_logits, game_outcome, score_logits, gamma, policy, score,
+        score_one_hot)
 
     regularization_loss = tf.math.add_n(model.losses)
 
@@ -91,7 +92,8 @@ def train_step(input, komi, score, score_one_hot, policy, model, optimizer):
   gradients = g.gradient(loss, model.trainable_variables)
   optimizer.apply_gradients(zip(gradients, model.trainable_variables))
 
-  return pi_logits, game_outcome, score_logits, loss
+  return (pi_logits, game_outcome, score_logits, loss, policy_loss,
+          outcome_loss, score_pdf_loss)
 
 
 @tf.function()
@@ -99,8 +101,9 @@ def train_step_gpu(input, komi, score, score_one_hot, policy, model, optimizer):
   with tf.GradientTape() as g:
     pi_logits, game_outcome, game_ownership, score_logits, gamma = model(
         input, tf.expand_dims(komi, axis=1), training=True)
-    training_loss = model.loss(pi_logits, game_outcome, score_logits, gamma,
-                               policy, score, score_one_hot)
+    training_loss, policy_loss, outcome_loss, score_pdf_loss = model.loss(
+        pi_logits, game_outcome, score_logits, gamma, policy, score,
+        score_one_hot)
 
     regularization_loss = tf.cast(tf.math.add_n(model.losses), dtype=tf.float16)
 
@@ -111,7 +114,8 @@ def train_step_gpu(input, komi, score, score_one_hot, policy, model, optimizer):
   gradients = optimizer.get_unscaled_gradients(scaled_gradients)
   optimizer.apply_gradients(zip(gradients, model.trainable_variables))
 
-  return pi_logits, game_outcome, score_logits, loss
+  return (pi_logits, game_outcome, score_logits, loss, policy_loss,
+          outcome_loss, score_pdf_loss)
 
 
 class LossHistory:
@@ -213,11 +217,47 @@ class SupervisedTrainingManager:
   Initializes dataset and holds method for training loop.
   '''
 
+  class MinLossTracker:
+
+    def __init__(self):
+      self.min_train_loss = 10000.
+      self.min_train_policy_loss = 10000.
+      self.min_train_outcome_loss = 10000.
+      self.min_train_score_pdf_loss = 10000.
+
+      self.min_test_loss = 10000.
+      self.min_test_policy_loss = 10000.
+      self.min_test_outcome_loss = 10000.
+      self.min_test_score_pdf_loss = 10000.
+
+    def update_train_losses(self, loss, policy_loss, outcome_loss,
+                            score_pdf_loss):
+      if loss < self.min_train_loss:
+        self.min_train_loss = loss
+      if policy_loss < self.min_train_policy_loss:
+        self.min_train_policy_loss = policy_loss
+      if outcome_loss < self.min_train_outcome_loss:
+        self.min_train_outcome_loss = outcome_loss
+      if score_pdf_loss < self.min_train_score_pdf_loss:
+        self.min_train_score_pdf_loss = score_pdf_loss
+
+    def update_test_losses(self, loss, policy_loss, outcome_loss,
+                           score_pdf_loss):
+      if loss < self.min_test_loss:
+        self.min_test_loss = loss
+      if policy_loss < self.min_test_policy_loss:
+        self.min_test_policy_loss = policy_loss
+      if outcome_loss < self.min_test_outcome_loss:
+        self.min_test_outcome_loss = outcome_loss
+      if score_pdf_loss < self.min_test_score_pdf_loss:
+        self.min_test_score_pdf_loss = score_pdf_loss
+
   def __init__(self, training_config=TrainingConfig()):
     self.training_config = training_config
     self.train_ds, self.test_ds = tfds.load(
         self.training_config.kDatasetName,
-        split=['train[:80%]', 'train[80%:]'],
+        split=['train[:95%]', 'train[95%:]'],
+        # split=['train[0:2000]', 'train[2000:3000]'],
         shuffle_files=True)
 
     logging.info(f"Dataset: {self.training_config.kDatasetName}, \
@@ -256,22 +296,33 @@ class SupervisedTrainingManager:
     print(model.summary(batch_size=self.training_config.kBatchSize))
 
     batch_num = 0
+    loss_tracker = self.MinLossTracker()
     for _ in range(self.training_config.kEpochs):
       # train
       for (input, komi, score, score_one_hot, policy) in self.train_ds:
-        pi_logits, game_outcome, score_logits, current_loss = train_fn(
-            input, komi, score, score_one_hot, policy, model, optimizer)
+        (pi_logits, game_outcome, score_logits, current_loss, policy_loss,
+         outcome_loss, score_pdf_loss) = train_fn(input, komi, score,
+                                                  score_one_hot, policy, model,
+                                                  optimizer)
+        loss_tracker.update_train_losses(current_loss, policy_loss,
+                                         outcome_loss, score_pdf_loss)
+
         if batch_num % self.training_config.kLogInterval == 0:
           top_policy_indices = tf.math.top_k(pi_logits[0], k=5).indices
           top_policy_values = tf.math.top_k(pi_logits[0], k=5).values
           board = tf.transpose(input, (0, 3, 1, 2))  # NHWC -> NCHW
           board = tf.cast(board[0][0] + (2 * board[0][1]), dtype=tf.int32)
-          top_score_indices = tf.math.top_k(score_logits[0], k=5).indices - 400
+          top_score_indices = tf.math.top_k(score_logits[0],
+                                            k=5).indices - SCORE_RANGE_MIDPOINT
           top_score_values = tf.math.top_k(score_logits[0], k=5).values
 
           print(f'---------- Batch {batch_num} -----------')
           print(f'Learning Rate: {optimizer.learning_rate.numpy()}')
           print(f'Loss: {current_loss}')
+          print(f'Min Loss: {loss_tracker.min_train_loss}')
+          print(f'Min Policy Loss: {loss_tracker.min_train_policy_loss}')
+          print(f'Min Outcome Loss: {loss_tracker.min_train_outcome_loss}')
+          print(f'Min Score PDF Loss: {loss_tracker.min_train_score_pdf_loss}')
           print(f'Predicted Outcome: {tf.nn.softmax(game_outcome[0])}')
           print(f'Predicted Scores: {top_score_indices}')
           print(f'Predicted Score Values: {top_score_values}')
@@ -301,6 +352,11 @@ class SupervisedTrainingManager:
       for (input, komi, score, score_one_hot, policy) in self.test_ds:
         pi_logits, game_outcome, game_ownership, score_logits, gamma = model(
             input, tf.expand_dims(komi, axis=1), training=False)
+        current_loss, policy_loss, outcome_loss, score_pdf_loss = model.loss(
+            pi_logits, game_outcome, score_logits, gamma, policy, score,
+            score_one_hot)
+        loss_tracker.update_test_losses(current_loss, policy_loss, outcome_loss,
+                                        score_pdf_loss)
 
         predicted_move = tf.math.argmax(pi_logits, axis=1, output_type=tf.int32)
         predicted_outcome = tf.math.argmax(game_outcome,
@@ -322,6 +378,13 @@ class SupervisedTrainingManager:
 
         if test_batch_num % self.training_config.kLogInterval == 0:
           print(f"---------- Batch {test_batch_num} ----------")
+          print(f'Loss: {current_loss}')
+          print(f'Min Loss: {loss_tracker.min_test_loss}')
+          print(f'Min Test Policy Loss: {loss_tracker.min_test_policy_loss}')
+          print(f'Min Test Outcome Loss: {loss_tracker.min_test_outcome_loss}')
+          print(
+              f'Min Test Score PDF Loss: {loss_tracker.min_test_score_pdf_loss}'
+          )
           print("Correct Moves: ", correct_moves, ", Total Moves: ",
                 total_moves)
           print("Correct Outcomes: ", correct_outcomes, ", Total Outcomes: ",
@@ -336,6 +399,17 @@ class SupervisedTrainingManager:
     # save final model
     print("Saving Final Model...")
     self.save_model(model, batch_num)
+
+    # log final stats
+    print(f'---------- Final Stats ----------')
+    print(f'Min Train Loss: {loss_tracker.min_train_loss}')
+    print(f'Min Test Loss: {loss_tracker.min_test_loss}')
+    print(f'Min Train Policy Loss: {loss_tracker.min_train_policy_loss}')
+    print(f'Min Test Policy Loss: {loss_tracker.min_test_policy_loss}')
+    print(f'Min Train Outcome Loss: {loss_tracker.min_train_outcome_loss}')
+    print(f'Min Test Outcome Loss: {loss_tracker.min_test_outcome_loss}')
+    print(f'Min Train Score PDF Loss: {loss_tracker.min_train_score_pdf_loss}')
+    print(f'Min Test Score PDF Loss: {loss_tracker.min_test_score_pdf_loss}')
 
   def save_model(self, model: P3achyGoModel, batch_num: int):
     local_path = self.training_config.kLocalModelPath.format(batch_num)
