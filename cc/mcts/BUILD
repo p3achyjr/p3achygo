@@ -25,3 +25,11 @@ cc_library(
         "//cc/game",
     ],
 )
+
+cc_library(
+    name = "mcts",
+    deps = [
+        ":gumbel",
+        ":tree",
+    ],
+)

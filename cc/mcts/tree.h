@@ -15,8 +15,10 @@ enum class TreeNodeState {
   kExpanded = 2,     // at least one child has been visited.
 };
 
-struct TreeNode {
-  // immutable
+struct TreeNode final {
+  TreeNode() = default;
+  ~TreeNode() = default;
+
   TreeNodeState state = TreeNodeState::kNew;
   bool is_terminal = false;
   int color_to_move;
@@ -28,7 +30,7 @@ struct TreeNode {
 
   int max_child_n = 0;
 
-  std::unique_ptr<TreeNode> children[constants::kMaxNumMoves]{};
+  std::array<std::unique_ptr<TreeNode>, constants::kMaxNumMoves> children{};
 
   // write-once
   float move_logits[constants::kMaxNumMoves]{};
@@ -41,11 +43,8 @@ struct TreeNode {
 void AdvanceState(TreeNode* node);
 float N(TreeNode* node);
 float Q(TreeNode* node);
-int MaxN(TreeNode* node);
-
-// backward pass for a single parent and child
-// Prerequisite: `child` is a valid child of `parent`
-void UpdateParentFromChild(TreeNode* parent, TreeNode* child);
+float MaxN(TreeNode* node);
+float SumChildrenN(TreeNode* node);
 
 // void IncrementChildN(TreeNode* node, int child);
 

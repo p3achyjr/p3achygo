@@ -2,6 +2,7 @@ package(default_visibility = ["//visibility:public"])
 
 cc_library(
     name = "core",
+    hdrs = ["util.h"],
     deps = [
         ":probability",
         ":rand",

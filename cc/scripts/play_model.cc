@@ -5,11 +5,11 @@
 
 #include "absl/flags/flag.h"
 #include "absl/flags/parse.h"
+#include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "cc/core/rand.h"
 #include "cc/game/board.h"
-#include "cc/nn/nn_board_utils.h"
-#include "cc/nn/nn_evaluator.h"
+#include "cc/nn/nn_interface.h"
 #include "tensorflow/cc/client/client_session.h"
 #include "tensorflow/cc/framework/scope.h"
 #include "tensorflow/cc/ops/array_ops.h"
@@ -51,26 +51,15 @@ int main(int argc, char** argv) {
   Scope root_scope = Scope::NewRootScope();
   ClientSession session(root_scope);
 
-  nn::NNEvaluator nn_evaluator;
-  Status status = nn_evaluator.InitFromPath(absl::GetFlag(FLAGS_model_path));
-  if (!status.ok()) {
-    LOG(ERROR) << status.error_message();
-    return 1;
-  }
-
-  std::vector<Loc> moves = {{-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}};
+  std::vector<Loc> move_history = {
+      {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}};
   game::ZobristTable zobrist_table;
   game::Board board(&zobrist_table);
 
-  std::vector<Tensor> output_buf = {
-      Tensor(DataType::DT_HALF, {1, BOARD_LEN * BOARD_LEN + 1}),  // logits
-      Tensor(DataType::DT_HALF, {1, 2}),                          // win percent
-      Tensor(DataType::DT_HALF, {1, BOARD_LEN, BOARD_LEN, 1}),    // ownership
-      Tensor(DataType::DT_HALF, {1, kNumScoreTargets}),  // score prediction
-      Tensor(DataType::DT_HALF, {1, 1})                  // gamma, just ignore
-  };
+  std::unique_ptr<nn::NNInterface> nn_interface =
+      std::make_unique<nn::NNInterface>(1);
+  CHECK_OK(nn_interface->Initialize(absl::GetFlag(FLAGS_model_path)));
 
-  std::vector<std::pair<std::string, Tensor>> nn_input;
   auto convert_to_move = [](const std::string& move) {
     return Loc{std::stoi(move.substr(1)), move[0] - 'a'};
   };
@@ -78,41 +67,22 @@ int main(int argc, char** argv) {
   std::string line;
   int color_to_move = BLACK;
   while (!board.IsGameOver()) {
-    // model move
+    CHECK_OK(nn_interface->LoadBatch(0, board, move_history, color_to_move));
+    nn::NNInferResult nn_result = nn_interface->GetInferenceResult(0);
 
-    // Get input
-    nn_input = nn::NNBoardUtils::ConstructNNInput(
-        session, root_scope, board, color_to_move, moves, kInputNames);
-
-    // Feed to session
-    status = nn_evaluator.Infer(nn_input, kOutputNames, &output_buf);
-    if (!status.ok()) {
-      LOG(ERROR) << "Eval Failed: " << status.code()
-                 << ", msg: " << status.error_message();
-      return 1;
+    std::vector<std::pair<int, float>> moves;
+    for (int i = 0; i < constants::kMaxNumMoves; ++i) {
+      moves.emplace_back(std::make_pair(i, nn_result.move_logits[i]));
     }
 
-    std::vector<Tensor> output;
-    status = session.Run(
-        {ops::TopK(root_scope,
-                   ops::Cast(root_scope, output_buf[0], DataType::DT_FLOAT),
-                   Input(kMovesToTest))
-             .indices,
-         ops::Softmax(root_scope, ops::Cast(root_scope, output_buf[1],
-                                            DataType::DT_FLOAT))},
-        &output);
-
-    if (!status.ok()) {
-      LOG(ERROR) << "Cast Failed: " << status.code()
-                 << ", msg: " << status.error_message();
-      return 1;
-    }
+    std::sort(moves.begin(), moves.end(),
+              [](auto& x, auto& y) { return x.first > y.first; });
 
     int k = 0;
     int move;
     Loc move_loc;
     while (k < kMovesToTest) {
-      move = output[0].flat<int32>()(k);
+      move = moves[k].first;
       move_loc = board.MoveAsLoc(move);
       if (board.Move(move_loc, color_to_move)) {
         break;
@@ -123,11 +93,11 @@ int main(int argc, char** argv) {
 
     LOG(INFO) << "------- Model Stats -------";
     LOG(INFO) << "Top Move: " << move_loc;
-    LOG(INFO) << "Win: " << output[1].matrix<float>()(0, 1)
-              << " Loss: " << output[1].matrix<float>()(0, 0);
+    LOG(INFO) << "Win: " << nn_result.value_probability[0]
+              << " Loss: " << nn_result.value_probability[1];
     LOG(INFO) << "-----Board-----\n" << board;
 
-    moves.emplace_back(move_loc);
+    move_history.emplace_back(move_loc);
     color_to_move = game::OppositeColor(color_to_move);
     sleep(1);
   }

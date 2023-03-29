@@ -1,6 +1,7 @@
 cc_binary(
     name = "ucb_scratch",
     srcs = ["ucb_scratch.cc"],
+    linkopts = ["-lm"],
     deps = [
         "//cc/constants",
         "//cc/core",
@@ -38,5 +39,11 @@ cc_binary(
         "//cc/constants",
         "//cc/core",
         "//cc/game",
+        "//cc/nn",
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/flags:parse",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/log:initialize",
     ],
 )

@@ -130,6 +130,8 @@ class Board final {
   float WhiteScore() const;
   float Score(int color) const;
 
+  std::string ToString() const;
+
   friend std::ostream& operator<<(std::ostream& os, const Board& board);
   friend class ::nn::NNBoardUtils;
 

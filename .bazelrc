@@ -50,11 +50,13 @@ build:asan --copt -fno-sanitize-blacklist
 build:asan --linkopt -fsanitize=address
 
 build:debug --copt -g
-build:debug --strip=never
+build:debug --copt -fstandalone-debug
 build:debug --compilation_mode=dbg
 
 build:opt --compilation_mode=opt
 
-build:O3 --compilation_mode=opt
-build:O3 --copt -O3
-build:O3 --strip=always
+build:o3 --compilation_mode=opt
+build:o3 --copt -O3
+
+build:ofast --compilation_mode=opt
+build:ofast --copt -Ofast
