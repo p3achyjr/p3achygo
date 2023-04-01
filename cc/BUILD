@@ -1,7 +1,10 @@
 cc_binary(
     name = "main",
     srcs = ["main.cc"],
-    linkopts = ["-lm"],
+    linkopts = [
+        "-lm",
+        "-Wl,-ldl",
+    ],
     deps = [
         ":self_play",
         "//cc/nn",

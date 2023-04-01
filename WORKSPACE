@@ -1,6 +1,5 @@
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
-load("tensorflow_http_archive.bzl", "tensorflow_http_archive")
 
 git_repository(
     name = "doctest",
@@ -14,11 +13,26 @@ http_archive(
     urls = ["https://github.com/abseil/abseil-cpp/archive/a0f9b465212aea24d3264b82d315b8ee59e8d7a0.zip"],
 )
 
-tensorflow_http_archive(
+# tensorflow_http_archive(
+#     name = "org_tensorflow",
+#     sha256 = "99c732b92b1b37fc243a559e02f9aef5671771e272758aa4aec7f34dc92dac48",
+#     version = "2.11.0",
+# )
+
+http_archive(
     name = "org_tensorflow",
     sha256 = "99c732b92b1b37fc243a559e02f9aef5671771e272758aa4aec7f34dc92dac48",
-    version = "2.11.0",
+    strip_prefix = "tensorflow-2.11.0",
+    urls = [
+        "https://github.com/tensorflow/tensorflow/archive/refs/tags/v2.11.0.tar.gz",
+    ],
 )
+
+# git_repository(
+#     name = "org_tensorflow",
+#     commit = "0db597d0d758aba578783b5bf46c889700a45085",
+#     remote = "https://github.com/tensorflow/tensorflow.git",
+# )
 
 # Initialize TensorFlow's external dependencies.
 load("@org_tensorflow//tensorflow:workspace3.bzl", "workspace")

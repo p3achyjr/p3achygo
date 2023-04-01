@@ -174,6 +174,7 @@ std::pair<Loc, Loc> GumbelEvaluator::SearchRoot(core::Probability& probability,
         std::vector<TreeNode*> search_path = SearchNonRoot(
             search_board, child, search_moves,
             game::OppositeColor(color_to_move), node->score_estimate);
+
         // update tree
         Backward(search_path);
       }

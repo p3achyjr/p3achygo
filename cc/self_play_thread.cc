@@ -1,7 +1,5 @@
 #include "cc/self_play_thread.h"
 
-#include <chrono>
-
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/strings/str_format.h"
@@ -35,8 +33,8 @@ class ThreadSink : public absl::LogSink {
   FILE* const fp_;
 };
 
-static constexpr auto kGumbelK = 16;
-static constexpr auto kGumbelN = 128;
+static constexpr auto kGumbelK = 8;
+static constexpr auto kGumbelN = 64;
 
 }  // namespace
 
@@ -86,6 +84,8 @@ void ExecuteSelfPlay(int thread_id, nn::NNInterface* nn_interface,
     LOG(INFO).ToSinkOnly(&sink) << "Board:\n" << board;
     LOG(INFO) << "Thread " << thread_id << " moved";
   }
+
+  nn_interface->UnregisterThread(thread_id);
 
   LOG(INFO).ToSinkOnly(&sink) << "Black Score: " << board.BlackScore();
   LOG(INFO).ToSinkOnly(&sink) << "White Score: " << board.WhiteScore();

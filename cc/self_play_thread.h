@@ -6,4 +6,4 @@
 void ExecuteSelfPlay(int thread_id, nn::NNInterface* nn_interface,
                      std::string logfile);
 
-#endif  // __CC_SELF_PLAY_THREAD_H_
+#endif  // __SELF_PLAY_THREAD_H_
