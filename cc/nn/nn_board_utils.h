@@ -23,9 +23,8 @@ class NNBoardUtils final {
 
   // Fills `input_features` and `input_state` at batch `batch_id`.
   // Assumes tensors are float tensors.
-  static void FillNNInput(::tensorflow::ClientSession& session,
-                          const ::tensorflow::Scope& scope, int batch_id,
-                          int batch_size, ::tensorflow::Tensor& input_features,
+  static void FillNNInput(int batch_id, int batch_size,
+                          ::tensorflow::Tensor& input_features,
                           ::tensorflow::Tensor& input_state,
                           const game::Board& board, int color,
                           const std::vector<game::Loc> moves);

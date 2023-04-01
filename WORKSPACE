@@ -28,6 +28,12 @@ http_archive(
     ],
 )
 
+# git_repository(
+#     name = "org_tensorflow",
+#     commit = "0db597d0d758aba578783b5bf46c889700a45085",
+#     remote = "https://github.com/tensorflow/tensorflow.git",
+# )
+
 # Initialize TensorFlow's external dependencies.
 load("@org_tensorflow//tensorflow:workspace3.bzl", "workspace")
 

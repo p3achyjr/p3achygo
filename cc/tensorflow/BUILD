@@ -46,46 +46,46 @@ sh_binary(
     name = "build",
     srcs = ["copy_outputs.sh"],
     data = [
-        ":libgrpc_runtime.so",
-        ":libtensorflow_lite.so",
+        # ":libgrpc_runtime.so",
+        # ":libtensorflow_lite.so",
         ":tensorflow_hdrs",
         "@org_tensorflow//tensorflow:tensorflow_cc",
         "@org_tensorflow//tensorflow:tensorflow_framework",
-        "@org_tensorflow//tensorflow/lite/toco",
+        # "@org_tensorflow//tensorflow/lite/toco",
         "@org_tensorflow//third_party/eigen3:eigen_third_party_header_files",
     ],
     visibility = ["//visibility:public"],
 )
 
-cc_binary(
-    name = "libgrpc_runtime.so",
-    linkshared = True,
-    linkstatic = True,
-    deps = [
-        "@org_tensorflow//tensorflow/core/distributed_runtime/rpc:grpc_runtime",
-    ],
-)
+# cc_binary(
+#     name = "libgrpc_runtime.so",
+#     linkshared = True,
+#     linkstatic = True,
+#     deps = [
+#         "@org_tensorflow//tensorflow/core/distributed_runtime/rpc:grpc_runtime",
+#     ],
+# )
 
-cc_binary(
-    name = "libtensorflow_lite.so",
-    linkshared = True,
-    linkstatic = True,
-    deps = [
-        "@org_tensorflow//tensorflow/lite:framework",
-        "@org_tensorflow//tensorflow/lite/kernels:builtin_ops",
-    ],
-)
+# cc_binary(
+#     name = "libtensorflow_lite.so",
+#     linkshared = True,
+#     linkstatic = True,
+#     deps = [
+#         "@org_tensorflow//tensorflow/lite:framework",
+#         "@org_tensorflow//tensorflow/lite/kernels:builtin_ops",
+#     ],
+# )
 
 transitive_hdrs(
     name = "tensorflow_hdrs",
     deps = [
-        ":libtensorflow_lite.so",
+        # ":libtensorflow_lite.so",
         "@com_google_protobuf//:protobuf_headers",
         "@eigen_archive//:eigen3",
         "@org_tensorflow//tensorflow/c:c_api",
         "@org_tensorflow//tensorflow/c:c_api_experimental",
         "@org_tensorflow//tensorflow/c/eager:c_api",
         "@org_tensorflow//tensorflow/core:tensorflow",
-        "@org_tensorflow//tensorflow/core/distributed_runtime/rpc:grpc_session",
+        # "@org_tensorflow//tensorflow/core/distributed_runtime/rpc:grpc_session",
     ],
 )

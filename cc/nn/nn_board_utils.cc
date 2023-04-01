@@ -44,9 +44,8 @@ Tensor NNBoardUtils::AsOneHot(game::Loc loc) {
 }
 
 /* static */ void NNBoardUtils::FillNNInput(
-    ClientSession& session, const Scope& scope, int batch_id, int batch_size,
-    Tensor& input_features, Tensor& input_state, const game::Board& board,
-    int color, const std::vector<game::Loc> moves) {
+    int batch_id, int batch_size, Tensor& input_features, Tensor& input_state,
+    const game::Board& board, int color, const std::vector<game::Loc> moves) {
   DCHECK(moves.size() >= 5);
 
   auto raw = input_features.shaped<float, 4>(

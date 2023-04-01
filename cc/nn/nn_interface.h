@@ -9,13 +9,14 @@
 #include "absl/synchronization/blocking_counter.h"
 #include "cc/constants/constants.h"
 #include "cc/game/board.h"
-#include "cc/nn/nn_evaluator.h"
 #include "tensorflow/cc/client/client_session.h"
 #include "tensorflow/cc/framework/scope.h"
+#include "tensorflow/cc/saved_model/loader.h"
 
 namespace tensorflow {
 class Tensor;
-}
+class GraphDef;
+}  // namespace tensorflow
 
 namespace nn {
 
@@ -54,12 +55,23 @@ class NNInterface final {
                          int color_to_move);
   NNInferResult GetInferenceResult(int thread_id) ABSL_LOCKS_EXCLUDED(mu_);
 
+  void RegisterThread(int thread_id);
+  void UnregisterThread(int thread_id);
+
  private:
   void InferLoop();
-  void Infer(::tensorflow::Scope& scope, ::tensorflow::ClientSession& session)
-      ABSL_LOCKS_EXCLUDED(mu_);
+  void Infer() ABSL_LOCKS_EXCLUDED(mu_);
 
-  NNEvaluator nn_evaluator_;
+  ::tensorflow::SavedModelBundleLite model_bundle_;
+  ::tensorflow::SessionOptions session_options_;
+  ::tensorflow::RunOptions run_options_;
+
+  ::tensorflow::Scope scope_cast_input_;
+  ::tensorflow::Scope scope_cast_output_;
+  ::tensorflow::GraphDef gdef_cast_input_;
+  ::tensorflow::GraphDef gdef_cast_output_;
+  std::unique_ptr<::tensorflow::Session> session_cast_input_;
+  std::unique_ptr<::tensorflow::Session> session_cast_output_;
   ::tensorflow::Tensor input_feature_buf_;
   ::tensorflow::Tensor input_state_buf_;
   std::vector<::tensorflow::Tensor> nn_input_buf_;
@@ -68,12 +80,14 @@ class NNInterface final {
 
   bool is_initialized_;
   int num_threads_;
+  int batch_size_;
 
   // Synchronization
   std::unique_ptr<absl::BlockingCounter> load_counter_;
   absl::Mutex mu_;
-  std::vector<char> infer_result_ready_;  // index `i` indicates whether result
-                                          // for thread `i` is ready.
+  std::vector<uint8_t> registered_;
+  std::vector<uint8_t> batch_ready_;  // index `i` indicates whether
+                                      // result for thread `i` is ready.
 
   // inference thread. Runs inference until told to stop.
   std::thread infer_thread_;

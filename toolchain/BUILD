@@ -47,6 +47,18 @@ local_include_paths = [
 vm_include_paths = [
     "/usr/lib/llvm-12/lib/clang/12.0.1/include",
     "/usr/include",
+    "/usr/include/c++/8",
+    "/usr/include/x86_64-linux-gnu/c++/8",
+    "/usr/include/c++/8/backward",
+    "/usr/lib/gcc/x86_64-linux-gnu/8/include",
+    "/usr/local/include",
+    "/usr/lib/gcc/x86_64-linux-gnu/8/include-fixed",
+    "/usr/include/x86_64-linux-gnu",
+    "/usr/include",
+    "/usr/local/cuda-11.3/targets/x86_64-linux/include",
+    "/usr/local/cuda-11.3/targets/x86_64-linux/include",
+    "/usr/local/cuda-11.3/extras/CUPTI/include",
+    "/usr/local/cuda-11.3/targets/x86_64-linux/include",
 ]
 
 cc_toolchain_config(
