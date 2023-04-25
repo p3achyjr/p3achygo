@@ -7,7 +7,7 @@ namespace game {
 
 using ::core::PRng;
 
-ZobristTable::ZobristTable() {
+Zobrist::Zobrist() {
   static bool created_table{false};
 
   if (created_table) {
@@ -28,7 +28,7 @@ ZobristTable::ZobristTable() {
   created_table = true;
 }
 
-HashKey ZobristTable::hash_at(unsigned i, unsigned j, unsigned state) {
+Zobrist::Hash Zobrist::hash_at(unsigned i, unsigned j, unsigned state) {
   return table_[i][j][state];
 }
 

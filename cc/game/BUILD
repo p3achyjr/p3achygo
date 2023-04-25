@@ -13,7 +13,9 @@ cc_library(
     deps = [
         "//cc/constants",
         "//cc/core",
+        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/container:inlined_vector",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/numeric:int128",
@@ -23,8 +25,10 @@ cc_library(
 cc_test(
     name = "board_test",
     srcs = ["board_test.cc"],
+    linkopts = ["-lm"],
     deps = [
         ":game",
         "//cc/core:doctest",
+        "@com_google_absl//absl/container:flat_hash_set",
     ],
 )

@@ -1,5 +1,6 @@
 #include "cc/game/board.h"
 
+#include "absl/container/flat_hash_set.h"
 #include "cc/core/doctest_include.h"
 #include "cc/game/zobrist_hash.h"
 
@@ -9,7 +10,7 @@ namespace game {
 
 TEST_CASE("BoardTest") {
   SUBCASE("NewBoardIsEmpty") {
-    ZobristTable table_;
+    Zobrist table_;
     game::Board board(&table_);
 
     for (unsigned i = 0; i < BOARD_LEN; i++) {
@@ -20,7 +21,7 @@ TEST_CASE("BoardTest") {
   }
 
   SUBCASE("MovingOnEmptyBoardSetsColor") {
-    ZobristTable table_;
+    Zobrist table_;
     game::Board board(&table_);
 
     board.MoveBlack(0, 0);
@@ -29,7 +30,7 @@ TEST_CASE("BoardTest") {
   }
 
   SUBCASE("MovingOnOccupiedSpotFails") {
-    ZobristTable table_;
+    Zobrist table_;
     game::Board board(&table_);
 
     board.MoveBlack(0, 0);
@@ -39,7 +40,7 @@ TEST_CASE("BoardTest") {
   }
 
   SUBCASE("BoardStateNotAlreadySeenReturnsTrue") {
-    ZobristTable table_;
+    Zobrist table_;
     game::Board board(&table_);
 
     board.MoveBlack(0, 0);
@@ -48,7 +49,7 @@ TEST_CASE("BoardTest") {
   }
 
   SUBCASE("NoSelfAtari") {
-    ZobristTable table_;
+    Zobrist table_;
     game::Board board(&table_);
 
     board.MoveBlack(1, 0);
@@ -58,7 +59,7 @@ TEST_CASE("BoardTest") {
   }
 
   SUBCASE("NoSelfAtariMultipleStones") {
-    ZobristTable table_;
+    Zobrist table_;
     game::Board board(&table_);
 
     board.MoveBlack(2, 3);
@@ -74,7 +75,7 @@ TEST_CASE("BoardTest") {
   }
 
   SUBCASE("BlackCapturesAdjacentWhite") {
-    ZobristTable table_;
+    Zobrist table_;
     game::Board board(&table_);
 
     board.MoveBlack(0, 1);
@@ -85,7 +86,7 @@ TEST_CASE("BoardTest") {
   }
 
   SUBCASE("BlackCapturesWhiteCenter") {
-    ZobristTable table_;
+    Zobrist table_;
     game::Board board(&table_);
 
     board.MoveBlack(1, 1);
@@ -99,7 +100,7 @@ TEST_CASE("BoardTest") {
   }
 
   SUBCASE("BlackCapturesMultipleStones") {
-    ZobristTable table_;
+    Zobrist table_;
     game::Board board(&table_);
 
     board.MoveWhite(1, 1);
@@ -121,7 +122,7 @@ TEST_CASE("BoardTest") {
   }
 
   SUBCASE("KoCannotRecaptureImmediately") {
-    ZobristTable table_;
+    Zobrist table_;
     game::Board board(&table_);
 
     board.MoveBlack(2, 1);
@@ -139,7 +140,7 @@ TEST_CASE("BoardTest") {
   }
 
   SUBCASE("SendTwoReturnOne") {
-    ZobristTable table_;
+    Zobrist table_;
     game::Board board(&table_);
 
     board.MoveBlack(2, 1);
@@ -270,5 +271,294 @@ TEST_CASE("GroupTrackerTest") {
     CHECK(group_tracker.LibertiesForGroup(gid0) == 5);
   }
 }
+
+bool PaRegionsMatch(GroupTracker& group_tracker,
+                    absl::flat_hash_set<Loc>& region, int color) {
+  for (int i = 0; i < group_tracker.length(); ++i) {
+    for (int j = 0; j < group_tracker.length(); ++j) {
+      bool loc_pass_alive = group_tracker.IsPassAliveForColor(Loc{i, j}, color);
+      if (loc_pass_alive && !region.contains(Loc{i, j})) {
+        std::cerr << "<<axlui> Missing loc: " << Loc{i, j};
+        return false;
+      }
+
+      region.erase(Loc{i, j});
+    }
+  }
+
+  if (!region.empty()) {
+    for (auto& loc : region) {
+      std::cerr << "<<axlui>> Loc remaining: " << loc;
+    }
+    return false;
+  }
+
+  return true;
+}
+
+TEST_CASE("BensonTest") {
+  GroupTracker group_tracker(BOARD_LEN);
+
+  // . o . o
+  // o o o o
+  SUBCASE("Corner") {
+    groupid gid = group_tracker.NewGroup(Loc{0, 1}, BLACK);
+    group_tracker.AddToGroup(Loc{0, 3}, gid);
+    group_tracker.AddToGroup(Loc{1, 0}, gid);
+    group_tracker.AddToGroup(Loc{1, 1}, gid);
+    group_tracker.AddToGroup(Loc{1, 2}, gid);
+    group_tracker.AddToGroup(Loc{1, 3}, gid);
+
+    group_tracker.CalculatePassAliveRegionForColor(BLACK);
+
+    absl::flat_hash_set<Loc> pa_region = {{0, 0}, {0, 1}, {0, 2}, {0, 3},
+                                          {1, 0}, {1, 1}, {1, 2}, {1, 3}};
+    CHECK(PaRegionsMatch(group_tracker, pa_region, BLACK));
+  }
+
+  // x . o . o
+  // o o o o o
+  SUBCASE("WhiteStone") {
+    groupid gid = group_tracker.NewGroup(Loc{0, 2}, BLACK);
+    group_tracker.AddToGroup(Loc{0, 4}, gid);
+    group_tracker.AddToGroup(Loc{1, 0}, gid);
+    group_tracker.AddToGroup(Loc{1, 1}, gid);
+    group_tracker.AddToGroup(Loc{1, 2}, gid);
+    group_tracker.AddToGroup(Loc{1, 3}, gid);
+    group_tracker.AddToGroup(Loc{1, 4}, gid);
+
+    groupid gid1 = group_tracker.NewGroup(Loc{0, 0}, WHITE);
+
+    group_tracker.CalculatePassAliveRegionForColor(BLACK);
+
+    absl::flat_hash_set<Loc> pa_region = {{0, 0}, {0, 1}, {0, 2}, {0, 3},
+                                          {0, 4}, {1, 0}, {1, 1}, {1, 2},
+                                          {1, 3}, {1, 4}};
+    CHECK(PaRegionsMatch(group_tracker, pa_region, BLACK));
+  }
+
+  // x x . o . o
+  // o o o o o o
+  SUBCASE("ManyWhiteStones") {
+    groupid gid1 = group_tracker.NewGroup(Loc{0, 0}, WHITE);
+    group_tracker.AddToGroup(Loc{0, 1}, gid1);
+
+    groupid gid = group_tracker.NewGroup(Loc{0, 3}, BLACK);
+    group_tracker.AddToGroup(Loc{0, 5}, gid);
+    group_tracker.AddToGroup(Loc{1, 0}, gid);
+    group_tracker.AddToGroup(Loc{1, 1}, gid);
+    group_tracker.AddToGroup(Loc{1, 2}, gid);
+    group_tracker.AddToGroup(Loc{1, 3}, gid);
+    group_tracker.AddToGroup(Loc{1, 4}, gid);
+    group_tracker.AddToGroup(Loc{1, 5}, gid);
+
+    group_tracker.CalculatePassAliveRegionForColor(BLACK);
+
+    absl::flat_hash_set<Loc> pa_region = {{0, 0}, {0, 1}, {0, 2}, {0, 3},
+                                          {0, 4}, {0, 5}, {1, 0}, {1, 1},
+                                          {1, 2}, {1, 3}, {1, 4}, {1, 5}};
+    CHECK(PaRegionsMatch(group_tracker, pa_region, BLACK));
+  }
+
+  // . . . . . .
+  // . . . . o o
+  // . o o o . o
+  // . o . . o o
+  // . o o o . .
+  // . . . . . .
+  SUBCASE("NonVitalRegion") {
+    groupid gid0 = group_tracker.NewGroup(Loc{1, 4}, BLACK);
+    group_tracker.AddToGroup(Loc{1, 5}, gid0);
+    group_tracker.AddToGroup(Loc{3, 4}, gid0);
+    group_tracker.AddToGroup(Loc{3, 5}, gid0);
+    group_tracker.AddToGroup(Loc{2, 5}, gid0);
+
+    groupid gid1 = group_tracker.NewGroup(Loc{2, 1}, BLACK);
+    group_tracker.AddToGroup(Loc{2, 1}, gid1);
+    group_tracker.AddToGroup(Loc{2, 2}, gid1);
+    group_tracker.AddToGroup(Loc{2, 3}, gid1);
+    group_tracker.AddToGroup(Loc{3, 1}, gid1);
+    group_tracker.AddToGroup(Loc{4, 1}, gid1);
+    group_tracker.AddToGroup(Loc{4, 2}, gid1);
+    group_tracker.AddToGroup(Loc{4, 3}, gid1);
+
+    group_tracker.CalculatePassAliveRegionForColor(BLACK);
+
+    absl::flat_hash_set<Loc> pa_region = {};
+    CHECK(PaRegionsMatch(group_tracker, pa_region, BLACK));
+  }
+
+  // . . . . . .
+  // . o o o o o
+  // o o . o . o
+  // o . x . o o
+  // o o . o . .
+  // . o o o . .
+  SUBCASE("VitalRegion") {
+    groupid gid = group_tracker.NewGroup(Loc{1, 4}, BLACK);
+    group_tracker.AddToGroup(Loc{1, 1}, gid);
+    group_tracker.AddToGroup(Loc{1, 2}, gid);
+    group_tracker.AddToGroup(Loc{1, 3}, gid);
+    group_tracker.AddToGroup(Loc{1, 4}, gid);
+    group_tracker.AddToGroup(Loc{1, 5}, gid);
+    group_tracker.AddToGroup(Loc{2, 0}, gid);
+    group_tracker.AddToGroup(Loc{2, 1}, gid);
+    group_tracker.AddToGroup(Loc{2, 3}, gid);
+    group_tracker.AddToGroup(Loc{2, 5}, gid);
+    group_tracker.AddToGroup(Loc{3, 0}, gid);
+    group_tracker.AddToGroup(Loc{3, 4}, gid);
+    group_tracker.AddToGroup(Loc{3, 5}, gid);
+    group_tracker.AddToGroup(Loc{4, 0}, gid);
+    group_tracker.AddToGroup(Loc{4, 1}, gid);
+    group_tracker.AddToGroup(Loc{4, 3}, gid);
+    group_tracker.AddToGroup(Loc{5, 1}, gid);
+    group_tracker.AddToGroup(Loc{5, 2}, gid);
+    group_tracker.AddToGroup(Loc{5, 3}, gid);
+
+    groupid gid0 = group_tracker.NewGroup(Loc{3, 2}, WHITE);
+
+    group_tracker.CalculatePassAliveRegionForColor(BLACK);
+
+    absl::flat_hash_set<Loc> pa_region = {
+        {1, 1}, {1, 2}, {1, 3}, {1, 4}, {1, 5}, {2, 0}, {2, 1}, {2, 2},
+        {2, 3}, {2, 4}, {2, 5}, {3, 0}, {3, 1}, {3, 2}, {3, 3}, {3, 4},
+        {3, 5}, {4, 0}, {4, 1}, {4, 2}, {4, 3}, {5, 1}, {5, 2}, {5, 3}};
+    CHECK(PaRegionsMatch(group_tracker, pa_region, BLACK));
+  }
+
+  // . . . . . .
+  // . o o o o o
+  // o o . o . o
+  // o . . . o o
+  // o o . o . .
+  // . o o o . .
+  SUBCASE("NonSmallRegion") {
+    groupid gid = group_tracker.NewGroup(Loc{1, 4}, BLACK);
+    group_tracker.AddToGroup(Loc{1, 1}, gid);
+    group_tracker.AddToGroup(Loc{1, 2}, gid);
+    group_tracker.AddToGroup(Loc{1, 3}, gid);
+    group_tracker.AddToGroup(Loc{1, 4}, gid);
+    group_tracker.AddToGroup(Loc{1, 5}, gid);
+    group_tracker.AddToGroup(Loc{2, 0}, gid);
+    group_tracker.AddToGroup(Loc{2, 1}, gid);
+    group_tracker.AddToGroup(Loc{2, 3}, gid);
+    group_tracker.AddToGroup(Loc{2, 5}, gid);
+    group_tracker.AddToGroup(Loc{3, 0}, gid);
+    group_tracker.AddToGroup(Loc{3, 4}, gid);
+    group_tracker.AddToGroup(Loc{3, 5}, gid);
+    group_tracker.AddToGroup(Loc{4, 0}, gid);
+    group_tracker.AddToGroup(Loc{4, 1}, gid);
+    group_tracker.AddToGroup(Loc{4, 3}, gid);
+    group_tracker.AddToGroup(Loc{5, 1}, gid);
+    group_tracker.AddToGroup(Loc{5, 2}, gid);
+    group_tracker.AddToGroup(Loc{5, 3}, gid);
+
+    group_tracker.CalculatePassAliveRegionForColor(BLACK);
+
+    absl::flat_hash_set<Loc> pa_region = {};
+    CHECK(PaRegionsMatch(group_tracker, pa_region, BLACK));
+  }
+
+  // . o . o
+  // o . o o
+  SUBCASE("NonPA") {
+    groupid gid = group_tracker.NewGroup(Loc{0, 3}, BLACK);
+    group_tracker.AddToGroup(Loc{1, 2}, gid);
+    group_tracker.AddToGroup(Loc{1, 3}, gid);
+
+    groupid gid1 = group_tracker.NewGroup(Loc{0, 1}, BLACK);
+    groupid gid2 = group_tracker.NewGroup(Loc{1, 0}, BLACK);
+
+    group_tracker.CalculatePassAliveRegionForColor(BLACK);
+
+    absl::flat_hash_set<Loc> pa_region = {};
+    CHECK(PaRegionsMatch(group_tracker, pa_region, BLACK));
+  }
+
+  // . . o . o . o o
+  // o o o o . o . o
+  // . . . . . . o o
+  SUBCASE("Senseis") {
+    groupid gid0 = group_tracker.NewGroup(Loc{1, 0}, BLACK);
+    group_tracker.AddToGroup(Loc{1, 1}, gid0);
+    group_tracker.AddToGroup(Loc{1, 2}, gid0);
+    group_tracker.AddToGroup(Loc{1, 3}, gid0);
+    group_tracker.AddToGroup(Loc{0, 2}, gid0);
+
+    groupid gid1 = group_tracker.NewGroup(Loc{0, 4}, BLACK);
+    groupid gid2 = group_tracker.NewGroup(Loc{1, 5}, BLACK);
+    groupid gid3 = group_tracker.NewGroup(Loc{0, 6}, BLACK);
+    group_tracker.AddToGroup(Loc{0, 7}, gid3);
+    group_tracker.AddToGroup(Loc{1, 7}, gid3);
+    group_tracker.AddToGroup(Loc{2, 7}, gid3);
+    group_tracker.AddToGroup(Loc{2, 6}, gid3);
+
+    group_tracker.CalculatePassAliveRegionForColor(BLACK);
+
+    absl::flat_hash_set<Loc> pa_region = {
+        {0, 0}, {0, 1}, {0, 2}, {0, 3}, {0, 4}, {0, 5}, {0, 6}, {0, 7}, {1, 0},
+        {1, 1}, {1, 2}, {1, 3}, {1, 5}, {1, 6}, {1, 7}, {2, 6}, {2, 7}};
+    CHECK(PaRegionsMatch(group_tracker, pa_region, BLACK));
+  }
+
+  // . . . . o o .
+  // o o o o . o .
+  // o o x x o o .
+  // o x x . x o .
+  // o x . x x o .
+  // o o x x o o .
+  // . o o o o . .
+  SUBCASE("NestedPaRegions") {
+    groupid gid0 = group_tracker.NewGroup(Loc{2, 2}, WHITE);
+    group_tracker.AddToGroup(Loc{2, 3}, gid0);
+    group_tracker.AddToGroup(Loc{3, 1}, gid0);
+    group_tracker.AddToGroup(Loc{3, 2}, gid0);
+    group_tracker.AddToGroup(Loc{4, 1}, gid0);
+
+    groupid gid1 = group_tracker.NewGroup(Loc{3, 4}, WHITE);
+    group_tracker.AddToGroup(Loc{4, 4}, gid1);
+    group_tracker.AddToGroup(Loc{4, 3}, gid1);
+    group_tracker.AddToGroup(Loc{5, 3}, gid1);
+    group_tracker.AddToGroup(Loc{5, 2}, gid1);
+
+    groupid gid2 = group_tracker.NewGroup(Loc{0, 4}, BLACK);
+    group_tracker.AddToGroup(Loc{0, 5}, gid2);
+    group_tracker.AddToGroup(Loc{1, 0}, gid2);
+    group_tracker.AddToGroup(Loc{1, 1}, gid2);
+    group_tracker.AddToGroup(Loc{1, 2}, gid2);
+    group_tracker.AddToGroup(Loc{1, 3}, gid2);
+    group_tracker.AddToGroup(Loc{1, 5}, gid2);
+    group_tracker.AddToGroup(Loc{2, 0}, gid2);
+    group_tracker.AddToGroup(Loc{2, 1}, gid2);
+    group_tracker.AddToGroup(Loc{2, 4}, gid2);
+    group_tracker.AddToGroup(Loc{2, 5}, gid2);
+    group_tracker.AddToGroup(Loc{3, 0}, gid2);
+    group_tracker.AddToGroup(Loc{3, 5}, gid2);
+    group_tracker.AddToGroup(Loc{4, 0}, gid2);
+    group_tracker.AddToGroup(Loc{4, 5}, gid2);
+    group_tracker.AddToGroup(Loc{5, 0}, gid2);
+    group_tracker.AddToGroup(Loc{5, 1}, gid2);
+    group_tracker.AddToGroup(Loc{5, 4}, gid2);
+    group_tracker.AddToGroup(Loc{5, 5}, gid2);
+    group_tracker.AddToGroup(Loc{6, 1}, gid2);
+    group_tracker.AddToGroup(Loc{6, 2}, gid2);
+    group_tracker.AddToGroup(Loc{6, 3}, gid2);
+    group_tracker.AddToGroup(Loc{6, 4}, gid2);
+
+    group_tracker.CalculatePassAliveRegionForColor(BLACK);
+    group_tracker.CalculatePassAliveRegionForColor(WHITE);
+
+    absl::flat_hash_set<Loc> pa_region_black = {
+        {0, 0}, {0, 1}, {0, 2}, {0, 3}, {0, 4}, {0, 5}, {1, 0},
+        {1, 1}, {1, 2}, {1, 3}, {1, 4}, {1, 5}, {2, 0}, {2, 1},
+        {2, 4}, {2, 5}, {3, 0}, {3, 5}, {4, 0}, {4, 5}, {5, 0},
+        {5, 1}, {5, 4}, {5, 5}, {6, 1}, {6, 2}, {6, 3}, {6, 4}};
+    absl::flat_hash_set<Loc> pa_region_white = {{2, 2}, {2, 3}, {3, 1}, {3, 2},
+                                                {3, 3}, {3, 4}, {4, 1}, {4, 2},
+                                                {4, 3}, {4, 4}, {5, 2}, {5, 3}};
+    CHECK(PaRegionsMatch(group_tracker, pa_region_black, BLACK));
+    CHECK(PaRegionsMatch(group_tracker, pa_region_white, WHITE));
+  }
+}  // namespace game
 
 }  // namespace game

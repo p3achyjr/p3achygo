@@ -8,27 +8,27 @@
 
 namespace game {
 
-using HashKey = absl::uint128;
-
 /*
  * Class Encapsulating Zobrist Initialization State.
  *
  * Should be globally initialized once, and immutable once initialized.
  */
-class ZobristTable final {
+class Zobrist final {
  public:
-  ZobristTable();
-  ~ZobristTable() = default;
+  using Hash = absl::uint128;
+
+  Zobrist();
+  ~Zobrist() = default;
 
   // Disable Copy
-  ZobristTable(ZobristTable const &) = delete;
-  ZobristTable &operator=(ZobristTable const &) = delete;
+  Zobrist(Zobrist const &) = delete;
+  Zobrist &operator=(Zobrist const &) = delete;
 
-  HashKey hash_at(unsigned i, unsigned j, unsigned state);
+  Hash hash_at(unsigned i, unsigned j, unsigned state);
 
  private:
   // globally once-initialized
-  HashKey table_[BOARD_LEN][BOARD_LEN][NUM_STATES];
+  Hash table_[BOARD_LEN][BOARD_LEN][NUM_STATES];
 };
 
 }  // namespace game
