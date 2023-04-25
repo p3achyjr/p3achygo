@@ -29,7 +29,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  game::ZobristTable zobrist_table;
+  game::Zobrist zobrist_table;
   game::Board board(&zobrist_table);
   std::unique_ptr<nn::NNInterface> nn_interface =
       std::make_unique<nn::NNInterface>(1);

@@ -53,6 +53,9 @@ static constexpr auto kPassMoveEncoding = 361;
 /* Integer value for an illegal move encoding. */
 static constexpr auto kNoopMoveEncoding = -1;
 
+/* Number of Passes before forbidding moves in pass-alive regions. */
+static constexpr auto kNumPassesBeforeBensons = 2;
+
 }  // namespace constants
 
 #endif  // __CONSTANTS_CONSTANTS_H_

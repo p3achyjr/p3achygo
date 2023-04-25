@@ -149,7 +149,7 @@ struct RandomDevice {
 };
 
 struct GameState {
-  game::HashKey board_hash;
+  game::Zobrist::Hash board_hash;
   int color_to_move;
 };
 
@@ -389,7 +389,7 @@ Loc Ucb(game::Board root_board, Tree& tree, int color_to_move,
 }  // namespace mcts
 
 int main(int argc, char** argv) {
-  game::ZobristTable zobrist_table;
+  game::Zobrist zobrist_table;
   game::Board board(&zobrist_table);
   absl::flat_hash_map<mcts::GameState, mcts::UcbState> tree;
 
