@@ -1,6 +1,7 @@
 #ifndef __GAME_BOARD_H_
 #define __GAME_BOARD_H_
 
+#include <cstdint>
 #include <iostream>
 #include <optional>
 
@@ -18,26 +19,42 @@ class NNBoardUtils;
 namespace game {
 
 using groupid = int;
+using color = int8_t;
 
+/*
+ * Represents cartesian index into grid.
+ */
 struct Loc {
   int i;
   int j;
+
+  // Index into a 1D representation of a 2D grid of length `len`.
+  int as_index(int len) { return i * len + j; }
 };
 
+/*
+ * State transition for a single point on the grid.
+ */
 struct Transition {
   Loc loc;
   int last_piece;
   int current_piece;
 };
 
+/*
+ * A struct that fully describes the state transitions for a board from a move.
+ */
 struct MoveInfo {
   Transition stone_transition;
   std::vector<Transition> capture_transitions;
 
-  // internal-only fields
+  // internal
   Zobrist::Hash new_hash;
 };
 
+/*
+ * Scores for both players.
+ */
 struct Scores {
   float black_score;
   float white_score;
@@ -66,6 +83,9 @@ inline int OppositeColor(int color) { return -color; }
 
 static constexpr Loc kNoopLoc = Loc{-1, -1};
 static constexpr Loc kPassLoc = Loc{19, 0};
+
+static constexpr groupid kInvalidGroupId = -1;
+static constexpr int kInvalidLiberties = -1;
 
 /*
  * Stack implementation for board coordinates.
@@ -125,7 +145,7 @@ class LocVisitor final {
 /*
  * Tracks groups and liberties throughout game.
  *
- * Should be internal to `Board` class.
+ * Internal to `Board` class.
  */
 class GroupTracker final {
  public:
@@ -217,11 +237,11 @@ class GroupTracker final {
   int ColorAt(Loc loc);
 
   int length_;
-  groupid groups_[BOARD_LEN][BOARD_LEN];
-  int pass_alive_[BOARD_LEN][BOARD_LEN] = {};
-  std::vector<GroupInfo> group_info_map_;
+  std::array<groupid, BOARD_LEN * BOARD_LEN> groups_;
+  std::array<color, BOARD_LEN * BOARD_LEN> pass_alive_;
+  absl::InlinedVector<GroupInfo, BOARD_LEN * BOARD_LEN> group_info_map_;
   int next_group_id_ = 0;
-  std::vector<groupid> available_group_ids_;
+  absl::InlinedVector<groupid, BOARD_LEN * BOARD_LEN> available_group_ids_;
 };
 
 /*
@@ -229,12 +249,14 @@ class GroupTracker final {
  */
 class Board final {
  public:
+  using BoardData = std::array<color, BOARD_LEN * BOARD_LEN>;
   Board(Zobrist* const zobrist_table);
   Board(Zobrist* const zobrist_table, int length);
   ~Board() = default;
 
   int length() const;
   int at(int i, int j) const;
+  float komi() const;
   Zobrist::Hash hash() const;
   int move_count() const;
 
@@ -254,7 +276,6 @@ class Board final {
   std::string ToString() const;
 
   friend std::ostream& operator<<(std::ostream& os, const Board& board);
-  friend class ::nn::NNBoardUtils;
 
  private:
   int AtLoc(Loc loc) const;
@@ -273,11 +294,11 @@ class Board final {
 
   Zobrist* const zobrist_table_;
   int length_;
-  int board_[BOARD_LEN][BOARD_LEN] = {};
-  int move_count_ = 0;
-  int pass_count_ = 0;
-  int total_pass_count_ = 0;
-  float komi_ = 7.5;
+  BoardData board_;
+  int move_count_;
+  int pass_count_;
+  int total_pass_count_;
+  float komi_;
 
   // Hash value of empty board. Keep to avoid recomputing for each new game.
   Zobrist::Hash initial_hash_;
@@ -291,7 +312,7 @@ inline std::ostream& operator<<(std::ostream& os,
   os << "----Groups----\n";
   for (auto i = 0; i < group_tracker.length_; i++) {
     for (auto j = 0; j < group_tracker.length_; j++) {
-      if (group_tracker.GroupAt(Loc{i, j}) == -1) {
+      if (group_tracker.GroupAt(Loc{i, j}) == kInvalidGroupId) {
         os << ". ";
         continue;
       }
@@ -314,13 +335,13 @@ inline std::ostream& operator<<(std::ostream& os,
   os << "----Pass Alive Regions----\n";
   for (auto i = 0; i < group_tracker.length_; i++) {
     for (auto j = 0; j < group_tracker.length_; j++) {
-      int pa_color = group_tracker.pass_alive_[i][j];
-      if (pa_color == EMPTY) {
+      if (group_tracker.IsPassAliveForColor(Loc{i, j}, BLACK)) {
+        os << "o ";
+      } else if (group_tracker.IsPassAliveForColor(Loc{i, j}, WHITE)) {
+        os << "x ";
+      } else {
         os << ". ";
-        continue;
       }
-
-      os << pa_color << " ";
     }
 
     os << "\n";
