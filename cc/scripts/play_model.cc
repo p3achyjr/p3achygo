@@ -102,9 +102,11 @@ int main(int argc, char** argv) {
     sleep(1);
   }
 
+  game::Scores scores = board.GetScores();
+
   LOG(INFO) << "Game Over: ";
-  LOG(INFO) << "  Black Score: " << board.Score(BLACK);
-  LOG(INFO) << "  White Score: " << board.Score(WHITE);
+  LOG(INFO) << "  Black Score: " << scores.black_score;
+  LOG(INFO) << "  White Score: " << scores.white_score;
 
   return 0;
 }
