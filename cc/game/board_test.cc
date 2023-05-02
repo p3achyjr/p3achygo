@@ -157,6 +157,29 @@ TEST_CASE("BoardTest") {
     CHECK(board.at(1, 0) == EMPTY);
     CHECK_FALSE(board.MoveBlack(1, 0));
   }
+
+  // . o . o
+  // o o o o
+  SUBCASE("CannotMoveInPARegion") {
+    Zobrist table_;
+    game::Board board(&table_);
+
+    board.MoveBlack(0, 1);
+    board.MoveBlack(0, 3);
+    board.MoveBlack(1, 0);
+    board.MoveBlack(1, 1);
+    board.MoveBlack(1, 2);
+    board.MoveBlack(1, 3);
+
+    CHECK(board.MoveDry(Loc{0, 0}, BLACK));
+    CHECK(board.MoveDry(Loc{0, 2}, BLACK));
+
+    board.MovePass(BLACK);
+    board.MovePass(WHITE);
+
+    CHECK_FALSE(board.MoveBlack(0, 0));
+    CHECK_FALSE(board.MoveBlack(0, 2));
+  }
 }
 
 TEST_CASE("GroupTrackerTest") {
@@ -205,7 +228,7 @@ TEST_CASE("GroupTrackerTest") {
     CHECK(group_tracker.LibertiesForGroup(gid1) == 4);
 
     group_tracker.AddToGroup(Loc{3, 4}, gid0);
-    groupid gid2 = group_tracker.CoalesceGroups({gid0, gid1});
+    groupid gid2 = group_tracker.CoalesceGroups(Loc{3, 4});
 
     CHECK(group_tracker.GroupAt(Loc{3, 3}) == gid2);
     CHECK(group_tracker.GroupAt(Loc{3, 4}) == gid2);
@@ -233,7 +256,7 @@ TEST_CASE("GroupTrackerTest") {
     CHECK(group_tracker.LibertiesForGroup(gid3) == 4);
 
     group_tracker.AddToGroup(Loc{3, 3}, gid2);
-    groupid final_gid = group_tracker.CoalesceGroups({gid0, gid1, gid2, gid3});
+    groupid final_gid = group_tracker.CoalesceGroups(Loc{3, 3});
     CHECK(group_tracker.GroupAt(Loc{2, 3}) == final_gid);
     CHECK(group_tracker.GroupAt(Loc{4, 3}) == final_gid);
     CHECK(group_tracker.GroupAt(Loc{3, 2}) == final_gid);
@@ -251,7 +274,7 @@ TEST_CASE("GroupTrackerTest") {
     group_tracker.AddToGroup(Loc{4, 4}, gid1);
 
     group_tracker.AddToGroup(Loc{3, 3}, gid0);
-    groupid final_gid = group_tracker.CoalesceGroups({gid0, gid1});
+    groupid final_gid = group_tracker.CoalesceGroups(Loc{3, 3});
     CHECK(group_tracker.GroupAt(Loc{2, 4}) == final_gid);
     CHECK(group_tracker.GroupAt(Loc{4, 4}) == final_gid);
     CHECK(group_tracker.GroupAt(Loc{3, 3}) == final_gid);
@@ -278,7 +301,6 @@ bool PaRegionsMatch(GroupTracker& group_tracker,
     for (int j = 0; j < group_tracker.length(); ++j) {
       bool loc_pass_alive = group_tracker.IsPassAliveForColor(Loc{i, j}, color);
       if (loc_pass_alive && !region.contains(Loc{i, j})) {
-        std::cerr << "<<axlui> Missing loc: " << Loc{i, j};
         return false;
       }
 
@@ -287,16 +309,13 @@ bool PaRegionsMatch(GroupTracker& group_tracker,
   }
 
   if (!region.empty()) {
-    for (auto& loc : region) {
-      std::cerr << "<<axlui>> Loc remaining: " << loc;
-    }
     return false;
   }
 
   return true;
 }
 
-TEST_CASE("BensonTest") {
+TEST_CASE("PassAliveTest") {
   GroupTracker group_tracker(BOARD_LEN);
 
   // . o . o
@@ -559,6 +578,267 @@ TEST_CASE("BensonTest") {
     CHECK(PaRegionsMatch(group_tracker, pa_region_black, BLACK));
     CHECK(PaRegionsMatch(group_tracker, pa_region_white, WHITE));
   }
-}  // namespace game
+}
+
+TEST_CASE("ScoreTest") {
+  // . . . o .
+  // o o o x .
+  SUBCASE("BlackCorner") {
+    Zobrist table_;
+    game::Board board(&table_);
+
+    board.MoveBlack(1, 0);
+    board.MoveBlack(1, 1);
+    board.MoveBlack(1, 2);
+    board.MoveBlack(0, 3);
+
+    board.MoveWhite(1, 3);
+
+    board.MovePass(BLACK);
+    board.MovePass(WHITE);
+
+    Scores scores = board.GetScores();
+    CHECK(scores.black_score == 7);
+    CHECK(scores.white_score == 8.5);
+  }
+
+  // . x . o .
+  // o o o x .
+  SUBCASE("BlackCornerWhiteStone") {
+    Zobrist table_;
+    game::Board board(&table_);
+
+    board.MoveBlack(1, 0);
+    board.MoveBlack(1, 1);
+    board.MoveBlack(1, 2);
+    board.MoveBlack(0, 3);
+
+    board.MoveWhite(1, 3);
+    board.MoveWhite(0, 1);
+
+    board.MovePass(BLACK);
+    board.MovePass(WHITE);
+
+    Scores scores = board.GetScores();
+    CHECK(scores.black_score == 4);
+    CHECK(scores.white_score == 9.5);
+  }
+
+  // . . . o
+  // . . . o
+  // . . . o
+  // o o o x
+  SUBCASE("BigBlackCorner") {
+    Zobrist table_;
+    game::Board board(&table_);
+
+    board.MoveBlack(3, 0);
+    board.MoveBlack(3, 1);
+    board.MoveBlack(3, 2);
+    board.MoveBlack(0, 3);
+    board.MoveBlack(1, 3);
+    board.MoveBlack(2, 3);
+
+    board.MoveWhite(3, 3);
+
+    board.MovePass(BLACK);
+    board.MovePass(WHITE);
+
+    Scores scores = board.GetScores();
+    CHECK(scores.black_score == 15);
+    CHECK(scores.white_score == 8.5);
+  }
+
+  // . . . x
+  // . . . x
+  // . . . x
+  // x x x o
+  SUBCASE("BigWhiteCorner") {
+    Zobrist table_;
+    game::Board board(&table_);
+
+    board.MoveWhite(3, 0);
+    board.MoveWhite(3, 1);
+    board.MoveWhite(3, 2);
+    board.MoveWhite(0, 3);
+    board.MoveWhite(1, 3);
+    board.MoveWhite(2, 3);
+
+    board.MoveBlack(3, 3);
+
+    board.MovePass(BLACK);
+    board.MovePass(WHITE);
+
+    Scores scores = board.GetScores();
+    CHECK(scores.black_score == 1);
+    CHECK(scores.white_score == 22.5);
+  }
+
+  // . x . x
+  // . x . x
+  // . x . x
+  // x x x o
+  SUBCASE("MultipleRegions") {
+    Zobrist table_;
+    game::Board board(&table_);
+
+    board.MoveWhite(3, 0);
+    board.MoveWhite(3, 1);
+    board.MoveWhite(3, 2);
+    board.MoveWhite(0, 3);
+    board.MoveWhite(1, 3);
+    board.MoveWhite(2, 3);
+
+    board.MoveBlack(3, 3);
+
+    board.MovePass(BLACK);
+    board.MovePass(WHITE);
+
+    Scores scores = board.GetScores();
+    CHECK(scores.black_score == 1);
+    CHECK(scores.white_score == 22.5);
+  }
+
+  // . . . . . . .
+  // . o o o . . .
+  // . o . o . . .
+  // . o o x x x .
+  // . . x . . . x
+  // . . . x x x .
+  SUBCASE("DifferentColorRegions") {
+    Zobrist table_;
+    game::Board board(&table_);
+
+    board.MoveBlack(1, 1);
+    board.MoveBlack(1, 2);
+    board.MoveBlack(1, 3);
+    board.MoveBlack(2, 1);
+    board.MoveBlack(2, 3);
+    board.MoveBlack(3, 1);
+    board.MoveBlack(3, 2);
+
+    board.MoveWhite(3, 3);
+    board.MoveWhite(3, 4);
+    board.MoveWhite(3, 5);
+    board.MoveWhite(4, 2);
+    board.MoveWhite(4, 6);
+    board.MoveWhite(5, 3);
+    board.MoveWhite(5, 4);
+    board.MoveWhite(5, 5);
+
+    board.MovePass(BLACK);
+    board.MovePass(WHITE);
+
+    Scores scores = board.GetScores();
+    CHECK(scores.black_score == 8);
+    CHECK(scores.white_score == 18.5);
+  }
+
+  // . . . . . . .
+  // . o o o . . .
+  // . o . o . . .
+  // . o o x x x .
+  // . . x . . . x
+  // . . . x x x .
+  SUBCASE("DifferentColorRegions") {
+    Zobrist table_;
+    game::Board board(&table_);
+
+    board.MoveBlack(1, 1);
+    board.MoveBlack(1, 2);
+    board.MoveBlack(1, 3);
+    board.MoveBlack(2, 1);
+    board.MoveBlack(2, 3);
+    board.MoveBlack(3, 1);
+    board.MoveBlack(3, 2);
+
+    board.MoveWhite(3, 3);
+    board.MoveWhite(3, 4);
+    board.MoveWhite(3, 5);
+    board.MoveWhite(4, 2);
+    board.MoveWhite(4, 6);
+    board.MoveWhite(5, 3);
+    board.MoveWhite(5, 4);
+    board.MoveWhite(5, 5);
+
+    board.MovePass(BLACK);
+    board.MovePass(WHITE);
+
+    Scores scores = board.GetScores();
+    CHECK(scores.black_score == 8);
+    CHECK(scores.white_score == 18.5);
+  }
+
+  // . . . . . . .
+  // . o o o . . .
+  // . o . o . . .
+  // . . o . o . .
+  // . . o x o . .
+  // . . o o o x .
+  SUBCASE("PaRegionStones") {
+    Zobrist table_;
+    game::Board board(&table_);
+
+    board.MoveBlack(1, 1);
+    board.MoveBlack(1, 2);
+    board.MoveBlack(1, 3);
+    board.MoveBlack(2, 1);
+    board.MoveBlack(2, 3);
+    board.MoveBlack(3, 2);
+    board.MoveBlack(3, 4);
+    board.MoveBlack(4, 2);
+    board.MoveBlack(4, 4);
+    board.MoveBlack(5, 2);
+    board.MoveBlack(5, 3);
+    board.MoveBlack(5, 4);
+
+    board.MoveWhite(4, 3);
+    board.MoveWhite(5, 5);
+
+    board.MovePass(BLACK);
+    board.MovePass(WHITE);
+
+    Scores scores = board.GetScores();
+    CHECK(scores.black_score == 16);
+    CHECK(scores.white_score == 8.5);
+  }
+
+  // x x x . o . o
+  // o o o o . o o
+  // . . . o x x o
+  // . . . o o o x
+  SUBCASE("PaRegionStoneGroup") {
+    Zobrist table_;
+    game::Board board(&table_);
+
+    board.MoveBlack(0, 4);
+    board.MoveBlack(0, 6);
+    board.MoveBlack(1, 0);
+    board.MoveBlack(1, 1);
+    board.MoveBlack(1, 2);
+    board.MoveBlack(1, 3);
+    board.MoveBlack(1, 5);
+    board.MoveBlack(1, 6);
+    board.MoveBlack(2, 3);
+    board.MoveBlack(2, 6);
+    board.MoveBlack(3, 3);
+    board.MoveBlack(3, 4);
+    board.MoveBlack(3, 5);
+
+    board.MoveWhite(0, 0);
+    board.MoveWhite(0, 1);
+    board.MoveWhite(0, 2);
+    board.MoveWhite(2, 4);
+    board.MoveWhite(2, 5);
+    board.MoveWhite(3, 6);
+
+    board.MovePass(BLACK);
+    board.MovePass(WHITE);
+
+    Scores scores = board.GetScores();
+    CHECK(scores.black_score == 26);
+    CHECK(scores.white_score == 8.5);
+  }
+}
 
 }  // namespace game

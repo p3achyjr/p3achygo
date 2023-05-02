@@ -7,6 +7,7 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/container/inlined_vector.h"
+#include "absl/log/check.h"
 #include "cc/constants/constants.h"
 #include "cc/game/zobrist_hash.h"
 
@@ -37,6 +38,11 @@ struct MoveInfo {
   Zobrist::Hash new_hash;
 };
 
+struct Scores {
+  float black_score;
+  float white_score;
+};
+
 template <typename H>
 H AbslHashValue(H h, const Loc& loc) {
   return H::combine(std::move(h), loc.i, loc.j);
@@ -60,6 +66,61 @@ inline int OppositeColor(int color) { return -color; }
 
 static constexpr Loc kNoopLoc = Loc{-1, -1};
 static constexpr Loc kPassLoc = Loc{19, 0};
+
+/*
+ * Stack implementation for board coordinates.
+ */
+class LocStack final {
+ public:
+  LocStack() = default;
+  ~LocStack() = default;
+
+  bool Empty() const { return stack_.empty(); }
+
+  void Push(Loc loc) { stack_.emplace_back(loc); }
+
+  Loc Pop() {
+    Loc loc = stack_.back();
+    stack_.pop_back();
+
+    return loc;
+  }
+
+ private:
+  absl::InlinedVector<Loc, constants::kMaxNumMoves> stack_;
+};
+
+/*
+ * Light visitor class to aid dfs-traversal over board coordinates.
+ *
+ * Abstracts keeping track of seen coords and dfs stack.
+ */
+class LocVisitor final {
+ public:
+  LocVisitor(Loc root_loc) {
+    stack_.Push(root_loc);
+    seen_[root_loc.i][root_loc.j] = true;
+  }
+  ~LocVisitor() = default;
+
+  bool Done() const { return stack_.Empty(); }
+
+  Loc Next() {
+    DCHECK(!stack_.Empty());
+    return stack_.Pop();
+  }
+
+  void Visit(Loc loc) {
+    if (!seen_[loc.i][loc.j]) {
+      seen_[loc.i][loc.j] = true;
+      stack_.Push(loc);
+    }
+  }
+
+ private:
+  LocStack stack_;
+  bool seen_[BOARD_LEN][BOARD_LEN] = {};
+};
 
 /*
  * Tracks groups and liberties throughout game.
@@ -118,6 +179,7 @@ class GroupTracker final {
     GroupTracker* group_tracker_;
   };
 
+  using ExpandedGroup = absl::InlinedVector<Loc, constants::kMaxNumBoardLocs>;
   GroupTracker(int length);
   ~GroupTracker() = default;
 
@@ -125,15 +187,16 @@ class GroupTracker final {
   groupid GroupAt(Loc loc) const;
   groupid NewGroup(Loc loc, int color);
   void AddToGroup(Loc loc, groupid id);
+
+  void Move(Loc loc, int color);
   int LibertiesAt(Loc loc) const;  // returns number of empty neighboring spots.
   int LibertiesForGroup(groupid group_id) const;
   int LibertiesForGroupAt(Loc loc) const;
-  std::vector<Loc> ExpandGroup(groupid group_id) const;
+  ExpandedGroup ExpandGroup(groupid group_id) const;
   void RemoveCaptures(const std::vector<Loc>& captures);
 
-  // coalesces `groups` into a single group.
-  // Precondition: all `groups` must be strongly-connected.
-  groupid CoalesceGroups(const std::vector<groupid>& groups);
+  // coalesces all groups adjacent to `loc` into a single group.
+  groupid CoalesceGroups(Loc loc);
 
   // calculates pass-alive regions according to Benson's algorithm
   // https://senseis.xmp.net/?BensonsAlgorithm
@@ -186,9 +249,7 @@ class Board final {
   Loc MoveAsLoc(int move) const;
   int LocAsMove(Loc loc) const;
 
-  float BlackScore() const;
-  float WhiteScore() const;
-  float Score(int color) const;
+  Scores GetScores();
 
   std::string ToString() const;
 
@@ -200,12 +261,12 @@ class Board final {
   void SetLoc(Loc loc, int color);
 
   bool IsSelfCapture(Loc loc, int color) const;
-
   bool IsInAtari(Loc loc) const;
 
-  absl::InlinedVector<Loc, 4> AdjacentOfColor(Loc loc, int color) const;
+  float Score(int color) const;
 
   std::vector<groupid> GetCapturedGroups(Loc loc, int captured_color) const;
+  absl::InlinedVector<Loc, 4> AdjacentOfColor(Loc loc, int color) const;
   Zobrist::Hash RecomputeHash(
       const Transition& move_transition,
       const std::vector<Transition>& capture_transitions) const;

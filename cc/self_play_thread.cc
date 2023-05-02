@@ -86,7 +86,8 @@ void ExecuteSelfPlay(int thread_id, nn::NNInterface* nn_interface,
   }
 
   nn_interface->UnregisterThread(thread_id);
+  game::Scores scores = board.GetScores();
 
-  LOG(INFO).ToSinkOnly(&sink) << "Black Score: " << board.BlackScore();
-  LOG(INFO).ToSinkOnly(&sink) << "White Score: " << board.WhiteScore();
+  LOG(INFO).ToSinkOnly(&sink) << "Black Score: " << scores.black_score;
+  LOG(INFO).ToSinkOnly(&sink) << "White Score: " << scores.white_score;
 }

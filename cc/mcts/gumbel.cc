@@ -267,8 +267,11 @@ std::vector<TreeNode*> GumbelEvaluator::SearchNonRoot(
 
   if (board.IsGameOver() && !leaf_node->is_terminal) {
     // evaluate score
-    float player_score = board.Score(color_to_move);
-    float opp_score = board.Score(game::OppositeColor(color_to_move));
+    game::Scores scores = board.GetScores();
+    float player_score =
+        color_to_move == BLACK ? scores.black_score : scores.white_score;
+    float opp_score =
+        color_to_move == BLACK ? scores.white_score : scores.black_score;
     float final_score =
         player_score - opp_score + constants::kScoreInflectionPoint;
     float empirical_q =

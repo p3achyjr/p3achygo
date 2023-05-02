@@ -216,8 +216,9 @@ int UcbRandomPlayout(game::Board& board, Tree& tree, int color_to_move,
     }
   }
 
-  int b_score = board.BlackScore();
-  int w_score = board.WhiteScore();
+  game::Scores scores = board.GetScores();
+  int b_score = scores.black_score;
+  int w_score = scores.white_score;
 
   return b_score > w_score ? BLACK : WHITE;
 }
@@ -225,8 +226,9 @@ int UcbRandomPlayout(game::Board& board, Tree& tree, int color_to_move,
 int UcbSearch(game::Board& board, Tree& tree, int color_to_move) {
   GameState game_state = GameState{board.hash(), color_to_move};
   if (board.IsGameOver()) {
-    int b_score = board.BlackScore();
-    int w_score = board.WhiteScore();
+    game::Scores scores = board.GetScores();
+    int b_score = scores.black_score;
+    int w_score = scores.white_score;
     int winner = b_score > w_score ? BLACK : WHITE;
 
     if (!tree.contains(game_state)) {
