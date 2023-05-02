@@ -14,7 +14,7 @@ Tensor NNBoardUtils::GetBlack(const game::Board& board) {
   auto t_data = t.matrix<float>();
   for (auto i = 0; i < BOARD_LEN; ++i) {
     for (auto j = 0; j < BOARD_LEN; ++j) {
-      t_data(i, j) = board.board_[i][j] == BLACK ? 1.0 : 0.0;
+      t_data(i, j) = board.at(i, j) == BLACK ? 1.0 : 0.0;
     }
   }
 
@@ -26,7 +26,7 @@ Tensor NNBoardUtils::GetWhite(const game::Board& board) {
   auto t_data = t.matrix<float>();
   for (auto i = 0; i < BOARD_LEN; ++i) {
     for (auto j = 0; j < BOARD_LEN; ++j) {
-      t_data(i, j) = board.board_[i][j] == WHITE ? 1.0 : 0.0;
+      t_data(i, j) = board.at(i, j) == WHITE ? 1.0 : 0.0;
     }
   }
 
@@ -54,9 +54,9 @@ Tensor NNBoardUtils::AsOneHot(game::Loc loc) {
   // fill board state
   for (auto i = 0; i < BOARD_LEN; ++i) {
     for (auto j = 0; j < BOARD_LEN; ++j) {
-      if (board.board_[i][j] == color) {
+      if (board.at(i, j) == color) {
         raw(batch_id, i, j, 0) = 1;
-      } else if (board.board_[i][j] == game::OppositeColor(color)) {
+      } else if (board.at(i, j) == game::OppositeColor(color)) {
         raw(batch_id, i, j, 1) = 1;
       }
     }
@@ -73,7 +73,7 @@ Tensor NNBoardUtils::AsOneHot(game::Loc loc) {
   }
 
   // fill game state (just komi for now)
-  input_state.matrix<float>()(batch_id, 0) = board.komi_ / 15.0;
+  input_state.matrix<float>()(batch_id, 0) = board.komi() / 15.0;
 }
 
 }  // namespace nn
