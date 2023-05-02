@@ -29,8 +29,11 @@ namespace constants {
 /* Maximum number of board locations */
 static constexpr auto kMaxNumBoardLocs = BOARD_LEN * BOARD_LEN;
 
-/* Maximum number of moves allowed in game */
+/* Maximum number of moves allowed per board state */
 static constexpr auto kMaxNumMoves = BOARD_LEN * BOARD_LEN + 1;
+
+/* Maximum number of moves per game */
+static constexpr auto kMaxGameLen = 600;
 
 /* Number of feature planes for neural network */
 static constexpr auto kNumInputFeaturePlanes = 7;

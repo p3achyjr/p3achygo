@@ -1,4 +1,4 @@
-#include "cc/game/zobrist_hash.h"
+#include "cc/game/zobrist.h"
 
 #include "absl/log/log.h"
 #include "cc/core/rand.h"
@@ -8,13 +8,6 @@ namespace game {
 using ::core::PRng;
 
 Zobrist::Zobrist() {
-  static bool created_table{false};
-
-  if (created_table) {
-    LOG(WARNING)
-        << "Zobrist Table Already Created. Use the one that already exists.";
-  }
-
   PRng prng;
 
   for (auto i = 0; i < BOARD_LEN; i++) {
@@ -24,12 +17,15 @@ Zobrist::Zobrist() {
       }
     }
   }
-
-  created_table = true;
 }
 
-Zobrist::Hash Zobrist::hash_at(unsigned i, unsigned j, unsigned state) {
+Zobrist::Hash Zobrist::hash_at(unsigned i, unsigned j, unsigned state) const {
   return table_[i][j][state];
+}
+
+/* static */ const Zobrist& Zobrist::get() {
+  static Zobrist zobrist;
+  return zobrist;
 }
 
 }  // namespace game

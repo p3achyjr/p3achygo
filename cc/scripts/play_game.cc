@@ -13,7 +13,6 @@
 #include "absl/status/statusor.h"
 #include "cc/constants/constants.h"
 #include "cc/game/board.h"
-#include "cc/game/zobrist_hash.h"
 #include "cc/nn/nn_interface.h"
 
 ABSL_FLAG(std::string, model_path, "", "Path to model.");
@@ -29,8 +28,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  game::Zobrist zobrist_table;
-  game::Board board(&zobrist_table);
+  game::Board board;
   std::unique_ptr<nn::NNInterface> nn_interface =
       std::make_unique<nn::NNInterface>(1);
   CHECK_OK(nn_interface->Initialize(absl::GetFlag(FLAGS_model_path)));

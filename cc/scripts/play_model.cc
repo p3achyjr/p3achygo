@@ -53,9 +53,7 @@ int main(int argc, char** argv) {
 
   std::vector<Loc> move_history = {
       {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}};
-  game::Zobrist zobrist_table;
-  game::Board board(&zobrist_table);
-
+  game::Board board;
   std::unique_ptr<nn::NNInterface> nn_interface =
       std::make_unique<nn::NNInterface>(1);
   CHECK_OK(nn_interface->Initialize(absl::GetFlag(FLAGS_model_path)));
@@ -83,7 +81,7 @@ int main(int argc, char** argv) {
     Loc move_loc;
     while (k < kMovesToTest) {
       move = moves[k].first;
-      move_loc = board.MoveAsLoc(move);
+      move_loc = board.AsLoc(move);
       if (board.Move(move_loc, color_to_move)) {
         break;
       }

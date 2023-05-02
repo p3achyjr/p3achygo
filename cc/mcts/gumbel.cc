@@ -137,7 +137,7 @@ std::pair<Loc, Loc> GumbelEvaluator::SearchRoot(core::Probability& probability,
   auto num_moves = constants::kMaxNumMoves;
   GumbelMoveInfo gmove_info[num_moves];
   for (auto i = 0; i < num_moves; ++i) {
-    if (!board.IsValidMove(board.MoveAsLoc(i), color_to_move)) {
+    if (!board.IsValidMove(board.AsLoc(i), color_to_move)) {
       // ignore move henceforth
       gmove_info[i].logit = -10000;
       continue;
@@ -146,7 +146,7 @@ std::pair<Loc, Loc> GumbelEvaluator::SearchRoot(core::Probability& probability,
     gmove_info[i].logit = node->move_logits[i];
     gmove_info[i].gumbel_noise = probability.GumbelSample();
     gmove_info[i].move_encoding = i;
-    gmove_info[i].move_loc = board.MoveAsLoc(i);
+    gmove_info[i].move_loc = board.AsLoc(i);
   }
 
   // reverse sort
@@ -191,7 +191,7 @@ std::pair<Loc, Loc> GumbelEvaluator::SearchRoot(core::Probability& probability,
 
   AdvanceState(node);
 
-  game::Loc raw_nn_move = board.MoveAsLoc(Argmax(node->move_logits));
+  game::Loc raw_nn_move = board.AsLoc(Argmax(node->move_logits));
   return {raw_nn_move, gmove_info[0].move_loc};
 }
 
@@ -233,7 +233,7 @@ std::vector<TreeNode*> GumbelEvaluator::SearchNonRoot(
     int selected_action = 0;
     float max_disparity = -10000;
     for (auto i = 0; i < constants::kMaxNumMoves; ++i) {
-      if (!board.IsValidMove(board.MoveAsLoc(i), color_to_move)) {
+      if (!board.IsValidMove(board.AsLoc(i), color_to_move)) {
         continue;
       }
 
@@ -250,7 +250,7 @@ std::vector<TreeNode*> GumbelEvaluator::SearchNonRoot(
       node->children[selected_action] = std::make_unique<TreeNode>();
     }
 
-    Loc move_loc = board.MoveAsLoc(selected_action);
+    Loc move_loc = board.AsLoc(selected_action);
     board.Move(move_loc, color_to_move);
     moves.emplace_back(move_loc);
     path.emplace_back(node->children[selected_action].get());

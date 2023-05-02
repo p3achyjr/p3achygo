@@ -4,11 +4,11 @@ cc_library(
     name = "game",
     srcs = [
         "board.cc",
-        "zobrist_hash.cc",
+        "zobrist.cc",
     ],
     hdrs = [
         "board.h",
-        "zobrist_hash.h",
+        "zobrist.h",
     ],
     deps = [
         "//cc/constants",

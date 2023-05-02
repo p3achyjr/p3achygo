@@ -45,8 +45,7 @@ void ExecuteSelfPlay(int thread_id, nn::NNInterface* nn_interface,
                                 thread_id);
 
   // initialize game related objects.
-  game::Zobrist zobrist_table;
-  game::Board board(&zobrist_table);
+  game::Board board;
   std::unique_ptr<mcts::TreeNode> root_node =
       std::make_unique<mcts::TreeNode>();
   std::vector<game::Loc> move_history = {game::kNoopLoc, game::kNoopLoc,
@@ -66,7 +65,7 @@ void ExecuteSelfPlay(int thread_id, nn::NNInterface* nn_interface,
     board.Move(move, color_to_move);
     move_history.emplace_back(move);
     color_to_move = game::OppositeColor(color_to_move);
-    root_node = std::move(root_node->children[board.LocAsMove(move)]);
+    root_node = std::move(root_node->children[board.AsIndex(move)]);
 
     LOG(INFO).ToSinkOnly(&sink) << "Raw NN Move: " << nn_move;
     LOG(INFO).ToSinkOnly(&sink) << "Gumbel Move: " << move;

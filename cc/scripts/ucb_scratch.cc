@@ -201,7 +201,7 @@ int UcbRandomPlayout(game::Board& board, Tree& tree, int color_to_move,
       board.MovePass(color);
       color = game::OppositeColor(color);
     } else {
-      Loc loc = board.MoveAsLoc(move);
+      Loc loc = board.AsLoc(move);
       std::optional<game::MoveInfo> move_info = board.MoveDry(loc, color);
       if (!move_info.has_value()) {
         continue;
@@ -211,7 +211,7 @@ int UcbRandomPlayout(game::Board& board, Tree& tree, int color_to_move,
       color = game::OppositeColor(color);
       move_bucket.RemoveAt(move_index);
       for (auto& transition : move_info->capture_transitions) {
-        move_bucket.Insert(board.LocAsMove(transition.loc));
+        move_bucket.Insert(board.AsIndex(transition.loc));
       }
     }
   }
@@ -282,7 +282,7 @@ int UcbSearch(game::Board& board, Tree& tree, int color_to_move) {
     if (move_to_expand == kPassMove) {
       board.MovePass(color_to_move);
     } else {
-      Loc move_loc = board.MoveAsLoc(move_to_expand);
+      Loc move_loc = board.AsLoc(move_to_expand);
       board.Move(move_loc, color_to_move);
     }
 
@@ -314,7 +314,7 @@ int UcbSearch(game::Board& board, Tree& tree, int color_to_move) {
     if (move == kPassMove) {
       board.MovePass(color_to_move);
     } else {
-      Loc move_loc = board.MoveAsLoc(move);
+      Loc move_loc = board.AsLoc(move);
       board.Move(move_loc, color_to_move);
     }
 
@@ -360,7 +360,7 @@ Loc Ucb(game::Board root_board, Tree& tree, int color_to_move,
   for (auto& action : actions) {
     int move = action.move;
     GameState child_game_state;
-    Loc move_loc = root_board.MoveAsLoc(move);
+    Loc move_loc = root_board.AsLoc(move);
     if (move == kPassMove) {
       child_game_state =
           GameState{root_board.hash(), game::OppositeColor(color_to_move)};
@@ -391,8 +391,7 @@ Loc Ucb(game::Board root_board, Tree& tree, int color_to_move,
 }  // namespace mcts
 
 int main(int argc, char** argv) {
-  game::Zobrist zobrist_table;
-  game::Board board(&zobrist_table);
+  game::Board board;
   absl::flat_hash_map<mcts::GameState, mcts::UcbState> tree;
 
   int color = BLACK;
