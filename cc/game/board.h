@@ -10,7 +10,7 @@
 #include "absl/container/inlined_vector.h"
 #include "absl/log/check.h"
 #include "cc/constants/constants.h"
-#include "cc/game/zobrist_hash.h"
+#include "cc/game/zobrist.h"
 
 namespace nn {
 class NNBoardUtils;
@@ -107,7 +107,7 @@ class LocStack final {
   }
 
  private:
-  absl::InlinedVector<Loc, constants::kMaxNumMoves> stack_;
+  absl::InlinedVector<Loc, constants::kMaxNumBoardLocs> stack_;
 };
 
 /*
@@ -250,8 +250,8 @@ class GroupTracker final {
 class Board final {
  public:
   using BoardData = std::array<color, BOARD_LEN * BOARD_LEN>;
-  Board(Zobrist* const zobrist_table);
-  Board(Zobrist* const zobrist_table, int length);
+  Board();
+  Board(int length);
   ~Board() = default;
 
   int length() const;
@@ -268,8 +268,8 @@ class Board final {
   bool Move(Loc loc, int color);
   bool MovePass(int color);
   std::optional<MoveInfo> MoveDry(Loc loc, int color) const;
-  Loc MoveAsLoc(int move) const;
-  int LocAsMove(Loc loc) const;
+  Loc AsLoc(int move) const;
+  int AsIndex(Loc loc) const;
 
   Scores GetScores();
 
@@ -292,7 +292,7 @@ class Board final {
       const Transition& move_transition,
       const std::vector<Transition>& capture_transitions) const;
 
-  Zobrist* const zobrist_table_;
+  const Zobrist& zobrist_;
   int length_;
   BoardData board_;
   int move_count_;

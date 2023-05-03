@@ -6,7 +6,6 @@
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "cc/core/util.h"
-#include "cc/game/zobrist_hash.h"
 
 namespace game {
 namespace {
@@ -311,9 +310,6 @@ void GroupTracker::BensonSolver::CalculatePassAliveRegionForColor(int color) {
 
   PopulateAdjacentRegions(group_map, region_map);
   PopulateVitalRegions(group_map, region_map);
-  // LOG(INFO) << "Benson Info:\n Group Info:\n"
-  //           << core::MapToString(group_map) << "\nRegion Info:\n"
-  //           << core::MapToString(region_map);
   RunBenson(group_map, region_map);
 
   // group_map and region_map are now trimmed to the pass-alive region.
@@ -501,8 +497,8 @@ void GroupTracker::BensonSolver::PopulateVitalRegions(GroupMap& group_map,
 void GroupTracker::BensonSolver::RunBenson(GroupMap& group_map,
                                            RegionMap& region_map) {
   // Do the following until neither step removes any chains/regions:
-  //   - Remove from `group_map` all groups with less than 2 vital regions.
-  //   - For all removed groups, remove any adjacent small regions.
+  // - Remove from `group_map` all groups with less than 2 vital regions.
+  // - For all removed groups, remove any adjacent small regions.
   absl::InlinedVector<groupid, BOARD_LEN * BOARD_LEN> groups_to_remove;
   while (true) {
     for (auto& [gid, group_info] : group_map) {
@@ -532,11 +528,10 @@ void GroupTracker::BensonSolver::RunBenson(GroupMap& group_map,
   }
 }
 
-Board::Board(Zobrist* const zobrist_table)
-    : Board::Board(zobrist_table, BOARD_LEN) {}
+Board::Board() : Board::Board(BOARD_LEN) {}
 
-Board::Board(Zobrist* const zobrist_table, int length)
-    : zobrist_table_(zobrist_table),
+Board::Board(int length)
+    : zobrist_(Zobrist::get()),
       length_(length),
       board_(),
       move_count_(0),
@@ -547,7 +542,7 @@ Board::Board(Zobrist* const zobrist_table, int length)
   Zobrist::Hash hash = 0;
   for (auto i = 0; i < length_; i++) {
     for (auto j = 0; j < length_; j++) {
-      hash ^= zobrist_table->hash_at(i, j, ZobristState(EMPTY));
+      hash ^= zobrist_.hash_at(i, j, ZobristState(EMPTY));
     }
   }
 
@@ -681,11 +676,9 @@ std::optional<MoveInfo> Board::MoveDry(Loc loc, int color) const {
   return MoveInfo{move_transition, capture_transitions, hash};
 }
 
-Loc Board::MoveAsLoc(int move) const {
-  return Loc{move / length_, move % length_};
-}
+Loc Board::AsLoc(int move) const { return Loc{move / length_, move % length_}; }
 
-int Board::LocAsMove(Loc loc) const { return loc.i * length_ + loc.j; }
+int Board::AsIndex(Loc loc) const { return loc.i * length_ + loc.j; }
 
 Scores Board::GetScores() {
   // (re) calculate PA regions for score accuracy.
@@ -832,18 +825,16 @@ Zobrist::Hash Board::RecomputeHash(
     const Transition& move_transition,
     const std::vector<Transition>& capture_transitions) const {
   Zobrist::Hash hash = hash_;
-  hash ^= zobrist_table_->hash_at(move_transition.loc.i, move_transition.loc.j,
-                                  ZobristState(move_transition.last_piece));
-  hash ^= zobrist_table_->hash_at(move_transition.loc.i, move_transition.loc.j,
-                                  ZobristState(move_transition.current_piece));
+  hash ^= zobrist_.hash_at(move_transition.loc.i, move_transition.loc.j,
+                           ZobristState(move_transition.last_piece));
+  hash ^= zobrist_.hash_at(move_transition.loc.i, move_transition.loc.j,
+                           ZobristState(move_transition.current_piece));
   for (auto& capture_transition : capture_transitions) {
     // one hash to "undo" presence of last piece, one to add new piece.
-    hash ^= zobrist_table_->hash_at(
-        capture_transition.loc.i, capture_transition.loc.j,
-        ZobristState(capture_transition.last_piece));
-    hash ^= zobrist_table_->hash_at(
-        capture_transition.loc.i, capture_transition.loc.j,
-        ZobristState(capture_transition.current_piece));
+    hash ^= zobrist_.hash_at(capture_transition.loc.i, capture_transition.loc.j,
+                             ZobristState(capture_transition.last_piece));
+    hash ^= zobrist_.hash_at(capture_transition.loc.i, capture_transition.loc.j,
+                             ZobristState(capture_transition.current_piece));
   }
 
   return hash;

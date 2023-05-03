@@ -17,17 +17,17 @@ class Zobrist final {
  public:
   using Hash = absl::uint128;
 
-  Zobrist();
-  ~Zobrist() = default;
-
   // Disable Copy
   Zobrist(Zobrist const &) = delete;
   Zobrist &operator=(Zobrist const &) = delete;
 
-  Hash hash_at(unsigned i, unsigned j, unsigned state);
+  Hash hash_at(unsigned i, unsigned j, unsigned state) const;
+  static const Zobrist &get();
 
  private:
-  // globally once-initialized
+  Zobrist();
+  ~Zobrist() = default;
+
   Hash table_[BOARD_LEN][BOARD_LEN][NUM_STATES];
 };
 

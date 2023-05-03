@@ -2,7 +2,7 @@
 
 #include "absl/container/flat_hash_set.h"
 #include "cc/core/doctest_include.h"
-#include "cc/game/zobrist_hash.h"
+#include "cc/game/zobrist.h"
 
 #define IN_UNIT_TEST
 
@@ -10,8 +10,7 @@ namespace game {
 
 TEST_CASE("BoardTest") {
   SUBCASE("NewBoardIsEmpty") {
-    Zobrist table_;
-    game::Board board(&table_);
+    game::Board board;
 
     for (unsigned i = 0; i < BOARD_LEN; i++) {
       for (unsigned j = 0; j < BOARD_LEN; j++) {
@@ -21,8 +20,7 @@ TEST_CASE("BoardTest") {
   }
 
   SUBCASE("MovingOnEmptyBoardSetsColor") {
-    Zobrist table_;
-    game::Board board(&table_);
+    game::Board board;
 
     board.MoveBlack(0, 0);
 
@@ -30,8 +28,7 @@ TEST_CASE("BoardTest") {
   }
 
   SUBCASE("MovingOnOccupiedSpotFails") {
-    Zobrist table_;
-    game::Board board(&table_);
+    game::Board board;
 
     board.MoveBlack(0, 0);
 
@@ -40,8 +37,7 @@ TEST_CASE("BoardTest") {
   }
 
   SUBCASE("BoardStateNotAlreadySeenReturnsTrue") {
-    Zobrist table_;
-    game::Board board(&table_);
+    game::Board board;
 
     board.MoveBlack(0, 0);
 
@@ -49,8 +45,7 @@ TEST_CASE("BoardTest") {
   }
 
   SUBCASE("NoSelfAtari") {
-    Zobrist table_;
-    game::Board board(&table_);
+    game::Board board;
 
     board.MoveBlack(1, 0);
     board.MoveBlack(0, 1);
@@ -59,8 +54,7 @@ TEST_CASE("BoardTest") {
   }
 
   SUBCASE("NoSelfAtariMultipleStones") {
-    Zobrist table_;
-    game::Board board(&table_);
+    game::Board board;
 
     board.MoveBlack(2, 3);
     board.MoveBlack(2, 4);
@@ -75,8 +69,7 @@ TEST_CASE("BoardTest") {
   }
 
   SUBCASE("BlackCapturesAdjacentWhite") {
-    Zobrist table_;
-    game::Board board(&table_);
+    game::Board board;
 
     board.MoveBlack(0, 1);
     board.MoveWhite(0, 0);
@@ -86,8 +79,7 @@ TEST_CASE("BoardTest") {
   }
 
   SUBCASE("BlackCapturesWhiteCenter") {
-    Zobrist table_;
-    game::Board board(&table_);
+    game::Board board;
 
     board.MoveBlack(1, 1);
     board.MoveBlack(2, 2);
@@ -100,8 +92,7 @@ TEST_CASE("BoardTest") {
   }
 
   SUBCASE("BlackCapturesMultipleStones") {
-    Zobrist table_;
-    game::Board board(&table_);
+    game::Board board;
 
     board.MoveWhite(1, 1);
     board.MoveWhite(2, 1);
@@ -122,8 +113,7 @@ TEST_CASE("BoardTest") {
   }
 
   SUBCASE("KoCannotRecaptureImmediately") {
-    Zobrist table_;
-    game::Board board(&table_);
+    game::Board board;
 
     board.MoveBlack(2, 1);
     board.MoveWhite(2, 2);
@@ -140,8 +130,7 @@ TEST_CASE("BoardTest") {
   }
 
   SUBCASE("SendTwoReturnOne") {
-    Zobrist table_;
-    game::Board board(&table_);
+    game::Board board;
 
     board.MoveBlack(2, 1);
     board.MoveWhite(0, 1);
@@ -161,8 +150,7 @@ TEST_CASE("BoardTest") {
   // . o . o
   // o o o o
   SUBCASE("CannotMoveInPARegion") {
-    Zobrist table_;
-    game::Board board(&table_);
+    game::Board board;
 
     board.MoveBlack(0, 1);
     board.MoveBlack(0, 3);
@@ -584,8 +572,7 @@ TEST_CASE("ScoreTest") {
   // . . . o .
   // o o o x .
   SUBCASE("BlackCorner") {
-    Zobrist table_;
-    game::Board board(&table_);
+    game::Board board;
 
     board.MoveBlack(1, 0);
     board.MoveBlack(1, 1);
@@ -605,8 +592,7 @@ TEST_CASE("ScoreTest") {
   // . x . o .
   // o o o x .
   SUBCASE("BlackCornerWhiteStone") {
-    Zobrist table_;
-    game::Board board(&table_);
+    game::Board board;
 
     board.MoveBlack(1, 0);
     board.MoveBlack(1, 1);
@@ -629,8 +615,7 @@ TEST_CASE("ScoreTest") {
   // . . . o
   // o o o x
   SUBCASE("BigBlackCorner") {
-    Zobrist table_;
-    game::Board board(&table_);
+    game::Board board;
 
     board.MoveBlack(3, 0);
     board.MoveBlack(3, 1);
@@ -654,8 +639,7 @@ TEST_CASE("ScoreTest") {
   // . . . x
   // x x x o
   SUBCASE("BigWhiteCorner") {
-    Zobrist table_;
-    game::Board board(&table_);
+    game::Board board;
 
     board.MoveWhite(3, 0);
     board.MoveWhite(3, 1);
@@ -679,8 +663,7 @@ TEST_CASE("ScoreTest") {
   // . x . x
   // x x x o
   SUBCASE("MultipleRegions") {
-    Zobrist table_;
-    game::Board board(&table_);
+    game::Board board;
 
     board.MoveWhite(3, 0);
     board.MoveWhite(3, 1);
@@ -706,8 +689,7 @@ TEST_CASE("ScoreTest") {
   // . . x . . . x
   // . . . x x x .
   SUBCASE("DifferentColorRegions") {
-    Zobrist table_;
-    game::Board board(&table_);
+    game::Board board;
 
     board.MoveBlack(1, 1);
     board.MoveBlack(1, 2);
@@ -741,8 +723,7 @@ TEST_CASE("ScoreTest") {
   // . . x . . . x
   // . . . x x x .
   SUBCASE("DifferentColorRegions") {
-    Zobrist table_;
-    game::Board board(&table_);
+    game::Board board;
 
     board.MoveBlack(1, 1);
     board.MoveBlack(1, 2);
@@ -776,8 +757,7 @@ TEST_CASE("ScoreTest") {
   // . . o x o . .
   // . . o o o x .
   SUBCASE("PaRegionStones") {
-    Zobrist table_;
-    game::Board board(&table_);
+    game::Board board;
 
     board.MoveBlack(1, 1);
     board.MoveBlack(1, 2);
@@ -808,8 +788,7 @@ TEST_CASE("ScoreTest") {
   // . . . o x x o
   // . . . o o o x
   SUBCASE("PaRegionStoneGroup") {
-    Zobrist table_;
-    game::Board board(&table_);
+    game::Board board;
 
     board.MoveBlack(0, 4);
     board.MoveBlack(0, 6);
