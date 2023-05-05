@@ -12,7 +12,7 @@
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "cc/core/rand.h"
-#include "cc/game/board.h"
+#include "cc/game/game.h"
 
 ABSL_FLAG(int, num_iterations, 1000, "Number of MCTS iterations per move");
 
@@ -187,46 +187,47 @@ struct UcbState {
 using Tree = absl::flat_hash_map<GameState, UcbState>;
 
 // returns whether `color_to_move` won the playout.
-int UcbRandomPlayout(game::Board& board, Tree& tree, int color_to_move,
+int UcbRandomPlayout(game::Game& game, Tree& tree, int color_to_move,
                      const std::vector<int>& valid_moves) {
   core::PRng prng;
   int color = color_to_move;
   MoveBucket move_bucket(valid_moves);
-  while (!board.IsGameOver() && board.move_count() < 400) {
+  while (!game.IsGameOver() && game.move_num() < 400) {
     int move_index = core::RandRange(prng, 0, move_bucket.size());
     int move = move_bucket.at(move_index);
 
     if (move == kPassMove) {
       // pass move
-      board.MovePass(color);
+      game.Pass(color);
       color = game::OppositeColor(color);
     } else {
-      Loc loc = board.AsLoc(move);
-      std::optional<game::MoveInfo> move_info = board.MoveDry(loc, color);
+      Loc loc = game::AsLoc(move, game.board_len());
+      std::optional<game::MoveInfo> move_info =
+          game.board().PlayMoveDry(loc, color);
       if (!move_info.has_value()) {
         continue;
       }
 
-      board.Move(loc, color);
+      game.PlayMove(loc, color);
       color = game::OppositeColor(color);
       move_bucket.RemoveAt(move_index);
       for (auto& transition : move_info->capture_transitions) {
-        move_bucket.Insert(board.AsIndex(transition.loc));
+        move_bucket.Insert(transition.loc.as_index(game.board_len()));
       }
     }
   }
 
-  game::Scores scores = board.GetScores();
+  game::Scores scores = game.GetScores();
   int b_score = scores.black_score;
   int w_score = scores.white_score;
 
   return b_score > w_score ? BLACK : WHITE;
 }
 
-int UcbSearch(game::Board& board, Tree& tree, int color_to_move) {
-  GameState game_state = GameState{board.hash(), color_to_move};
-  if (board.IsGameOver()) {
-    game::Scores scores = board.GetScores();
+int UcbSearch(game::Game& game, Tree& tree, int color_to_move) {
+  GameState game_state = GameState{game.board().hash(), color_to_move};
+  if (game.IsGameOver()) {
+    game::Scores scores = game.GetScores();
     int b_score = scores.black_score;
     int w_score = scores.white_score;
     int winner = b_score > w_score ? BLACK : WHITE;
@@ -253,17 +254,17 @@ int UcbSearch(game::Board& board, Tree& tree, int color_to_move) {
   if (!tree.contains(game_state)) {
     // leaf node
     std::vector<int> valid_moves;
-    for (auto i = 0; i < board.length(); ++i) {
-      for (auto j = 0; j < board.length(); ++j) {
-        if (board.IsValidMove(Loc{i, j}, color_to_move)) {
-          valid_moves.emplace_back(i * board.length() + j);
+    for (auto i = 0; i < game.board_len(); ++i) {
+      for (auto j = 0; j < game.board_len(); ++j) {
+        if (game.IsValidMove(Loc{i, j}, color_to_move)) {
+          valid_moves.emplace_back(i * game.board_len() + j);
         }
       }
     }
 
     valid_moves.emplace_back(kPassMove);
 
-    int winner = UcbRandomPlayout(board, tree, color_to_move, valid_moves);
+    int winner = UcbRandomPlayout(game, tree, color_to_move, valid_moves);
 
     std::shuffle(valid_moves.begin(), valid_moves.end(), RandomDevice());
 
@@ -280,15 +281,15 @@ int UcbSearch(game::Board& board, Tree& tree, int color_to_move) {
     int move_to_expand = tree.at(game_state).actions_unexplored.back();
 
     if (move_to_expand == kPassMove) {
-      board.MovePass(color_to_move);
+      game.Pass(color_to_move);
     } else {
-      Loc move_loc = board.AsLoc(move_to_expand);
-      board.Move(move_loc, color_to_move);
+      Loc move_loc = game::AsLoc(move_to_expand, game.board_len());
+      game.PlayMove(move_loc, color_to_move);
     }
 
     GameState child_game_state =
-        GameState{board.hash(), game::OppositeColor(color_to_move)};
-    int winner = UcbSearch(board, tree, game::OppositeColor(color_to_move));
+        GameState{game.board().hash(), game::OppositeColor(color_to_move)};
+    int winner = UcbSearch(game, tree, game::OppositeColor(color_to_move));
     UcbState& state = tree.at(game_state);
     state.N++;
     state.W += (winner == color_to_move ? 1.0 : -1.0);
@@ -312,15 +313,15 @@ int UcbSearch(game::Board& board, Tree& tree, int color_to_move) {
     int move = actions_explored.back().move;
     actions_explored.pop_back();
     if (move == kPassMove) {
-      board.MovePass(color_to_move);
+      game.Pass(color_to_move);
     } else {
-      Loc move_loc = board.AsLoc(move);
-      board.Move(move_loc, color_to_move);
+      Loc move_loc = game::AsLoc(move, game.board_len());
+      game.PlayMove(move_loc, color_to_move);
     }
 
     GameState child_game_state =
-        GameState{board.hash(), game::OppositeColor(color_to_move)};
-    int winner = UcbSearch(board, tree, game::OppositeColor(color_to_move));
+        GameState{game.board().hash(), game::OppositeColor(color_to_move)};
+    int winner = UcbSearch(game, tree, game::OppositeColor(color_to_move));
     UcbState& state = tree.at(game_state);
     state.N++;
     state.W += (winner == color_to_move ? 1.0 : -1.0);
@@ -336,15 +337,14 @@ int UcbSearch(game::Board& board, Tree& tree, int color_to_move) {
   }
 }
 
-Loc Ucb(game::Board root_board, Tree& tree, int color_to_move,
-        int num_iterations) {
+Loc Ucb(game::Game game, Tree& tree, int color_to_move, int num_iterations) {
   for (auto i = 0; i < num_iterations; ++i) {
-    game::Board board = root_board;  // make a copy
+    game::Game board = game;  // make a copy
     UcbSearch(board, tree, color_to_move);
   }
 
   // pick node with highest value
-  GameState game_state = GameState{root_board.hash(), color_to_move};
+  GameState game_state = GameState{game.board().hash(), color_to_move};
   DCHECK(tree.contains(game_state));
   UcbState& root_state = tree.at(game_state);
   DCHECK(root_state.actions_unexplored.empty());
@@ -360,13 +360,13 @@ Loc Ucb(game::Board root_board, Tree& tree, int color_to_move,
   for (auto& action : actions) {
     int move = action.move;
     GameState child_game_state;
-    Loc move_loc = root_board.AsLoc(move);
+    Loc move_loc = game::AsLoc(move, game.board_len());
     if (move == kPassMove) {
       child_game_state =
-          GameState{root_board.hash(), game::OppositeColor(color_to_move)};
+          GameState{game.board().hash(), game::OppositeColor(color_to_move)};
     } else {
       std::optional<game::MoveInfo> move_info =
-          root_board.MoveDry(move_loc, color_to_move);
+          game.board().PlayMoveDry(move_loc, color_to_move);
       DCHECK(move_info.has_value());
       if (!move_info.has_value()) {
         continue;
@@ -391,18 +391,18 @@ Loc Ucb(game::Board root_board, Tree& tree, int color_to_move,
 }  // namespace mcts
 
 int main(int argc, char** argv) {
-  game::Board board;
+  game::Game game;
   absl::flat_hash_map<mcts::GameState, mcts::UcbState> tree;
 
   int color = BLACK;
   int num_iterations = absl::GetFlag(FLAGS_num_iterations);
-  while (!board.IsGameOver() && board.move_count() < 400) {
-    game::Loc move_loc = mcts::Ucb(board, tree, color, num_iterations);
-    board.Move(move_loc, color);
+  while (!game.IsGameOver() && game.move_num() < 400) {
+    game::Loc move_loc = mcts::Ucb(game, tree, color, num_iterations);
+    game.PlayMove(move_loc, color);
     color = game::OppositeColor(color);
 
-    LOG(INFO) << "Move: " << board.move_count() << "\n";
-    LOG(INFO) << "Board:\n" << board;
+    LOG(INFO) << "Move: " << game.move_num() << "\n";
+    LOG(INFO) << "Board:\n" << game.board();
   }
 
   return 0;

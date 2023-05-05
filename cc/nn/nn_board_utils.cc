@@ -43,10 +43,14 @@ Tensor NNBoardUtils::AsOneHot(game::Loc loc) {
   return t;
 }
 
-/* static */ void NNBoardUtils::FillNNInput(
-    int batch_id, int batch_size, Tensor& input_features, Tensor& input_state,
-    const game::Board& board, int color, const std::vector<game::Loc> moves) {
-  DCHECK(moves.size() >= 5);
+/* static */ void NNBoardUtils::FillNNInput(int batch_id, int batch_size,
+                                            Tensor& input_features,
+                                            Tensor& input_state,
+                                            const game::Game& game, int color) {
+  DCHECK(game.moves().size() >= 5);
+
+  const auto& board = game.board();
+  const auto& moves = game.moves();
 
   auto raw = input_features.shaped<float, 4>(
       {batch_size, BOARD_LEN, BOARD_LEN, constants::kNumInputFeaturePlanes});
@@ -65,7 +69,7 @@ Tensor NNBoardUtils::AsOneHot(game::Loc loc) {
   // fill moves
   auto offset = 2;
   for (auto i = 0; i < constants::kNumLastMoves; ++i) {
-    game::Loc loc = moves[moves.size() - constants::kNumLastMoves + i];
+    game::Loc loc = moves[moves.size() - constants::kNumLastMoves + i].loc;
     if (loc == game::kNoopLoc) continue;
     if (loc == game::kPassLoc) continue;
 

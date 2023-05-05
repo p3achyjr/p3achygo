@@ -22,7 +22,7 @@ TEST_CASE("BoardTest") {
   SUBCASE("MovingOnEmptyBoardSetsColor") {
     game::Board board;
 
-    board.MoveBlack(0, 0);
+    board.PlayBlack(0, 0);
 
     CHECK_EQ(board.at(0, 0), BLACK);
   }
@@ -30,83 +30,83 @@ TEST_CASE("BoardTest") {
   SUBCASE("MovingOnOccupiedSpotFails") {
     game::Board board;
 
-    board.MoveBlack(0, 0);
+    board.PlayBlack(0, 0);
 
-    CHECK_FALSE(board.MoveWhite(0, 0));
+    CHECK_FALSE(board.PlayWhite(0, 0));
     CHECK_EQ(board.at(0, 0), BLACK);
   }
 
   SUBCASE("BoardStateNotAlreadySeenReturnsTrue") {
     game::Board board;
 
-    board.MoveBlack(0, 0);
+    board.PlayBlack(0, 0);
 
-    CHECK(board.MoveWhite(1, 1));
+    CHECK(board.PlayWhite(1, 1));
   }
 
   SUBCASE("NoSelfAtari") {
     game::Board board;
 
-    board.MoveBlack(1, 0);
-    board.MoveBlack(0, 1);
+    board.PlayBlack(1, 0);
+    board.PlayBlack(0, 1);
 
-    CHECK_FALSE(board.MoveWhite(0, 0));
+    CHECK_FALSE(board.PlayWhite(0, 0));
   }
 
   SUBCASE("NoSelfAtariMultipleStones") {
     game::Board board;
 
-    board.MoveBlack(2, 3);
-    board.MoveBlack(2, 4);
-    board.MoveBlack(3, 2);
-    board.MoveBlack(4, 3);
-    board.MoveBlack(4, 4);
-    board.MoveBlack(3, 5);
+    board.PlayBlack(2, 3);
+    board.PlayBlack(2, 4);
+    board.PlayBlack(3, 2);
+    board.PlayBlack(4, 3);
+    board.PlayBlack(4, 4);
+    board.PlayBlack(3, 5);
 
-    board.MoveWhite(3, 3);
+    board.PlayWhite(3, 3);
 
-    CHECK_FALSE(board.MoveWhite(3, 4));
+    CHECK_FALSE(board.PlayWhite(3, 4));
   }
 
   SUBCASE("BlackCapturesAdjacentWhite") {
     game::Board board;
 
-    board.MoveBlack(0, 1);
-    board.MoveWhite(0, 0);
+    board.PlayBlack(0, 1);
+    board.PlayWhite(0, 0);
 
-    CHECK(board.MoveBlack(1, 0));
+    CHECK(board.PlayBlack(1, 0));
     CHECK(board.at(0, 0) == EMPTY);
   }
 
   SUBCASE("BlackCapturesWhiteCenter") {
     game::Board board;
 
-    board.MoveBlack(1, 1);
-    board.MoveBlack(2, 2);
-    board.MoveBlack(3, 1);
-    board.MoveWhite(2, 1);
+    board.PlayBlack(1, 1);
+    board.PlayBlack(2, 2);
+    board.PlayBlack(3, 1);
+    board.PlayWhite(2, 1);
 
     CHECK(board.at(2, 1) == WHITE);
-    CHECK(board.MoveBlack(2, 0));
+    CHECK(board.PlayBlack(2, 0));
     CHECK(board.at(2, 1) == EMPTY);
   }
 
   SUBCASE("BlackCapturesMultipleStones") {
     game::Board board;
 
-    board.MoveWhite(1, 1);
-    board.MoveWhite(2, 1);
+    board.PlayWhite(1, 1);
+    board.PlayWhite(2, 1);
 
-    board.MoveBlack(0, 1);
-    board.MoveBlack(1, 2);
-    board.MoveBlack(2, 2);
-    board.MoveBlack(3, 1);
-    board.MoveBlack(2, 0);
+    board.PlayBlack(0, 1);
+    board.PlayBlack(1, 2);
+    board.PlayBlack(2, 2);
+    board.PlayBlack(3, 1);
+    board.PlayBlack(2, 0);
 
     CHECK(board.at(1, 1) == WHITE);
     CHECK(board.at(2, 1) == WHITE);
 
-    CHECK(board.MoveBlack(1, 0));
+    CHECK(board.PlayBlack(1, 0));
 
     CHECK(board.at(1, 1) == EMPTY);
     CHECK(board.at(2, 1) == EMPTY);
@@ -115,36 +115,36 @@ TEST_CASE("BoardTest") {
   SUBCASE("KoCannotRecaptureImmediately") {
     game::Board board;
 
-    board.MoveBlack(2, 1);
-    board.MoveWhite(2, 2);
-    board.MoveBlack(3, 2);
-    board.MoveWhite(3, 3);
-    board.MoveBlack(2, 3);
-    board.MoveWhite(2, 4);
-    board.MoveBlack(1, 2);
-    board.MoveWhite(1, 3);
-    board.MoveWhite(2, 2);
+    board.PlayBlack(2, 1);
+    board.PlayWhite(2, 2);
+    board.PlayBlack(3, 2);
+    board.PlayWhite(3, 3);
+    board.PlayBlack(2, 3);
+    board.PlayWhite(2, 4);
+    board.PlayBlack(1, 2);
+    board.PlayWhite(1, 3);
+    board.PlayWhite(2, 2);
 
     CHECK(board.at(2, 3) == EMPTY);
-    CHECK_FALSE(board.MoveBlack(2, 3));
+    CHECK_FALSE(board.PlayBlack(2, 3));
   }
 
   SUBCASE("SendTwoReturnOne") {
     game::Board board;
 
-    board.MoveBlack(2, 1);
-    board.MoveWhite(0, 1);
-    board.MoveBlack(1, 0);
-    board.MoveWhite(1, 1);
-    board.MoveBlack(3, 0);
+    board.PlayBlack(2, 1);
+    board.PlayWhite(0, 1);
+    board.PlayBlack(1, 0);
+    board.PlayWhite(1, 1);
+    board.PlayBlack(3, 0);
 
     // send two
-    board.MoveBlack(0, 0);
-    board.MoveWhite(2, 0);
+    board.PlayBlack(0, 0);
+    board.PlayWhite(2, 0);
 
     CHECK(board.at(0, 0) == EMPTY);
     CHECK(board.at(1, 0) == EMPTY);
-    CHECK_FALSE(board.MoveBlack(1, 0));
+    CHECK_FALSE(board.PlayBlack(1, 0));
   }
 
   // . o . o
@@ -152,21 +152,21 @@ TEST_CASE("BoardTest") {
   SUBCASE("CannotMoveInPARegion") {
     game::Board board;
 
-    board.MoveBlack(0, 1);
-    board.MoveBlack(0, 3);
-    board.MoveBlack(1, 0);
-    board.MoveBlack(1, 1);
-    board.MoveBlack(1, 2);
-    board.MoveBlack(1, 3);
+    board.PlayBlack(0, 1);
+    board.PlayBlack(0, 3);
+    board.PlayBlack(1, 0);
+    board.PlayBlack(1, 1);
+    board.PlayBlack(1, 2);
+    board.PlayBlack(1, 3);
 
-    CHECK(board.MoveDry(Loc{0, 0}, BLACK));
-    CHECK(board.MoveDry(Loc{0, 2}, BLACK));
+    CHECK(board.PlayMoveDry(Loc{0, 0}, BLACK));
+    CHECK(board.PlayMoveDry(Loc{0, 2}, BLACK));
 
-    board.MovePass(BLACK);
-    board.MovePass(WHITE);
+    board.Pass(BLACK);
+    board.Pass(WHITE);
 
-    CHECK_FALSE(board.MoveBlack(0, 0));
-    CHECK_FALSE(board.MoveBlack(0, 2));
+    CHECK_FALSE(board.PlayBlack(0, 0));
+    CHECK_FALSE(board.PlayBlack(0, 2));
   }
 }
 
@@ -566,6 +566,41 @@ TEST_CASE("PassAliveTest") {
     CHECK(PaRegionsMatch(group_tracker, pa_region_black, BLACK));
     CHECK(PaRegionsMatch(group_tracker, pa_region_white, WHITE));
   }
+
+  // . . . o .
+  // o o o . .
+  // . . . o .
+  // o o . o .
+  // o . o o .
+  // . o . . .
+  // o o . . .
+  SUBCASE("AlmostPA") {
+    groupid gid = group_tracker.NewGroup(Loc{1, 0}, BLACK);
+    group_tracker.AddToGroup(Loc{1, 1}, gid);
+    group_tracker.AddToGroup(Loc{1, 2}, gid);
+
+    groupid gid1 = group_tracker.NewGroup(Loc{2, 3}, BLACK);
+    group_tracker.AddToGroup(Loc{3, 3}, gid1);
+    group_tracker.AddToGroup(Loc{4, 3}, gid1);
+    group_tracker.AddToGroup(Loc{4, 2}, gid1);
+
+    groupid gid2 = group_tracker.NewGroup(Loc{3, 0}, BLACK);
+    group_tracker.AddToGroup(Loc{3, 1}, gid2);
+    group_tracker.AddToGroup(Loc{4, 0}, gid2);
+
+    groupid gid3 = group_tracker.NewGroup(Loc{5, 1}, BLACK);
+    group_tracker.AddToGroup(Loc{6, 0}, gid3);
+    group_tracker.AddToGroup(Loc{6, 1}, gid3);
+
+    groupid gid4 = group_tracker.NewGroup(Loc{0, 3}, BLACK);
+
+    std::cerr << group_tracker;
+
+    group_tracker.CalculatePassAliveRegionForColor(BLACK);
+
+    absl::flat_hash_set<Loc> pa_region = {};
+    CHECK(PaRegionsMatch(group_tracker, pa_region, BLACK));
+  }
 }
 
 TEST_CASE("ScoreTest") {
@@ -574,15 +609,15 @@ TEST_CASE("ScoreTest") {
   SUBCASE("BlackCorner") {
     game::Board board;
 
-    board.MoveBlack(1, 0);
-    board.MoveBlack(1, 1);
-    board.MoveBlack(1, 2);
-    board.MoveBlack(0, 3);
+    board.PlayBlack(1, 0);
+    board.PlayBlack(1, 1);
+    board.PlayBlack(1, 2);
+    board.PlayBlack(0, 3);
 
-    board.MoveWhite(1, 3);
+    board.PlayWhite(1, 3);
 
-    board.MovePass(BLACK);
-    board.MovePass(WHITE);
+    board.Pass(BLACK);
+    board.Pass(WHITE);
 
     Scores scores = board.GetScores();
     CHECK(scores.black_score == 7);
@@ -594,16 +629,16 @@ TEST_CASE("ScoreTest") {
   SUBCASE("BlackCornerWhiteStone") {
     game::Board board;
 
-    board.MoveBlack(1, 0);
-    board.MoveBlack(1, 1);
-    board.MoveBlack(1, 2);
-    board.MoveBlack(0, 3);
+    board.PlayBlack(1, 0);
+    board.PlayBlack(1, 1);
+    board.PlayBlack(1, 2);
+    board.PlayBlack(0, 3);
 
-    board.MoveWhite(1, 3);
-    board.MoveWhite(0, 1);
+    board.PlayWhite(1, 3);
+    board.PlayWhite(0, 1);
 
-    board.MovePass(BLACK);
-    board.MovePass(WHITE);
+    board.Pass(BLACK);
+    board.Pass(WHITE);
 
     Scores scores = board.GetScores();
     CHECK(scores.black_score == 4);
@@ -617,17 +652,17 @@ TEST_CASE("ScoreTest") {
   SUBCASE("BigBlackCorner") {
     game::Board board;
 
-    board.MoveBlack(3, 0);
-    board.MoveBlack(3, 1);
-    board.MoveBlack(3, 2);
-    board.MoveBlack(0, 3);
-    board.MoveBlack(1, 3);
-    board.MoveBlack(2, 3);
+    board.PlayBlack(3, 0);
+    board.PlayBlack(3, 1);
+    board.PlayBlack(3, 2);
+    board.PlayBlack(0, 3);
+    board.PlayBlack(1, 3);
+    board.PlayBlack(2, 3);
 
-    board.MoveWhite(3, 3);
+    board.PlayWhite(3, 3);
 
-    board.MovePass(BLACK);
-    board.MovePass(WHITE);
+    board.Pass(BLACK);
+    board.Pass(WHITE);
 
     Scores scores = board.GetScores();
     CHECK(scores.black_score == 15);
@@ -641,17 +676,17 @@ TEST_CASE("ScoreTest") {
   SUBCASE("BigWhiteCorner") {
     game::Board board;
 
-    board.MoveWhite(3, 0);
-    board.MoveWhite(3, 1);
-    board.MoveWhite(3, 2);
-    board.MoveWhite(0, 3);
-    board.MoveWhite(1, 3);
-    board.MoveWhite(2, 3);
+    board.PlayWhite(3, 0);
+    board.PlayWhite(3, 1);
+    board.PlayWhite(3, 2);
+    board.PlayWhite(0, 3);
+    board.PlayWhite(1, 3);
+    board.PlayWhite(2, 3);
 
-    board.MoveBlack(3, 3);
+    board.PlayBlack(3, 3);
 
-    board.MovePass(BLACK);
-    board.MovePass(WHITE);
+    board.Pass(BLACK);
+    board.Pass(WHITE);
 
     Scores scores = board.GetScores();
     CHECK(scores.black_score == 1);
@@ -665,17 +700,17 @@ TEST_CASE("ScoreTest") {
   SUBCASE("MultipleRegions") {
     game::Board board;
 
-    board.MoveWhite(3, 0);
-    board.MoveWhite(3, 1);
-    board.MoveWhite(3, 2);
-    board.MoveWhite(0, 3);
-    board.MoveWhite(1, 3);
-    board.MoveWhite(2, 3);
+    board.PlayWhite(3, 0);
+    board.PlayWhite(3, 1);
+    board.PlayWhite(3, 2);
+    board.PlayWhite(0, 3);
+    board.PlayWhite(1, 3);
+    board.PlayWhite(2, 3);
 
-    board.MoveBlack(3, 3);
+    board.PlayBlack(3, 3);
 
-    board.MovePass(BLACK);
-    board.MovePass(WHITE);
+    board.Pass(BLACK);
+    board.Pass(WHITE);
 
     Scores scores = board.GetScores();
     CHECK(scores.black_score == 1);
@@ -691,25 +726,25 @@ TEST_CASE("ScoreTest") {
   SUBCASE("DifferentColorRegions") {
     game::Board board;
 
-    board.MoveBlack(1, 1);
-    board.MoveBlack(1, 2);
-    board.MoveBlack(1, 3);
-    board.MoveBlack(2, 1);
-    board.MoveBlack(2, 3);
-    board.MoveBlack(3, 1);
-    board.MoveBlack(3, 2);
+    board.PlayBlack(1, 1);
+    board.PlayBlack(1, 2);
+    board.PlayBlack(1, 3);
+    board.PlayBlack(2, 1);
+    board.PlayBlack(2, 3);
+    board.PlayBlack(3, 1);
+    board.PlayBlack(3, 2);
 
-    board.MoveWhite(3, 3);
-    board.MoveWhite(3, 4);
-    board.MoveWhite(3, 5);
-    board.MoveWhite(4, 2);
-    board.MoveWhite(4, 6);
-    board.MoveWhite(5, 3);
-    board.MoveWhite(5, 4);
-    board.MoveWhite(5, 5);
+    board.PlayWhite(3, 3);
+    board.PlayWhite(3, 4);
+    board.PlayWhite(3, 5);
+    board.PlayWhite(4, 2);
+    board.PlayWhite(4, 6);
+    board.PlayWhite(5, 3);
+    board.PlayWhite(5, 4);
+    board.PlayWhite(5, 5);
 
-    board.MovePass(BLACK);
-    board.MovePass(WHITE);
+    board.Pass(BLACK);
+    board.Pass(WHITE);
 
     Scores scores = board.GetScores();
     CHECK(scores.black_score == 8);
@@ -725,25 +760,25 @@ TEST_CASE("ScoreTest") {
   SUBCASE("DifferentColorRegions") {
     game::Board board;
 
-    board.MoveBlack(1, 1);
-    board.MoveBlack(1, 2);
-    board.MoveBlack(1, 3);
-    board.MoveBlack(2, 1);
-    board.MoveBlack(2, 3);
-    board.MoveBlack(3, 1);
-    board.MoveBlack(3, 2);
+    board.PlayBlack(1, 1);
+    board.PlayBlack(1, 2);
+    board.PlayBlack(1, 3);
+    board.PlayBlack(2, 1);
+    board.PlayBlack(2, 3);
+    board.PlayBlack(3, 1);
+    board.PlayBlack(3, 2);
 
-    board.MoveWhite(3, 3);
-    board.MoveWhite(3, 4);
-    board.MoveWhite(3, 5);
-    board.MoveWhite(4, 2);
-    board.MoveWhite(4, 6);
-    board.MoveWhite(5, 3);
-    board.MoveWhite(5, 4);
-    board.MoveWhite(5, 5);
+    board.PlayWhite(3, 3);
+    board.PlayWhite(3, 4);
+    board.PlayWhite(3, 5);
+    board.PlayWhite(4, 2);
+    board.PlayWhite(4, 6);
+    board.PlayWhite(5, 3);
+    board.PlayWhite(5, 4);
+    board.PlayWhite(5, 5);
 
-    board.MovePass(BLACK);
-    board.MovePass(WHITE);
+    board.Pass(BLACK);
+    board.Pass(WHITE);
 
     Scores scores = board.GetScores();
     CHECK(scores.black_score == 8);
@@ -759,24 +794,24 @@ TEST_CASE("ScoreTest") {
   SUBCASE("PaRegionStones") {
     game::Board board;
 
-    board.MoveBlack(1, 1);
-    board.MoveBlack(1, 2);
-    board.MoveBlack(1, 3);
-    board.MoveBlack(2, 1);
-    board.MoveBlack(2, 3);
-    board.MoveBlack(3, 2);
-    board.MoveBlack(3, 4);
-    board.MoveBlack(4, 2);
-    board.MoveBlack(4, 4);
-    board.MoveBlack(5, 2);
-    board.MoveBlack(5, 3);
-    board.MoveBlack(5, 4);
+    board.PlayBlack(1, 1);
+    board.PlayBlack(1, 2);
+    board.PlayBlack(1, 3);
+    board.PlayBlack(2, 1);
+    board.PlayBlack(2, 3);
+    board.PlayBlack(3, 2);
+    board.PlayBlack(3, 4);
+    board.PlayBlack(4, 2);
+    board.PlayBlack(4, 4);
+    board.PlayBlack(5, 2);
+    board.PlayBlack(5, 3);
+    board.PlayBlack(5, 4);
 
-    board.MoveWhite(4, 3);
-    board.MoveWhite(5, 5);
+    board.PlayWhite(4, 3);
+    board.PlayWhite(5, 5);
 
-    board.MovePass(BLACK);
-    board.MovePass(WHITE);
+    board.Pass(BLACK);
+    board.Pass(WHITE);
 
     Scores scores = board.GetScores();
     CHECK(scores.black_score == 16);
@@ -790,29 +825,29 @@ TEST_CASE("ScoreTest") {
   SUBCASE("PaRegionStoneGroup") {
     game::Board board;
 
-    board.MoveBlack(0, 4);
-    board.MoveBlack(0, 6);
-    board.MoveBlack(1, 0);
-    board.MoveBlack(1, 1);
-    board.MoveBlack(1, 2);
-    board.MoveBlack(1, 3);
-    board.MoveBlack(1, 5);
-    board.MoveBlack(1, 6);
-    board.MoveBlack(2, 3);
-    board.MoveBlack(2, 6);
-    board.MoveBlack(3, 3);
-    board.MoveBlack(3, 4);
-    board.MoveBlack(3, 5);
+    board.PlayBlack(0, 4);
+    board.PlayBlack(0, 6);
+    board.PlayBlack(1, 0);
+    board.PlayBlack(1, 1);
+    board.PlayBlack(1, 2);
+    board.PlayBlack(1, 3);
+    board.PlayBlack(1, 5);
+    board.PlayBlack(1, 6);
+    board.PlayBlack(2, 3);
+    board.PlayBlack(2, 6);
+    board.PlayBlack(3, 3);
+    board.PlayBlack(3, 4);
+    board.PlayBlack(3, 5);
 
-    board.MoveWhite(0, 0);
-    board.MoveWhite(0, 1);
-    board.MoveWhite(0, 2);
-    board.MoveWhite(2, 4);
-    board.MoveWhite(2, 5);
-    board.MoveWhite(3, 6);
+    board.PlayWhite(0, 0);
+    board.PlayWhite(0, 1);
+    board.PlayWhite(0, 2);
+    board.PlayWhite(2, 4);
+    board.PlayWhite(2, 5);
+    board.PlayWhite(3, 6);
 
-    board.MovePass(BLACK);
-    board.MovePass(WHITE);
+    board.Pass(BLACK);
+    board.Pass(WHITE);
 
     Scores scores = board.GetScores();
     CHECK(scores.black_score == 26);
