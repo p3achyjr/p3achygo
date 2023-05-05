@@ -6,6 +6,7 @@
 
 #include "cc/constants/constants.h"
 #include "cc/game/board.h"
+#include "cc/game/game.h"
 #include "tensorflow/cc/client/client_session.h"
 #include "tensorflow/cc/framework/scope.h"
 #include "tensorflow/core/framework/tensor.h"
@@ -26,8 +27,7 @@ class NNBoardUtils final {
   static void FillNNInput(int batch_id, int batch_size,
                           ::tensorflow::Tensor& input_features,
                           ::tensorflow::Tensor& input_state,
-                          const game::Board& board, int color,
-                          const std::vector<game::Loc> moves);
+                          const game::Game& board, int color);
 };
 
 }  // namespace nn

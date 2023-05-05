@@ -7,7 +7,10 @@
 #include "absl/strings/string_view.h"
 #include "cc/constants/constants.h"
 #include "cc/core/probability.h"
+#include "cc/game/game.h"
 #include "cc/mcts/gumbel.h"
+
+#define LOG_TO_SINK(severity, sink) LOG(severity).ToSinkOnly(&sink)
 
 namespace {
 
@@ -45,48 +48,46 @@ void ExecuteSelfPlay(int thread_id, nn::NNInterface* nn_interface,
                                 thread_id);
 
   // initialize game related objects.
-  game::Board board;
+  game::Game game;
   std::unique_ptr<mcts::TreeNode> root_node =
       std::make_unique<mcts::TreeNode>();
-  std::vector<game::Loc> move_history = {game::kNoopLoc, game::kNoopLoc,
-                                         game::kNoopLoc, game::kNoopLoc,
-                                         game::kNoopLoc};
 
   mcts::GumbelEvaluator gumbel_evaluator(nn_interface, thread_id);
   auto color_to_move = BLACK;
-  while (!board.IsGameOver()) {
-    LOG(INFO).ToSinkOnly(&sink) << "-------------------";
-    LOG(INFO).ToSinkOnly(&sink) << "Searching...";
+  while (!game.IsGameOver()) {
+    LOG_TO_SINK(INFO, sink) << "-------------------";
+    LOG_TO_SINK(INFO, sink) << "Searching...";
     std::pair<game::Loc, game::Loc> move_pair = gumbel_evaluator.SearchRoot(
-        probability, board, root_node.get(), move_history, color_to_move,
-        kGumbelN, kGumbelK);
+        probability, game, root_node.get(), color_to_move, kGumbelN, kGumbelK);
     game::Loc nn_move = move_pair.first;
     game::Loc move = move_pair.second;
-    board.Move(move, color_to_move);
-    move_history.emplace_back(move);
+    game.PlayMove(move, color_to_move);
     color_to_move = game::OppositeColor(color_to_move);
-    root_node = std::move(root_node->children[board.AsIndex(move)]);
+    root_node = std::move(root_node->children[move.as_index(game.board_len())]);
 
-    LOG(INFO).ToSinkOnly(&sink) << "Raw NN Move: " << nn_move;
-    LOG(INFO).ToSinkOnly(&sink) << "Gumbel Move: " << move;
-    LOG(INFO).ToSinkOnly(&sink) << "Move Num: " << move_history.size() - 5;
-    LOG(INFO).ToSinkOnly(&sink)
-        << "Last 5 Moves: " << move_history[move_history.size() - 5] << ", "
-        << move_history[move_history.size() - 4] << ", "
-        << move_history[move_history.size() - 3] << ", "
-        << move_history[move_history.size() - 2] << ", "
-        << move_history[move_history.size() - 1];
-    LOG(INFO).ToSinkOnly(&sink)
-        << "Tree Visit Count: " << root_node->n
-        << " Player to Move: " << root_node->color_to_move
-        << " Value: " << root_node->q;
-    LOG(INFO).ToSinkOnly(&sink) << "Board:\n" << board;
+    LOG_TO_SINK(INFO, sink) << "Raw NN Move: " << nn_move;
+    LOG_TO_SINK(INFO, sink) << "Gumbel Move: " << move;
+    LOG_TO_SINK(INFO, sink) << "Move Num: " << game.move_num();
+    LOG_TO_SINK(INFO, sink)
+        << "Last 5 Moves: " << game.move(game.move_num() - 5) << ", "
+        << game.move(game.move_num() - 4) << ", "
+        << game.move(game.move_num() - 3) << ", "
+        << game.move(game.move_num() - 2) << ", "
+        << game.move(game.move_num() - 1);
+    LOG_TO_SINK(INFO, sink) << "Tree Visit Count: " << root_node->n
+                            << " Player to Move: " << root_node->color_to_move
+                            << " Value: " << root_node->q;
+    LOG_TO_SINK(INFO, sink) << "Board:\n" << game.board();
     LOG(INFO) << "Thread " << thread_id << " moved";
   }
 
   nn_interface->UnregisterThread(thread_id);
-  game::Scores scores = board.GetScores();
+  game::Scores scores = game.GetScores();
 
-  LOG(INFO).ToSinkOnly(&sink) << "Black Score: " << scores.black_score;
-  LOG(INFO).ToSinkOnly(&sink) << "White Score: " << scores.white_score;
+  LOG_TO_SINK(INFO, sink) << "Black Score: " << scores.black_score;
+  LOG_TO_SINK(INFO, sink) << "White Score: " << scores.white_score;
+
+  LOG_TO_SINK(INFO, sink) << "Final Board:\n" << game.board();
 }
+
+#undef LOG_TO_SINK

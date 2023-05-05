@@ -8,7 +8,7 @@
 #include "absl/status/statusor.h"
 #include "absl/synchronization/blocking_counter.h"
 #include "cc/constants/constants.h"
-#include "cc/game/board.h"
+#include "cc/game/game.h"
 #include "tensorflow/cc/client/client_session.h"
 #include "tensorflow/cc/framework/scope.h"
 #include "tensorflow/cc/saved_model/loader.h"
@@ -50,8 +50,7 @@ class NNInterface final {
   // then get the result for the corresponding thread index from
   // `GetInferenceResult`.
   // `GetInferenceResult` will block until the result for all threads is ready.
-  absl::Status LoadBatch(int thread_id, const game::Board& board,
-                         const std::vector<game::Loc> last_moves,
+  absl::Status LoadBatch(int thread_id, const game::Game& game,
                          int color_to_move);
   NNInferResult GetInferenceResult(int thread_id) ABSL_LOCKS_EXCLUDED(mu_);
 
@@ -70,13 +69,14 @@ class NNInterface final {
   ::tensorflow::Scope scope_cast_output_;
   ::tensorflow::GraphDef gdef_cast_input_;
   ::tensorflow::GraphDef gdef_cast_output_;
-  std::unique_ptr<::tensorflow::Session> session_cast_input_;
-  std::unique_ptr<::tensorflow::Session> session_cast_output_;
   ::tensorflow::Tensor input_feature_buf_;
   ::tensorflow::Tensor input_state_buf_;
   std::vector<::tensorflow::Tensor> nn_input_buf_;
   std::vector<::tensorflow::Tensor> nn_output_buf_;
   std::vector<::tensorflow::Tensor> result_buf_;
+
+  std::unique_ptr<::tensorflow::Session> session_cast_input_;
+  std::unique_ptr<::tensorflow::Session> session_cast_output_;
 
   bool is_initialized_;
   int num_threads_;

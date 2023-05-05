@@ -8,11 +8,12 @@
 #include "absl/status/statusor.h"
 #include "cc/constants/constants.h"
 #include "cc/core/util.h"
-#include "cc/game/board.h"
+#include "cc/game/game.h"
+#include "cc/game/loc.h"
 #include "cc/mcts/tree.h"
 #include "cc/nn/nn_interface.h"
 
-using ::game::Board;
+using ::game::Game;
 using ::game::Loc;
 
 namespace mcts {
@@ -26,8 +27,8 @@ struct GumbelMoveInfo {
   float logit = 0;
   float gumbel_noise = 0;
   float qtransform = 0;
-  int move_encoding = -1;
-  Loc move_loc = {-1, -1};
+  int move_encoding = game::kInvalidMoveEncoding;
+  Loc move_loc = game::kNoopLoc;
 };
 
 bool GumbelMoveInfoLess(const GumbelMoveInfo& x, const GumbelMoveInfo& y) {
@@ -122,22 +123,21 @@ GumbelEvaluator::GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id)
 // `n` must be >= `klogk`.
 // !! `board`, `node`, and `moves` must be kept in sync with each other.
 std::pair<Loc, Loc> GumbelEvaluator::SearchRoot(core::Probability& probability,
-                                                Board& board, TreeNode* node,
-                                                std::vector<Loc>& moves,
+                                                Game& game, TreeNode* node,
                                                 int color_to_move, int n,
                                                 int k) {
   CHECK(node);
-  int num_rounds = log2(k);
+  int num_rounds = std::max(log2(k), 1);
   int visits_per_action = n / (k * num_rounds);
 
   if (node->state == TreeNodeState::kNew) {
-    InitTreeNode(node, board, moves, color_to_move);
+    InitTreeNode(node, game, color_to_move);
   }
 
   auto num_moves = constants::kMaxNumMoves;
   GumbelMoveInfo gmove_info[num_moves];
   for (auto i = 0; i < num_moves; ++i) {
-    if (!board.IsValidMove(board.AsLoc(i), color_to_move)) {
+    if (!game.IsValidMove(i, color_to_move)) {
       // ignore move henceforth
       gmove_info[i].logit = -10000;
       continue;
@@ -146,7 +146,7 @@ std::pair<Loc, Loc> GumbelEvaluator::SearchRoot(core::Probability& probability,
     gmove_info[i].logit = node->move_logits[i];
     gmove_info[i].gumbel_noise = probability.GumbelSample();
     gmove_info[i].move_encoding = i;
-    gmove_info[i].move_loc = board.AsLoc(i);
+    gmove_info[i].move_loc = game::AsLoc(i, game.board_len());
   }
 
   // reverse sort
@@ -166,14 +166,12 @@ std::pair<Loc, Loc> GumbelEvaluator::SearchRoot(core::Probability& probability,
 
       TreeNode* child = node->children[move_info.move_encoding].get();
       for (auto _ = 0; _ < visits_per_action; ++_) {
-        game::Board search_board = board;
-        std::vector<Loc> search_moves = moves;
-        search_board.Move(move_info.move_loc, color_to_move);
-        search_moves.emplace_back(move_info.move_loc);
+        game::Game search_game = game;
+        search_game.PlayMove(move_info.move_loc, color_to_move);
 
         std::vector<TreeNode*> search_path = SearchNonRoot(
-            search_board, child, search_moves,
-            game::OppositeColor(color_to_move), node->score_estimate);
+            search_game, child, game::OppositeColor(color_to_move),
+            node->score_estimate);
 
         // update tree
         Backward(search_path);
@@ -191,7 +189,8 @@ std::pair<Loc, Loc> GumbelEvaluator::SearchRoot(core::Probability& probability,
 
   AdvanceState(node);
 
-  game::Loc raw_nn_move = board.AsLoc(Argmax(node->move_logits));
+  game::Loc raw_nn_move =
+      game::AsLoc(Argmax(node->move_logits), game.board_len());
   return {raw_nn_move, gmove_info[0].move_loc};
 }
 
@@ -202,19 +201,19 @@ std::pair<Loc, Loc> GumbelEvaluator::SearchRoot(core::Probability& probability,
 // `root_score_estimate`: Value estimate for root node. Subsequent node score
 // estimates will be centered against this value.
 std::vector<TreeNode*> GumbelEvaluator::SearchNonRoot(
-    game::Board& board, TreeNode* node, std::vector<game::Loc>& moves,
-    int color_to_move, float root_score_estimate) {
+    game::Game& game, TreeNode* node, int color_to_move,
+    float root_score_estimate) {
   std::vector<TreeNode*> path = {node};
   if (node->state == TreeNodeState::kNew) {
     // leaf node. evaluate and return.
-    EvaluateLeaf(board, node, moves, color_to_move, root_score_estimate);
+    EvaluateLeaf(game, node, color_to_move, root_score_estimate);
     return path;
   }
 
   // internal node. Trace a single path until we hit a leaf, using a
   // deterministic paradigm.
   while (path.back()->state != TreeNodeState::kNew &&
-         !(path.back()->is_terminal) && !board.IsGameOver()) {
+         !(path.back()->is_terminal) && !game.IsGameOver()) {
     auto node = path.back();
     float v_mix = VMixed(node);
     float logits_improved[constants::kMaxNumMoves];
@@ -233,7 +232,7 @@ std::vector<TreeNode*> GumbelEvaluator::SearchNonRoot(
     int selected_action = 0;
     float max_disparity = -10000;
     for (auto i = 0; i < constants::kMaxNumMoves; ++i) {
-      if (!board.IsValidMove(board.AsLoc(i), color_to_move)) {
+      if (!game.IsValidMove(i, color_to_move)) {
         continue;
       }
 
@@ -250,9 +249,8 @@ std::vector<TreeNode*> GumbelEvaluator::SearchNonRoot(
       node->children[selected_action] = std::make_unique<TreeNode>();
     }
 
-    Loc move_loc = board.AsLoc(selected_action);
-    board.Move(move_loc, color_to_move);
-    moves.emplace_back(move_loc);
+    Loc move_loc = game::AsLoc(selected_action, game.board_len());
+    game.PlayMove(move_loc, color_to_move);
     path.emplace_back(node->children[selected_action].get());
     color_to_move = game::OppositeColor(color_to_move);
     AdvanceState(node);
@@ -262,12 +260,12 @@ std::vector<TreeNode*> GumbelEvaluator::SearchNonRoot(
   // or both.
   TreeNode* leaf_node = path.back();
   if (leaf_node->state == TreeNodeState::kNew) {
-    EvaluateLeaf(board, leaf_node, moves, color_to_move, root_score_estimate);
+    EvaluateLeaf(game, leaf_node, color_to_move, root_score_estimate);
   }
 
-  if (board.IsGameOver() && !leaf_node->is_terminal) {
+  if (game.IsGameOver() && !leaf_node->is_terminal) {
     // evaluate score
-    game::Scores scores = board.GetScores();
+    game::Scores scores = game.GetScores();
     float player_score =
         color_to_move == BLACK ? scores.black_score : scores.white_score;
     float opp_score =
@@ -276,7 +274,7 @@ std::vector<TreeNode*> GumbelEvaluator::SearchNonRoot(
         player_score - opp_score + constants::kScoreInflectionPoint;
     float empirical_q =
         (player_score > opp_score ? 1.0 : -1.0) +
-        ScoreTransform(final_score, root_score_estimate, board.length());
+        ScoreTransform(final_score, root_score_estimate, game.board_len());
     leaf_node->is_terminal = true;
     leaf_node->q = empirical_q;
   }
@@ -284,14 +282,13 @@ std::vector<TreeNode*> GumbelEvaluator::SearchNonRoot(
   return path;
 }
 
-void GumbelEvaluator::EvaluateLeaf(game::Board& board, TreeNode* node,
-                                   std::vector<game::Loc>& moves,
+void GumbelEvaluator::EvaluateLeaf(game::Game& game, TreeNode* node,
                                    int color_to_move,
                                    float root_score_estimate) {
-  InitTreeNode(node, board, moves, color_to_move);
+  InitTreeNode(node, game, color_to_move);
   float score_utility =
-      kScoreScale *
-      ScoreTransform(node->score_estimate, root_score_estimate, board.length());
+      kScoreScale * ScoreTransform(node->score_estimate, root_score_estimate,
+                                   game.board_len());
 
   node->n = 1;
   node->w = node->value_estimate + score_utility;
@@ -299,11 +296,10 @@ void GumbelEvaluator::EvaluateLeaf(game::Board& board, TreeNode* node,
   node->init_utility_estimate = node->w;
 }
 
-void GumbelEvaluator::InitTreeNode(TreeNode* node, const game::Board& board,
-                                   const std::vector<game::Loc>& moves,
+void GumbelEvaluator::InitTreeNode(TreeNode* node, const game::Game& game,
                                    int color_to_move) {
   DCHECK(node->state == TreeNodeState::kNew);
-  CHECK_OK(nn_interface_->LoadBatch(thread_id_, board, moves, color_to_move));
+  CHECK_OK(nn_interface_->LoadBatch(thread_id_, game, color_to_move));
   nn::NNInferResult infer_result =
       nn_interface_->GetInferenceResult(thread_id_);
 

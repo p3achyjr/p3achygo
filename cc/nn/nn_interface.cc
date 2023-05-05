@@ -176,15 +176,12 @@ absl::Status NNInterface::Initialize(std::string&& model_path) {
   TF_CHECK_OK(session_cast_output_->Create(gdef_cast_output_));
 
   infer_thread_ = std::move(std::thread(&NNInterface::InferLoop, this));
-  infer_thread_.detach();
-
   is_initialized_ = true;
 
   return absl::OkStatus();
 }
 
-absl::Status NNInterface::LoadBatch(int thread_id, const game::Board& board,
-                                    const std::vector<game::Loc> last_moves,
+absl::Status NNInterface::LoadBatch(int thread_id, const game::Game& game,
                                     int color_to_move) {
   if (!is_initialized_) {
     return absl::Status(
@@ -192,9 +189,9 @@ absl::Status NNInterface::LoadBatch(int thread_id, const game::Board& board,
         "Need to initialize NNInterface before using inference.");
   }
 
-  DCHECK(last_moves.size() >= constants::kNumLastMoves);
+  DCHECK(game.moves().size() >= constants::kNumLastMoves);
   NNBoardUtils::FillNNInput(thread_id, batch_size_, input_feature_buf_,
-                            input_state_buf_, board, color_to_move, last_moves);
+                            input_state_buf_, game, color_to_move);
 
   load_counter_->DecrementCount();
   return absl::OkStatus();

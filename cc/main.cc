@@ -46,5 +46,6 @@ int main(int argc, char** argv) {
     thread.join();
   }
 
+  LOG(INFO) << "Self-Play Done!";
   return 0;
 }

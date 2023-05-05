@@ -1,6 +1,5 @@
 #include "cc/game/zobrist.h"
 
-#include "absl/log/log.h"
 #include "cc/core/rand.h"
 
 namespace game {

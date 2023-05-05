@@ -1,7 +1,6 @@
 #ifndef __GAME_BOARD_H_
 #define __GAME_BOARD_H_
 
-#include <cstdint>
 #include <iostream>
 #include <optional>
 
@@ -10,6 +9,9 @@
 #include "absl/container/inlined_vector.h"
 #include "absl/log/check.h"
 #include "cc/constants/constants.h"
+#include "cc/core/util.h"
+#include "cc/game/color.h"
+#include "cc/game/loc.h"
 #include "cc/game/zobrist.h"
 
 namespace nn {
@@ -19,18 +21,7 @@ class NNBoardUtils;
 namespace game {
 
 using groupid = int;
-using color = int8_t;
-
-/*
- * Represents cartesian index into grid.
- */
-struct Loc {
-  int i;
-  int j;
-
-  // Index into a 1D representation of a 2D grid of length `len`.
-  int as_index(int len) { return i * len + j; }
-};
+using LocVec = absl::InlinedVector<Loc, constants::kMaxNumBoardLocs>;
 
 /*
  * State transition for a single point on the grid.
@@ -45,8 +36,10 @@ struct Transition {
  * A struct that fully describes the state transitions for a board from a move.
  */
 struct MoveInfo {
+  using Transitions =
+      absl::InlinedVector<Transition, constants::kMaxNumBoardLocs>;
   Transition stone_transition;
-  std::vector<Transition> capture_transitions;
+  Transitions capture_transitions;
 
   // internal
   Zobrist::Hash new_hash;
@@ -60,29 +53,15 @@ struct Scores {
   float white_score;
 };
 
-template <typename H>
-H AbslHashValue(H h, const Loc& loc) {
-  return H::combine(std::move(h), loc.i, loc.j);
-}
-
-inline bool operator==(const Loc& x, const Loc& y) {
-  return x.i == y.i && x.j == y.j;
-}
-
-inline std::ostream& operator<<(std::ostream& os, const Loc& loc) {
-  return os << "Loc(" << loc.i << ", " << loc.j << ")";
-}
-
 inline std::ostream& operator<<(std::ostream& os,
                                 const Transition& transition) {
   return os << transition.loc << ", last_piece: " << transition.last_piece
             << ", current_piece: " << transition.current_piece;
 }
 
-inline int OppositeColor(int color) { return -color; }
+inline int OppositeColor(color color) { return -color; }
 
-static constexpr Loc kNoopLoc = Loc{-1, -1};
-static constexpr Loc kPassLoc = Loc{19, 0};
+static constexpr int kInvalidMoveEncoding = -1;
 
 static constexpr groupid kInvalidGroupId = -1;
 static constexpr int kInvalidLiberties = -1;
@@ -107,7 +86,7 @@ class LocStack final {
   }
 
  private:
-  absl::InlinedVector<Loc, constants::kMaxNumBoardLocs> stack_;
+  LocVec stack_;
 };
 
 /*
@@ -155,7 +134,7 @@ class GroupTracker final {
   struct GroupInfo {
     int liberties;
     Loc root;
-    int color;
+    color color;
     bool is_valid;
   };
 
@@ -187,9 +166,9 @@ class GroupTracker final {
     BensonSolver(GroupTracker* group_tracker);
     ~BensonSolver() = default;
 
-    void CalculatePassAliveRegionForColor(int color);
-    GroupMap GetGroupMap(int color);
-    RegionMap GetRegionMap(int color);
+    void CalculatePassAliveRegionForColor(color color);
+    GroupMap GetGroupMap(color color);
+    RegionMap GetRegionMap(color color);
 
     void PopulateAdjacentRegions(GroupMap& group_map, RegionMap& region_map);
     void PopulateVitalRegions(GroupMap& group_map, RegionMap& region_map);
@@ -199,21 +178,20 @@ class GroupTracker final {
     GroupTracker* group_tracker_;
   };
 
-  using ExpandedGroup = absl::InlinedVector<Loc, constants::kMaxNumBoardLocs>;
   GroupTracker(int length);
   ~GroupTracker() = default;
 
   int length() const;
   groupid GroupAt(Loc loc) const;
-  groupid NewGroup(Loc loc, int color);
+  groupid NewGroup(Loc loc, color color);
   void AddToGroup(Loc loc, groupid id);
 
-  void Move(Loc loc, int color);
+  void Move(Loc loc, color color);
   int LibertiesAt(Loc loc) const;  // returns number of empty neighboring spots.
-  int LibertiesForGroup(groupid group_id) const;
+  int LibertiesForGroup(groupid gid) const;
   int LibertiesForGroupAt(Loc loc) const;
-  ExpandedGroup ExpandGroup(groupid group_id) const;
-  void RemoveCaptures(const std::vector<Loc>& captures);
+  LocVec ExpandGroup(groupid gid) const;
+  void RemoveCaptures(const LocVec& captures);
 
   // coalesces all groups adjacent to `loc` into a single group.
   groupid CoalesceGroups(Loc loc);
@@ -221,10 +199,10 @@ class GroupTracker final {
   // calculates pass-alive regions according to Benson's algorithm
   // https://senseis.xmp.net/?BensonsAlgorithm
   void CalculatePassAliveRegions();
-  void CalculatePassAliveRegionForColor(int color);
+  void CalculatePassAliveRegionForColor(color color);
 
   bool IsPassAlive(Loc loc) const;
-  bool IsPassAliveForColor(Loc loc, int color) const;
+  bool IsPassAliveForColor(Loc loc, color color) const;
 
   friend std::ostream& operator<<(std::ostream& os,
                                   const GroupTracker& group_tracker);
@@ -260,16 +238,14 @@ class Board final {
   Zobrist::Hash hash() const;
   int move_count() const;
 
-  bool IsValidMove(Loc loc, int color) const;
+  bool IsValidMove(Loc loc, color color) const;
   bool IsGameOver() const;
 
-  bool MoveBlack(int i, int j);
-  bool MoveWhite(int i, int j);
-  bool Move(Loc loc, int color);
-  bool MovePass(int color);
-  std::optional<MoveInfo> MoveDry(Loc loc, int color) const;
-  Loc AsLoc(int move) const;
-  int AsIndex(Loc loc) const;
+  bool PlayBlack(int i, int j);
+  bool PlayWhite(int i, int j);
+  bool PlayMove(Loc loc, color color);
+  bool Pass(color color);
+  std::optional<MoveInfo> PlayMoveDry(Loc loc, color color) const;
 
   Scores GetScores();
 
@@ -279,25 +255,25 @@ class Board final {
 
  private:
   int AtLoc(Loc loc) const;
-  void SetLoc(Loc loc, int color);
+  void SetLoc(Loc loc, color color);
 
-  bool IsSelfCapture(Loc loc, int color) const;
+  bool IsSelfCapture(Loc loc, color color) const;
   bool IsInAtari(Loc loc) const;
 
-  float Score(int color) const;
+  float Score(color color) const;
 
   std::vector<groupid> GetCapturedGroups(Loc loc, int captured_color) const;
-  absl::InlinedVector<Loc, 4> AdjacentOfColor(Loc loc, int color) const;
+  absl::InlinedVector<Loc, 4> AdjacentOfColor(Loc loc, color color) const;
   Zobrist::Hash RecomputeHash(
       const Transition& move_transition,
-      const std::vector<Transition>& capture_transitions) const;
+      const MoveInfo::Transitions& capture_transitions) const;
 
   const Zobrist& zobrist_;
   int length_;
   BoardData board_;
   int move_count_;
-  int pass_count_;
-  int total_pass_count_;
+  int consecutive_passes_;
+  int passes_;
   float komi_;
 
   // Hash value of empty board. Keep to avoid recomputing for each new game.
@@ -309,14 +285,40 @@ class Board final {
 
 inline std::ostream& operator<<(std::ostream& os,
                                 const GroupTracker& group_tracker) {
+  auto width = [](groupid gid) {
+    if (gid == kInvalidGroupId || gid == 0) {
+      return 1;
+    }
+
+    int width = 0;
+    while (gid > 0) {
+      gid /= 10;
+      ++width;
+    }
+
+    return width;
+  };
+
+  int col_widths[BOARD_LEN]{};
+  for (auto j = 0; j < group_tracker.length_; ++j) {
+    for (auto i = 0; i < group_tracker.length_; ++i) {
+      auto gid = group_tracker.GroupAt(Loc{i, j});
+      col_widths[j] = std::max(col_widths[j], width(gid));
+    }
+  }
+
   os << "----Groups----\n";
   for (auto i = 0; i < group_tracker.length_; i++) {
     for (auto j = 0; j < group_tracker.length_; j++) {
-      if (group_tracker.GroupAt(Loc{i, j}) == kInvalidGroupId) {
-        os << ". ";
-        continue;
+      auto gid = group_tracker.GroupAt(Loc{i, j});
+      int padding = col_widths[j] - width(gid) + 1;
+      if (gid == kInvalidGroupId) {
+        os << ".";
+      } else {
+        os << gid;
       }
-      os << group_tracker.GroupAt(Loc{i, j}) << " ";
+
+      os << std::string(padding, ' ');
     }
 
     os << "\n";
@@ -328,19 +330,20 @@ inline std::ostream& operator<<(std::ostream& os,
     auto root = group_tracker.group_info_map_[i].root;
     auto color = group_tracker.group_info_map_[i].color;
     auto is_valid = group_tracker.group_info_map_[i].is_valid;
-    os << "Group " << i << ": (liberties: " << liberties << ", color: " << color
-       << ", root: " << root << ", is_valid: " << is_valid << ")\n";
+    os << "Group " << i << ": (liberties: " << liberties
+       << ", color: " << static_cast<int>(color) << ", root: " << root
+       << ", is_valid: " << is_valid << ")\n";
   }
 
   os << "----Pass Alive Regions----\n";
   for (auto i = 0; i < group_tracker.length_; i++) {
     for (auto j = 0; j < group_tracker.length_; j++) {
       if (group_tracker.IsPassAliveForColor(Loc{i, j}, BLACK)) {
-        os << "o ";
+        os << "○ ";
       } else if (group_tracker.IsPassAliveForColor(Loc{i, j}, WHITE)) {
-        os << "x ";
+        os << "● ";
       } else {
-        os << ". ";
+        os << "⋅ ";
       }
     }
 
