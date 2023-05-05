@@ -53,7 +53,7 @@ int main(int argc, char** argv) {
 
   std::vector<Loc> move_history = {
       {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}};
-  game::Board board;
+  game::Game game;
   std::unique_ptr<nn::NNInterface> nn_interface =
       std::make_unique<nn::NNInterface>(1);
   CHECK_OK(nn_interface->Initialize(absl::GetFlag(FLAGS_model_path)));
@@ -64,8 +64,8 @@ int main(int argc, char** argv) {
 
   std::string line;
   int color_to_move = BLACK;
-  while (!board.IsGameOver()) {
-    CHECK_OK(nn_interface->LoadBatch(0, board, move_history, color_to_move));
+  while (!game.IsGameOver()) {
+    CHECK_OK(nn_interface->LoadBatch(0, game, color_to_move));
     nn::NNInferResult nn_result = nn_interface->GetInferenceResult(0);
 
     std::vector<std::pair<int, float>> moves;
@@ -81,8 +81,8 @@ int main(int argc, char** argv) {
     Loc move_loc;
     while (k < kMovesToTest) {
       move = moves[k].first;
-      move_loc = board.AsLoc(move);
-      if (board.Move(move_loc, color_to_move)) {
+      move_loc = game::AsLoc(move, game.board_len());
+      if (game.PlayMove(move_loc, color_to_move)) {
         break;
       }
 
@@ -93,14 +93,14 @@ int main(int argc, char** argv) {
     LOG(INFO) << "Top Move: " << move_loc;
     LOG(INFO) << "Win: " << nn_result.value_probability[0]
               << " Loss: " << nn_result.value_probability[1];
-    LOG(INFO) << "-----Board-----\n" << board;
+    LOG(INFO) << "-----Board-----\n" << game.board();
 
     move_history.emplace_back(move_loc);
     color_to_move = game::OppositeColor(color_to_move);
     sleep(1);
   }
 
-  game::Scores scores = board.GetScores();
+  game::Scores scores = game.GetScores();
 
   LOG(INFO) << "Game Over: ";
   LOG(INFO) << "  Black Score: " << scores.black_score;

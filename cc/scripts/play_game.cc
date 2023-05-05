@@ -1,5 +1,5 @@
 /*
- * Interactive script to enter moves on the board.
+ * Interactive script to enter moves on the game.
  *
  * Mainly for debugging.
  */
@@ -12,7 +12,7 @@
 #include "absl/log/log.h"
 #include "absl/status/statusor.h"
 #include "cc/constants/constants.h"
-#include "cc/game/board.h"
+#include "cc/game/game.h"
 #include "cc/nn/nn_interface.h"
 
 ABSL_FLAG(std::string, model_path, "", "Path to model.");
@@ -28,7 +28,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  game::Board board;
+  game::Game game;
   std::unique_ptr<nn::NNInterface> nn_interface =
       std::make_unique<nn::NNInterface>(1);
   CHECK_OK(nn_interface->Initialize(absl::GetFlag(FLAGS_model_path)));
@@ -48,11 +48,8 @@ int main(int argc, char** argv) {
     return loc;
   };
 
-  std::vector<game::Loc> move_history = {game::Loc{-1, -1}, game::Loc{-1, -1},
-                                         game::Loc{-1, -1}, game::Loc{-1, -1},
-                                         game::Loc{-1, -1}};
   int color_to_move = BLACK;
-  while (!board.IsGameOver()) {
+  while (!game.IsGameOver()) {
     while (true) {
       std::string move_str;
       std::cout << "Input Move:\n";
@@ -64,17 +61,16 @@ int main(int argc, char** argv) {
         continue;
       }
 
-      if (!board.Move(move, color_to_move)) {
+      if (!game.PlayMove(move, color_to_move)) {
         std::cout << "Invalid Move.\n";
         continue;
       }
 
-      move_history.emplace_back(move);
       break;
     }
 
-    std::cout << board << "\n";
-    CHECK_OK(nn_interface->LoadBatch(0, board, move_history, color_to_move));
+    std::cout << game.board() << "\n";
+    CHECK_OK(nn_interface->LoadBatch(0, game, color_to_move));
     nn::NNInferResult nn_result = nn_interface->GetInferenceResult(0);
 
     LOG(INFO) << "Loss: " << nn_result.value_probability[0]
