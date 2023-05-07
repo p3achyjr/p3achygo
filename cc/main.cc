@@ -11,6 +11,7 @@
 #include "absl/log/log.h"
 #include "absl/strings/str_format.h"
 #include "cc/nn/nn_interface.h"
+#include "cc/recorder/sgf_recorder.h"
 #include "cc/self_play_thread.h"
 
 ABSL_FLAG(std::string, model_path, "", "Path to model.");
@@ -34,10 +35,15 @@ int main(int argc, char** argv) {
       std::make_unique<nn::NNInterface>(num_threads);
   CHECK_OK(nn_interface->Initialize(absl::GetFlag(FLAGS_model_path)));
 
+  // initialize serialization objects.
+  std::unique_ptr<recorder::SgfRecorder> sgf_recorder =
+      recorder::SgfRecorder::Create("/home/axlui/sgf/", num_threads, 2);
+
   std::vector<std::thread> threads;
   for (int thread_id = 0; thread_id < num_threads; ++thread_id) {
     LOG(INFO) << "Spawning Thread " << thread_id << ".";
     std::thread thread(ExecuteSelfPlay, thread_id, nn_interface.get(),
+                       sgf_recorder.get(),
                        absl::StrFormat("/tmp/thread%d_log.txt", thread_id));
     threads.emplace_back(std::move(thread));
   }

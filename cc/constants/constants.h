@@ -59,6 +59,9 @@ static constexpr auto kNoopMoveEncoding = -1;
 /* Number of Passes before forbidding moves in pass-alive regions. */
 static constexpr auto kNumPassesBeforeBensons = 2;
 
+/* Maximum number of threads. */
+static constexpr auto kMaxNumThreads = 64;
+
 }  // namespace constants
 
 #endif  // __CONSTANTS_CONSTANTS_H_

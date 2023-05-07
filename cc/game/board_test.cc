@@ -157,12 +157,12 @@ TEST_CASE("BoardTest") {
     board.PlayBlack(1, 0);
     board.PlayBlack(1, 1);
     board.PlayBlack(1, 2);
+    board.Pass(BLACK);
     board.PlayBlack(1, 3);
 
     CHECK(board.PlayMoveDry(Loc{0, 0}, BLACK));
     CHECK(board.PlayMoveDry(Loc{0, 2}, BLACK));
 
-    board.Pass(BLACK);
     board.Pass(WHITE);
 
     CHECK_FALSE(board.PlayBlack(0, 0));
@@ -594,8 +594,6 @@ TEST_CASE("PassAliveTest") {
 
     groupid gid4 = group_tracker.NewGroup(Loc{0, 3}, BLACK);
 
-    std::cerr << group_tracker;
-
     group_tracker.CalculatePassAliveRegionForColor(BLACK);
 
     absl::flat_hash_set<Loc> pa_region = {};
@@ -604,6 +602,17 @@ TEST_CASE("PassAliveTest") {
 }
 
 TEST_CASE("ScoreTest") {
+  SUBCASE("Empty") {
+    game::Board board;
+
+    board.Pass(BLACK);
+    board.Pass(WHITE);
+
+    Scores scores = board.GetScores();
+    CHECK(scores.black_score == 0);
+    CHECK(scores.white_score == 7.5);
+  }
+
   // . . . o .
   // o o o x .
   SUBCASE("BlackCorner") {

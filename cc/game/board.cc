@@ -740,24 +740,22 @@ float Board::Score(color color) const {
       // only count empty coords in visitation. We will handle stones in loop.
       LocVisitor visitor(Loc{i, j});
       int region_score = 0;
-      bool is_region_counted = true;
+      bool seen_self_color = false;
+      bool seen_opp_color = false;
       bool is_pa_region = true;
       while (!visitor.Done()) {
         Loc loc = visitor.Next();
         if (AtLoc(loc) == color) {
+          seen_self_color = true;
           continue;
-        }
-
-        if (!group_tracker_.IsPassAliveForColor(loc, color)) {
-          is_pa_region = false;
         }
 
         // either empty region or opposite color
         if (AtLoc(loc) == OppositeColor(color)) {
-          if (is_pa_region) {
+          if (group_tracker_.IsPassAliveForColor(loc, color)) {
             region_score += 2;
           } else {
-            is_region_counted = false;
+            seen_opp_color = true;
           }
         } else {
           // empty region
@@ -770,7 +768,7 @@ float Board::Score(color color) const {
         }
       }
 
-      score += is_region_counted ? region_score : 0;
+      score += seen_self_color && !seen_opp_color ? region_score : 0;
     }
   }
 
