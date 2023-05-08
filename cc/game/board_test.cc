@@ -157,12 +157,12 @@ TEST_CASE("BoardTest") {
     board.PlayBlack(1, 0);
     board.PlayBlack(1, 1);
     board.PlayBlack(1, 2);
+    board.Pass(BLACK);
     board.PlayBlack(1, 3);
 
     CHECK(board.PlayMoveDry(Loc{0, 0}, BLACK));
     CHECK(board.PlayMoveDry(Loc{0, 2}, BLACK));
 
-    board.Pass(BLACK);
     board.Pass(WHITE);
 
     CHECK_FALSE(board.PlayBlack(0, 0));
@@ -284,7 +284,7 @@ TEST_CASE("GroupTrackerTest") {
 }
 
 bool PaRegionsMatch(GroupTracker& group_tracker,
-                    absl::flat_hash_set<Loc>& region, int color) {
+                    absl::flat_hash_set<Loc>&& region, int color) {
   for (int i = 0; i < group_tracker.length(); ++i) {
     for (int j = 0; j < group_tracker.length(); ++j) {
       bool loc_pass_alive = group_tracker.IsPassAliveForColor(Loc{i, j}, color);
@@ -320,7 +320,7 @@ TEST_CASE("PassAliveTest") {
 
     absl::flat_hash_set<Loc> pa_region = {{0, 0}, {0, 1}, {0, 2}, {0, 3},
                                           {1, 0}, {1, 1}, {1, 2}, {1, 3}};
-    CHECK(PaRegionsMatch(group_tracker, pa_region, BLACK));
+    CHECK(PaRegionsMatch(group_tracker, std::move(pa_region), BLACK));
   }
 
   // x . o . o
@@ -341,7 +341,7 @@ TEST_CASE("PassAliveTest") {
     absl::flat_hash_set<Loc> pa_region = {{0, 0}, {0, 1}, {0, 2}, {0, 3},
                                           {0, 4}, {1, 0}, {1, 1}, {1, 2},
                                           {1, 3}, {1, 4}};
-    CHECK(PaRegionsMatch(group_tracker, pa_region, BLACK));
+    CHECK(PaRegionsMatch(group_tracker, std::move(pa_region), BLACK));
   }
 
   // x x . o . o
@@ -364,7 +364,7 @@ TEST_CASE("PassAliveTest") {
     absl::flat_hash_set<Loc> pa_region = {{0, 0}, {0, 1}, {0, 2}, {0, 3},
                                           {0, 4}, {0, 5}, {1, 0}, {1, 1},
                                           {1, 2}, {1, 3}, {1, 4}, {1, 5}};
-    CHECK(PaRegionsMatch(group_tracker, pa_region, BLACK));
+    CHECK(PaRegionsMatch(group_tracker, std::move(pa_region), BLACK));
   }
 
   // . . . . . .
@@ -392,7 +392,7 @@ TEST_CASE("PassAliveTest") {
     group_tracker.CalculatePassAliveRegionForColor(BLACK);
 
     absl::flat_hash_set<Loc> pa_region = {};
-    CHECK(PaRegionsMatch(group_tracker, pa_region, BLACK));
+    CHECK(PaRegionsMatch(group_tracker, std::move(pa_region), BLACK));
   }
 
   // . . . . . .
@@ -430,7 +430,7 @@ TEST_CASE("PassAliveTest") {
         {1, 1}, {1, 2}, {1, 3}, {1, 4}, {1, 5}, {2, 0}, {2, 1}, {2, 2},
         {2, 3}, {2, 4}, {2, 5}, {3, 0}, {3, 1}, {3, 2}, {3, 3}, {3, 4},
         {3, 5}, {4, 0}, {4, 1}, {4, 2}, {4, 3}, {5, 1}, {5, 2}, {5, 3}};
-    CHECK(PaRegionsMatch(group_tracker, pa_region, BLACK));
+    CHECK(PaRegionsMatch(group_tracker, std::move(pa_region), BLACK));
   }
 
   // . . . . . .
@@ -463,7 +463,7 @@ TEST_CASE("PassAliveTest") {
     group_tracker.CalculatePassAliveRegionForColor(BLACK);
 
     absl::flat_hash_set<Loc> pa_region = {};
-    CHECK(PaRegionsMatch(group_tracker, pa_region, BLACK));
+    CHECK(PaRegionsMatch(group_tracker, std::move(pa_region), BLACK));
   }
 
   // . o . o
@@ -479,7 +479,7 @@ TEST_CASE("PassAliveTest") {
     group_tracker.CalculatePassAliveRegionForColor(BLACK);
 
     absl::flat_hash_set<Loc> pa_region = {};
-    CHECK(PaRegionsMatch(group_tracker, pa_region, BLACK));
+    CHECK(PaRegionsMatch(group_tracker, std::move(pa_region), BLACK));
   }
 
   // . . o . o . o o
@@ -505,7 +505,7 @@ TEST_CASE("PassAliveTest") {
     absl::flat_hash_set<Loc> pa_region = {
         {0, 0}, {0, 1}, {0, 2}, {0, 3}, {0, 4}, {0, 5}, {0, 6}, {0, 7}, {1, 0},
         {1, 1}, {1, 2}, {1, 3}, {1, 5}, {1, 6}, {1, 7}, {2, 6}, {2, 7}};
-    CHECK(PaRegionsMatch(group_tracker, pa_region, BLACK));
+    CHECK(PaRegionsMatch(group_tracker, std::move(pa_region), BLACK));
   }
 
   // . . . . o o .
@@ -563,8 +563,8 @@ TEST_CASE("PassAliveTest") {
     absl::flat_hash_set<Loc> pa_region_white = {{2, 2}, {2, 3}, {3, 1}, {3, 2},
                                                 {3, 3}, {3, 4}, {4, 1}, {4, 2},
                                                 {4, 3}, {4, 4}, {5, 2}, {5, 3}};
-    CHECK(PaRegionsMatch(group_tracker, pa_region_black, BLACK));
-    CHECK(PaRegionsMatch(group_tracker, pa_region_white, WHITE));
+    CHECK(PaRegionsMatch(group_tracker, std::move(pa_region_black), BLACK));
+    CHECK(PaRegionsMatch(group_tracker, std::move(pa_region_white), WHITE));
   }
 
   // . . . o .
@@ -594,16 +594,61 @@ TEST_CASE("PassAliveTest") {
 
     groupid gid4 = group_tracker.NewGroup(Loc{0, 3}, BLACK);
 
-    std::cerr << group_tracker;
-
     group_tracker.CalculatePassAliveRegionForColor(BLACK);
 
     absl::flat_hash_set<Loc> pa_region = {};
-    CHECK(PaRegionsMatch(group_tracker, pa_region, BLACK));
+    CHECK(PaRegionsMatch(group_tracker, std::move(pa_region), BLACK));
   }
 }
 
+bool OwnershipRegionsMatch(
+    const std::array<Color, BOARD_LEN * BOARD_LEN>& ownership, int board_len,
+    absl::flat_hash_set<Loc>&& bregion, absl::flat_hash_set<Loc>&& wregion) {
+  for (int i = 0; i < BOARD_LEN; ++i) {
+    for (int j = 0; j < BOARD_LEN; ++j) {
+      int idx = i * board_len + j;
+      if (ownership[idx] == BLACK) {
+        if (!bregion.contains(Loc{i, j})) {
+          std::cerr << "Black Region does not contain " << Loc{i, j} << "\n";
+          return false;
+        }
+
+        bregion.erase(Loc{i, j});
+      } else if (ownership[idx] == WHITE) {
+        if (!wregion.contains(Loc{i, j})) {
+          std::cerr << "White Region does not contain " << Loc{i, j} << "\n";
+          return false;
+        }
+
+        wregion.erase(Loc{i, j});
+      } else if (ownership[idx] != EMPTY) {
+        std::cerr << "Ownership contains unknown node " << Loc{i, j} << "\n";
+        return false;
+      }
+    }
+  }
+
+  if (!bregion.empty() || !wregion.empty()) {
+    std::cerr << "Stragglers found";
+    return false;
+  }
+
+  return true;
+}
+
 TEST_CASE("ScoreTest") {
+  SUBCASE("Empty") {
+    game::Board board;
+
+    board.Pass(BLACK);
+    board.Pass(WHITE);
+
+    Scores scores = board.GetScores();
+    CHECK(scores.black_score == 0);
+    CHECK(scores.white_score == 7.5);
+    CHECK(OwnershipRegionsMatch(scores.ownership, board.length(), {}, {}));
+  }
+
   // . . . o .
   // o o o x .
   SUBCASE("BlackCorner") {
@@ -622,6 +667,10 @@ TEST_CASE("ScoreTest") {
     Scores scores = board.GetScores();
     CHECK(scores.black_score == 7);
     CHECK(scores.white_score == 8.5);
+    CHECK(OwnershipRegionsMatch(scores.ownership, board.length(),
+                                {Loc{0, 0}, Loc{0, 1}, Loc{0, 2}, Loc{0, 3},
+                                 Loc{1, 0}, Loc{1, 1}, Loc{1, 2}},
+                                {Loc{1, 3}}));
   }
 
   // . x . o .
@@ -643,6 +692,9 @@ TEST_CASE("ScoreTest") {
     Scores scores = board.GetScores();
     CHECK(scores.black_score == 4);
     CHECK(scores.white_score == 9.5);
+    CHECK(OwnershipRegionsMatch(scores.ownership, board.length(),
+                                {Loc{0, 3}, Loc{1, 0}, Loc{1, 1}, Loc{1, 2}},
+                                {Loc{0, 1}, Loc{1, 3}}));
   }
 
   // . . . o
@@ -667,6 +719,12 @@ TEST_CASE("ScoreTest") {
     Scores scores = board.GetScores();
     CHECK(scores.black_score == 15);
     CHECK(scores.white_score == 8.5);
+    CHECK(OwnershipRegionsMatch(
+        scores.ownership, board.length(),
+        {Loc{0, 0}, Loc{0, 1}, Loc{0, 2}, Loc{0, 3}, Loc{1, 0}, Loc{1, 1},
+         Loc{1, 2}, Loc{1, 3}, Loc{2, 0}, Loc{2, 1}, Loc{2, 2}, Loc{2, 3},
+         Loc{3, 0}, Loc{3, 1}, Loc{3, 2}},
+        {Loc{3, 3}}));
   }
 
   // . . . x
@@ -691,6 +749,11 @@ TEST_CASE("ScoreTest") {
     Scores scores = board.GetScores();
     CHECK(scores.black_score == 1);
     CHECK(scores.white_score == 22.5);
+    CHECK(OwnershipRegionsMatch(
+        scores.ownership, board.length(), {Loc{3, 3}},
+        {Loc{0, 0}, Loc{0, 1}, Loc{0, 2}, Loc{0, 3}, Loc{1, 0}, Loc{1, 1},
+         Loc{1, 2}, Loc{1, 3}, Loc{2, 0}, Loc{2, 1}, Loc{2, 2}, Loc{2, 3},
+         Loc{3, 0}, Loc{3, 1}, Loc{3, 2}}));
   }
 
   // . x . x
@@ -715,6 +778,11 @@ TEST_CASE("ScoreTest") {
     Scores scores = board.GetScores();
     CHECK(scores.black_score == 1);
     CHECK(scores.white_score == 22.5);
+    CHECK(OwnershipRegionsMatch(
+        scores.ownership, board.length(), {Loc{3, 3}},
+        {Loc{0, 0}, Loc{0, 1}, Loc{0, 2}, Loc{0, 3}, Loc{1, 0}, Loc{1, 1},
+         Loc{1, 2}, Loc{1, 3}, Loc{2, 0}, Loc{2, 1}, Loc{2, 2}, Loc{2, 3},
+         Loc{3, 0}, Loc{3, 1}, Loc{3, 2}}));
   }
 
   // . . . . . . .
@@ -749,40 +817,12 @@ TEST_CASE("ScoreTest") {
     Scores scores = board.GetScores();
     CHECK(scores.black_score == 8);
     CHECK(scores.white_score == 18.5);
-  }
-
-  // . . . . . . .
-  // . o o o . . .
-  // . o . o . . .
-  // . o o x x x .
-  // . . x . . . x
-  // . . . x x x .
-  SUBCASE("DifferentColorRegions") {
-    game::Board board;
-
-    board.PlayBlack(1, 1);
-    board.PlayBlack(1, 2);
-    board.PlayBlack(1, 3);
-    board.PlayBlack(2, 1);
-    board.PlayBlack(2, 3);
-    board.PlayBlack(3, 1);
-    board.PlayBlack(3, 2);
-
-    board.PlayWhite(3, 3);
-    board.PlayWhite(3, 4);
-    board.PlayWhite(3, 5);
-    board.PlayWhite(4, 2);
-    board.PlayWhite(4, 6);
-    board.PlayWhite(5, 3);
-    board.PlayWhite(5, 4);
-    board.PlayWhite(5, 5);
-
-    board.Pass(BLACK);
-    board.Pass(WHITE);
-
-    Scores scores = board.GetScores();
-    CHECK(scores.black_score == 8);
-    CHECK(scores.white_score == 18.5);
+    CHECK(OwnershipRegionsMatch(
+        scores.ownership, board.length(),
+        {Loc{1, 1}, Loc{1, 2}, Loc{1, 3}, Loc{2, 1}, Loc{2, 2}, Loc{2, 3},
+         Loc{3, 1}, Loc{3, 2}},
+        {Loc{3, 3}, Loc{3, 4}, Loc{3, 5}, Loc{4, 2}, Loc{4, 3}, Loc{4, 4},
+         Loc{4, 5}, Loc{4, 6}, Loc{5, 3}, Loc{5, 4}, Loc{5, 5}}));
   }
 
   // . . . . . . .
@@ -816,6 +856,12 @@ TEST_CASE("ScoreTest") {
     Scores scores = board.GetScores();
     CHECK(scores.black_score == 16);
     CHECK(scores.white_score == 8.5);
+    CHECK(OwnershipRegionsMatch(
+        scores.ownership, board.length(),
+        {Loc{1, 1}, Loc{1, 2}, Loc{1, 3}, Loc{2, 1}, Loc{2, 2}, Loc{2, 3},
+         Loc{3, 2}, Loc{3, 3}, Loc{3, 4}, Loc{4, 2}, Loc{4, 3}, Loc{4, 4},
+         Loc{5, 2}, Loc{5, 3}, Loc{5, 4}},
+        {Loc{5, 5}}));
   }
 
   // x x x . o . o
@@ -852,6 +898,13 @@ TEST_CASE("ScoreTest") {
     Scores scores = board.GetScores();
     CHECK(scores.black_score == 26);
     CHECK(scores.white_score == 8.5);
+    CHECK(OwnershipRegionsMatch(
+        scores.ownership, board.length(),
+        {Loc{0, 0}, Loc{0, 1}, Loc{0, 2}, Loc{0, 3}, Loc{0, 4}, Loc{0, 5},
+         Loc{0, 6}, Loc{1, 0}, Loc{1, 1}, Loc{1, 2}, Loc{1, 3}, Loc{1, 4},
+         Loc{1, 5}, Loc{1, 6}, Loc{2, 3}, Loc{2, 4}, Loc{2, 5}, Loc{2, 6},
+         Loc{3, 3}, Loc{3, 4}, Loc{3, 5}},
+        {Loc{3, 6}}));
   }
 }
 

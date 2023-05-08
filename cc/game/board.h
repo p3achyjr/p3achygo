@@ -46,11 +46,12 @@ struct MoveInfo {
 };
 
 /*
- * Scores for both players.
+ * Scores and ownership for both players.
  */
 struct Scores {
   float black_score;
   float white_score;
+  std::array<Color, BOARD_LEN * BOARD_LEN> ownership;
 };
 
 inline std::ostream& operator<<(std::ostream& os,
@@ -59,7 +60,7 @@ inline std::ostream& operator<<(std::ostream& os,
             << ", current_piece: " << transition.current_piece;
 }
 
-inline int OppositeColor(color color) { return -color; }
+inline int OppositeColor(Color color) { return -color; }
 
 static constexpr int kInvalidMoveEncoding = -1;
 
@@ -134,7 +135,7 @@ class GroupTracker final {
   struct GroupInfo {
     int liberties;
     Loc root;
-    color color;
+    Color color;
     bool is_valid;
   };
 
@@ -166,9 +167,9 @@ class GroupTracker final {
     BensonSolver(GroupTracker* group_tracker);
     ~BensonSolver() = default;
 
-    void CalculatePassAliveRegionForColor(color color);
-    GroupMap GetGroupMap(color color);
-    RegionMap GetRegionMap(color color);
+    void CalculatePassAliveRegionForColor(Color color);
+    GroupMap GetGroupMap(Color color);
+    RegionMap GetRegionMap(Color color);
 
     void PopulateAdjacentRegions(GroupMap& group_map, RegionMap& region_map);
     void PopulateVitalRegions(GroupMap& group_map, RegionMap& region_map);
@@ -183,10 +184,10 @@ class GroupTracker final {
 
   int length() const;
   groupid GroupAt(Loc loc) const;
-  groupid NewGroup(Loc loc, color color);
+  groupid NewGroup(Loc loc, Color color);
   void AddToGroup(Loc loc, groupid id);
 
-  void Move(Loc loc, color color);
+  void Move(Loc loc, Color color);
   int LibertiesAt(Loc loc) const;  // returns number of empty neighboring spots.
   int LibertiesForGroup(groupid gid) const;
   int LibertiesForGroupAt(Loc loc) const;
@@ -199,10 +200,10 @@ class GroupTracker final {
   // calculates pass-alive regions according to Benson's algorithm
   // https://senseis.xmp.net/?BensonsAlgorithm
   void CalculatePassAliveRegions();
-  void CalculatePassAliveRegionForColor(color color);
+  void CalculatePassAliveRegionForColor(Color color);
 
   bool IsPassAlive(Loc loc) const;
-  bool IsPassAliveForColor(Loc loc, color color) const;
+  bool IsPassAliveForColor(Loc loc, Color color) const;
 
   friend std::ostream& operator<<(std::ostream& os,
                                   const GroupTracker& group_tracker);
@@ -216,7 +217,7 @@ class GroupTracker final {
 
   int length_;
   std::array<groupid, BOARD_LEN * BOARD_LEN> groups_;
-  std::array<color, BOARD_LEN * BOARD_LEN> pass_alive_;
+  std::array<Color, BOARD_LEN * BOARD_LEN> pass_alive_;
   absl::InlinedVector<GroupInfo, BOARD_LEN * BOARD_LEN> group_info_map_;
   int next_group_id_ = 0;
   absl::InlinedVector<groupid, BOARD_LEN * BOARD_LEN> available_group_ids_;
@@ -227,7 +228,7 @@ class GroupTracker final {
  */
 class Board final {
  public:
-  using BoardData = std::array<color, BOARD_LEN * BOARD_LEN>;
+  using BoardData = std::array<Color, BOARD_LEN * BOARD_LEN>;
   Board();
   Board(int length);
   ~Board() = default;
@@ -238,14 +239,14 @@ class Board final {
   Zobrist::Hash hash() const;
   int move_count() const;
 
-  bool IsValidMove(Loc loc, color color) const;
+  bool IsValidMove(Loc loc, Color color) const;
   bool IsGameOver() const;
 
   bool PlayBlack(int i, int j);
   bool PlayWhite(int i, int j);
-  bool PlayMove(Loc loc, color color);
-  bool Pass(color color);
-  std::optional<MoveInfo> PlayMoveDry(Loc loc, color color) const;
+  bool PlayMove(Loc loc, Color color);
+  bool Pass(Color color);
+  std::optional<MoveInfo> PlayMoveDry(Loc loc, Color color) const;
 
   Scores GetScores();
 
@@ -255,15 +256,16 @@ class Board final {
 
  private:
   int AtLoc(Loc loc) const;
-  void SetLoc(Loc loc, color color);
+  void SetLoc(Loc loc, Color color);
 
-  bool IsSelfCapture(Loc loc, color color) const;
+  bool IsSelfCapture(Loc loc, Color color) const;
   bool IsInAtari(Loc loc) const;
 
-  float Score(color color) const;
+  std::pair<float, std::array<Color, BOARD_LEN * BOARD_LEN>> ScoreAndOwnership(
+      Color color) const;
 
   std::vector<groupid> GetCapturedGroups(Loc loc, int captured_color) const;
-  absl::InlinedVector<Loc, 4> AdjacentOfColor(Loc loc, color color) const;
+  absl::InlinedVector<Loc, 4> AdjacentOfColor(Loc loc, Color color) const;
   Zobrist::Hash RecomputeHash(
       const Transition& move_transition,
       const MoveInfo::Transitions& capture_transitions) const;

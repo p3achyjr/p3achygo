@@ -12,7 +12,7 @@ namespace game {
  * Represents a move.
  */
 struct Move {
-  color color;
+  Color color;
   Loc loc;
 };
 

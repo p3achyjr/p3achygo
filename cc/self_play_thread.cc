@@ -1,5 +1,7 @@
 #include "cc/self_play_thread.h"
 
+#include <chrono>
+
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/strings/str_format.h"
@@ -9,6 +11,7 @@
 #include "cc/core/probability.h"
 #include "cc/game/game.h"
 #include "cc/mcts/gumbel.h"
+#include "cc/recorder/sgf_recorder.h"
 
 #define LOG_TO_SINK(severity, sink) LOG(severity).ToSinkOnly(&sink)
 
@@ -36,13 +39,11 @@ class ThreadSink : public absl::LogSink {
   FILE* const fp_;
 };
 
-static constexpr auto kGumbelK = 8;
-static constexpr auto kGumbelN = 64;
-
 }  // namespace
 
 void ExecuteSelfPlay(int thread_id, nn::NNInterface* nn_interface,
-                     std::string logfile) {
+                     recorder::SgfRecorder* sgf_recorder, std::string logfile,
+                     int gumbel_n, int gumbel_k, int max_num_moves) {
   ThreadSink sink(logfile.c_str());
   core::Probability probability(static_cast<uint64_t>(std::time(nullptr)) +
                                 thread_id);
@@ -54,11 +55,13 @@ void ExecuteSelfPlay(int thread_id, nn::NNInterface* nn_interface,
 
   mcts::GumbelEvaluator gumbel_evaluator(nn_interface, thread_id);
   auto color_to_move = BLACK;
-  while (!game.IsGameOver()) {
+  while (!game.IsGameOver() && game.move_num() < max_num_moves) {
     LOG_TO_SINK(INFO, sink) << "-------------------";
     LOG_TO_SINK(INFO, sink) << "Searching...";
+    auto begin = std::chrono::high_resolution_clock::now();
     std::pair<game::Loc, game::Loc> move_pair = gumbel_evaluator.SearchRoot(
-        probability, game, root_node.get(), color_to_move, kGumbelN, kGumbelK);
+        probability, game, root_node.get(), color_to_move, gumbel_n, gumbel_k);
+    auto end = std::chrono::high_resolution_clock::now();
     game::Loc nn_move = move_pair.first;
     game::Loc move = move_pair.second;
     game.PlayMove(move, color_to_move);
@@ -78,6 +81,11 @@ void ExecuteSelfPlay(int thread_id, nn::NNInterface* nn_interface,
                             << " Player to Move: " << root_node->color_to_move
                             << " Value: " << root_node->q;
     LOG_TO_SINK(INFO, sink) << "Board:\n" << game.board();
+    LOG_TO_SINK(INFO, sink)
+        << "Search Took "
+        << std::chrono::duration_cast<std::chrono::microseconds>(end - begin)
+               .count()
+        << "us";
     LOG(INFO) << "Thread " << thread_id << " moved";
   }
 
@@ -87,7 +95,17 @@ void ExecuteSelfPlay(int thread_id, nn::NNInterface* nn_interface,
   LOG_TO_SINK(INFO, sink) << "Black Score: " << scores.black_score;
   LOG_TO_SINK(INFO, sink) << "White Score: " << scores.white_score;
 
-  LOG_TO_SINK(INFO, sink) << "Final Board:\n" << game.board();
+  game.WriteResult();
+
+  auto begin = std::chrono::high_resolution_clock::now();
+  sgf_recorder->RecordGame(thread_id, game);
+  auto end = std::chrono::high_resolution_clock::now();
+
+  LOG_TO_SINK(INFO, sink)
+      << "Recording Game Took "
+      << std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin)
+             .count()
+      << "ns";
 }
 
 #undef LOG_TO_SINK
