@@ -39,13 +39,11 @@ class ThreadSink : public absl::LogSink {
   FILE* const fp_;
 };
 
-static constexpr auto kGumbelK = 2;
-static constexpr auto kGumbelN = 2;
-
 }  // namespace
 
 void ExecuteSelfPlay(int thread_id, nn::NNInterface* nn_interface,
-                     recorder::SgfRecorder* sgf_recorder, std::string logfile) {
+                     recorder::SgfRecorder* sgf_recorder, std::string logfile,
+                     int gumbel_n, int gumbel_k, int max_num_moves) {
   ThreadSink sink(logfile.c_str());
   core::Probability probability(static_cast<uint64_t>(std::time(nullptr)) +
                                 thread_id);
@@ -57,12 +55,12 @@ void ExecuteSelfPlay(int thread_id, nn::NNInterface* nn_interface,
 
   mcts::GumbelEvaluator gumbel_evaluator(nn_interface, thread_id);
   auto color_to_move = BLACK;
-  while (!game.IsGameOver()) {
+  while (!game.IsGameOver() && game.move_num() < max_num_moves) {
     LOG_TO_SINK(INFO, sink) << "-------------------";
     LOG_TO_SINK(INFO, sink) << "Searching...";
     auto begin = std::chrono::high_resolution_clock::now();
     std::pair<game::Loc, game::Loc> move_pair = gumbel_evaluator.SearchRoot(
-        probability, game, root_node.get(), color_to_move, kGumbelN, kGumbelK);
+        probability, game, root_node.get(), color_to_move, gumbel_n, gumbel_k);
     auto end = std::chrono::high_resolution_clock::now();
     game::Loc nn_move = move_pair.first;
     game::Loc move = move_pair.second;

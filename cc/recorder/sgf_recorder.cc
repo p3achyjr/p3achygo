@@ -1,7 +1,9 @@
 #include "cc/recorder/sgf_recorder.h"
 
+#include <filesystem>
 #include <memory>
 
+#include "absl/log/log.h"
 #include "absl/strings/str_format.h"
 #include "absl/synchronization/mutex.h"
 #include "cc/constants/constants.h"
@@ -13,6 +15,8 @@
 
 namespace recorder {
 namespace {
+
+namespace fs = std::filesystem;
 
 using ::game::Game;
 using ::game::Move;
@@ -105,17 +109,19 @@ void SgfRecorderImpl::Flush() {
       continue;
     }
 
-    std::string path = path_ + absl::StrFormat("game_%d.sgf", games_written_);
+    std::string path =
+        fs::path(path_) / absl::StrFormat("game_%d.sgf", games_written_);
     SgfSerializer serializer;
     for (const auto& sgf : thread_sgfs) {
       FILE* const sgf_file = fopen(path.c_str(), "w");
-      absl::FPrintF(sgf_file, "%s", serializer.Serialize(sgf.get()).c_str());
+      absl::FPrintF(sgf_file, "%s", serializer.Serialize(sgf.get()));
     }
     thread_sgfs.clear();
 
     ++games_written_;
   }
   games_buffered_ = 0;
+  LOG(INFO) << "Written " << games_written_ << " SGFs so far.";
 }
 }  // namespace
 
