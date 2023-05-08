@@ -29,15 +29,15 @@ float Game::komi() const { return board_.komi(); }
 
 bool Game::IsGameOver() const { return board_.IsGameOver(); }
 
-bool Game::IsValidMove(int index, color color) const {
+bool Game::IsValidMove(int index, Color color) const {
   return IsValidMove(AsLoc(index, board_len()), color);
 }
 
-bool Game::IsValidMove(Loc loc, color color) const {
+bool Game::IsValidMove(Loc loc, Color color) const {
   return board_.IsValidMove(loc, color);
 }
 
-bool Game::PlayMove(Loc loc, color color) {
+bool Game::PlayMove(Loc loc, Color color) {
   bool succeeded = board_.PlayMove(loc, color);
   if (succeeded) {
     moves_.emplace_back(game::Move{color, loc});
@@ -46,7 +46,7 @@ bool Game::PlayMove(Loc loc, color color) {
   return succeeded;
 }
 
-bool Game::Pass(color color) {
+bool Game::Pass(Color color) {
   bool succeeded = board_.Pass(color);
   if (succeeded) {
     moves_.emplace_back(game::Move{color, kPassLoc});

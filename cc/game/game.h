@@ -39,10 +39,10 @@ class Game final {
   float komi() const;
 
   bool IsGameOver() const;
-  bool IsValidMove(int index, color color) const;
-  bool IsValidMove(Loc loc, color color) const;
-  bool PlayMove(Loc loc, color color);
-  bool Pass(color color);
+  bool IsValidMove(int index, Color color) const;
+  bool IsValidMove(Loc loc, Color color) const;
+  bool PlayMove(Loc loc, Color color);
+  bool Pass(Color color);
 
   Scores GetScores();
   void WriteResult();

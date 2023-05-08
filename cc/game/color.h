@@ -4,7 +4,7 @@
 #include <cstdint>
 
 namespace game {
-using color = int8_t;
+using Color = int8_t;
 }
 
 #endif

@@ -70,7 +70,7 @@ groupid GroupTracker::GroupAt(Loc loc) const {
   return groups_[loc.as_index(length_)];
 }
 
-groupid GroupTracker::NewGroup(Loc loc, color color) {
+groupid GroupTracker::NewGroup(Loc loc, Color color) {
   // precondition: loc is not connected to any other group.
   int liberties = 0;
   std::vector<groupid> seen_groups;  // can only subtract up to 1 liberty from
@@ -121,7 +121,7 @@ void GroupTracker::AddToGroup(Loc loc, groupid gid) {
   SetLoc(loc, gid);
 }
 
-void GroupTracker::Move(Loc loc, color color) {
+void GroupTracker::Move(Loc loc, Color color) {
   absl::InlinedVector<groupid, 4> adjacent_groups;
   for (const Loc& nloc : Adjacent(loc, length_)) {
     if (ColorAt(nloc) != color) {
@@ -220,7 +220,7 @@ void GroupTracker::RemoveCaptures(const LocVec& captures) {
 
 groupid GroupTracker::CoalesceGroups(Loc loc) {
   groupid canonical_group_id = GroupAt(loc);
-  color color = ColorAt(loc);
+  Color color = ColorAt(loc);
   int liberties = 0;
 
   LocVisitor visitor(loc);
@@ -253,7 +253,7 @@ void GroupTracker::CalculatePassAliveRegions() {
   CalculatePassAliveRegionForColor(WHITE);
 }
 
-void GroupTracker::CalculatePassAliveRegionForColor(color color) {
+void GroupTracker::CalculatePassAliveRegionForColor(Color color) {
   BensonSolver benson_solver(this);
   benson_solver.CalculatePassAliveRegionForColor(color);
 }
@@ -262,7 +262,7 @@ bool GroupTracker::IsPassAlive(Loc loc) const {
   return pass_alive_[loc.as_index(length_)] != EMPTY;
 }
 
-bool GroupTracker::IsPassAliveForColor(Loc loc, color color) const {
+bool GroupTracker::IsPassAliveForColor(Loc loc, Color color) const {
   return pass_alive_[loc.as_index(length_)] == color;
 }
 
@@ -305,7 +305,7 @@ int GroupTracker::ColorAt(Loc loc) {
 GroupTracker::BensonSolver::BensonSolver(GroupTracker* group_tracker)
     : group_tracker_(group_tracker) {}
 
-void GroupTracker::BensonSolver::CalculatePassAliveRegionForColor(color color) {
+void GroupTracker::BensonSolver::CalculatePassAliveRegionForColor(Color color) {
   absl::flat_hash_map<groupid, BensonGroupInfo> group_map = GetGroupMap(color);
   absl::flat_hash_map<regionid, BensonRegionInfo> region_map =
       GetRegionMap(color);
@@ -335,7 +335,7 @@ void GroupTracker::BensonSolver::CalculatePassAliveRegionForColor(color color) {
   }
 }
 
-GroupMap GroupTracker::BensonSolver::GetGroupMap(color color) {
+GroupMap GroupTracker::BensonSolver::GetGroupMap(Color color) {
   absl::flat_hash_map<groupid, BensonGroupInfo> group_map;
 
   for (int gid = 0; gid < group_tracker_->group_info_map_.size(); ++gid) {
@@ -356,7 +356,7 @@ GroupMap GroupTracker::BensonSolver::GetGroupMap(color color) {
   return group_map;
 }
 
-RegionMap GroupTracker::BensonSolver::GetRegionMap(color color) {
+RegionMap GroupTracker::BensonSolver::GetRegionMap(Color color) {
   absl::flat_hash_map<regionid, BensonRegionInfo> region_map;
   // Find all small regions and populate them in `region_map`.
   int next_region_id = 1;
@@ -560,7 +560,7 @@ float Board::komi() const { return komi_; }
 Zobrist::Hash Board::hash() const { return hash_; }
 int Board::move_count() const { return move_count_; }
 
-bool Board::IsValidMove(Loc loc, color color) const {
+bool Board::IsValidMove(Loc loc, Color color) const {
   if (loc == kPassLoc) {
     return true;
   }
@@ -573,7 +573,7 @@ bool Board::IsGameOver() const { return consecutive_passes_ == 2; }
 bool Board::PlayBlack(int i, int j) { return PlayMove(Loc{i, j}, BLACK); }
 bool Board::PlayWhite(int i, int j) { return PlayMove(Loc{i, j}, WHITE); }
 
-bool Board::PlayMove(Loc loc, color color) {
+bool Board::PlayMove(Loc loc, Color color) {
   if (loc == kPassLoc) {
     return Pass(color);
   }
@@ -610,7 +610,7 @@ bool Board::PlayMove(Loc loc, color color) {
   return true;
 }
 
-bool Board::Pass(color color) {
+bool Board::Pass(Color color) {
   consecutive_passes_++;
   passes_++;
 
@@ -621,7 +621,7 @@ bool Board::Pass(color color) {
   return true;
 }
 
-std::optional<MoveInfo> Board::PlayMoveDry(Loc loc, color color) const {
+std::optional<MoveInfo> Board::PlayMoveDry(Loc loc, Color color) const {
   if (loc == kPassLoc) {
     return MoveInfo{Transition{loc, color, color}, MoveInfo::Transitions(),
                     hash_};
@@ -681,7 +681,25 @@ std::optional<MoveInfo> Board::PlayMoveDry(Loc loc, color color) const {
 Scores Board::GetScores() {
   // (re) calculate PA regions for score accuracy.
   group_tracker_.CalculatePassAliveRegions();
-  return Scores{Score(BLACK), Score(WHITE)};
+  std::pair<float, std::array<Color, BOARD_LEN* BOARD_LEN>> bscore_ownership =
+      ScoreAndOwnership(BLACK);
+  std::pair<float, std::array<Color, BOARD_LEN* BOARD_LEN>> wscore_ownership =
+      ScoreAndOwnership(WHITE);
+
+  std::array<Color, BOARD_LEN * BOARD_LEN> ownership;
+  for (int i = 0; i < length_; ++i) {
+    for (int j = 0; j < length_; ++j) {
+      int idx = i * length_ + j;
+      if (bscore_ownership.second[idx] == BLACK) {
+        ownership[idx] = BLACK;
+      } else if (wscore_ownership.second[idx] == WHITE) {
+        ownership[idx] = WHITE;
+      } else {
+        ownership[idx] = EMPTY;
+      }
+    }
+  }
+  return Scores{bscore_ownership.first, wscore_ownership.first, ownership};
 }
 
 std::string Board::ToString() const {
@@ -693,11 +711,11 @@ std::string Board::ToString() const {
 
 int Board::AtLoc(Loc loc) const { return board_[loc.as_index(length_)]; }
 
-void Board::SetLoc(Loc loc, color color) {
+void Board::SetLoc(Loc loc, Color color) {
   board_[loc.as_index(length_)] = color;
 }
 
-bool Board::IsSelfCapture(Loc loc, color color) const {
+bool Board::IsSelfCapture(Loc loc, Color color) const {
   bool adjacent_in_atari = true;
   for (Loc& loc : AdjacentOfColor(loc, color)) {
     if (!IsInAtari(loc)) {
@@ -717,8 +735,10 @@ bool Board::IsInAtari(Loc loc) const {
   return group_tracker_.LibertiesForGroupAt(loc) == 1;
 }
 
-float Board::Score(color color) const {
+std::pair<float, std::array<Color, BOARD_LEN * BOARD_LEN>>
+Board::ScoreAndOwnership(Color color) const {
   bool counted[BOARD_LEN][BOARD_LEN]{};
+  std::array<Color, BOARD_LEN * BOARD_LEN> ownership{};
   int score = 0;
   for (auto i = 0; i < length_; ++i) {
     for (auto j = 0; j < length_; ++j) {
@@ -729,20 +749,24 @@ float Board::Score(color color) const {
             group_tracker_.IsPassAliveForColor(Loc{i, j}, OppositeColor(color));
         if (!stone_is_dead) {
           ++score;
+          ownership[i * length_ + j] = color;
         }
 
+        counted[i][j] = true;
         continue;
       } else if (at(i, j) == OppositeColor(color)) {
+        counted[i][j] = true;
         continue;
       }
 
       // empty, unseen region.
-      // only count empty coords in visitation. We will handle stones in loop.
+      // only count empty + dead stones in visitor. Self-colored stones are
+      // handled in loop.
       LocVisitor visitor(Loc{i, j});
+      LocVec region;
       int region_score = 0;
       bool seen_self_color = false;
       bool seen_opp_color = false;
-      bool is_pa_region = true;
       while (!visitor.Done()) {
         Loc loc = visitor.Next();
         if (AtLoc(loc) == color) {
@@ -753,26 +777,35 @@ float Board::Score(color color) const {
         // either empty region or opposite color
         if (AtLoc(loc) == OppositeColor(color)) {
           if (group_tracker_.IsPassAliveForColor(loc, color)) {
+            region.emplace_back(loc);
             region_score += 2;
           } else {
             seen_opp_color = true;
           }
         } else {
           // empty region
-          counted[loc.i][loc.j] = true;
+          region.emplace_back(loc);
           ++region_score;
         }
 
+        counted[loc.i][loc.j] = true;
         for (const auto& nloc : Adjacent(loc, length_)) {
           visitor.Visit(nloc);
         }
       }
 
-      score += seen_self_color && !seen_opp_color ? region_score : 0;
+      bool count_region = seen_self_color && !seen_opp_color;
+      if (count_region) {
+        score += region_score;
+        for (const auto& loc : region) {
+          ownership[loc.i * length_ + loc.j] = color;
+        }
+      }
     }
   }
 
-  return static_cast<float>(score) + (color == WHITE ? komi_ : 0);
+  return std::make_pair(
+      static_cast<float>(score) + (color == WHITE ? komi_ : 0), ownership);
 }
 
 std::vector<groupid> Board::GetCapturedGroups(Loc loc,
@@ -791,7 +824,7 @@ std::vector<groupid> Board::GetCapturedGroups(Loc loc,
   return captured_groups;
 }
 
-absl::InlinedVector<Loc, 4> Board::AdjacentOfColor(Loc loc, color color) const {
+absl::InlinedVector<Loc, 4> Board::AdjacentOfColor(Loc loc, Color color) const {
   absl::InlinedVector<Loc, 4> adjacent_points;
 
   Loc left = Loc{loc.i - 1, loc.j};
