@@ -11,7 +11,7 @@
 #include "cc/core/probability.h"
 #include "cc/game/game.h"
 #include "cc/mcts/gumbel.h"
-#include "cc/recorder/sgf_recorder.h"
+#include "cc/recorder/game_recorder.h"
 
 #define LOG_TO_SINK(severity, sink) LOG(severity).ToSinkOnly(&sink)
 
@@ -42,7 +42,7 @@ class ThreadSink : public absl::LogSink {
 }  // namespace
 
 void ExecuteSelfPlay(int thread_id, nn::NNInterface* nn_interface,
-                     recorder::SgfRecorder* sgf_recorder, std::string logfile,
+                     recorder::GameRecorder* game_recorder, std::string logfile,
                      int gumbel_n, int gumbel_k, int max_num_moves) {
   ThreadSink sink(logfile.c_str());
   core::Probability probability(static_cast<uint64_t>(std::time(nullptr)) +
@@ -98,14 +98,14 @@ void ExecuteSelfPlay(int thread_id, nn::NNInterface* nn_interface,
   game.WriteResult();
 
   auto begin = std::chrono::high_resolution_clock::now();
-  sgf_recorder->RecordGame(thread_id, game);
+  game_recorder->RecordGame(thread_id, game);
   auto end = std::chrono::high_resolution_clock::now();
 
   LOG_TO_SINK(INFO, sink)
       << "Recording Game Took "
-      << std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin)
+      << std::chrono::duration_cast<std::chrono::microseconds>(end - begin)
              .count()
-      << "ns";
+      << "us";
 }
 
 #undef LOG_TO_SINK

@@ -79,7 +79,7 @@ TEST_CASE("SgfSerializer") {
   // . . o x . x
   // . . o x . x
   // o o o . x .
-  SUBCASE("WithResult") {
+  SUBCASE("WhiteWin") {
     SgfSerializer serializer;
     game::Game game = GameFromMoves(
         {Move{BLACK, Loc{0, 2}}, Move{WHITE, Loc{0, 3}}, Move{BLACK, Loc{1, 2}},
@@ -91,6 +91,26 @@ TEST_CASE("SgfSerializer") {
     CHECK_EQ(serializer.Serialize(ToSgfNode(game).get()),
              "(;FF[4]GM[1]KM[7.5]RE[W+5.5]PB[testB]PW[testW];B[ac];W[ad];B[bc]"
              ";W[bd];B[cc];W[ce];B[ca];W[bf];B[cb];W[af])\n");
+  }
+
+  // . . o .
+  // . . o .
+  // o o o x
+  SUBCASE("BlackWin") {
+    SgfSerializer serializer;
+    game::Game game = GameFromMoves({
+        Move{BLACK, Loc{0, 2}},
+        Move{BLACK, Loc{1, 2}},
+        Move{BLACK, Loc{2, 2}},
+        Move{BLACK, Loc{2, 0}},
+        Move{BLACK, Loc{2, 1}},
+        Move{WHITE, Loc{2, 3}},
+    });
+    game.WriteResult();
+
+    CHECK_EQ(serializer.Serialize(ToSgfNode(game).get()),
+             "(;FF[4]GM[1]KM[7.5]RE[B+0.5]PB[testB]PW[testW];B[ac];B[bc];B[cc]"
+             ";B[ca];B[cb];W[cd])\n");
   }
 
   SUBCASE("Branch") {

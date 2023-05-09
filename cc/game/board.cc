@@ -559,6 +559,7 @@ int Board::at(int i, int j) const { return board_[i * length_ + j]; }
 float Board::komi() const { return komi_; }
 Zobrist::Hash Board::hash() const { return hash_; }
 int Board::move_count() const { return move_count_; }
+const Board::BoardData& Board::position() const { return board_; }
 
 bool Board::IsValidMove(Loc loc, Color color) const {
   if (loc == kPassLoc) {

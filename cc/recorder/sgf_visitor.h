@@ -10,6 +10,9 @@ class SgfBMoveProp;
 class SgfWMoveProp;
 class SgfNode;
 
+/*
+ * Abstract base class for SGF visitors.
+ */
 class SgfVisitor {
  public:
   virtual void Visit(const SgfKomiProp* prop) = 0;

@@ -11,12 +11,12 @@ using ::game::Loc;
 static constexpr char kCoords[] = "abcdefghijklmnopqrst";
 
 std::string SgfString(const Game::Result& result) {
-  switch (result.tag) {
-    case Game::ResultTag::kBlackWinByScore:
-      return absl::StrFormat("B+%g", result.margin);
-    case Game::ResultTag::kWhiteWinByScore:
-      return absl::StrFormat("W+%g", result.margin);
-    case Game::ResultTag::kUnknown:
+  switch (result.winner) {
+    case BLACK:
+      return absl::StrFormat("B+%g", result.bscore - result.wscore);
+    case WHITE:
+      return absl::StrFormat("W+%g", result.wscore - result.bscore);
+    default:
       return "?";
   }
 }
