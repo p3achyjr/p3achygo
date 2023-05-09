@@ -40,7 +40,7 @@ class SgfRecorderImpl final : public SgfRecorder {
 
  private:
   std::unique_ptr<SgfNode> ToSgfNode(const Game& game);
-  void Flush() ABSL_LOCKS_EXCLUDED(mu_);
+  void Flush() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
 
   std::string path_;
   int num_threads_;
@@ -62,14 +62,12 @@ SgfRecorderImpl::SgfRecorderImpl(std::string path, int num_threads,
       flush_interval_(flush_interval) {}
 
 void SgfRecorderImpl::RecordGame(int thread_id, const Game& game) {
-  DCHECK(game.has_result());
+  CHECK(game.has_result());
   std::vector<std::unique_ptr<SgfNode>>& thread_sgfs = sgfs_[thread_id];
   thread_sgfs.emplace_back(ToSgfNode(game));
 
-  mu_.Lock();
+  absl::MutexLock lock(&mu_);
   ++games_buffered_;
-  mu_.Unlock();
-
   if (games_buffered_ >= flush_interval_) {
     Flush();
   }
@@ -102,7 +100,6 @@ std::unique_ptr<SgfNode> SgfRecorderImpl::ToSgfNode(const Game& game) {
 }
 
 void SgfRecorderImpl::Flush() {
-  absl::MutexLock lock(&mu_);
   for (int i = 0; i < num_threads_; ++i) {
     std::vector<std::unique_ptr<SgfNode>>& thread_sgfs = sgfs_[i];
     if (thread_sgfs.empty()) {
@@ -115,6 +112,7 @@ void SgfRecorderImpl::Flush() {
     for (const auto& sgf : thread_sgfs) {
       FILE* const sgf_file = fopen(path.c_str(), "w");
       absl::FPrintF(sgf_file, "%s", serializer.Serialize(sgf.get()));
+      fclose(sgf_file);
     }
     thread_sgfs.clear();
 

@@ -6,6 +6,9 @@
 
 namespace recorder {
 
+/*
+ * Class for serializing an SGF Tree.
+ */
 class SgfSerializer final : public SgfVisitor {
  public:
   SgfSerializer() = default;

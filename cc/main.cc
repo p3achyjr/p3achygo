@@ -12,15 +12,11 @@
 #include "absl/log/log.h"
 #include "absl/strings/str_format.h"
 #include "cc/nn/nn_interface.h"
-#include "cc/recorder/sgf_recorder.h"
+#include "cc/recorder/dir.h"
+#include "cc/recorder/game_recorder.h"
 #include "cc/self_play_thread.h"
 
-namespace {
 namespace fs = std::filesystem;
-
-static constexpr char kSgfDir[] = "sgf";
-static constexpr char kTfDir[] = "tf";
-}  // namespace
 
 ABSL_FLAG(std::string, model_path, "", "Path to model.");
 ABSL_FLAG(int, num_threads, 1, "Number of threads to use.");
@@ -49,8 +45,8 @@ int main(int argc, char** argv) {
     recorder_path = "/tmp/";
   }
 
-  fs::create_directory(recorder_path / kSgfDir);
-  fs::create_directory(recorder_path / kTfDir);
+  fs::create_directory(recorder_path / recorder::kSgfDir);
+  fs::create_directory(recorder_path / recorder::kTfDir);
 
   int num_threads = absl::GetFlag(FLAGS_num_threads);
   LOG(INFO) << "Max Hardware Concurrency: "
@@ -68,15 +64,15 @@ int main(int argc, char** argv) {
   CHECK_OK(nn_interface->Initialize(std::move(model_path)));
 
   // initialize serialization objects.
-  std::unique_ptr<recorder::SgfRecorder> sgf_recorder =
-      recorder::SgfRecorder::Create(recorder_path / kSgfDir, num_threads,
-                                    absl::GetFlag(FLAGS_flush_interval));
+  std::unique_ptr<recorder::GameRecorder> game_recorder =
+      recorder::GameRecorder::Create(recorder_path, num_threads,
+                                     absl::GetFlag(FLAGS_flush_interval));
 
   std::vector<std::thread> threads;
   for (int thread_id = 0; thread_id < num_threads; ++thread_id) {
     LOG(INFO) << "Spawning Thread " << thread_id << ".";
     std::thread thread(
-        ExecuteSelfPlay, thread_id, nn_interface.get(), sgf_recorder.get(),
+        ExecuteSelfPlay, thread_id, nn_interface.get(), game_recorder.get(),
         absl::StrFormat("/tmp/thread%d_log.txt", thread_id),
         absl::GetFlag(FLAGS_gumbel_n), absl::GetFlag(FLAGS_gumbel_k),
         absl::GetFlag(FLAGS_max_moves));

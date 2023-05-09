@@ -1,8 +1,36 @@
 package(default_visibility = ["//visibility:public"])
 
 cc_library(
+    name = "recorder",
+    deps = [
+        ":dir",
+        ":game_recorder",
+        ":sgf_recorder",
+        ":tf_recorder",
+    ],
+)
+
+cc_library(
+    name = "dir",
+    hdrs = ["dir.h"],
+)
+
+cc_library(
     name = "recorder_base",
     hdrs = ["recorder.h"],
+)
+
+cc_library(
+    name = "game_recorder",
+    srcs = ["game_recorder.cc"],
+    hdrs = ["game_recorder.h"],
+    deps = [
+        ":dir",
+        ":recorder_base",
+        ":sgf_recorder",
+        ":tf_recorder",
+        "//cc/game",
+    ],
 )
 
 cc_library(
@@ -15,6 +43,8 @@ cc_library(
         ":sgf_tree",
         "//cc/constants",
         "//cc/game",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/strings",
     ],
 )
 
@@ -51,5 +81,20 @@ cc_test(
     deps = [
         ":sgf_serializer",
         "//cc/core:doctest",
+    ],
+)
+
+cc_library(
+    name = "tf_recorder",
+    srcs = ["tf_recorder.cc"],
+    hdrs = ["tf_recorder.h"],
+    deps = [
+        ":recorder_base",
+        "//cc/constants",
+        "//cc/game",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/strings",
+        "@org_tensorflow//tensorflow/core:lib",
+        "@org_tensorflow//tensorflow/core/example:example_protos_cc",
     ],
 )

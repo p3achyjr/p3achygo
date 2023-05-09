@@ -8,7 +8,7 @@ cc_binary(
     deps = [
         ":self_play",
         "//cc/nn",
-        "//cc/recorder:sgf_recorder",
+        "//cc/recorder",
         "@com_google_absl//absl/flags:flag",
         "@com_google_absl//absl/flags:parse",
         "@com_google_absl//absl/log",
@@ -28,7 +28,7 @@ cc_library(
         "//cc/game",
         "//cc/mcts",
         "//cc/nn",
-        "//cc/recorder:sgf_recorder",
+        "//cc/recorder",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/strings",

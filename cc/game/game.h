@@ -14,15 +14,13 @@ namespace game {
  */
 class Game final {
  public:
-  enum class ResultTag {
-    kUnknown = 0,
-    kBlackWinByScore,
-    kWhiteWinByScore,
-  };
-
+  static constexpr int kMoveOffset = 5;
   struct Result {
-    ResultTag tag;
-    float margin;
+    Color winner;
+    float bscore;
+    float wscore;
+
+    std::array<Color, BOARD_LEN * BOARD_LEN> ownership;
   };
 
   Game();
@@ -31,9 +29,16 @@ class Game final {
 
   const Board& board() const;
   int board_len() const;
+
+  // returns moves _with_ noop padding at the beginning.
   const absl::InlinedVector<Move, constants::kMaxGameLen>& moves() const;
+
+  // returns number of _player made_ moves.
   int move_num() const;
+
+  // returns the `move_num`th _player made_ move.
   Move move(int move_num) const;
+
   Result result() const;
   bool has_result() const;
   float komi() const;
@@ -48,7 +53,6 @@ class Game final {
   void WriteResult();
 
  private:
-  static constexpr int kMoveOffset = 5;
   Board board_;
   absl::InlinedVector<struct Move, constants::kMaxGameLen> moves_;
   Result result_;

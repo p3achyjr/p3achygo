@@ -16,7 +16,7 @@ struct Loc {
   int j;
 
   // Index into a 1D representation of a 2D grid of length `len`.
-  int as_index(int len) { return i * len + j; }
+  int16_t as_index(int len) const { return i * len + j; }
 };
 
 inline Loc AsLoc(int encoding, int grid_len) {

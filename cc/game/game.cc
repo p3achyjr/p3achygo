@@ -7,7 +7,7 @@ namespace game {
 
 Game::Game()
     : moves_({kNoopMove, kNoopMove, kNoopMove, kNoopMove, kNoopMove}),
-      result_(Result{ResultTag::kUnknown, 0}) {}
+      result_(Result{EMPTY, 0, 0, {}}) {}
 
 const Board& Game::board() const { return board_; }
 
@@ -23,7 +23,7 @@ Move Game::move(int move_num) const { return moves_[move_num + kMoveOffset]; }
 
 Game::Result Game::result() const { return result_; }
 
-bool Game::has_result() const { return result_.tag != ResultTag::kUnknown; }
+bool Game::has_result() const { return result_.winner != EMPTY; }
 
 float Game::komi() const { return board_.komi(); }
 
@@ -60,13 +60,11 @@ Scores Game::GetScores() { return board_.GetScores(); }
 void Game::WriteResult() {
   Scores scores = GetScores();
   if (scores.black_score > scores.white_score) {
-    result_ = Result{ResultTag::kBlackWinByScore,
-                     scores.black_score - scores.white_score};
+    result_ =
+        Result{BLACK, scores.black_score, scores.white_score, scores.ownership};
   } else if (scores.white_score > scores.black_score) {
-    result_ = Result{ResultTag::kWhiteWinByScore,
-                     scores.white_score - scores.black_score};
-  } else {
-    result_ = Result{ResultTag::kUnknown, 0};
+    result_ =
+        Result{WHITE, scores.black_score, scores.white_score, scores.ownership};
   }
 }
 

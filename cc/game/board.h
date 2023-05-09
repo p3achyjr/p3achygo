@@ -238,6 +238,7 @@ class Board final {
   float komi() const;
   Zobrist::Hash hash() const;
   int move_count() const;
+  const BoardData& position() const;
 
   bool IsValidMove(Loc loc, Color color) const;
   bool IsGameOver() const;

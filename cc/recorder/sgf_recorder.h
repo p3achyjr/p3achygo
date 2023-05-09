@@ -1,6 +1,7 @@
 #ifndef __RECORDER_SGF_RECORDER_H_
 #define __RECORDER_SGF_RECORDER_H_
 
+#include <memory>
 #include <string>
 
 #include "absl/container/inlined_vector.h"
