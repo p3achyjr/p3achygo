@@ -4,7 +4,6 @@
 #include <sstream>
 
 #include "absl/log/check.h"
-#include "absl/log/log.h"
 #include "cc/core/util.h"
 
 namespace game {
@@ -566,25 +565,26 @@ bool Board::IsValidMove(Loc loc, Color color) const {
     return true;
   }
 
-  return PlayMoveDry(loc, color).has_value();
+  return MoveOk(PlayMoveDry(loc, color));
 }
 
 bool Board::IsGameOver() const { return consecutive_passes_ == 2; }
 
-bool Board::PlayBlack(int i, int j) { return PlayMove(Loc{i, j}, BLACK); }
-bool Board::PlayWhite(int i, int j) { return PlayMove(Loc{i, j}, WHITE); }
+MoveStatus Board::PlayBlack(int i, int j) { return PlayMove(Loc{i, j}, BLACK); }
+MoveStatus Board::PlayWhite(int i, int j) { return PlayMove(Loc{i, j}, WHITE); }
 
-bool Board::PlayMove(Loc loc, Color color) {
+MoveStatus Board::PlayMove(Loc loc, Color color) {
   if (loc == kPassLoc) {
     return Pass(color);
   }
 
-  std::optional<MoveInfo> move_info = PlayMoveDry(loc, color);
-  if (!move_info.has_value()) {
-    return false;
+  MoveResult move_result = PlayMoveDry(loc, color);
+  if (!MoveOk(move_result)) {
+    return move_result.status;
   }
 
   // reaching here means the move is valid. Mutable portion begins here.
+  std::optional<MoveInfo>& move_info = move_result.move_info;
 
   // remove captures.
   LocVec captured_stones;
@@ -608,10 +608,10 @@ bool Board::PlayMove(Loc loc, Color color) {
   hash_ = move_info->new_hash;
   seen_states_.insert(hash_);
 
-  return true;
+  return MoveStatus::kValid;
 }
 
-bool Board::Pass(Color color) {
+MoveStatus Board::Pass(Color color) {
   consecutive_passes_++;
   passes_++;
 
@@ -619,26 +619,22 @@ bool Board::Pass(Color color) {
     group_tracker_.CalculatePassAliveRegions();
   }
 
-  return true;
+  return MoveStatus::kValid;
 }
 
-std::optional<MoveInfo> Board::PlayMoveDry(Loc loc, Color color) const {
+MoveResult Board::PlayMoveDry(Loc loc, Color color) const {
   if (loc == kPassLoc) {
-    return MoveInfo{Transition{loc, color, color}, MoveInfo::Transitions(),
-                    hash_};
+    return MoveResult{MoveStatus::kValid,
+                      MoveInfo{Transition{loc, color, color},
+                               MoveInfo::Transitions(), hash_}};
   } else if (color != BLACK && color != WHITE) {
-    DLOG_EVERY_N_SEC(INFO, 5) << "Unknown Color: " << color;
-    return std::nullopt;
+    return MoveResult{MoveStatus::kUnknownColor, std::nullopt};
   } else if (loc.i < 0 || loc.i >= length_ || loc.j < 0 || loc.j >= length_) {
-    DLOG_EVERY_N_SEC(INFO, 5)
-        << "Out of Bounds. i: " << loc.i << " j: " << loc.j;
-    return std::nullopt;
+    return MoveResult{MoveStatus::kOutOfBounds, std::nullopt};
   } else if (AtLoc(loc) != EMPTY) {
-    DLOG_EVERY_N_SEC(INFO, 5) << "Board Position Not Empty: " << loc;
-    return std::nullopt;
+    return MoveResult{MoveStatus::kLocNotEmpty, std::nullopt};
   } else if (group_tracker_.IsPassAlive(loc)) {
-    DLOG_EVERY_N_SEC(INFO, 5) << "Loc is Pass Alive: " << loc;
-    return std::nullopt;
+    return MoveResult{MoveStatus::kPassAliveRegion, std::nullopt};
   }
 
   // check for captures.
@@ -647,9 +643,7 @@ std::optional<MoveInfo> Board::PlayMoveDry(Loc loc, Color color) const {
 
   // if no captures, check for self-atari.
   if (captured_groups.size() == 0 && IsSelfCapture(loc, color)) {
-    DLOG_EVERY_N_SEC(INFO, 5)
-        << "Played Self Capture Move at " << loc << " for Color " << color;
-    return std::nullopt;
+    return MoveResult{MoveStatus::kSelfCapture, std::nullopt};
   }
 
   // reaching here means the move is playable.
@@ -671,12 +665,11 @@ std::optional<MoveInfo> Board::PlayMoveDry(Loc loc, Color color) const {
   // check if we have already seen this board position.
   Zobrist::Hash hash = RecomputeHash(move_transition, capture_transitions);
   if (seen_states_.contains(hash)) {
-    DLOG_EVERY_N_SEC(INFO, 5) << "Already seen this board state. Move: " << loc
-                              << " Color: " << color;
-    return std::nullopt;
+    return MoveResult{MoveStatus::kRepeatedPosition, std::nullopt};
   }
 
-  return MoveInfo{move_transition, capture_transitions, hash};
+  return MoveResult{MoveStatus::kValid,
+                    MoveInfo{move_transition, capture_transitions, hash}};
 }
 
 Scores Board::GetScores() {

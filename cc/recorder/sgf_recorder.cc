@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <memory>
 
-#include "absl/log/log.h"
+#include "absl/log/check.h"
 #include "absl/strings/str_format.h"
 #include "absl/synchronization/mutex.h"
 #include "cc/constants/constants.h"
@@ -26,7 +26,7 @@ static constexpr char kP3achyGoName[] = "p3achygo";
 
 class SgfRecorderImpl final : public SgfRecorder {
  public:
-  SgfRecorderImpl(std::string path, int num_threads, int flush_interval);
+  SgfRecorderImpl(std::string path, int num_threads);
   ~SgfRecorderImpl() override = default;
 
   // Disable Copy and Move.
@@ -37,40 +37,25 @@ class SgfRecorderImpl final : public SgfRecorder {
 
   // Recorder Impl.
   void RecordGame(int thread_id, const Game& game) override;
+  void FlushThread(int thread_id, int games_written) override;
 
  private:
   std::unique_ptr<SgfNode> ToSgfNode(const Game& game);
-  void Flush() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
 
-  std::string path_;
-  int num_threads_;
+  const std::string path_;
+  const int num_threads_;
   std::array<std::vector<std::unique_ptr<SgfNode>>, constants::kMaxNumThreads>
       sgfs_;
-
-  absl::Mutex mu_;
-  int games_buffered_ ABSL_GUARDED_BY(mu_);
-  int games_written_ ABSL_GUARDED_BY(mu_);
-  int flush_interval_;
 };
 
-SgfRecorderImpl::SgfRecorderImpl(std::string path, int num_threads,
-                                 int flush_interval)
-    : path_(path),
-      num_threads_(num_threads),
-      games_buffered_(0),
-      games_written_(0),
-      flush_interval_(flush_interval) {}
+SgfRecorderImpl::SgfRecorderImpl(std::string path, int num_threads)
+    : path_(path), num_threads_(num_threads) {}
 
 void SgfRecorderImpl::RecordGame(int thread_id, const Game& game) {
   CHECK(game.has_result());
+
   std::vector<std::unique_ptr<SgfNode>>& thread_sgfs = sgfs_[thread_id];
   thread_sgfs.emplace_back(ToSgfNode(game));
-
-  absl::MutexLock lock(&mu_);
-  ++games_buffered_;
-  if (games_buffered_ >= flush_interval_) {
-    Flush();
-  }
 }
 
 std::unique_ptr<SgfNode> SgfRecorderImpl::ToSgfNode(const Game& game) {
@@ -99,32 +84,29 @@ std::unique_ptr<SgfNode> SgfRecorderImpl::ToSgfNode(const Game& game) {
   return root_node;
 }
 
-void SgfRecorderImpl::Flush() {
-  for (int i = 0; i < num_threads_; ++i) {
-    std::vector<std::unique_ptr<SgfNode>>& thread_sgfs = sgfs_[i];
-    if (thread_sgfs.empty()) {
-      continue;
-    }
-
-    std::string path =
-        fs::path(path_) / absl::StrFormat("game_%d.sgf", games_written_);
-    SgfSerializer serializer;
-    for (const auto& sgf : thread_sgfs) {
-      FILE* const sgf_file = fopen(path.c_str(), "w");
-      absl::FPrintF(sgf_file, "%s", serializer.Serialize(sgf.get()));
-      fclose(sgf_file);
-    }
-    thread_sgfs.clear();
-
-    ++games_written_;
+void SgfRecorderImpl::FlushThread(int thread_id, int games_written) {
+  std::vector<std::unique_ptr<SgfNode>>& thread_sgfs = sgfs_[thread_id];
+  if (thread_sgfs.empty()) {
+    return;
   }
-  games_buffered_ = 0;
-  LOG(INFO) << "Written " << games_written_ << " SGFs so far.";
+
+  SgfSerializer serializer;
+  for (const auto& sgf : thread_sgfs) {
+    std::string path =
+        fs::path(path_) / absl::StrFormat("game_%d.sgf", games_written);
+
+    FILE* const sgf_file = fopen(path.c_str(), "w");
+    absl::FPrintF(sgf_file, "%s", serializer.Serialize(sgf.get()));
+    fclose(sgf_file);
+
+    ++games_written;
+  }
+  thread_sgfs.clear();
 }
 }  // namespace
 
-/* static */ std::unique_ptr<SgfRecorder> SgfRecorder::Create(
-    std::string path, int num_threads, int flush_interval) {
-  return std::make_unique<SgfRecorderImpl>(path, num_threads, flush_interval);
+/* static */ std::unique_ptr<SgfRecorder> SgfRecorder::Create(std::string path,
+                                                              int num_threads) {
+  return std::make_unique<SgfRecorderImpl>(path, num_threads);
 }
 }  // namespace recorder

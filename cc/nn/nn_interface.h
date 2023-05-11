@@ -22,10 +22,10 @@ namespace nn {
 
 struct NNInferResult {
   float move_logits[constants::kMaxNumMoves];
-  float move_probabilities[constants::kMaxNumMoves];
-  float value_probability[constants::kNumValueLogits];
+  float move_probs[constants::kMaxNumMoves];
+  float value_probs[constants::kNumValueLogits];
   float ownership[constants::kMaxNumBoardLocs];
-  float score_probabilities[constants::kNumScoreLogits];
+  float score_probs[constants::kNumScoreLogits];
 };
 
 /*
@@ -79,12 +79,12 @@ class NNInterface final {
   std::unique_ptr<::tensorflow::Session> session_cast_output_;
 
   bool is_initialized_;
-  int num_threads_;
-  int batch_size_;
+  int num_threads_ ABSL_GUARDED_BY(mu_);
+  const int batch_size_;
 
   // Synchronization
-  std::unique_ptr<absl::BlockingCounter> load_counter_;
   absl::Mutex mu_;
+  std::unique_ptr<absl::BlockingCounter> load_counter_ ABSL_GUARDED_BY(mu_);
   std::vector<uint8_t> registered_;
   std::vector<uint8_t> batch_ready_;  // index `i` indicates whether
                                       // result for thread `i` is ready.

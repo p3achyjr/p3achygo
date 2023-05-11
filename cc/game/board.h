@@ -38,11 +38,33 @@ struct Transition {
 struct MoveInfo {
   using Transitions =
       absl::InlinedVector<Transition, constants::kMaxNumBoardLocs>;
+
   Transition stone_transition;
   Transitions capture_transitions;
 
   // internal
   Zobrist::Hash new_hash;
+};
+
+/*
+ * Status of attempted move.
+ */
+enum class MoveStatus : uint8_t {
+  kValid,
+  kUnknownColor,
+  kOutOfBounds,
+  kLocNotEmpty,
+  kPassAliveRegion,
+  kSelfCapture,
+  kRepeatedPosition,
+};
+
+/*
+ * A wrapper struct around `MoveInfo`.
+ */
+struct MoveResult {
+  MoveStatus status;
+  std::optional<MoveInfo> move_info;
 };
 
 /*
@@ -61,6 +83,10 @@ inline std::ostream& operator<<(std::ostream& os,
 }
 
 inline int OppositeColor(Color color) { return -color; }
+inline bool MoveOk(MoveStatus status) { return status == MoveStatus::kValid; }
+inline bool MoveOk(MoveResult result) {
+  return result.status == MoveStatus::kValid;
+}
 
 static constexpr int kInvalidMoveEncoding = -1;
 
@@ -243,11 +269,11 @@ class Board final {
   bool IsValidMove(Loc loc, Color color) const;
   bool IsGameOver() const;
 
-  bool PlayBlack(int i, int j);
-  bool PlayWhite(int i, int j);
-  bool PlayMove(Loc loc, Color color);
-  bool Pass(Color color);
-  std::optional<MoveInfo> PlayMoveDry(Loc loc, Color color) const;
+  MoveStatus PlayBlack(int i, int j);
+  MoveStatus PlayWhite(int i, int j);
+  MoveStatus PlayMove(Loc loc, Color color);
+  MoveStatus Pass(Color color);
+  MoveResult PlayMoveDry(Loc loc, Color color) const;
 
   Scores GetScores();
 

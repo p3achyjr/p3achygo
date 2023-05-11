@@ -96,6 +96,11 @@ build:debug --copt -g
 build:debug --copt -fstandalone-debug
 build:debug --compilation_mode=dbg
 
+build:optdebug --strip=never
+build:optdebug --copt -g
+build:optdebug --copt -fstandalone-debug
+build:optdebug --copt -O2
+
 build:opt --compilation_mode=opt
 build:opt --copt=-march=native
 build:opt --host_copt=-march=native

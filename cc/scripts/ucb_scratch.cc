@@ -202,16 +202,15 @@ int UcbRandomPlayout(game::Game& game, Tree& tree, int color_to_move,
       color = game::OppositeColor(color);
     } else {
       Loc loc = game::AsLoc(move, game.board_len());
-      std::optional<game::MoveInfo> move_info =
-          game.board().PlayMoveDry(loc, color);
-      if (!move_info.has_value()) {
+      game::MoveResult move_result = game.board().PlayMoveDry(loc, color);
+      if (!game::MoveOk(move_result)) {
         continue;
       }
 
       game.PlayMove(loc, color);
       color = game::OppositeColor(color);
       move_bucket.RemoveAt(move_index);
-      for (auto& transition : move_info->capture_transitions) {
+      for (auto& transition : move_result.move_info->capture_transitions) {
         move_bucket.Insert(transition.loc.as_index(game.board_len()));
       }
     }
@@ -365,15 +364,15 @@ Loc Ucb(game::Game game, Tree& tree, int color_to_move, int num_iterations) {
       child_game_state =
           GameState{game.board().hash(), game::OppositeColor(color_to_move)};
     } else {
-      std::optional<game::MoveInfo> move_info =
+      game::MoveResult move_result =
           game.board().PlayMoveDry(move_loc, color_to_move);
-      DCHECK(move_info.has_value());
-      if (!move_info.has_value()) {
+      DCHECK(MoveOk(move_result));
+      if (!move_result.move_info.has_value()) {
         continue;
       }
 
-      child_game_state =
-          GameState{move_info->new_hash, game::OppositeColor(color_to_move)};
+      child_game_state = GameState{move_result.move_info->new_hash,
+                                   game::OppositeColor(color_to_move)};
     }
 
     DCHECK(tree.contains(child_game_state));

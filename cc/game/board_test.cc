@@ -4,8 +4,6 @@
 #include "cc/core/doctest_include.h"
 #include "cc/game/zobrist.h"
 
-#define IN_UNIT_TEST
-
 namespace game {
 
 TEST_CASE("BoardTest") {
@@ -32,7 +30,7 @@ TEST_CASE("BoardTest") {
 
     board.PlayBlack(0, 0);
 
-    CHECK_FALSE(board.PlayWhite(0, 0));
+    CHECK_FALSE(MoveOk(board.PlayWhite(0, 0)));
     CHECK_EQ(board.at(0, 0), BLACK);
   }
 
@@ -41,7 +39,7 @@ TEST_CASE("BoardTest") {
 
     board.PlayBlack(0, 0);
 
-    CHECK(board.PlayWhite(1, 1));
+    CHECK(MoveOk(board.PlayWhite(1, 1)));
   }
 
   SUBCASE("NoSelfAtari") {
@@ -50,7 +48,7 @@ TEST_CASE("BoardTest") {
     board.PlayBlack(1, 0);
     board.PlayBlack(0, 1);
 
-    CHECK_FALSE(board.PlayWhite(0, 0));
+    CHECK_FALSE(MoveOk(board.PlayWhite(0, 0)));
   }
 
   SUBCASE("NoSelfAtariMultipleStones") {
@@ -65,7 +63,7 @@ TEST_CASE("BoardTest") {
 
     board.PlayWhite(3, 3);
 
-    CHECK_FALSE(board.PlayWhite(3, 4));
+    CHECK_FALSE(MoveOk(board.PlayWhite(3, 4)));
   }
 
   SUBCASE("BlackCapturesAdjacentWhite") {
@@ -74,7 +72,7 @@ TEST_CASE("BoardTest") {
     board.PlayBlack(0, 1);
     board.PlayWhite(0, 0);
 
-    CHECK(board.PlayBlack(1, 0));
+    CHECK(MoveOk(board.PlayBlack(1, 0)));
     CHECK(board.at(0, 0) == EMPTY);
   }
 
@@ -87,7 +85,7 @@ TEST_CASE("BoardTest") {
     board.PlayWhite(2, 1);
 
     CHECK(board.at(2, 1) == WHITE);
-    CHECK(board.PlayBlack(2, 0));
+    CHECK(MoveOk(board.PlayBlack(2, 0)));
     CHECK(board.at(2, 1) == EMPTY);
   }
 
@@ -106,7 +104,7 @@ TEST_CASE("BoardTest") {
     CHECK(board.at(1, 1) == WHITE);
     CHECK(board.at(2, 1) == WHITE);
 
-    CHECK(board.PlayBlack(1, 0));
+    CHECK(MoveOk(board.PlayBlack(1, 0)));
 
     CHECK(board.at(1, 1) == EMPTY);
     CHECK(board.at(2, 1) == EMPTY);
@@ -126,7 +124,7 @@ TEST_CASE("BoardTest") {
     board.PlayWhite(2, 2);
 
     CHECK(board.at(2, 3) == EMPTY);
-    CHECK_FALSE(board.PlayBlack(2, 3));
+    CHECK_FALSE(MoveOk(board.PlayBlack(2, 3)));
   }
 
   SUBCASE("SendTwoReturnOne") {
@@ -144,7 +142,7 @@ TEST_CASE("BoardTest") {
 
     CHECK(board.at(0, 0) == EMPTY);
     CHECK(board.at(1, 0) == EMPTY);
-    CHECK_FALSE(board.PlayBlack(1, 0));
+    CHECK_FALSE(MoveOk(board.PlayBlack(1, 0)));
   }
 
   // . o . o
@@ -160,13 +158,13 @@ TEST_CASE("BoardTest") {
     board.Pass(BLACK);
     board.PlayBlack(1, 3);
 
-    CHECK(board.PlayMoveDry(Loc{0, 0}, BLACK));
-    CHECK(board.PlayMoveDry(Loc{0, 2}, BLACK));
+    CHECK(MoveOk(board.PlayMoveDry(Loc{0, 0}, BLACK)));
+    CHECK(MoveOk(board.PlayMoveDry(Loc{0, 2}, BLACK)));
 
     board.Pass(WHITE);
 
-    CHECK_FALSE(board.PlayBlack(0, 0));
-    CHECK_FALSE(board.PlayBlack(0, 2));
+    CHECK_FALSE(MoveOk(board.PlayBlack(0, 0)));
+    CHECK_FALSE(MoveOk(board.PlayBlack(0, 2)));
   }
 }
 

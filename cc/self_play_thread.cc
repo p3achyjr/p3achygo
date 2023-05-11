@@ -43,69 +43,75 @@ class ThreadSink : public absl::LogSink {
 
 void ExecuteSelfPlay(int thread_id, nn::NNInterface* nn_interface,
                      recorder::GameRecorder* game_recorder, std::string logfile,
-                     int gumbel_n, int gumbel_k, int max_num_moves) {
+                     int gumbel_n, int gumbel_k, int max_moves) {
   ThreadSink sink(logfile.c_str());
   core::Probability probability(static_cast<uint64_t>(std::time(nullptr)) +
                                 thread_id);
 
-  // initialize game related objects.
-  game::Game game;
-  std::unique_ptr<mcts::TreeNode> root_node =
-      std::make_unique<mcts::TreeNode>();
+  // Main loop.
+  while (true) {
+    // Initialize game related objects.
+    game::Game game;
+    std::unique_ptr<mcts::TreeNode> root_node =
+        std::make_unique<mcts::TreeNode>();
 
-  mcts::GumbelEvaluator gumbel_evaluator(nn_interface, thread_id);
-  auto color_to_move = BLACK;
-  while (!game.IsGameOver() && game.move_num() < max_num_moves) {
-    LOG_TO_SINK(INFO, sink) << "-------------------";
-    LOG_TO_SINK(INFO, sink) << "Searching...";
+    mcts::GumbelEvaluator gumbel_evaluator(nn_interface, thread_id);
+    auto color_to_move = BLACK;
+    while (!game.IsGameOver() && game.move_num() < max_moves) {
+      LOG_TO_SINK(INFO, sink) << "-------------------";
+      LOG_TO_SINK(INFO, sink) << "Searching...";
+      auto begin = std::chrono::high_resolution_clock::now();
+      std::pair<game::Loc, game::Loc> move_pair =
+          gumbel_evaluator.SearchRoot(probability, game, root_node.get(),
+                                      color_to_move, gumbel_n, gumbel_k);
+      auto end = std::chrono::high_resolution_clock::now();
+      game::Loc nn_move = move_pair.first;
+      game::Loc move = move_pair.second;
+      game.PlayMove(move, color_to_move);
+      color_to_move = game::OppositeColor(color_to_move);
+      root_node =
+          std::move(root_node->children[move.as_index(game.board_len())]);
+
+      LOG_TO_SINK(INFO, sink) << "Raw NN Move: " << nn_move;
+      LOG_TO_SINK(INFO, sink) << "Gumbel Move: " << move;
+      LOG_TO_SINK(INFO, sink) << "Move Num: " << game.move_num();
+      LOG_TO_SINK(INFO, sink)
+          << "Last 5 Moves: " << game.move(game.move_num() - 5) << ", "
+          << game.move(game.move_num() - 4) << ", "
+          << game.move(game.move_num() - 3) << ", "
+          << game.move(game.move_num() - 2) << ", "
+          << game.move(game.move_num() - 1);
+      LOG_TO_SINK(INFO, sink) << "Tree Visit Count: " << root_node->n
+                              << " Player to Move: " << root_node->color_to_move
+                              << " Value: " << root_node->q;
+      LOG_TO_SINK(INFO, sink) << "Board:\n" << game.board();
+      LOG_TO_SINK(INFO, sink)
+          << "Search Took "
+          << std::chrono::duration_cast<std::chrono::microseconds>(end - begin)
+                 .count()
+          << "us";
+    }
+
+    nn_interface->UnregisterThread(thread_id);
+    game.WriteResult();
+
+    LOG_TO_SINK(INFO, sink) << "Black Score: " << game.result().bscore;
+    LOG_TO_SINK(INFO, sink) << "White Score: " << game.result().wscore;
+
     auto begin = std::chrono::high_resolution_clock::now();
-    std::pair<game::Loc, game::Loc> move_pair = gumbel_evaluator.SearchRoot(
-        probability, game, root_node.get(), color_to_move, gumbel_n, gumbel_k);
+    game_recorder->RecordGame(thread_id, game);
     auto end = std::chrono::high_resolution_clock::now();
-    game::Loc nn_move = move_pair.first;
-    game::Loc move = move_pair.second;
-    game.PlayMove(move, color_to_move);
-    color_to_move = game::OppositeColor(color_to_move);
-    root_node = std::move(root_node->children[move.as_index(game.board_len())]);
 
-    LOG_TO_SINK(INFO, sink) << "Raw NN Move: " << nn_move;
-    LOG_TO_SINK(INFO, sink) << "Gumbel Move: " << move;
-    LOG_TO_SINK(INFO, sink) << "Move Num: " << game.move_num();
     LOG_TO_SINK(INFO, sink)
-        << "Last 5 Moves: " << game.move(game.move_num() - 5) << ", "
-        << game.move(game.move_num() - 4) << ", "
-        << game.move(game.move_num() - 3) << ", "
-        << game.move(game.move_num() - 2) << ", "
-        << game.move(game.move_num() - 1);
-    LOG_TO_SINK(INFO, sink) << "Tree Visit Count: " << root_node->n
-                            << " Player to Move: " << root_node->color_to_move
-                            << " Value: " << root_node->q;
-    LOG_TO_SINK(INFO, sink) << "Board:\n" << game.board();
-    LOG_TO_SINK(INFO, sink)
-        << "Search Took "
+        << "Recording Game Took "
         << std::chrono::duration_cast<std::chrono::microseconds>(end - begin)
                .count()
         << "us";
-    LOG(INFO) << "Thread " << thread_id << " moved";
+
+    // Threads start off auto-registered, so doing this at the beginning of the
+    // loop is incorrect.
+    nn_interface->RegisterThread(thread_id);
   }
-
-  nn_interface->UnregisterThread(thread_id);
-  game::Scores scores = game.GetScores();
-
-  LOG_TO_SINK(INFO, sink) << "Black Score: " << scores.black_score;
-  LOG_TO_SINK(INFO, sink) << "White Score: " << scores.white_score;
-
-  game.WriteResult();
-
-  auto begin = std::chrono::high_resolution_clock::now();
-  game_recorder->RecordGame(thread_id, game);
-  auto end = std::chrono::high_resolution_clock::now();
-
-  LOG_TO_SINK(INFO, sink)
-      << "Recording Game Took "
-      << std::chrono::duration_cast<std::chrono::microseconds>(end - begin)
-             .count()
-      << "us";
 }
 
 #undef LOG_TO_SINK
