@@ -91,8 +91,8 @@ int main(int argc, char** argv) {
 
     LOG(INFO) << "------- Model Stats -------";
     LOG(INFO) << "Top Move: " << move_loc;
-    LOG(INFO) << "Win: " << nn_result.value_prob[0]
-              << " Loss: " << nn_result.value_prob[1];
+    LOG(INFO) << "Win: " << nn_result.value_probs[0]
+              << " Loss: " << nn_result.value_probs[1];
     LOG(INFO) << "-----Board-----\n" << game.board();
 
     move_history.emplace_back(move_loc);

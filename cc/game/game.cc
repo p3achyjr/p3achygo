@@ -38,21 +38,21 @@ bool Game::IsValidMove(Loc loc, Color color) const {
 }
 
 bool Game::PlayMove(Loc loc, Color color) {
-  bool succeeded = board_.PlayMove(loc, color);
-  if (succeeded) {
+  bool ok = MoveOk(board_.PlayMove(loc, color));
+  if (ok) {
     moves_.emplace_back(game::Move{color, loc});
   }
 
-  return succeeded;
+  return ok;
 }
 
 bool Game::Pass(Color color) {
-  bool succeeded = board_.Pass(color);
-  if (succeeded) {
+  bool ok = MoveOk(board_.Pass(color));
+  if (ok) {
     moves_.emplace_back(game::Move{color, kPassLoc});
   }
 
-  return succeeded;
+  return ok;
 }
 
 Scores Game::GetScores() { return board_.GetScores(); }
