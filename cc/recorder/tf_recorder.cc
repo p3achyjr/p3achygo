@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <memory>
 
-#include "absl/log/log.h"
+#include "absl/log/check.h"
 #include "absl/strings/str_format.h"
 #include "cc/constants/constants.h"
 #include "cc/game/board.h"
@@ -61,7 +61,7 @@ tensorflow::Example MakeTfExample(
 
 class TfRecorderImpl final : public TfRecorder {
  public:
-  TfRecorderImpl(std::string path, int num_threads, int flush_interval);
+  TfRecorderImpl(std::string path, int num_threads);
   ~TfRecorderImpl() = default;
 
   // Disable Copy and Move.
@@ -71,33 +71,22 @@ class TfRecorderImpl final : public TfRecorder {
   TfRecorderImpl& operator=(TfRecorderImpl&&) = delete;
 
   void RecordGame(int thread_id, const Game& game) override;
+  void FlushThread(int thread_id, int batch_num) override;
 
  private:
-  void Flush() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
-  std::string path_;
-  int num_threads_;
+  const std::string path_;
+  const int num_threads_;
 
   std::array<std::vector<tensorflow::Example>, constants::kMaxNumThreads>
       tf_examples_;
-
-  absl::Mutex mu_;
-  int games_buffered_ ABSL_GUARDED_BY(mu_);
-  int games_written_ ABSL_GUARDED_BY(mu_);
-  int batch_num_ ABSL_GUARDED_BY(mu_);
-  int flush_interval_;
 };
 
-TfRecorderImpl::TfRecorderImpl(std::string path, int num_threads,
-                               int flush_interval)
-    : path_(path),
-      num_threads_(num_threads),
-      games_buffered_(0),
-      games_written_(0),
-      batch_num_(0),
-      flush_interval_(flush_interval) {}
+TfRecorderImpl::TfRecorderImpl(std::string path, int num_threads)
+    : path_(path), num_threads_(num_threads) {}
 
 void TfRecorderImpl::RecordGame(int thread_id, const Game& game) {
   CHECK(game.has_result());
+
   std::vector<tensorflow::Example>& thread_tf_examples =
       tf_examples_[thread_id];
 
@@ -121,52 +110,35 @@ void TfRecorderImpl::RecordGame(int thread_id, const Game& game) {
                       move.color, game.komi(), game.board_len()));
     board.PlayMove(move.loc, move.color);
   }
-
-  absl::MutexLock lock(&mu_);
-  ++games_buffered_;
-  if (games_buffered_ >= flush_interval_) {
-    Flush();
-  }
 }
 
-void TfRecorderImpl::Flush() {
+void TfRecorderImpl::FlushThread(int thread_id, int batch_num) {
   std::string path =
-      fs::path(path_) / absl::StrFormat("batch_%d.tfrecord.zz", batch_num_);
+      fs::path(path_) / absl::StrFormat("batch_%d.tfrecord.zz", batch_num);
 
   std::unique_ptr<tensorflow::WritableFile> file;
   TF_CHECK_OK(tensorflow::Env::Default()->NewWritableFile(path, &file));
-
-  tensorflow::StringPiece fname;
-  TF_CHECK_OK(file->Name(&fname));
 
   RecordWriterOptions options;
   options.compression_type = RecordWriterOptions::ZLIB_COMPRESSION;
   options.zlib_options.compression_level = 2;
   RecordWriter writer(file.get(), options);
 
-  // TODO: test whether it's better to write into separate tfrecords.
-  for (const auto& thread_examples : tf_examples_) {
-    for (const auto& example : thread_examples) {
-      std::string data;
-      example.SerializeToString(&data);
-      TF_CHECK_OK(writer.WriteRecord(data));
-    }
+  std::vector<tensorflow::Example>& thread_examples = tf_examples_[thread_id];
+  for (const auto& example : thread_examples) {
+    std::string data;
+    example.SerializeToString(&data);
+    TF_CHECK_OK(writer.WriteRecord(data));
   }
 
   TF_CHECK_OK(writer.Close());
   TF_CHECK_OK(file->Close());
-
-  games_written_ += games_buffered_;
-  ++batch_num_;
-  games_buffered_ = 0;
-  LOG(INFO) << "Written " << batch_num_ << " batches and " << games_written_
-            << " games to TFRecord so far.";
 }
 }  // namespace
 
-/* static */ std::unique_ptr<TfRecorder> TfRecorder::Create(
-    std::string path, int num_threads, int flush_interval) {
-  return std::make_unique<TfRecorderImpl>(path, num_threads, flush_interval);
+/* static */ std::unique_ptr<TfRecorder> TfRecorder::Create(std::string path,
+                                                            int num_threads) {
+  return std::make_unique<TfRecorderImpl>(path, num_threads);
 }
 
 }  // namespace recorder

@@ -45,7 +45,7 @@ int log2(int x) {
   // x needs to be > 0
   int i = 1;
   while (x >> i > 0) {
-    i++;
+    ++i;
   }
 
   return i - 1;
@@ -306,16 +306,16 @@ void GumbelEvaluator::InitTreeNode(TreeNode* node, const game::Game& game,
   std::copy(infer_result.move_logits,
             infer_result.move_logits + constants::kMaxNumMoves,
             node->move_logits);
-  std::copy(infer_result.move_probabilities,
-            infer_result.move_probabilities + constants::kMaxNumMoves,
+  std::copy(infer_result.move_probs,
+            infer_result.move_probs + constants::kMaxNumMoves,
             node->move_probabilities);
 
-  float value_estimate = infer_result.value_probability[0] * -1 +
-                         infer_result.value_probability[1] * 1;
+  float value_estimate =
+      infer_result.value_probs[0] * -1 + infer_result.value_probs[1] * 1;
 
   float score_estimate = 0.0;
   for (auto i = 0; i < constants::kNumScoreLogits; ++i) {
-    score_estimate += (infer_result.score_probabilities[i] * i);
+    score_estimate += (infer_result.score_probs[i] * i);
   }
 
   node->color_to_move = color_to_move;

@@ -30,6 +30,7 @@ cc_library(
         ":sgf_recorder",
         ":tf_recorder",
         "//cc/game",
+        "@com_google_absl//absl/log",
     ],
 )
 
@@ -43,7 +44,7 @@ cc_library(
         ":sgf_tree",
         "//cc/constants",
         "//cc/game",
-        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/strings",
     ],
 )
@@ -92,7 +93,7 @@ cc_library(
         ":recorder_base",
         "//cc/constants",
         "//cc/game",
-        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/strings",
         "@org_tensorflow//tensorflow/core:lib",
         "@org_tensorflow//tensorflow/core/example:example_protos_cc",

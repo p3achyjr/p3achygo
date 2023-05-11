@@ -73,8 +73,8 @@ int main(int argc, char** argv) {
     CHECK_OK(nn_interface->LoadBatch(0, game, color_to_move));
     nn::NNInferResult nn_result = nn_interface->GetInferenceResult(0);
 
-    LOG(INFO) << "Loss: " << nn_result.value_probability[0]
-              << "Win: " << nn_result.value_probability[1];
+    LOG(INFO) << "Loss: " << nn_result.value_prob[0]
+              << "Win: " << nn_result.value_prob[1];
     color_to_move = game::OppositeColor(color_to_move);
   }
 }

@@ -8,9 +8,11 @@
 #include "absl/flags/flag.h"
 #include "absl/flags/parse.h"
 #include "absl/log/check.h"
+#include "absl/log/globals.h"
 #include "absl/log/initialize.h"
 #include "absl/log/log.h"
 #include "absl/strings/str_format.h"
+#include "cc/constants/constants.h"
 #include "cc/nn/nn_interface.h"
 #include "cc/recorder/dir.h"
 #include "cc/recorder/game_recorder.h"
@@ -31,6 +33,7 @@ ABSL_FLAG(int, max_moves, 600, "Maximum number of moves per game.");
 int main(int argc, char** argv) {
   absl::ParseCommandLine(argc, argv);
   absl::InitializeLog();
+  absl::SetStderrThreshold(absl::LogSeverity::kInfo);
 
   std::string model_path = absl::GetFlag(FLAGS_model_path);
   if (model_path == "") {
@@ -49,6 +52,12 @@ int main(int argc, char** argv) {
   fs::create_directory(recorder_path / recorder::kTfDir);
 
   int num_threads = absl::GetFlag(FLAGS_num_threads);
+  if (num_threads > constants::kMaxNumThreads) {
+    LOG(ERROR) << "Requesting " << num_threads << " threads, but only up to "
+               << constants::kMaxNumThreads << " is supported.";
+    return 1;
+  }
+
   LOG(INFO) << "Max Hardware Concurrency: "
             << std::thread::hardware_concurrency() << ". Using " << num_threads
             << " threads.";

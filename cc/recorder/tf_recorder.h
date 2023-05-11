@@ -11,6 +11,8 @@ namespace recorder {
 
 /*
  * Class responsible for recording games to TF examples.
+ *
+ * This class is thread safe-per thread, but not across threads.
  */
 class TfRecorder : public Recorder {
  public:
@@ -25,8 +27,10 @@ class TfRecorder : public Recorder {
   // Recorder Impl.
   void RecordGame(int thread_id, const game::Game& game) override = 0;
 
-  static std::unique_ptr<TfRecorder> Create(std::string path, int num_threads,
-                                            int flush_interval);
+  // Flushes all pending writes. Thread safe per-thread.
+  virtual void FlushThread(int thread_id, int batch_num) = 0;
+
+  static std::unique_ptr<TfRecorder> Create(std::string path, int num_threads);
 
  protected:
   TfRecorder() = default;

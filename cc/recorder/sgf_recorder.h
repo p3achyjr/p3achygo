@@ -12,6 +12,8 @@ namespace recorder {
 
 /*
  * Class responsible for recording games to SGFs.
+ *
+ * This class is not thread safe.
  */
 class SgfRecorder : public Recorder {
  public:
@@ -26,8 +28,10 @@ class SgfRecorder : public Recorder {
   // Recorder Impl.
   void RecordGame(int thread_id, const game::Game& game) override = 0;
 
-  std::unique_ptr<SgfRecorder> static Create(std::string path, int num_threads,
-                                             int flush_interval);
+  // Flushes all pending writes.
+  virtual void FlushThread(int thread_id, int games_written) = 0;
+
+  std::unique_ptr<SgfRecorder> static Create(std::string path, int num_threads);
 
  protected:
   SgfRecorder() = default;
