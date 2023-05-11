@@ -4,7 +4,6 @@
 #include <sstream>
 
 #include "absl/log/check.h"
-#include "absl/log/log.h"
 #include "cc/core/util.h"
 
 namespace game {
@@ -644,8 +643,6 @@ MoveResult Board::PlayMoveDry(Loc loc, Color color) const {
 
   // if no captures, check for self-atari.
   if (captured_groups.size() == 0 && IsSelfCapture(loc, color)) {
-    DLOG_EVERY_N_SEC(INFO, 5)
-        << "Played Self Capture Move at " << loc << " for Color " << color;
     return MoveResult{MoveStatus::kSelfCapture, std::nullopt};
   }
 
@@ -668,8 +665,6 @@ MoveResult Board::PlayMoveDry(Loc loc, Color color) const {
   // check if we have already seen this board position.
   Zobrist::Hash hash = RecomputeHash(move_transition, capture_transitions);
   if (seen_states_.contains(hash)) {
-    DLOG_EVERY_N_SEC(INFO, 5) << "Already seen this board state. Move: " << loc
-                              << " Color: " << color;
     return MoveResult{MoveStatus::kRepeatedPosition, std::nullopt};
   }
 
