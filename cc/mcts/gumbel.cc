@@ -166,7 +166,7 @@ std::pair<Loc, Loc> GumbelEvaluator::SearchRoot(core::Probability& probability,
 
       TreeNode* child = node->children[move_info.move_encoding].get();
       for (auto _ = 0; _ < visits_per_action; ++_) {
-        game::Game search_game = game;
+        Game search_game = game;
         search_game.PlayMove(move_info.move_loc, color_to_move);
 
         std::vector<TreeNode*> search_path = SearchNonRoot(
@@ -189,8 +189,7 @@ std::pair<Loc, Loc> GumbelEvaluator::SearchRoot(core::Probability& probability,
 
   AdvanceState(node);
 
-  game::Loc raw_nn_move =
-      game::AsLoc(Argmax(node->move_logits), game.board_len());
+  Loc raw_nn_move = game::AsLoc(Argmax(node->move_logits), game.board_len());
   return {raw_nn_move, gmove_info[0].move_loc};
 }
 
@@ -201,8 +200,7 @@ std::pair<Loc, Loc> GumbelEvaluator::SearchRoot(core::Probability& probability,
 // `root_score_estimate`: Value estimate for root node. Subsequent node score
 // estimates will be centered against this value.
 std::vector<TreeNode*> GumbelEvaluator::SearchNonRoot(
-    game::Game& game, TreeNode* node, int color_to_move,
-    float root_score_estimate) {
+    Game& game, TreeNode* node, int color_to_move, float root_score_estimate) {
   std::vector<TreeNode*> path = {node};
   if (node->state == TreeNodeState::kNew) {
     // leaf node. evaluate and return.
@@ -282,7 +280,7 @@ std::vector<TreeNode*> GumbelEvaluator::SearchNonRoot(
   return path;
 }
 
-void GumbelEvaluator::EvaluateLeaf(game::Game& game, TreeNode* node,
+void GumbelEvaluator::EvaluateLeaf(Game& game, TreeNode* node,
                                    int color_to_move,
                                    float root_score_estimate) {
   InitTreeNode(node, game, color_to_move);
@@ -296,7 +294,7 @@ void GumbelEvaluator::EvaluateLeaf(game::Game& game, TreeNode* node,
   node->init_utility_estimate = node->w;
 }
 
-void GumbelEvaluator::InitTreeNode(TreeNode* node, const game::Game& game,
+void GumbelEvaluator::InitTreeNode(TreeNode* node, const Game& game,
                                    int color_to_move) {
   DCHECK(node->state == TreeNodeState::kNew);
   CHECK_OK(nn_interface_->LoadBatch(thread_id_, game, color_to_move));
