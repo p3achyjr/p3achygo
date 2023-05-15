@@ -41,6 +41,8 @@ build --define=with_xla_support=true
 # Disable AWS/HDFS support by default
 build --define=no_aws_support=true
 build --define=no_hdfs_support=true
+build --define=no_kafka_support=true
+build --define=no_ignite_support=true
 
 # TF now has `cc_shared_library` targets, so it needs the experimental flag
 # TODO(rostam): Remove when `cc_shared_library` is enabled by default
@@ -92,18 +94,21 @@ build:asan --copt -fno-omit-frame-pointer
 build:asan --copt -fno-sanitize-blacklist
 build:asan --linkopt -fsanitize=address
 
-build:debug --copt -g
-build:debug --copt -fstandalone-debug
-build:debug --compilation_mode=dbg
+build:dbg --copt -g
+build:dbg --compilation_mode=dbg
+build:dbg --per_file_copt=+.*,-tensorflow.*@-g0
+build:dbg --per_file_copt=+tensorflow/core/kernels.*@-g0
 
-build:optdebug --strip=never
-build:optdebug --copt -g
-build:optdebug --copt -fstandalone-debug
-build:optdebug --copt -O2
+build:optdbg --config=dbg
+build:optdbg --copt -O2
+build:optdbg --copt=-Wno-sign-compare
+build:optdbg --host_copt=-Wno-sign-compare
 
 build:opt --compilation_mode=opt
 build:opt --copt=-march=native
 build:opt --host_copt=-march=native
+build:opt --copt=-Wno-sign-compare
+build:opt --host_copt=-Wno-sign-compare
 
 build:o3 --config=opt
 build:o3 --copt -O3
@@ -118,6 +123,11 @@ build:cuda --repo_env TF_NEED_CUDA=1
 build:cuda --crosstool_top=@local_config_cuda//crosstool:toolchain
 build:cuda --@local_config_cuda//:enable_cuda
 
+# This config refers to building CUDA op kernels with clang.
+build:cuda_clang --config=cuda
+build:cuda_clang --repo_env TF_CUDA_CLANG=1
+build:cuda_clang --@local_config_cuda//:cuda_compiler=clang
+
 build:tf_gpu --action_env PYTHON_BIN_PATH="/opt/conda/bin/python3"
 build:tf_gpu --action_env PYTHON_LIB_PATH="/bin"
 build:tf_gpu --python_path="/opt/conda/bin/python3"
@@ -129,5 +139,7 @@ build:tf_gpu --action_env CUDA_TOOLKIT_PATH="/usr/local/cuda-11.3"
 build:tf_gpu --action_env CUDNN_INSTALL_PATH="/usr/local/cuda"
 build:tf_gpu --action_env TF_CUDA_COMPUTE_CAPABILITIES="7.5"
 build:tf_gpu --action_env LD_LIBRARY_PATH="/usr/local/cuda/lib64:/usr/local/nccl2/lib:/usr/local/cuda/extras/CUPTI/lib64"
-build:tf_gpu --action_env GCC_HOST_COMPILER_PATH="/usr/bin/x86_64-linux-gnu-gcc-9"
+build:tf_gpu --action_env GCC_HOST_COMPILER_PATH="/usr/bin/x86_64-linux-gnu-gcc-8"
+build:tf_gpu --action_env CLANG_CUDA_COMPILER_PATH="/usr/lib/llvm-12/bin/clang"
 build:tf_gpu --config=cuda
+# build:tf_gpu --config=cuda_clang

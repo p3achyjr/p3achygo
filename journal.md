@@ -78,3 +78,25 @@ In term of direct work items, next up is:
 - Create a GKE cluster to orchestrate the entire thing.
 
 Lots to do :)
+
+## 5-12-2023
+
+This week I mainly worked on serializing things to disk. I also did lots of cleanup,
+including changing `Board` to use status codes, a `Game` object, getting continuous
+self-play to work, fixing thread registration/de-registration in `NNInterface`, and
+adding ownership to score computation. I also finally ripped off the bandaid and
+spun up my GPU instance. Building there is an absolute nightmare, but we finally have
+a working build.
+
+Next I will need to write a rsync process and a dataset shuffler. The rsync process
+should be simple--it will just ping a directory every 1-2 minutes for new games,
+and rsync new files when they pop up. The shuffler will be based off [this](https://www.moderndescartes.com/essays/shuffle_viz/).
+
+Other things to do:
+
+- Draw first `n` moves from raw policy net, where `n ~ [0, 30]`.
+- Reduce visit count near endgame when one side is sure to lose. These visit counts
+probably could be the minimum possible (`n=2, k=2`), since the policy net is pretty good.
+- Discourage passing, and maybe randomly continue play sometimes when we see a pass?
+The model is very happy to pass atm.
+- Implement [root position caching](https://arxiv.org/abs/2302.12359).

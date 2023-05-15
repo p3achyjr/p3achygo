@@ -1,8 +1,9 @@
 /*
- * Main function for standalone cc binary
+ * Main function for standalone cc binary.
  */
 
-#include <filesystem>
+#include <sys/stat.h>
+
 #include <thread>
 
 #include "absl/flags/flag.h"
@@ -13,12 +14,11 @@
 #include "absl/log/log.h"
 #include "absl/strings/str_format.h"
 #include "cc/constants/constants.h"
+#include "cc/core/filepath.h"
 #include "cc/nn/nn_interface.h"
 #include "cc/recorder/dir.h"
 #include "cc/recorder/game_recorder.h"
 #include "cc/self_play_thread.h"
-
-namespace fs = std::filesystem;
 
 ABSL_FLAG(std::string, model_path, "", "Path to model.");
 ABSL_FLAG(int, num_threads, 1, "Number of threads to use.");
@@ -27,7 +27,7 @@ ABSL_FLAG(int, gumbel_k, 8, "Number of top moves to consider in Gumbel MCTS.");
 ABSL_FLAG(std::string, recorder_path, "",
           "Path to write SGF files and TF examples. 'sgf' and 'tf' are "
           "appended to the path.");
-ABSL_FLAG(int, flush_interval, 100, "Number of games to buffer before flush.");
+ABSL_FLAG(int, flush_interval, 128, "Number of games to buffer before flush.");
 ABSL_FLAG(int, max_moves, 600, "Maximum number of moves per game.");
 
 int main(int argc, char** argv) {
@@ -41,15 +41,17 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  fs::path recorder_path = absl::GetFlag(FLAGS_recorder_path);
+  core::FilePath recorder_path(absl::GetFlag(FLAGS_recorder_path));
   if (recorder_path == "") {
     LOG(WARNING) << "No Recorder Path Specified. SGF and TF files will be "
                     "written to /tmp/";
     recorder_path = "/tmp/";
   }
 
-  fs::create_directory(recorder_path / recorder::kSgfDir);
-  fs::create_directory(recorder_path / recorder::kTfDir);
+  int perms =
+      S_IRUSR | S_IWUSR | S_IXUSR | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH;
+  mkdir((recorder_path / recorder::kSgfDir).c_str(), perms);
+  mkdir((recorder_path / recorder::kTfDir).c_str(), perms);
 
   int num_threads = absl::GetFlag(FLAGS_num_threads);
   if (num_threads > constants::kMaxNumThreads) {
