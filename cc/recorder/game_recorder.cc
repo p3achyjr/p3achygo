@@ -91,6 +91,7 @@ void GameRecorderImpl::IoThread() {
   while (running_.load(std::memory_order_acquire)) {
     mu_.LockWhen(absl::Condition(&should_flush_));
     LOG(INFO) << "Flushing...";
+
     auto begin = std::chrono::high_resolution_clock::now();
     for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
       thread_mus_[thread_id].Lock();

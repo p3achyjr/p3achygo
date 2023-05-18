@@ -47,6 +47,7 @@ void ExecuteSelfPlay(int thread_id, nn::NNInterface* nn_interface,
   ThreadSink sink(logfile.c_str());
   core::Probability probability(static_cast<uint64_t>(std::time(nullptr)) +
                                 thread_id);
+  auto search_dur_ema = 0;
 
   // Main loop.
   while (true) {
@@ -71,6 +72,27 @@ void ExecuteSelfPlay(int thread_id, nn::NNInterface* nn_interface,
       color_to_move = game::OppositeColor(color_to_move);
       root_node =
           std::move(root_node->children[move.as_index(game.board_len())]);
+      if (!root_node) {
+        // this is possible if pass is the only legal move found in search.
+        LOG(INFO) << "Root node is nullptr. "
+                  << "Last 5 Moves: " << game.move(game.move_num() - 5) << ", "
+                  << game.move(game.move_num() - 4) << ", "
+                  << game.move(game.move_num() - 3) << ", "
+                  << game.move(game.move_num() - 2) << ", "
+                  << game.move(game.move_num() - 1)
+                  << ", Move Count: " << game.move_num();
+        LOG(INFO) << "Board:\n" << game.board();
+        root_node = std::make_unique<mcts::TreeNode>();
+      }
+
+      auto search_dur =
+          std::chrono::duration_cast<std::chrono::microseconds>(end - begin)
+              .count();
+      if (game.move_num() > 1) {
+        search_dur_ema = search_dur_ema == 0
+                             ? search_dur
+                             : (search_dur_ema * 0.9 + search_dur * 0.1);
+      }
 
       LOG_TO_SINK(INFO, sink) << "Raw NN Move: " << nn_move;
       LOG_TO_SINK(INFO, sink) << "Gumbel Move: " << move;
@@ -85,11 +107,8 @@ void ExecuteSelfPlay(int thread_id, nn::NNInterface* nn_interface,
                               << " Player to Move: " << root_node->color_to_move
                               << " Value: " << root_node->q;
       LOG_TO_SINK(INFO, sink) << "Board:\n" << game.board();
-      LOG_TO_SINK(INFO, sink)
-          << "Search Took "
-          << std::chrono::duration_cast<std::chrono::microseconds>(end - begin)
-                 .count()
-          << "us";
+      LOG_TO_SINK(INFO, sink) << "Search Took " << search_dur
+                              << "us. Search EMA: " << search_dur_ema << "us.";
     }
 
     nn_interface->UnregisterThread(thread_id);

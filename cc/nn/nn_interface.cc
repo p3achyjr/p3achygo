@@ -66,11 +66,10 @@ NNInterface::NNInterface(int num_threads)
       is_initialized_(false),
       num_threads_(num_threads),
       batch_size_(num_threads),
-      load_counter_(std::make_unique<absl::BlockingCounter>(num_threads)),
-      registered_(std::vector<uint8_t>(num_threads_, static_cast<char>(true))),
-      batch_ready_(
-          std::vector<uint8_t>(num_threads_, static_cast<char>(false))),
-      running_(true) {
+      thread_info_(batch_size_),
+      running_(true),
+      last_infer_time_(
+          std::chrono::time_point<std::chrono::steady_clock>::max()) {
   input_feature_buf_ = Tensor(
       DataType::DT_FLOAT,
       {batch_size_, BOARD_LEN, BOARD_LEN, constants::kNumInputFeaturePlanes});
@@ -193,14 +192,16 @@ absl::Status NNInterface::LoadBatch(int thread_id, const game::Game& game,
   NNBoardUtils::FillNNInput(thread_id, batch_size_, input_feature_buf_,
                             input_state_buf_, game, color_to_move);
 
-  load_counter_->DecrementCount();
+  mu_.Lock();
+  thread_info_[thread_id].loaded = true;
+  mu_.Unlock();
+
   return absl::OkStatus();
 }
 
 NNInferResult NNInterface::GetInferenceResult(int thread_id) {
-  mu_.LockWhen(absl::Condition(
-      reinterpret_cast<bool*>(batch_ready_.data() + thread_id)));
-  batch_ready_[thread_id] = false;
+  mu_.LockWhen(absl::Condition(&thread_info_[thread_id].res_ready));
+  thread_info_[thread_id].res_ready = false;
   mu_.Unlock();
 
   const auto move_logits =
@@ -235,44 +236,28 @@ NNInferResult NNInterface::GetInferenceResult(int thread_id) {
 }
 
 void NNInterface::RegisterThread(int thread_id) {
-  mu_.Lock();
-  if (registered_[thread_id]) {
+  absl::MutexLock l(&mu_);
+  auto& thread = thread_info_[thread_id];
+  if (thread.registered) {
     LOG(WARNING) << "Thread " << thread_id << " already registered.";
     return;
   }
 
-  registered_[thread_id] = true;
+  thread.registered = true;
+  thread.loaded = false;
   ++num_threads_;
-  mu_.Unlock();
-
-  // Although `num_threads_` is incremented, `load_counter_` may have been
-  // created with a value of `num_threads_` that is stale. We call
-  // `GetInferenceResult` to mitigate this issue.
-  //
-  // `Infer` will create a new `load_counter_` with the value of `num_threads_`
-  // it sees, and set `batch_ready_` to true for each registered thread.
-  // `GetInferenceResult` waits until `batch_ready_[thread_id]` is true. Thus,
-  // when this call returns, we know that a call to `Infer()` has completed with
-  // the current thread registered.
-  //
-  // Since we protect both `registered_[thread_id]` and `++num_threads_` with
-  // the same mutex that guards `Infer()`, it is not possible for a call to
-  // `Infer()` to see `registered_[thread_id]` as true, but `num_threads_` as
-  // stale. Thus, we know that the `Infer()` call has seen the correct value of
-  // `num_threads_`, and created `load_counter_` correctly as well.
-  GetInferenceResult(thread_id);
 }
 
 void NNInterface::UnregisterThread(int thread_id) {
   absl::MutexLock l(&mu_);
-  if (!registered_[thread_id]) {
+  auto& thread = thread_info_[thread_id];
+  if (!thread.registered) {
     LOG(WARNING) << "Thread " << thread_id << " already unregistered.";
     return;
   }
 
   --num_threads_;
-  load_counter_->DecrementCount();
-  registered_[thread_id] = false;
+  thread.registered = false;
 }
 
 void NNInterface::InferLoop() {
@@ -282,10 +267,8 @@ void NNInterface::InferLoop() {
 }
 
 void NNInterface::Infer() {
-  load_counter_->Wait();
-  absl::MutexLock l(&mu_);
+  absl::MutexLock l(&mu_, absl::Condition(this, &NNInterface::ShouldInfer));
   if (num_threads_ == 0) {
-    load_counter_ = std::make_unique<absl::BlockingCounter>(num_threads_);
     return;
   }
 
@@ -318,12 +301,32 @@ void NNInterface::Infer() {
   input_feature_buf_.flat<float>().setZero();
   input_state_buf_.flat<float>().setZero();
 
-  load_counter_ = std::make_unique<absl::BlockingCounter>(num_threads_);
-  for (int thread_id = 0; thread_id < batch_ready_.size(); ++thread_id) {
-    if (registered_[thread_id]) {
-      batch_ready_[thread_id] = static_cast<char>(true);
+  for (auto& thread : thread_info_) {
+    if (thread.registered) {
+      thread.loaded = false;
+      thread.res_ready = true;
     }
   }
+
+  last_infer_time_ = std::chrono::steady_clock::now();
+}
+
+bool NNInterface::ShouldInfer() const {
+  auto now = std::chrono::steady_clock::now();
+  auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
+      now - last_infer_time_);
+  if (duration.count() >= kTimeoutUs) {
+    return true;
+  }
+
+  for (int thread_id = 0; thread_id < thread_info_.size(); ++thread_id) {
+    const auto& thread = thread_info_[thread_id];
+    if (thread.registered && !thread.loaded) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 }  // namespace nn

@@ -96,7 +96,6 @@ build:asan --linkopt -fsanitize=address
 
 build:dbg --copt -g
 build:dbg --compilation_mode=dbg
-build:dbg --per_file_copt=+.*,-tensorflow.*@-g0
 build:dbg --per_file_copt=+tensorflow/core/kernels.*@-g0
 
 build:optdbg --config=dbg
@@ -139,7 +138,7 @@ build:tf_gpu --action_env CUDA_TOOLKIT_PATH="/usr/local/cuda-11.3"
 build:tf_gpu --action_env CUDNN_INSTALL_PATH="/usr/local/cuda"
 build:tf_gpu --action_env TF_CUDA_COMPUTE_CAPABILITIES="7.5"
 build:tf_gpu --action_env LD_LIBRARY_PATH="/usr/local/cuda/lib64:/usr/local/nccl2/lib:/usr/local/cuda/extras/CUPTI/lib64"
-build:tf_gpu --action_env GCC_HOST_COMPILER_PATH="/usr/bin/x86_64-linux-gnu-gcc-8"
+build:tf_gpu --action_env GCC_HOST_COMPILER_PATH="/usr/bin/x86_64-linux-gnu-gcc-9"
 build:tf_gpu --action_env CLANG_CUDA_COMPILER_PATH="/usr/lib/llvm-12/bin/clang"
 build:tf_gpu --config=cuda
 # build:tf_gpu --config=cuda_clang

@@ -2,11 +2,12 @@
 #define __NN_INTERFACE_H_
 
 #include <atomic>
+#include <chrono>
 #include <thread>
 
+#include "absl/container/inlined_vector.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
-#include "absl/synchronization/blocking_counter.h"
 #include "cc/constants/constants.h"
 #include "cc/game/game.h"
 #include "tensorflow/cc/client/client_session.h"
@@ -54,12 +55,20 @@ class NNInterface final {
                          int color_to_move);
   NNInferResult GetInferenceResult(int thread_id) ABSL_LOCKS_EXCLUDED(mu_);
 
-  void RegisterThread(int thread_id);
-  void UnregisterThread(int thread_id);
+  void RegisterThread(int thread_id) ABSL_LOCKS_EXCLUDED(mu_);
+  void UnregisterThread(int thread_id) ABSL_LOCKS_EXCLUDED(mu_);
 
  private:
+  static constexpr int64_t kTimeoutUs = 30000;
+  struct ThreadInfo {
+    bool registered = true;
+    bool loaded = false;
+    bool res_ready = false;
+  };
+
   void InferLoop();
   void Infer() ABSL_LOCKS_EXCLUDED(mu_);
+  bool ShouldInfer() const;
 
   ::tensorflow::SavedModelBundleLite model_bundle_;
   ::tensorflow::SessionOptions session_options_;
@@ -84,14 +93,13 @@ class NNInterface final {
 
   // Synchronization
   absl::Mutex mu_;
-  std::unique_ptr<absl::BlockingCounter> load_counter_ ABSL_GUARDED_BY(mu_);
-  std::vector<uint8_t> registered_;
-  std::vector<uint8_t> batch_ready_;  // index `i` indicates whether
-                                      // result for thread `i` is ready.
+  absl::InlinedVector<ThreadInfo, constants::kMaxNumThreads> thread_info_;
 
-  // inference thread. Runs inference until told to stop.
+  // Inference thread. Runs inference until told to stop.
   std::thread infer_thread_;
   std::atomic<bool> running_;
+
+  std::chrono::time_point<std::chrono::steady_clock> last_infer_time_;
 };
 
 }  // namespace nn
