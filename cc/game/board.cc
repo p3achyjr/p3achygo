@@ -9,6 +9,8 @@
 namespace game {
 namespace {
 
+using namespace ::core;
+
 using GroupMap = GroupTracker::BensonSolver::GroupMap;
 using RegionMap = GroupTracker::BensonSolver::RegionMap;
 
@@ -34,26 +36,6 @@ inline absl::InlinedVector<Loc, 4> Adjacent(Loc loc, int length) {
   }
 
   return adjacent_points;
-}
-
-template <typename T>
-inline bool VecContains(const std::vector<T> vec, T x) {
-  return std::find(vec.begin(), vec.end(), x) != vec.end();
-}
-
-template <typename T, size_t N>
-inline bool InlinedVecContains(const absl::InlinedVector<T, N> vec, T x) {
-  return std::find(vec.begin(), vec.end(), x) != vec.end();
-}
-
-template <typename K>
-inline bool SetContains(const absl::flat_hash_set<K> set, K x) {
-  return set.find(x) != set.end();
-}
-
-template <typename K, typename V>
-inline bool MapContains(const absl::flat_hash_map<K, V> map, K x) {
-  return map.find(x) != map.end();
 }
 
 }  // namespace

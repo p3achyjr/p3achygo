@@ -10,7 +10,7 @@ namespace core {
  */
 class Probability final {
  public:
-  explicit Probability(int seed);
+  explicit Probability(uint64_t seed);
   Probability() = default;
   ~Probability() = default;
 
@@ -18,8 +18,14 @@ class Probability final {
   Probability(Probability const&) = delete;
   Probability& operator=(Probability const&) = delete;
 
+  // returns underlying prng
+  PRng& prng();
+
   // returns a sample x ~ Gumbel(0, 1)
   float GumbelSample();
+
+  // returns a sample x ~ Uniform(0, 1)
+  float Uniform();
 
  private:
   PRng prng_;

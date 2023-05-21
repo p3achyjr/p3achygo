@@ -34,6 +34,16 @@ class PRng final {
   uint64_t next64();
   absl::uint128 next128();
 
+  // UniformRandomBitGenerator Impl.
+  using result_type = uint32_t;
+  static constexpr result_type min() {
+    return std::numeric_limits<result_type>::min();
+  }
+  static constexpr result_type max() {
+    return std::numeric_limits<result_type>::max();
+  }
+  result_type operator()() { return next(); }
+
  private:
   uint64_t state_[4];
 };
