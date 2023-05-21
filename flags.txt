@@ -1,0 +1,5 @@
+--model_path=/home/axlui/p3achygo/models/model_sl_332705
+--num_threads=8
+--gumbel_k=8
+--gumbel_n=64
+--flush_interval=128

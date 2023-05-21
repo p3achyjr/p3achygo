@@ -1,11 +1,11 @@
 #include "cc/recorder/tf_recorder.h"
 
-#include <filesystem>
 #include <memory>
 
 #include "absl/log/check.h"
 #include "absl/strings/str_format.h"
 #include "cc/constants/constants.h"
+#include "cc/core/filepath.h"
 #include "cc/game/board.h"
 #include "cc/game/color.h"
 #include "tensorflow/core/example/example.pb.h"
@@ -13,8 +13,6 @@
 
 namespace recorder {
 namespace {
-
-namespace fs = std::filesystem;
 
 using ::game::Board;
 using ::game::Color;
@@ -24,6 +22,8 @@ using ::game::Move;
 
 using ::tensorflow::io::RecordWriter;
 using ::tensorflow::io::RecordWriterOptions;
+
+using ::core::FilePath;
 
 template <typename T, size_t N>
 tensorflow::Feature MakeBytesFeature(const std::array<T, N>& data) {
@@ -71,7 +71,7 @@ class TfRecorderImpl final : public TfRecorder {
   TfRecorderImpl& operator=(TfRecorderImpl&&) = delete;
 
   void RecordGame(int thread_id, const Game& game) override;
-  void FlushThread(int thread_id, int batch_num) override;
+  void FlushThread(int thread_id) override;
 
  private:
   const std::string path_;
@@ -79,10 +79,11 @@ class TfRecorderImpl final : public TfRecorder {
 
   std::array<std::vector<tensorflow::Example>, constants::kMaxNumThreads>
       tf_examples_;
+  int batch_num_;
 };
 
 TfRecorderImpl::TfRecorderImpl(std::string path, int num_threads)
-    : path_(path), num_threads_(num_threads) {}
+    : path_(path), num_threads_(num_threads), batch_num_(0) {}
 
 void TfRecorderImpl::RecordGame(int thread_id, const Game& game) {
   CHECK(game.has_result());
@@ -112,9 +113,16 @@ void TfRecorderImpl::RecordGame(int thread_id, const Game& game) {
   }
 }
 
-void TfRecorderImpl::FlushThread(int thread_id, int batch_num) {
+void TfRecorderImpl::FlushThread(int thread_id) {
+  // this function assumes that it is not called concurrently. It also assumes
+  // that no thread calls `RecordGame` while this function is running.
+  std::vector<tensorflow::Example>& thread_examples = tf_examples_[thread_id];
+  if (thread_examples.empty()) {
+    return;
+  }
+
   std::string path =
-      fs::path(path_) / absl::StrFormat("batch_%d.tfrecord.zz", batch_num);
+      FilePath(path_) / absl::StrFormat("batch_%d.tfrecord.zz", batch_num_);
 
   std::unique_ptr<tensorflow::WritableFile> file;
   TF_CHECK_OK(tensorflow::Env::Default()->NewWritableFile(path, &file));
@@ -124,7 +132,6 @@ void TfRecorderImpl::FlushThread(int thread_id, int batch_num) {
   options.zlib_options.compression_level = 2;
   RecordWriter writer(file.get(), options);
 
-  std::vector<tensorflow::Example>& thread_examples = tf_examples_[thread_id];
   for (const auto& example : thread_examples) {
     std::string data;
     example.SerializeToString(&data);
@@ -133,6 +140,8 @@ void TfRecorderImpl::FlushThread(int thread_id, int batch_num) {
 
   TF_CHECK_OK(writer.Close());
   TF_CHECK_OK(file->Close());
+
+  ++batch_num_;
 }
 }  // namespace
 

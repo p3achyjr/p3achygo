@@ -27,40 +27,40 @@
 namespace constants {
 
 /* Maximum number of board locations */
-static constexpr auto kMaxNumBoardLocs = BOARD_LEN * BOARD_LEN;
+static constexpr int kMaxNumBoardLocs = BOARD_LEN * BOARD_LEN;
 
 /* Maximum number of moves allowed per board state */
-static constexpr auto kMaxNumMoves = BOARD_LEN * BOARD_LEN + 1;
+static constexpr int kMaxNumMoves = BOARD_LEN * BOARD_LEN + 1;
 
 /* Maximum number of moves per game */
-static constexpr auto kMaxGameLen = 600;
+static constexpr int kMaxGameLen = 600;
 
 /* Number of feature planes for neural network */
-static constexpr auto kNumInputFeaturePlanes = 7;
+static constexpr int kNumInputFeaturePlanes = 7;
 
 /* Number of score logits from neural network */
-static constexpr auto kNumValueLogits = 2;
+static constexpr int kNumValueLogits = 2;
 
 /* Number of score logits from neural network */
-static constexpr auto kNumScoreLogits = 800;
+static constexpr int kNumScoreLogits = 800;
 
 /* Score inflection point */
-static constexpr auto kScoreInflectionPoint = 400;
+static constexpr int kScoreInflectionPoint = 400;
 
 /* Number of most recent moves to feed to NN */
-static constexpr auto kNumLastMoves = 5;
+static constexpr int kNumLastMoves = 5;
 
 /* Integer value for pass move encoding, from NN. */
-static constexpr auto kPassMoveEncoding = 361;
+static constexpr int kPassMoveEncoding = 361;
 
 /* Integer value for an illegal move encoding. */
-static constexpr auto kNoopMoveEncoding = -1;
+static constexpr int kNoopMoveEncoding = -1;
 
 /* Number of Passes before forbidding moves in pass-alive regions. */
-static constexpr auto kNumPassesBeforeBensons = 2;
+static constexpr int kNumPassesBeforeBensons = 3;
 
 /* Maximum number of threads. */
-static constexpr auto kMaxNumThreads = 64;
+static constexpr int kMaxNumThreads = 64;
 
 }  // namespace constants
 

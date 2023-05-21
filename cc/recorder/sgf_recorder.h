@@ -29,7 +29,7 @@ class SgfRecorder : public Recorder {
   void RecordGame(int thread_id, const game::Game& game) override = 0;
 
   // Flushes all pending writes.
-  virtual void FlushThread(int thread_id, int games_written) = 0;
+  virtual void FlushThread(int thread_id) = 0;
 
   std::unique_ptr<SgfRecorder> static Create(std::string path, int num_threads);
 

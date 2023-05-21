@@ -1,12 +1,12 @@
 #include "cc/recorder/sgf_recorder.h"
 
-#include <filesystem>
 #include <memory>
 
 #include "absl/log/check.h"
 #include "absl/strings/str_format.h"
 #include "absl/synchronization/mutex.h"
 #include "cc/constants/constants.h"
+#include "cc/core/filepath.h"
 #include "cc/game/game.h"
 #include "cc/game/loc.h"
 #include "cc/game/move.h"
@@ -16,8 +16,7 @@
 namespace recorder {
 namespace {
 
-namespace fs = std::filesystem;
-
+using ::core::FilePath;
 using ::game::Game;
 using ::game::Move;
 
@@ -37,7 +36,7 @@ class SgfRecorderImpl final : public SgfRecorder {
 
   // Recorder Impl.
   void RecordGame(int thread_id, const Game& game) override;
-  void FlushThread(int thread_id, int games_written) override;
+  void FlushThread(int thread_id) override;
 
  private:
   std::unique_ptr<SgfNode> ToSgfNode(const Game& game);
@@ -46,10 +45,11 @@ class SgfRecorderImpl final : public SgfRecorder {
   const int num_threads_;
   std::array<std::vector<std::unique_ptr<SgfNode>>, constants::kMaxNumThreads>
       sgfs_;
+  int games_written_;
 };
 
 SgfRecorderImpl::SgfRecorderImpl(std::string path, int num_threads)
-    : path_(path), num_threads_(num_threads) {}
+    : path_(path), num_threads_(num_threads), games_written_(0) {}
 
 void SgfRecorderImpl::RecordGame(int thread_id, const Game& game) {
   CHECK(game.has_result());
@@ -84,7 +84,9 @@ std::unique_ptr<SgfNode> SgfRecorderImpl::ToSgfNode(const Game& game) {
   return root_node;
 }
 
-void SgfRecorderImpl::FlushThread(int thread_id, int games_written) {
+void SgfRecorderImpl::FlushThread(int thread_id) {
+  // this function assumes that it is not called concurrently. It also assumes
+  // that no thread calls `RecordGame` while this function is running.
   std::vector<std::unique_ptr<SgfNode>>& thread_sgfs = sgfs_[thread_id];
   if (thread_sgfs.empty()) {
     return;
@@ -93,13 +95,13 @@ void SgfRecorderImpl::FlushThread(int thread_id, int games_written) {
   SgfSerializer serializer;
   for (const auto& sgf : thread_sgfs) {
     std::string path =
-        fs::path(path_) / absl::StrFormat("game_%d.sgf", games_written);
+        FilePath(path_) / absl::StrFormat("game_%d.sgf", games_written_);
 
     FILE* const sgf_file = fopen(path.c_str(), "w");
     absl::FPrintF(sgf_file, "%s", serializer.Serialize(sgf.get()));
     fclose(sgf_file);
 
-    ++games_written;
+    ++games_written_;
   }
   thread_sgfs.clear();
 }

@@ -34,10 +34,10 @@ struct TreeNode final {
 
   // write-once
   float move_logits[constants::kMaxNumMoves]{};
-  float move_probabilities[constants::kMaxNumMoves]{};
-  float value_estimate = 0;
-  float score_estimate = 0;
-  float init_utility_estimate = 0;  // mix value estimate and score estimate.
+  float move_probs[constants::kMaxNumMoves]{};
+  float value_est = 0;
+  float score_est = 0;
+  float init_util_est = 0;  // mix value estimate and score estimate.
 };
 
 void AdvanceState(TreeNode* node);

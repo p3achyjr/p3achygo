@@ -29,6 +29,7 @@ cc_library(
         ":recorder_base",
         ":sgf_recorder",
         ":tf_recorder",
+        "//cc/core:filepath",
         "//cc/game",
         "@com_google_absl//absl/log",
     ],
@@ -43,6 +44,7 @@ cc_library(
         ":sgf_serializer",
         ":sgf_tree",
         "//cc/constants",
+        "//cc/core:filepath",
         "//cc/game",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/strings",
@@ -92,6 +94,7 @@ cc_library(
     deps = [
         ":recorder_base",
         "//cc/constants",
+        "//cc/core:filepath",
         "//cc/game",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/strings",
