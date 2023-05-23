@@ -35,6 +35,10 @@ class TfRecordWatcher final {
   TfRecordWatcher(std::string dir, std::vector<int> exclude_gens);
   ~TfRecordWatcher() = default;
 
+  // Disable Copy
+  TfRecordWatcher(TfRecordWatcher const&) = delete;
+  TfRecordWatcher& operator=(TfRecordWatcher const&) = delete;
+
   const absl::flat_hash_set<std::string>& GetFiles();
   std::vector<std::string> UpdateAndGetNew();
 

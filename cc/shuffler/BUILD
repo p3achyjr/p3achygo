@@ -16,6 +16,7 @@ cc_library(
         "//cc/core",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/time",
         "@org_tensorflow//tensorflow/core:lib",
     ],
 )
@@ -23,5 +24,11 @@ cc_library(
 cc_binary(
     name = "main",
     srcs = ["main.cc"],
-    deps = [":shuffler"],
+    deps = [
+        ":shuffler",
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/flags:parse",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:initialize",
+    ],
 )
