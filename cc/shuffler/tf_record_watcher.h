@@ -27,6 +27,7 @@ namespace shuffler {
  *     mach{m}/
  *   ...
  *   gen{n}/
+ *   goldens/
  *
  * where there are `n` generations, `m` machines, and `b` games per batch.
  */

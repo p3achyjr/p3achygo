@@ -46,8 +46,9 @@ class ChunkManager final {
   ChunkManager(ChunkManager const&) = delete;
   ChunkManager& operator=(ChunkManager const&) = delete;
 
-  std::vector<::tensorflow::tstring> CreateChunk();
-  void Stop();
+  void CreateChunk();
+  void ShuffleAndFlush();
+  void SignalStop();
 
  private:
   void AppendToChunk(::tensorflow::tstring&& proto);

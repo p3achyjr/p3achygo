@@ -1,23 +1,30 @@
 #include "cc/shuffler/chunk_manager.h"
 
+#include <filesystem>  // compile with gcc 9+
 #include <random>
 #include <string>
 #include <vector>
 
+#include "absl/log/log.h"
+#include "absl/strings/str_format.h"
 #include "absl/time/time.h"
+#include "cc/shuffler/constants.h"
 #include "tensorflow/core/lib/io/compression.h"
 #include "tensorflow/core/lib/io/record_reader.h"
+#include "tensorflow/core/lib/io/record_writer.h"
 
 namespace shuffler {
 namespace {
 static constexpr size_t kDefaultChunkSize = 2048000;
-static constexpr int kDefaultPollIntervalS = 300;
+static constexpr int kDefaultPollIntervalS = 30;
 static constexpr int kLoggingInterval = 1000000;
-static constexpr int kEmptySleepIntervalS = 30;
 }  // namespace
 
+namespace fs = std::filesystem;
 using ::tensorflow::tstring;
 using ::tensorflow::io::RecordReaderOptions;
+using ::tensorflow::io::RecordWriter;
+using ::tensorflow::io::RecordWriterOptions;
 using ::tensorflow::io::SequentialRecordReader;
 using ::tensorflow::io::compression::kZlib;
 
@@ -55,12 +62,13 @@ ChunkManager::~ChunkManager() {
   }
 }
 
-std::vector<::tensorflow::tstring> ChunkManager::CreateChunk() {
+void ChunkManager::CreateChunk() {
   LOG(INFO) << "Creating Chunk...";
 
   int num_scanned = 0;
   auto start = std::chrono::steady_clock::now();
   while (true) {
+    // Pop file to read, if one exists.
     std::optional<std::string> f;
     {
       absl::MutexLock l(&mu_);
@@ -73,17 +81,18 @@ std::vector<::tensorflow::tstring> ChunkManager::CreateChunk() {
     }
 
     if (f == std::nullopt) {
-      LOG(INFO) << "No files remaining. Sleeping for " << kEmptySleepIntervalS
+      LOG(INFO) << "No files remaining. Sleeping for " << poll_interval_s_
                 << "s.";
 
       absl::MutexLock l(&mu_);
-      cv_.WaitWithTimeout(&mu_, absl::Seconds(kEmptySleepIntervalS));
+      cv_.WaitWithTimeout(&mu_, absl::Seconds(poll_interval_s_));
       if (!running_) {
         break;
       }
       continue;
     }
 
+    // Read file into memory.
     std::unique_ptr<tensorflow::RandomAccessFile> file;
     TF_CHECK_OK(tensorflow::Env::Default()->NewRandomAccessFile(*f, &file));
 
@@ -101,31 +110,56 @@ std::vector<::tensorflow::tstring> ChunkManager::CreateChunk() {
       }
 
       ++num_scanned;
-      if (num_scanned % kLoggingInterval == 0) {
-        auto now = std::chrono::steady_clock::now();
-        std::chrono::duration<float> elapsed = now - start;
-        LOG(INFO) << "Time so far: " << elapsed.count()
-                  << "s. Num scanned so far: " << num_scanned
-                  << ". Chunk size: " << chunk_.size() << ".";
-      }
+      LOG_IF(INFO, num_scanned % kLoggingInterval == 0)
+          << "Time so far: "
+          << std::chrono::duration<float>(std::chrono::steady_clock::now() -
+                                          start)
+                 .count()
+          << "s. Num scanned so far: " << num_scanned
+          << ". Chunk size: " << chunk_.size() << ".";
     }
   }
   auto end = std::chrono::steady_clock::now();
   std::chrono::duration<float> elapsed = end - start;
   LOG(INFO) << "Building chunk took " << elapsed.count() << "s. Scanned "
             << num_scanned << " protos.";
-
-  std::vector<tstring> chunk(chunk_.begin(), chunk_.end());
-  start = std::chrono::steady_clock::now();
-  std::shuffle(chunk.begin(), chunk.end(), probability_.prng());
-  end = std::chrono::steady_clock::now();
-  elapsed = end - start;
-  LOG(INFO) << "Shuffling chunk took " << elapsed.count() << "s.";
-
-  return chunk;
 }
 
-void ChunkManager::Stop() {
+void ChunkManager::ShuffleAndFlush() {
+  // shuffle chunk
+  std::vector<tstring> golden_chunk(chunk_.begin(), chunk_.end());
+  auto start = std::chrono::steady_clock::now();
+  std::shuffle(golden_chunk.begin(), golden_chunk.end(), probability_.prng());
+  auto end = std::chrono::steady_clock::now();
+  std::chrono::duration<float> elapsed = end - start;
+  LOG(INFO) << "Shuffling chunk took " << elapsed.count()
+            << "s. Chunk contains " << golden_chunk.size() << " elements.";
+
+  // create directory
+  std::string chunk_dir = fs::path(dir_) / kGoldenChunkDirname;
+  std::string chunk_filename =
+      fs::path(chunk_dir) / absl::StrFormat("chunk_%d.tfrecord.zz", gen_);
+  fs::create_directory(chunk_dir);
+
+  // write to disk
+  std::unique_ptr<tensorflow::WritableFile> file;
+  TF_CHECK_OK(
+      tensorflow::Env::Default()->NewWritableFile(chunk_filename, &file));
+
+  RecordWriterOptions options;
+  options.compression_type = RecordWriterOptions::ZLIB_COMPRESSION;
+  options.zlib_options.compression_level = 2;
+  RecordWriter writer(file.get(), options);
+
+  for (const tstring& record : golden_chunk) {
+    TF_CHECK_OK(writer.WriteRecord(record));
+  }
+
+  TF_CHECK_OK(writer.Close());
+  TF_CHECK_OK(file->Close());
+}
+
+void ChunkManager::SignalStop() {
   absl::MutexLock l(&mu_);
   running_ = false;
   cv_.SignalAll();
