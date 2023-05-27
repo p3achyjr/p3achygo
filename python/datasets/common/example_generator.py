@@ -97,7 +97,7 @@ class ExampleGenerator:
                                  RESIGN_SCORE_EST_UB - bound_adjustment)
       return score_est
 
-    def rot90_points(i, j, k):
+    def rot90_points(i, j, k) -> tuple:
       if (i, j) == NON_MOVE or (i, j) == PASS_MOVE:
         return (i, j)
 
@@ -110,7 +110,9 @@ class ExampleGenerator:
       elif k == 3:
         return (j, BOARD_LEN - 1 - i)
 
-    def fliplr_points(i, j):
+      raise Exception(f'Invalid value of k: {k}')
+
+    def fliplr_points(i, j) -> tuple:
       if (i, j) == NON_MOVE or (i, j) == PASS_MOVE:
         return (i, j)
 

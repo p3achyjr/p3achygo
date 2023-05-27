@@ -15,11 +15,6 @@
 
 namespace shuffler {
 namespace {
-static constexpr size_t kDefaultChunkSize = 2048000;
-static constexpr int kDefaultPollIntervalS = 30;
-static constexpr int kLoggingInterval = 1000000;
-}  // namespace
-
 namespace fs = std::filesystem;
 using ::tensorflow::tstring;
 using ::tensorflow::io::RecordReaderOptions;
@@ -27,6 +22,31 @@ using ::tensorflow::io::RecordWriter;
 using ::tensorflow::io::RecordWriterOptions;
 using ::tensorflow::io::SequentialRecordReader;
 using ::tensorflow::io::compression::kZlib;
+
+static constexpr size_t kDefaultChunkSize = 2048000;
+static constexpr int kDefaultPollIntervalS = 30;
+static constexpr int kLoggingInterval = 1000000;
+
+// keep in sync with python/gcs_utils.py
+static constexpr char kChunkFormat[] = "chunk_%d.tfrecord.zz";
+
+void WriteChunkToDisk(std::string filename, const std::vector<tstring>& chunk) {
+  std::unique_ptr<tensorflow::WritableFile> file;
+  TF_CHECK_OK(tensorflow::Env::Default()->NewWritableFile(filename, &file));
+
+  RecordWriterOptions options;
+  options.compression_type = RecordWriterOptions::ZLIB_COMPRESSION;
+  options.zlib_options.compression_level = 2;
+  RecordWriter writer(file.get(), options);
+
+  for (const tstring& record : chunk) {
+    TF_CHECK_OK(writer.WriteRecord(record));
+  }
+
+  TF_CHECK_OK(writer.Close());
+  TF_CHECK_OK(file->Close());
+}
+}  // namespace
 
 ChunkManager::ChunkManager(std::string dir, int gen, float p)
     : ChunkManager(dir, gen, p, {} /* exclude_gens */) {}
@@ -138,25 +158,11 @@ void ChunkManager::ShuffleAndFlush() {
   // create directory
   std::string chunk_dir = fs::path(dir_) / kGoldenChunkDirname;
   std::string chunk_filename =
-      fs::path(chunk_dir) / absl::StrFormat("chunk_%d.tfrecord.zz", gen_);
+      fs::path(chunk_dir) / absl::StrFormat(kChunkFormat, gen_);
   fs::create_directory(chunk_dir);
 
   // write to disk
-  std::unique_ptr<tensorflow::WritableFile> file;
-  TF_CHECK_OK(
-      tensorflow::Env::Default()->NewWritableFile(chunk_filename, &file));
-
-  RecordWriterOptions options;
-  options.compression_type = RecordWriterOptions::ZLIB_COMPRESSION;
-  options.zlib_options.compression_level = 2;
-  RecordWriter writer(file.get(), options);
-
-  for (const tstring& record : golden_chunk) {
-    TF_CHECK_OK(writer.WriteRecord(record));
-  }
-
-  TF_CHECK_OK(writer.Close());
-  TF_CHECK_OK(file->Close());
+  WriteChunkToDisk(chunk_filename, golden_chunk);
 }
 
 void ChunkManager::SignalStop() {

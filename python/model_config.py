@@ -1,9 +1,10 @@
-'''
-Configuration for model
-'''
+from __future__ import annotations
 
 
 class ModelConfig:
+  """
+  Configuration for model.
+  """
 
   def __init__(self,
                blocks=16,
