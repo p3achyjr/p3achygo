@@ -74,7 +74,8 @@ class ZobristHash:
   def hash(self):
     return self.__hash
 
-  def recompute_hash(self, transitions: list[(int, int, int, int)]) -> None:
+  def recompute_hash(self, transitions: list[tuple[int, int, int,
+                                                   int]]) -> None:
     for (i, j, last_piece, current_piece) in transitions:
       self.__hash ^= self.__zobrist_table.bitstring_at(i, j, last_piece)
       self.__hash ^= self.__zobrist_table.bitstring_at(i, j, current_piece)
@@ -134,7 +135,7 @@ class GoBoard:
 
     return True
 
-  def get_captured(self, i, j, captured_color) -> set((int, int)):
+  def get_captured(self, i, j, captured_color) -> set[tuple[int, int]]:
     # intuition is that we only need to check the 4 spots next to the place just
     # played.
     checked = set()
@@ -162,8 +163,8 @@ class GoBoard:
 
     return captured
 
-  def find_liberties(self, group: set((int, int)), i, j, color, visited: set(
-      (int, int))) -> None:
+  def find_liberties(self, group: set[tuple[int, int]], i, j, color,
+                     visited: set[tuple[int, int]]) -> int:
     if (i, j) in visited:
       return 0
 
@@ -235,42 +236,6 @@ class GoBoard:
       return PASS_MOVE
 
     return (move // BOARD_LEN, move % BOARD_LEN)
-
-
-class GoBoardTrainingUtils:
-  '''
-  Various helpers related to training.
-  '''
-
-  @staticmethod
-  def get_black(board: tf.Tensor) -> tf.Tensor:
-    return tf.cast(
-        tf.where(tf.math.equal(board, BLACK), board, tf.zeros_like(board)) /
-        BLACK,
-        dtype=tf.float32)
-
-  @staticmethod
-  def get_white(board: tf.Tensor) -> tf.Tensor:
-    return tf.cast(
-        tf.where(tf.math.equal(board, WHITE), board, tf.zeros_like(board)) /
-        WHITE,
-        dtype=tf.float32)
-
-  @staticmethod
-  def as_one_hot(move: tf.Tensor) -> tf.Tensor:
-    non_move = tf.constant(NON_MOVE, dtype=tf.int32)
-    pass_move = tf.constant(PASS_MOVE, dtype=tf.int32)
-    if tf.reduce_all(move == non_move) or tf.reduce_all(move == pass_move):
-      return tf.zeros((BOARD_LEN, BOARD_LEN), dtype=tf.float32)
-
-    return tf.cast(tf.scatter_nd(indices=[move],
-                                 updates=tf.constant([1]),
-                                 shape=(BOARD_LEN, BOARD_LEN)),
-                   dtype=tf.float32)
-
-  @staticmethod
-  def as_index(move: tf.Tensor) -> tf.Tensor:
-    return tf.cast(move[0] * BOARD_LEN + move[1], dtype=tf.int32)
 
 
 class GameResult:

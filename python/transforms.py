@@ -1,0 +1,162 @@
+from __future__ import annotations
+
+import functools
+import tensorflow as tf
+from constants import *
+
+RL_DESC = {
+    'bsize': tf.io.FixedLenFeature([], tf.string),
+    'board': tf.io.FixedLenFeature([], tf.string),
+    'last_moves': tf.io.FixedLenFeature([], tf.string),
+    'color': tf.io.FixedLenFeature([], tf.string),
+    'komi': tf.io.FixedLenFeature([], tf.float32),
+    'own': tf.io.FixedLenFeature([], tf.string),
+    'pi': tf.io.FixedLenFeature([], tf.string),
+    'result': tf.io.FixedLenFeature([], tf.float32),
+}
+
+
+def get_black(board: tf.Tensor) -> tf.Tensor:
+  """Return black stones as 2D tensor."""
+  return tf.cast(
+      tf.where(tf.math.equal(board, BLACK), board, tf.zeros_like(board)) /
+      BLACK,
+      dtype=tf.float32)
+
+
+def get_white(board: tf.Tensor) -> tf.Tensor:
+  """Return white stones as 2D tensor."""
+  return tf.cast(
+      tf.where(tf.math.equal(board, WHITE), board, tf.zeros_like(board)) /
+      WHITE,
+      dtype=tf.float32)
+
+
+def get_color(board: tf.Tensor, color) -> tf.Tensor:
+  """Return `color` locs as 2D tensor."""
+  return tf.cast(
+      tf.where(tf.math.equal(board, color), board, tf.zeros_like(board)) /
+      color,
+      dtype=tf.float32)
+
+
+def as_one_hot(move: tf.Tensor, bsize=BOARD_LEN) -> tf.Tensor:
+  """Broadcast a move tuple to a one-hot 2D tensor."""
+  non_move = tf.constant(NON_MOVE, dtype=tf.int32)
+  pass_move = tf.constant(PASS_MOVE, dtype=tf.int32)
+  pass_move_rl = tf.constant(PASS_MOVE_RL, dtype=tf.int32)
+  if (tf.reduce_all(move == non_move) or tf.reduce_all(move == pass_move) or
+      tf.reduce_all(move == pass_move_rl)):
+    return tf.zeros((bsize, bsize), dtype=tf.float32)
+
+  return tf.cast(tf.scatter_nd(indices=[move],
+                               updates=tf.constant([1]),
+                               shape=(bsize, bsize)),
+                 dtype=tf.float32)
+
+
+def as_index(move: tf.Tensor, bsize=BOARD_LEN) -> tf.Tensor:
+  return tf.cast(move[0] * bsize + move[1], dtype=tf.int32)
+
+
+def as_loc(mv_index: tf.Tensor, bsize=BOARD_LEN) -> tf.Tensor:
+  loc = tf.convert_to_tensor(
+      [tf.abs(mv_index) // bsize,
+       tf.abs(mv_index) % bsize])
+
+  if mv_index < 0:
+    return -loc
+
+  return loc
+
+
+def expand_sl(ex):
+  """Expands a single training example from a supervised learning dataset."""
+  board, komi, color, score, last_moves, policy = (ex['board'], ex['komi'],
+                                                   ex['color'], ex['result'],
+                                                   ex['last_moves'],
+                                                   ex['policy'])
+  assert (last_moves.shape == (5, 2))
+
+  black_stones = get_black(board)
+  white_stones = get_white(board)
+  fifth_move_before = as_one_hot(tf.cast(last_moves[0], dtype=tf.int32))
+  fourth_move_before = as_one_hot(tf.cast(last_moves[1], dtype=tf.int32))
+  third_move_before = as_one_hot(tf.cast(last_moves[2], dtype=tf.int32))
+  second_move_before = as_one_hot(tf.cast(last_moves[3], dtype=tf.int32))
+  first_move_before = as_one_hot(tf.cast(last_moves[4], dtype=tf.int32))
+
+  score_index = tf.cast([[score + SCORE_RANGE_MIDPOINT]], dtype=tf.int32)
+  score_one_hot = tf.cast(tf.scatter_nd(score_index, [1.0],
+                                        shape=(SCORE_RANGE,)),
+                          dtype=tf.float32)
+  policy = as_index(tf.cast(policy, dtype=tf.int32))
+
+  input = tf.convert_to_tensor([
+      black_stones, white_stones, fifth_move_before, fourth_move_before,
+      third_move_before, second_move_before, first_move_before
+  ],
+                               dtype=tf.float32)
+
+  input = tf.transpose(input, perm=(1, 2, 0))  # CHW -> HWC
+  own = tf.zeros(shape=(BOARD_LEN, BOARD_LEN))
+
+  return input, komi, score, score_one_hot, policy, own
+
+
+def expand_rl(tf_example):
+  """Expands a tfrecord from cc/recorder/tf_recorder.cc"""
+  ex = tf.io.parse_single_example(tf_example, RL_DESC)
+
+  # keep these in sync with cc/recorder/tf_recorder.cc
+  bsize = tf.cast(tf.squeeze(
+      tf.reshape(tf.io.decode_raw(ex['bsize'], tf.uint8), shape=(1,)),),
+                  dtype=tf.int32)
+  board = tf.reshape(tf.io.decode_raw(ex['board'], tf.int8),
+                     shape=(bsize * bsize,))
+  last_moves = tf.reshape(tf.io.decode_raw(ex['last_moves'], tf.int16),
+                          shape=(5,))
+  color = tf.squeeze(
+      tf.reshape(tf.io.decode_raw(ex['color'], tf.int8), shape=(1,)))
+  komi = ex['komi']
+  own = tf.reshape(tf.io.decode_raw(ex['own'], tf.int8), shape=(bsize * bsize,))
+  policy = tf.squeeze(
+      tf.reshape(tf.io.decode_raw(ex['pi'], tf.uint16), shape=(1,)))
+  score = ex['result']  # score from perspective of current player.
+
+  # cast b/c TF hates you.
+  board = tf.cast(board, dtype=tf.int32)
+  last_moves = tf.cast(last_moves, dtype=tf.int32)
+  own = tf.cast(own, dtype=tf.int32)
+  policy = tf.cast(policy, dtype=tf.int32)
+
+  # reshape for compatibility with TrainingManager.
+  board = tf.reshape(board, shape=(bsize, bsize))
+  last_moves = tf.map_fn(functools.partial(as_loc, bsize=bsize), last_moves)
+  own = tf.reshape(own, shape=(bsize, bsize))
+
+  # view ownership from perspective of current player.
+  own = tf.cond(color == BLACK_RL, lambda: own, lambda: -own)
+
+  # build input tensor.
+  our_stones = tf.cond(color == BLACK_RL, lambda: get_color(board, BLACK_RL),
+                       lambda: get_color(board, WHITE_RL))
+  opp_stones = tf.cond(color == WHITE_RL, lambda: get_color(board, BLACK_RL),
+                       lambda: get_color(board, WHITE_RL))
+  input = tf.convert_to_tensor([
+      our_stones,
+      opp_stones,
+      as_one_hot(last_moves[0], bsize=bsize),
+      as_one_hot(last_moves[1], bsize=bsize),
+      as_one_hot(last_moves[2], bsize=bsize),
+      as_one_hot(last_moves[3], bsize=bsize),
+      as_one_hot(last_moves[4], bsize=bsize),
+  ],
+                               dtype=tf.float32)
+  input = tf.transpose(input, perm=(1, 2, 0))  # CHW -> HWC
+  score_index = tf.cast([[score + SCORE_RANGE_MIDPOINT]], dtype=tf.int32)
+  score_one_hot = tf.cast(tf.scatter_nd(score_index, [1.0],
+                                        shape=(SCORE_RANGE,)),
+                          dtype=tf.float32)
+
+  return input, komi, score, score_one_hot, policy, own

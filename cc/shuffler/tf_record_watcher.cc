@@ -1,9 +1,11 @@
 #include "cc/shuffler/tf_record_watcher.h"
 
 #include <filesystem>  // make sure to compile with gcc 9+
+#include <iterator>
 
 #include "absl/container/flat_hash_set.h"
 #include "cc/core/util.h"
+#include "cc/shuffler/constants.h"
 
 namespace shuffler {
 namespace fs = std::filesystem;
@@ -14,7 +16,7 @@ namespace {
 static constexpr char kGenPrefix[] = "gen";
 static constexpr char kTfRecordSuffix[] = ".tfrecord.zz";
 
-// Find generation number from filepath. Assumes **/gen{i}/** format.
+// Find generation number from filepath. Assumes gen{i}/** format.
 int FindGen(fs::path path) {
   for (const std::string& p : path) {
     if (p.find(kGenPrefix, 0) != std::string::npos) {
@@ -22,8 +24,25 @@ int FindGen(fs::path path) {
     }
   }
 
-  // should never get here.
   return -1;
+}
+
+fs::path RelativePath(fs::path base_path, fs::path path) {
+  fs::path rel_path;
+  auto path_it = path.begin();
+  for (const auto& p : base_path) {
+    if (p != *path_it) {
+      return rel_path;
+    }
+
+    path_it = std::next(path_it);
+  }
+
+  for (auto it = path_it; it != path.end(); it = std::next(it)) {
+    rel_path /= *it;
+  }
+
+  return rel_path;
 }
 
 }  // namespace
@@ -50,6 +69,26 @@ std::vector<std::string> TfRecordWatcher::UpdateAndGetNew() {
 }
 
 absl::flat_hash_set<std::string> TfRecordWatcher::GlobFiles() {
+  auto should_include = [&](const fs::directory_entry& dir_entry) {
+    fs::path rel_path = RelativePath(dir_, dir_entry);
+    if (rel_path.empty()) {
+      return false;
+    }
+
+    bool starts_with_gen_prefix =
+        static_cast<std::string>(*rel_path.begin()).rfind(kDataGenPrefix, 0) ==
+        0;
+    if (!starts_with_gen_prefix) {
+      return false;
+    }
+
+    if (VecContains(exclude_gens_, FindGen(rel_path))) {
+      return false;
+    }
+
+    return true;
+  };
+
   auto dir_it = fs::recursive_directory_iterator(dir_);
   absl::flat_hash_set<std::string> files;
   for (const auto& dir_entry : dir_it) {
@@ -57,7 +96,7 @@ absl::flat_hash_set<std::string> TfRecordWatcher::GlobFiles() {
       continue;
     }
 
-    if (VecContains(exclude_gens_, FindGen(dir_entry))) {
+    if (!should_include(dir_entry)) {
       continue;
     }
 

@@ -1,5 +1,5 @@
 /*
- * Main function for standalone cc binary.
+ * Main function for self-play binary.
  */
 
 #include <sys/stat.h>

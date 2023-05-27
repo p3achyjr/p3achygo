@@ -1,25 +1,25 @@
 import numpy as np
 import tensorflow as tf
+import transforms
 
 from absl import app, flags, logging
 from collections import deque
 
-from board import GoBoard, GoBoardTrainingUtils, parse_move
+from board import GoBoard, parse_move
 from constants import *
 from model import P3achyGoModel
-from model_config import ModelConfig
 
 FLAGS = flags.FLAGS
 
-flags.DEFINE_string('model_ckpt_path', '', 'Path to model checkpoint.')
+flags.DEFINE_string('model_path', '', 'Path to SavedModel.')
 flags.DEFINE_string('color', 'black',
                     'Color for model to play as (black|white)')
 
 
 def model_move(model, board, last_moves, game_state, color):
   x = tf.convert_to_tensor([
-      GoBoardTrainingUtils.get_white(tf.constant(board.board)),
-      GoBoardTrainingUtils.get_black(tf.constant(board.board))
+      transforms.get_white(tf.constant(board.board)),
+      transforms.get_black(tf.constant(board.board))
   ])
   # print(x.numpy())
   x = tf.concat([x, list(last_moves)], axis=0)
@@ -101,11 +101,11 @@ def play(model, color=BLACK):
     # print('--------BLACK--------')
     # print(
     #     GoBoard.to_string(
-    #         GoBoardTrainingUtils.get_black(tf.constant(board.board))))
+    #         transforms.get_black(tf.constant(board.board))))
     # print('--------WHITE--------')
     # print(
     #     GoBoard.to_string(
-    #         GoBoardTrainingUtils.get_white(tf.constant(board.board))))
+    #         transforms.get_white(tf.constant(board.board))))
     print('---------------- Last Moves: ----------------')
     for move in last_moves:
       print(tf.where(move))
@@ -114,44 +114,38 @@ def play(model, color=BLACK):
     if color == BLACK:
       p0_move = model_move(model, board, last_moves, komi_state, color)
       board.print()
-      last_moves.append(GoBoardTrainingUtils.as_one_hot(tf.constant(p0_move)))
+      last_moves.append(transforms.as_one_hot(tf.constant(p0_move)))
       last_moves.popleft()
 
       p1_move = human_move(board, color ^ 0x3)
       board.print()
-      last_moves.append(GoBoardTrainingUtils.as_one_hot(tf.constant(p1_move)))
+      last_moves.append(transforms.as_one_hot(tf.constant(p1_move)))
       last_moves.popleft()
     elif color == WHITE:
       p0_move = human_move(board, color ^ 0x3)
       board.print()
-      last_moves.append(GoBoardTrainingUtils.as_one_hot(tf.constant(p0_move)))
+      last_moves.append(transforms.as_one_hot(tf.constant(p0_move)))
       last_moves.popleft()
 
       p1_move = model_move(model, board, last_moves, komi_state, color)
       board.print()
-      last_moves.append(GoBoardTrainingUtils.as_one_hot(tf.constant(p1_move)))
+      last_moves.append(transforms.as_one_hot(tf.constant(p1_move)))
       last_moves.popleft()
     else:
       raise ValueError(f'Unknown Color: {color}')
 
 
 def main(_):
-  if not FLAGS.model_ckpt_path:
-    logging.warning('No Checkpoint Path Specified.')
+  if not FLAGS.model_path:
+    logging.warning('No Model Path Specified.')
     return
 
-  logging.info(f'Checkpoint Path: {FLAGS.model_ckpt_path}')
+  logging.info(f'Model Path: {FLAGS.model_path}')
   dummy_board = np.random.random((1, 19, 19, 7))
   dummy_game = np.random.random((1, 1))
-  model = P3achyGoModel.create(ModelConfig.small(),
-                               board_len=BOARD_LEN,
-                               num_input_planes=NUM_INPUT_PLANES,
-                               num_input_features=NUM_INPUT_FEATURES,
-                               name='p3achy_test')
+  model = tf.keras.models.load_model(
+      FLAGS.model_path, custom_objects=P3achyGoModel.custom_objects())
   model(dummy_board, dummy_game)
-  load_status = model.load_weights(FLAGS.model_ckpt_path)
-
-  logging.info(load_status)
 
   if FLAGS.color.lower() == 'black':
     color = BLACK

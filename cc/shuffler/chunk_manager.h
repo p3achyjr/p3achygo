@@ -3,8 +3,10 @@
 
 #include <deque>
 #include <string>
+#include <thread>
 #include <vector>
 
+#include "absl/synchronization/mutex.h"
 #include "cc/core/probability.h"
 #include "cc/shuffler/filename_buffer.h"
 #include "cc/shuffler/tf_record_watcher.h"
@@ -37,26 +39,39 @@ class ChunkManager final {
   ChunkManager(std::string dir, int gen, float p,
                std::vector<int> exclude_gens);
   ChunkManager(std::string dir, int gen, float p, std::vector<int> exclude_gens,
-               size_t chunk_size, int poll_interval);
-  ~ChunkManager() = default;
+               size_t chunk_size, int poll_interval_s);
+  ~ChunkManager();
 
-  std::vector<::tensorflow::tstring> CreateChunk();
+  // Disable Copy
+  ChunkManager(ChunkManager const&) = delete;
+  ChunkManager& operator=(ChunkManager const&) = delete;
+
+  void CreateChunk();
+  void ShuffleAndFlush();
+  void SignalStop();
 
  private:
   void AppendToChunk(::tensorflow::tstring&& proto);
+  void FsThread();  // runs in `fs_thread_`.
 
   std::string dir_;
   int gen_;
   float p_;
   size_t chunk_size_;
-  int poll_interval_;
+  int poll_interval_s_;
   std::vector<int> exclude_gens_;
 
   core::Probability probability_;
-  TfRecordWatcher watcher_;
-  FilenameBuffer fbuffer_;
+  TfRecordWatcher watcher_ ABSL_GUARDED_BY(mu_);
+  FilenameBuffer fbuffer_ ABSL_GUARDED_BY(mu_);
+  absl::Mutex mu_;
+  absl::CondVar cv_;
 
   std::deque<::tensorflow::tstring> chunk_;
+
+  // thread to scan and update file list.
+  bool running_ ABSL_GUARDED_BY(mu_);
+  std::thread fs_thread_;
 };
 }  // namespace shuffler
 

@@ -593,6 +593,7 @@ class P3achyGoModel(tf.keras.Model):
     self.scce_logits = tf.keras.losses.SparseCategoricalCrossentropy(
         from_logits=True)
     self.scce = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)
+    self.cce = tf.keras.losses.CategoricalCrossentropy(from_logits=False)
     self.identity = tf.keras.layers.Activation(
         'linear')  # need for mixed-precision
 
@@ -627,29 +628,20 @@ class P3achyGoModel(tf.keras.Model):
 
     return pi_logits, game_outcome, game_ownership, score_logits, gamma
 
-  def loss(self, pi_logits, game_outcome, score_logits, gamma, policy, score,
-           score_one_hot):
-    # constants weighting each loss component
-    c_outcome = 1.5
-    c_score = .02
-    c_gamma_scaling = .0005
-
-    # overall weighting for value loss
-    # TODO: make this configurable
-    c_value = .01
-
-    # compute actual loss value
+  def loss(self, pi_logits, game_outcome, score_logits, own_pred, gamma, policy,
+           score, score_one_hot, own, w_pi, w_val, w_outcome, w_score, w_own,
+           w_gamma):
     policy_loss = self.scce_logits(policy, pi_logits)
 
-    # print('Policy Loss:', policy_loss.numpy())
+    # tf.print('Policy Loss:', policy_loss)
 
-    outcome_clip_max = 100.0
     did_win = score >= 0
-    outcome_loss = c_outcome * self.scce_logits(did_win, game_outcome)
+    outcome_loss = self.scce_logits(did_win, game_outcome)
+    # outcome_clip_max = 100.0
     # outcome_loss = tf.clip_by_value(outcome_loss, -outcome_clip_max,
-    #                                 outcome_clip_max)
+    #                                  outcome_clip_max)
 
-    # print('Outcome Loss:', outcome_loss.numpy())
+    # tf.print('Outcome Loss:', outcome_loss)
 
     score_index = score + SCORE_RANGE_MIDPOINT
     score_distribution = tf.keras.activations.softmax(score_logits)
@@ -660,18 +652,29 @@ class P3achyGoModel(tf.keras.Model):
             tf.math.cumsum(score_distribution, axis=1)),
                            axis=1))
 
-    score_loss = c_score * (c_value * score_pdf_loss + score_cdf_loss)
-    # print('Score PDF Loss:', score_pdf_loss.numpy())
-    # print('Score CDF Loss:', score_cdf_loss.numpy())
-    # print('Score Loss:', score_loss.numpy())
+    # tf.print('Score PDF Loss:', score_pdf_loss)
+    # tf.print('Score CDF Loss:', score_cdf_loss)
+    # tf.print('Score Loss:', score_loss)
+
+    # {-1, 0, 1} -> {0, .5, 1}
+    own = tf.cast((own + 1) / 2, dtype=tf.float32)
+    own_pred = (own_pred + 1) / 2
+    own_loss = self.cce(own, own_pred)
 
     gamma = tf.squeeze(gamma, axis=-1)
-    gamma_loss = tf.math.reduce_mean(gamma * gamma * c_gamma_scaling)
+    gamma_loss = tf.math.reduce_mean(gamma * gamma * w_gamma)
 
-    # print('Gamme Loss:', gamma_loss.numpy())
+    # tf.print('Gamma Loss:', gamma_loss)
 
-    loss = policy_loss + c_value * outcome_loss + score_loss + gamma_loss
-    return loss, policy_loss, outcome_loss, score_pdf_loss
+    woutcome_loss = w_outcome * outcome_loss
+    wscore_pdf_loss = w_score * score_pdf_loss
+    wscore_cdf_loss = w_score * score_cdf_loss
+    wown_loss = w_own * own_loss
+    val_loss = w_val * (woutcome_loss + wscore_pdf_loss +
+                        wown_loss) + wscore_cdf_loss
+
+    loss = w_pi * policy_loss + val_loss + gamma_loss
+    return loss, policy_loss, outcome_loss, score_pdf_loss, own_loss
 
   def get_config(self):
     return {
@@ -728,16 +731,16 @@ class P3achyGoModel(tf.keras.Model):
                          config.kBroadcastInterval,
                          name=name)
 
-
-def custom_objects_dict_for_serialization():
-  return {
-      'ConvBlock': ConvBlock,
-      'ResidualBlock': ResidualBlock,
-      'BottleneckResidualConvBlock': BottleneckResidualConvBlock,
-      'BroadcastResidualBlock': BroadcastResidualBlock,
-      'Broadcast': BroadcastResidualBlock.Broadcast,
-      'GlobalPoolBias': GlobalPoolBias,
-      'GlobalPool': GlobalPool,
-      'PolicyHead': PolicyHead,
-      'P3achyGoModel': P3achyGoModel,
-  }
+  @staticmethod
+  def custom_objects():
+    return {
+        'ConvBlock': ConvBlock,
+        'ResidualBlock': ResidualBlock,
+        'BottleneckResidualConvBlock': BottleneckResidualConvBlock,
+        'BroadcastResidualBlock': BroadcastResidualBlock,
+        'Broadcast': BroadcastResidualBlock.Broadcast,
+        'GlobalPoolBias': GlobalPoolBias,
+        'GlobalPool': GlobalPool,
+        'PolicyHead': PolicyHead,
+        'P3achyGoModel': P3achyGoModel,
+    }

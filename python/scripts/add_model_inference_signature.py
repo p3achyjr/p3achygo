@@ -1,6 +1,6 @@
 import tensorflow as tf
 from absl import app, flags, logging
-from model import P3achyGoModel, custom_objects_dict_for_serialization
+from model import P3achyGoModel
 
 FLAGS = flags.FLAGS
 
@@ -19,7 +19,7 @@ def main(_):
 
   logging.info(f'Model Path: {FLAGS.model_path}')
   model = tf.keras.models.load_model(
-      FLAGS.model_path, custom_objects=custom_objects_dict_for_serialization())
+      FLAGS.model_path, custom_objects=P3achyGoModel.custom_objects())
 
   model.save(FLAGS.model_save_path,
              signatures={
