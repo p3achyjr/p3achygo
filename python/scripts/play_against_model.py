@@ -39,16 +39,28 @@ def model_move(model, board, last_moves, game_state, color):
       f'Predicted Top 5 Moves: {[GoBoard.move_as_tuple(move.numpy()) for move in top_policy_indices[0]]}'
   )
   logging.info(f'Predicted Top 5 Move Values: {top_policy_values}')
-  while True:
-    # move_sample = tf.random.categorical(logits=move_logits, num_samples=1)
-    # moves = [GoBoard.move_as_tuple(move_sample[0, 0].numpy())]
-    # move = moves[0]
-    move_sample = tf.argmax(move_logits, axis=1).numpy()[0]
-    move = GoBoard.move_as_tuple(move_sample)
+  for move in top_policy_indices[0]:
+    print(move)
+    move = GoBoard.move_as_tuple(move.numpy())
     logging.info(f'P3achyGo Considering Move: {move}')
+    if move == PASS_MOVE or move == PASS_MOVE_RL:
+      continue
+
     if board.move(color, move[0], move[1]):
       chosen_move = move
       break
+  # while True:
+  #   # move_sample = tf.random.categorical(logits=move_logits, num_samples=1)
+  #   # moves = [GoBoard.move_as_tuple(move_sample[0, 0].numpy())]
+  #   # move = moves[0]
+  #   move_sample = tf.argmax(move_logits, axis=1).numpy()[0]
+  #   move = GoBoard.move_as_tuple(move_sample)
+  #   if move == PASS_MOVE or move == PASS_MOVE_RL:
+  #     continue
+  #   logging.info(f'P3achyGo Considering Move: {move}')
+  #   if board.move(color, move[0], move[1]):
+  #     chosen_move = move
+  #     break
 
   assert chosen_move != None
 

@@ -60,11 +60,9 @@ def main(_):
     logging.warning('Please provide --model_save_path.')
     return
 
-  train_ds, val_ds = tfds.load(
-      FLAGS.dataset,
-      split=['train[0:32]', 'train[32:48]'],
-      # split=['train[:95%]', 'train[95%:]'],
-      shuffle_files=True)
+  train_ds, val_ds = tfds.load(FLAGS.dataset,
+                               split=['train[:95%]', 'train[95%:]'],
+                               shuffle_files=True)
 
   # setup training dataset
   batch_size = FLAGS.batch_size

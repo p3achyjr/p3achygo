@@ -30,6 +30,9 @@ LR = 1e-2
 EPOCHS_PER_GEN = 1
 MOMENTUM = .9
 
+# keep in sync with cc/constants.cc: kMaxNumThreads
+MAX_INFER_BATCH_SIZE = 64
+
 flags.DEFINE_integer('num_generations', 10, 'Number of generations to produce.')
 flags.DEFINE_string('run_id', '', 'ID corresponding to the current run.')
 flags.DEFINE_string('local_run_dir', '',

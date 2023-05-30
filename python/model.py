@@ -371,8 +371,7 @@ class PolicyHead(tf.keras.layers.Layer):
         name='policy_output_pass',
         kernel_regularizer=L2(C_L2),
     )
-    # self.scaling_pass = tf.keras.layers.Rescaling(3e-1,
-    #                                               name='policy_output_scale')
+    self.pass_scaling = tf.Variable(1.0, name='policy_pass_scale')
 
     # save parameters for serialization
     self.channels = channels
@@ -387,8 +386,7 @@ class PolicyHead(tf.keras.layers.Layer):
 
     p = self.output_moves(p)
 
-    pass_logit = self.output_pass(g_pooled)
-    # pass_logit = self.scaling_pass(pass_logit)
+    pass_logit = self.pass_scaling * self.output_pass(g_pooled)
 
     p = self.flatten(tf.squeeze(p, axis=3))
 
@@ -593,7 +591,7 @@ class P3achyGoModel(tf.keras.Model):
     self.scce_logits = tf.keras.losses.SparseCategoricalCrossentropy(
         from_logits=True)
     self.scce = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)
-    self.cce = tf.keras.losses.CategoricalCrossentropy(from_logits=False)
+    self.mse = tf.keras.losses.MeanSquaredError()
     self.identity = tf.keras.layers.Activation(
         'linear')  # need for mixed-precision
 
@@ -633,15 +631,8 @@ class P3achyGoModel(tf.keras.Model):
            w_gamma):
     policy_loss = self.scce_logits(policy, pi_logits)
 
-    # tf.print('Policy Loss:', policy_loss)
-
     did_win = score >= 0
     outcome_loss = self.scce_logits(did_win, game_outcome)
-    # outcome_clip_max = 100.0
-    # outcome_loss = tf.clip_by_value(outcome_loss, -outcome_clip_max,
-    #                                  outcome_clip_max)
-
-    # tf.print('Outcome Loss:', outcome_loss)
 
     score_index = score + SCORE_RANGE_MIDPOINT
     score_distribution = tf.keras.activations.softmax(score_logits)
@@ -652,19 +643,11 @@ class P3achyGoModel(tf.keras.Model):
             tf.math.cumsum(score_distribution, axis=1)),
                            axis=1))
 
-    # tf.print('Score PDF Loss:', score_pdf_loss)
-    # tf.print('Score CDF Loss:', score_cdf_loss)
-    # tf.print('Score Loss:', score_loss)
-
-    # {-1, 0, 1} -> {0, .5, 1}
-    own = tf.cast((own + 1) / 2, dtype=tf.float32)
-    own_pred = (own_pred + 1) / 2
-    own_loss = self.cce(own, own_pred)
+    own_pred = tf.squeeze(own_pred, -1)  # tailing 1 dim.
+    own_loss = self.mse(own, own_pred)
 
     gamma = tf.squeeze(gamma, axis=-1)
     gamma_loss = tf.math.reduce_mean(gamma * gamma * w_gamma)
-
-    # tf.print('Gamma Loss:', gamma_loss)
 
     woutcome_loss = w_outcome * outcome_loss
     wscore_pdf_loss = w_score * score_pdf_loss
@@ -674,6 +657,21 @@ class P3achyGoModel(tf.keras.Model):
                         wown_loss) + wscore_cdf_loss
 
     loss = w_pi * policy_loss + val_loss + gamma_loss
+
+    # yapf: disable
+    # tf.print('Loss:', loss,
+    #          '\nPolicy Loss:', policy_loss,
+    #          '\nWeighted Policy Loss:', w_pi * policy_loss,
+    #          '\nOutcome Loss:', outcome_loss,
+    #          '\nWeighted Outcome Loss:', woutcome_loss,
+    #          '\nScore PDF Loss:', score_pdf_loss,
+    #          '\nWeighted Score PDF Loss:', wscore_pdf_loss,
+    #          '\nScore CDF Loss:', score_cdf_loss,
+    #          '\nWeighted Score CDF Loss:', wscore_cdf_loss,
+    #          '\nOwn Loss:', own_loss,
+    #          '\nWeighted Own Loss:', wown_loss,
+    #          '\nGamma Loss:', gamma_loss)
+    # yapf: enable
     return loss, policy_loss, outcome_loss, score_pdf_loss, own_loss
 
   def get_config(self):

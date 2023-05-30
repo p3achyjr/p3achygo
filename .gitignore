@@ -10,3 +10,6 @@ python/third_party/**
 python/scripts/estimate_score.py
 .vscode
 models/**
+
+cc/tensorflow/**
+!cc/tensorflow/BUILD
