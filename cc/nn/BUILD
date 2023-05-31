@@ -7,12 +7,8 @@ cc_library(
     deps = [
         "//cc/constants",
         "//cc/game",
-        "@org_tensorflow//tensorflow/cc:cc_ops",
-        "@org_tensorflow//tensorflow/cc:client_session",
-        "@org_tensorflow//tensorflow/cc:ops",
-        "@org_tensorflow//tensorflow/core",
-        "@org_tensorflow//tensorflow/core:framework",
-        "@org_tensorflow//tensorflow/core:lib",
+        "//cc/tensorflow",
+        "@com_google_absl//absl/status",
     ],
 )
 
@@ -24,16 +20,9 @@ cc_library(
         ":nn_board_utils",
         "//cc/constants",
         "//cc/game",
+        "//cc/tensorflow",
         "@com_google_absl//absl/container:inlined_vector",
         "@com_google_absl//absl/status:statusor",
-        "@org_tensorflow//tensorflow/cc:cc_ops",
-        "@org_tensorflow//tensorflow/cc:client_session",
-        "@org_tensorflow//tensorflow/cc:ops",
-        "@org_tensorflow//tensorflow/cc/saved_model:loader",
-        "@org_tensorflow//tensorflow/cc/saved_model:tag_constants",
-        "@org_tensorflow//tensorflow/core",
-        "@org_tensorflow//tensorflow/core:framework",
-        "@org_tensorflow//tensorflow/core:lib",
     ],
 )
 

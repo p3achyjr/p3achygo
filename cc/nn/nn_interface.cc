@@ -8,7 +8,6 @@
 #include "tensorflow/cc/ops/array_ops.h"
 #include "tensorflow/cc/ops/math_ops.h"
 #include "tensorflow/cc/ops/nn_ops.h"
-#include "tensorflow/cc/saved_model/tag_constants.h"
 #include "tensorflow/core/graph/default_device.h"
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/public/session.h"
@@ -53,6 +52,8 @@ static constexpr char kOut32ValueProbsName[] = "out32_value_probs";
 static constexpr char kOut32OwnerLogitsName[] = "out32_owner_logits";
 static constexpr char kOut32ScoreProbsName[] = "out32_score_probs";
 static constexpr char kOut32MoveProbsName[] = "out32_move_probs";
+
+static constexpr char kSavedModelTagServe[] = "serve";
 
 }  // namespace
 
@@ -124,9 +125,8 @@ NNInterface::~NNInterface() {
 }
 
 absl::Status NNInterface::Initialize(std::string&& model_path) {
-  auto status =
-      LoadSavedModel(session_options_, run_options_, model_path,
-                     {tensorflow::kSavedModelTagServe}, &model_bundle_);
+  auto status = LoadSavedModel(session_options_, run_options_, model_path,
+                               {kSavedModelTagServe}, &model_bundle_);
   if (!status.ok()) {
     return ToAbslStatus(status);
   }
@@ -189,8 +189,8 @@ absl::Status NNInterface::LoadBatch(int thread_id, const game::Game& game,
   }
 
   DCHECK(game.moves().size() >= constants::kNumLastMoves);
-  NNBoardUtils::FillNNInput(thread_id, batch_size_, input_feature_buf_,
-                            input_state_buf_, game, color_to_move);
+  board_utils::FillNNInput(thread_id, batch_size_, input_feature_buf_,
+                           input_state_buf_, game, color_to_move);
 
   mu_.Lock();
   thread_info_[thread_id].loaded = true;

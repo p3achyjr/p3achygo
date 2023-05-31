@@ -6,10 +6,11 @@
 #include "tensorflow/cc/ops/math_ops.h"
 
 namespace nn {
+namespace board_utils {
 
 using namespace ::tensorflow;
 
-Tensor NNBoardUtils::GetBlack(const game::Board& board) {
+Tensor GetBlack(const game::Board& board) {
   Tensor t(DataType::DT_FLOAT, {BOARD_LEN, BOARD_LEN});
   auto t_data = t.matrix<float>();
   for (auto i = 0; i < BOARD_LEN; ++i) {
@@ -21,7 +22,7 @@ Tensor NNBoardUtils::GetBlack(const game::Board& board) {
   return t;
 }
 
-Tensor NNBoardUtils::GetWhite(const game::Board& board) {
+Tensor GetWhite(const game::Board& board) {
   Tensor t(DataType::DT_FLOAT, {BOARD_LEN, BOARD_LEN});
   auto t_data = t.matrix<float>();
   for (auto i = 0; i < BOARD_LEN; ++i) {
@@ -33,7 +34,7 @@ Tensor NNBoardUtils::GetWhite(const game::Board& board) {
   return t;
 }
 
-Tensor NNBoardUtils::AsOneHot(game::Loc loc) {
+Tensor AsOneHot(game::Loc loc) {
   Tensor t(DataType::DT_FLOAT, {BOARD_LEN, BOARD_LEN});
   if (loc.i == -1 && loc.j == -1) {
     return t;
@@ -43,10 +44,9 @@ Tensor NNBoardUtils::AsOneHot(game::Loc loc) {
   return t;
 }
 
-/* static */ void NNBoardUtils::FillNNInput(int batch_id, int batch_size,
-                                            Tensor& input_features,
-                                            Tensor& input_state,
-                                            const game::Game& game, int color) {
+/* static */ void FillNNInput(int batch_id, int batch_size,
+                              Tensor& input_features, Tensor& input_state,
+                              const game::Game& game, int color) {
   DCHECK(game.moves().size() >= 5);
 
   const auto& board = game.board();
@@ -80,4 +80,5 @@ Tensor NNBoardUtils::AsOneHot(game::Loc loc) {
   input_state.matrix<float>()(batch_id, 0) = board.komi() / 15.0;
 }
 
+}  // namespace board_utils
 }  // namespace nn

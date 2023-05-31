@@ -23,11 +23,10 @@ cc_binary(
         "//cc/core",
         "//cc/game",
         "//cc/nn",
+        "//cc/tensorflow",
         "@com_google_absl//absl/flags:flag",
         "@com_google_absl//absl/flags:parse",
         "@com_google_absl//absl/log",
-        "@org_tensorflow//tensorflow/cc:client_session",
-        "@org_tensorflow//tensorflow/core",
     ],
 )
 
