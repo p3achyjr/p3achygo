@@ -69,7 +69,7 @@ ChunkManager::ChunkManager(std::string dir, int gen, float p,
       watcher_(dir_, exclude_gens_),
       fbuffer_(watcher_.GetFiles()),
       running_(true) {
-  fs_thread_ = std::move(std::thread(&ChunkManager::FsThread, this));
+  fs_thread_ = std::thread(&ChunkManager::FsThread, this);
 }
 
 ChunkManager::~ChunkManager() {
