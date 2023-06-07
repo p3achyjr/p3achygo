@@ -63,7 +63,7 @@ GameRecorderImpl::GameRecorderImpl(std::string path, int num_threads,
       should_flush_(false),
       num_threads_(num_threads),
       flush_interval_(flush_interval) {
-  io_thread_ = std::move(std::thread(&GameRecorderImpl::IoThread, this));
+  io_thread_ = std::thread(&GameRecorderImpl::IoThread, this);
 }
 
 GameRecorderImpl::~GameRecorderImpl() {
@@ -93,10 +93,17 @@ void GameRecorderImpl::IoThread() {
     LOG(INFO) << "Flushing...";
 
     auto begin = std::chrono::high_resolution_clock::now();
+
+    // Lock all threads.
     for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
       thread_mus_[thread_id].Lock();
-      sgf_recorder_->FlushThread(thread_id);
-      tf_recorder_->FlushThread(thread_id);
+    }
+
+    sgf_recorder_->Flush();
+    tf_recorder_->Flush();
+
+    // Unlock all threads.
+    for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
       thread_mus_[thread_id].Unlock();
     }
     auto end = std::chrono::high_resolution_clock::now();

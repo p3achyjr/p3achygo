@@ -36,20 +36,20 @@ class SgfRecorderImpl final : public SgfRecorder {
 
   // Recorder Impl.
   void RecordGame(int thread_id, const Game& game) override;
-  void FlushThread(int thread_id) override;
+  void Flush() override;
 
  private:
   std::unique_ptr<SgfNode> ToSgfNode(const Game& game);
 
   const std::string path_;
-  const int num_threads_;
   std::array<std::vector<std::unique_ptr<SgfNode>>, constants::kMaxNumThreads>
       sgfs_;
-  int games_written_;
+  const int num_threads_;
+  int batch_num_;
 };
 
 SgfRecorderImpl::SgfRecorderImpl(std::string path, int num_threads)
-    : path_(path), num_threads_(num_threads), games_written_(0) {}
+    : path_(path), num_threads_(num_threads), batch_num_(0) {}
 
 void SgfRecorderImpl::RecordGame(int thread_id, const Game& game) {
   CHECK(game.has_result());
@@ -84,26 +84,35 @@ std::unique_ptr<SgfNode> SgfRecorderImpl::ToSgfNode(const Game& game) {
   return root_node;
 }
 
-void SgfRecorderImpl::FlushThread(int thread_id) {
-  // this function assumes that it is not called concurrently. It also assumes
-  // that no thread calls `RecordGame` while this function is running.
-  std::vector<std::unique_ptr<SgfNode>>& thread_sgfs = sgfs_[thread_id];
-  if (thread_sgfs.empty()) {
-    return;
-  }
-
+// Only one thread can call this function. Additionally, no thread can call
+// `RecordGame` while this function is running.
+void SgfRecorderImpl::Flush() {
+  int games_in_batch = 0;
+  std::string sgfs = "";
   SgfSerializer serializer;
-  for (const auto& sgf : thread_sgfs) {
-    std::string path =
-        FilePath(path_) / absl::StrFormat("game_%d.sgf", games_written_);
+  for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
+    std::vector<std::unique_ptr<SgfNode>>& thread_sgfs = sgfs_[thread_id];
+    if (thread_sgfs.empty()) {
+      continue;
+    }
 
-    FILE* const sgf_file = fopen(path.c_str(), "w");
-    absl::FPrintF(sgf_file, "%s", serializer.Serialize(sgf.get()));
-    fclose(sgf_file);
+    for (const auto& sgf : thread_sgfs) {
+      sgfs += serializer.Serialize(sgf.get());
+      sgfs += "\n";
 
-    ++games_written_;
+      ++games_in_batch;
+    }
+    thread_sgfs.clear();
   }
-  thread_sgfs.clear();
+
+  std::string path =
+      FilePath(path_) /
+      absl::StrFormat("game_b%d_g%d.sgfs", batch_num_, games_in_batch);
+  FILE* const sgf_file = fopen(path.c_str(), "w");
+  absl::FPrintF(sgf_file, "%s", sgfs);
+  fclose(sgf_file);
+
+  ++batch_num_;
 }
 }  // namespace
 

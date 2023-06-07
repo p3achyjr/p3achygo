@@ -71,7 +71,7 @@ class TfRecorderImpl final : public TfRecorder {
   TfRecorderImpl& operator=(TfRecorderImpl&&) = delete;
 
   void RecordGame(int thread_id, const Game& game) override;
-  void FlushThread(int thread_id) override;
+  void Flush() override;
 
  private:
   const std::string path_;
@@ -79,11 +79,15 @@ class TfRecorderImpl final : public TfRecorder {
 
   std::array<std::vector<tensorflow::Example>, constants::kMaxNumThreads>
       tf_examples_;
+  std::array<int, constants::kMaxNumThreads> thread_game_counts_;
   int batch_num_;
 };
 
 TfRecorderImpl::TfRecorderImpl(std::string path, int num_threads)
-    : path_(path), num_threads_(num_threads), batch_num_(0) {}
+    : path_(path),
+      num_threads_(num_threads),
+      thread_game_counts_{},
+      batch_num_(0) {}
 
 void TfRecorderImpl::RecordGame(int thread_id, const Game& game) {
   CHECK(game.has_result());
@@ -111,37 +115,59 @@ void TfRecorderImpl::RecordGame(int thread_id, const Game& game) {
                       move.color, game.komi(), game.board_len()));
     board.PlayMove(move.loc, move.color);
   }
+
+  ++thread_game_counts_[thread_id];
 }
 
-void TfRecorderImpl::FlushThread(int thread_id) {
-  // this function assumes that it is not called concurrently. It also assumes
-  // that no thread calls `RecordGame` while this function is running.
-  std::vector<tensorflow::Example>& thread_examples = tf_examples_[thread_id];
-  if (thread_examples.empty()) {
-    return;
-  }
+// Only one thread can call this method. Additionally, no thread can call
+// `RecordGame` while this method is running.
+void TfRecorderImpl::Flush() {
+  int num_games =
+      std::accumulate(thread_game_counts_.begin(),
+                      thread_game_counts_.begin() + num_threads_, 0);
+  int num_examples = std::accumulate(
+      tf_examples_.begin(), tf_examples_.begin() + num_threads_, 0,
+      [](int n, const std::vector<tensorflow::Example>& examples) {
+        return n + examples.size();
+      });
 
+  // Create File.
   std::string path =
-      FilePath(path_) / absl::StrFormat("batch_%d.tfrecord.zz", batch_num_);
-
+      FilePath(path_) / absl::StrFormat("batch_b%d_g%d_n%d.tfrecord.zz",
+                                        batch_num_, num_games, num_examples);
   std::unique_ptr<tensorflow::WritableFile> file;
   TF_CHECK_OK(tensorflow::Env::Default()->NewWritableFile(path, &file));
 
+  // Create Writer.
   RecordWriterOptions options;
   options.compression_type = RecordWriterOptions::ZLIB_COMPRESSION;
   options.zlib_options.compression_level = 2;
   RecordWriter writer(file.get(), options);
 
-  for (const auto& example : thread_examples) {
-    std::string data;
-    example.SerializeToString(&data);
-    TF_CHECK_OK(writer.WriteRecord(data));
+  // Flush each thread.
+  for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
+    std::vector<tensorflow::Example>& thread_examples = tf_examples_[thread_id];
+    if (thread_examples.empty()) {
+      continue;
+    }
+
+    for (const auto& example : thread_examples) {
+      std::string data;
+      example.SerializeToString(&data);
+      TF_CHECK_OK(writer.WriteRecord(data));
+    }
+
+    thread_examples.clear();
   }
 
+  // Close file.
   TF_CHECK_OK(writer.Close());
   TF_CHECK_OK(file->Close());
 
+  // Update metadata fields.
   ++batch_num_;
+  std::fill(thread_game_counts_.begin(),
+            thread_game_counts_.begin() + num_threads_, 0);
 }
 }  // namespace
 

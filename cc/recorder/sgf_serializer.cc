@@ -32,7 +32,7 @@ std::string SgfString(const Loc& loc) {
 std::string SgfSerializer::Serialize(const SgfNode* node) {
   sgf_ = "(";
   VisitNode(node, true);
-  sgf_ += ")\n";
+  sgf_ += ")";
 
   return sgf_;
 }
