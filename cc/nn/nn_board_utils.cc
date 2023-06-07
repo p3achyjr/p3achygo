@@ -2,16 +2,18 @@
 
 #include "absl/log/check.h"
 #include "cc/constants/constants.h"
+#include "cc/nn/create_tensor_shape.h"
 #include "tensorflow/cc/ops/array_ops.h"
 #include "tensorflow/cc/ops/math_ops.h"
 
 namespace nn {
 namespace board_utils {
 
+using namespace ::nn;
 using namespace ::tensorflow;
 
 Tensor GetBlack(const game::Board& board) {
-  Tensor t(DataType::DT_FLOAT, {BOARD_LEN, BOARD_LEN});
+  Tensor t(DataType::DT_FLOAT, CreateTensorShape({BOARD_LEN, BOARD_LEN}));
   auto t_data = t.matrix<float>();
   for (auto i = 0; i < BOARD_LEN; ++i) {
     for (auto j = 0; j < BOARD_LEN; ++j) {
@@ -23,7 +25,7 @@ Tensor GetBlack(const game::Board& board) {
 }
 
 Tensor GetWhite(const game::Board& board) {
-  Tensor t(DataType::DT_FLOAT, {BOARD_LEN, BOARD_LEN});
+  Tensor t(DataType::DT_FLOAT, CreateTensorShape({BOARD_LEN, BOARD_LEN}));
   auto t_data = t.matrix<float>();
   for (auto i = 0; i < BOARD_LEN; ++i) {
     for (auto j = 0; j < BOARD_LEN; ++j) {
@@ -35,7 +37,7 @@ Tensor GetWhite(const game::Board& board) {
 }
 
 Tensor AsOneHot(game::Loc loc) {
-  Tensor t(DataType::DT_FLOAT, {BOARD_LEN, BOARD_LEN});
+  Tensor t(DataType::DT_FLOAT, CreateTensorShape({BOARD_LEN, BOARD_LEN}));
   if (loc.i == -1 && loc.j == -1) {
     return t;
   }

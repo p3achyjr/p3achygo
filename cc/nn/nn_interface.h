@@ -15,8 +15,8 @@
 #include "tensorflow/cc/saved_model/loader.h"
 
 namespace tensorflow {
-class Tensor;
 class GraphDef;
+class Tensor;
 }  // namespace tensorflow
 
 namespace nn {

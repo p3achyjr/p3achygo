@@ -1,11 +1,10 @@
-#include "cc/nn/nn_interface.h"
-
 #include <stdlib.h>
 
 #include "absl/log/check.h"
 #include "absl/synchronization/mutex.h"
 #include "cc/nn/create_tensor_shape.h"
 #include "cc/nn/nn_board_utils.h"
+#include "cc/nn/nn_interface.h"
 #include "tensorflow/cc/ops/array_ops.h"
 #include "tensorflow/cc/ops/math_ops.h"
 #include "tensorflow/cc/ops/nn_ops.h"
@@ -25,32 +24,26 @@ static constexpr int kScoreIndex = 3;
 static constexpr int kMoveProbsIndex = 4;
 
 static const std::vector<std::string> kInputNames = {
-    "infer_mixed_board_state:0",
-    "infer_mixed_game_state:0",
+    "serving_default_args_0:0",
+    "serving_default_args_1:0",
 };
 
 static const std::vector<std::string> kOutputNames = {
-    "StatefulPartitionedCall:0", "StatefulPartitionedCall:1",
-    "StatefulPartitionedCall:2", "StatefulPartitionedCall:3",
-    "StatefulPartitionedCall:4",
+    "PartitionedCall:0", "PartitionedCall:1", "PartitionedCall:2",
+    "PartitionedCall:3", "PartitionedCall:4",
 };
 
 // input feed and fetch names for F32 -> F16 cast.
 static constexpr char kInput32BoardName[] = "input32_board_state";
 static constexpr char kInput32GameName[] = "input32_game_state";
 
-static constexpr char kInput16BoardName[] = "input16_board_state";
-static constexpr char kInput16GameName[] = "input16_game_state";
-
 // output feed and fetch names for F16 -> F32 cast.
-static constexpr char kOut16MoveLogitsName[] = "out16_move_logits";
-static constexpr char kOut16ValueLogitsName[] = "out16_value_logits";
-static constexpr char kOut16OwnerLogitsName[] = "out16_owner_logits";
-static constexpr char kOut16ScoreLogitsName[] = "out16_score_logits";
-
 static constexpr char kOut32MoveLogitsName[] = "out32_move_logits";
-static constexpr char kOut32ValueProbsName[] = "out32_value_probs";
+static constexpr char kOut32ValueLogitsName[] = "out32_value_logits";
 static constexpr char kOut32OwnerLogitsName[] = "out32_owner_logits";
+static constexpr char kOut32ScoreLogitsName[] = "out32_score_logits";
+
+static constexpr char kOut32ValueProbsName[] = "out32_value_probs";
 static constexpr char kOut32ScoreProbsName[] = "out32_score_probs";
 static constexpr char kOut32MoveProbsName[] = "out32_move_probs";
 
@@ -61,9 +54,7 @@ static constexpr char kSavedModelTagServe[] = "serve";
 NNInterface::NNInterface(int num_threads)
     : session_options_(SessionOptions()),
       run_options_(RunOptions()),
-      scope_cast_input_(Scope::NewRootScope()),
       scope_cast_output_(Scope::NewRootScope()),
-      session_cast_input_(tensorflow::NewSession(session_options_)),
       session_cast_output_(tensorflow::NewSession(session_options_)),
       is_initialized_(false),
       num_threads_(num_threads),
@@ -72,36 +63,30 @@ NNInterface::NNInterface(int num_threads)
       running_(true),
       last_infer_time_(
           std::chrono::time_point<std::chrono::steady_clock>::max()) {
-  input_feature_buf_ =
+  nn_input_buf_ = {
       Tensor(DataType::DT_FLOAT,
              CreateTensorShape({batch_size_, BOARD_LEN, BOARD_LEN,
-                                constants::kNumInputFeaturePlanes}));
-  input_state_buf_ =
-      Tensor(DataType::DT_FLOAT, CreateTensorShape({batch_size_, 1}));
-  nn_input_buf_ = {
-      Tensor(DataType::DT_HALF,
-             CreateTensorShape({batch_size_, BOARD_LEN, BOARD_LEN,
                                 constants::kNumInputFeaturePlanes})),
-      Tensor(DataType::DT_HALF, CreateTensorShape({batch_size_, 1}))};
+      Tensor(DataType::DT_FLOAT, CreateTensorShape({batch_size_, 1}))};
 
-  input_feature_buf_.flat<float>().setZero();
-  input_state_buf_.flat<float>().setZero();
+  nn_input_buf_[0].flat<float>().setZero();
+  nn_input_buf_[1].flat<float>().setZero();
 
   nn_output_buf_ = {
       // move logits
-      Tensor(DataType::DT_HALF,
+      Tensor(DataType::DT_FLOAT,
              CreateTensorShape({batch_size_, constants::kMaxNumMoves})),
       // win percent
-      Tensor(DataType::DT_HALF,
+      Tensor(DataType::DT_FLOAT,
              CreateTensorShape({batch_size_, constants::kNumValueLogits})),
       // ownership
-      Tensor(DataType::DT_HALF,
+      Tensor(DataType::DT_FLOAT,
              CreateTensorShape({batch_size_, BOARD_LEN, BOARD_LEN, 1})),
       // score prediction
-      Tensor(DataType::DT_HALF,
+      Tensor(DataType::DT_FLOAT,
              CreateTensorShape({batch_size_, constants::kNumScoreLogits})),
       // gamma, just ignore
-      Tensor(DataType::DT_HALF, CreateTensorShape({batch_size_, 1}))};
+      Tensor(DataType::DT_FLOAT, CreateTensorShape({batch_size_, 1}))};
 
   result_buf_ = {
       // move logits
@@ -150,39 +135,26 @@ absl::Status NNInterface::Initialize(std::string&& model_path) {
                                 DataType::DT_FLOAT);
   auto game = ops::Placeholder(scope_cast_input_.WithOpName(kInput32GameName),
                                DataType::DT_FLOAT);
-  auto cast_board = ops::Cast(scope_cast_input_.WithOpName(kInput16BoardName),
-                              board, DataType::DT_HALF);
-  auto cast_game = ops::Cast(scope_cast_input_.WithOpName(kInput16GameName),
-                             game, DataType::DT_HALF);
 
   TF_CHECK_OK(scope_cast_input_.ToGraphDef(&gdef_cast_input_));
   TF_CHECK_OK(session_cast_input_->Create(gdef_cast_input_));
 
-  // Create graph to cast output to float.
+  // Raw nn output fetches.
   auto move_logits = ops::Placeholder(
-      scope_cast_output_.WithOpName(kOut16MoveLogitsName), DataType::DT_HALF);
+      scope_cast_output_.WithOpName(kOut32MoveLogitsName), DataType::DT_FLOAT);
   auto value_logits = ops::Placeholder(
-      scope_cast_output_.WithOpName(kOut16ValueLogitsName), DataType::DT_HALF);
+      scope_cast_output_.WithOpName(kOut32ValueLogitsName), DataType::DT_FLOAT);
   auto owner_logits = ops::Placeholder(
-      scope_cast_output_.WithOpName(kOut16OwnerLogitsName), DataType::DT_HALF);
+      scope_cast_output_.WithOpName(kOut32OwnerLogitsName), DataType::DT_FLOAT);
   auto score_logits = ops::Placeholder(
-      scope_cast_output_.WithOpName(kOut16ScoreLogitsName), DataType::DT_HALF);
+      scope_cast_output_.WithOpName(kOut32ScoreLogitsName), DataType::DT_FLOAT);
 
-  auto cast_move_logits =
-      ops::Cast(scope_cast_output_.WithOpName(kOut32MoveLogitsName),
-                move_logits, DataType::DT_FLOAT);
   auto value_probs = ops::Softmax(
-      scope_cast_output_.WithOpName(kOut32ValueProbsName),
-      ops::Cast(scope_cast_output_, value_logits, DataType::DT_FLOAT));
-  auto cast_owner_logits =
-      ops::Cast(scope_cast_output_.WithOpName(kOut32OwnerLogitsName),
-                owner_logits, DataType::DT_FLOAT);
+      scope_cast_output_.WithOpName(kOut32ValueProbsName), scope_cast_output_);
   auto score_probs = ops::Softmax(
-      scope_cast_output_.WithOpName(kOut32ScoreProbsName),
-      ops::Cast(scope_cast_output_, score_logits, DataType::DT_FLOAT));
+      scope_cast_output_.WithOpName(kOut32ScoreProbsName), scope_cast_output_);
   auto move_probs = ops::Softmax(
-      scope_cast_output_.WithOpName(kOut32MoveProbsName),
-      ops::Cast(scope_cast_output_, move_logits, DataType::DT_FLOAT));
+      scope_cast_output_.WithOpName(kOut32MoveProbsName), scope_cast_output_);
 
   TF_CHECK_OK(scope_cast_output_.ToGraphDef(&gdef_cast_output_));
   TF_CHECK_OK(session_cast_output_->Create(gdef_cast_output_));
@@ -202,8 +174,8 @@ absl::Status NNInterface::LoadBatch(int thread_id, const game::Game& game,
   }
 
   DCHECK(game.moves().size() >= constants::kNumLastMoves);
-  board_utils::FillNNInput(thread_id, batch_size_, input_feature_buf_,
-                           input_state_buf_, game, color_to_move);
+  board_utils::FillNNInput(thread_id, batch_size_, nn_input_buf_[0],
+                           nn_input_buf_[1], game, color_to_move);
 
   mu_.Lock();
   thread_info_[thread_id].loaded = true;
@@ -285,13 +257,6 @@ void NNInterface::Infer() {
     return;
   }
 
-  // Cast to half.
-  std::vector<std::pair<std::string, Tensor>> cast_input = {
-      {kInput32BoardName, input_feature_buf_},
-      {kInput32GameName, input_state_buf_}};
-  TF_CHECK_OK(session_cast_input_->Run(
-      cast_input, {kInput16BoardName, kInput16GameName}, {}, &nn_input_buf_));
-
   // Run Inference.
   std::vector<std::pair<std::string, Tensor>> nn_input = {
       {kInputNames[0], nn_input_buf_[0]}, {kInputNames[1], nn_input_buf_[1]}};
@@ -300,10 +265,10 @@ void NNInterface::Infer() {
 
   // cast back to float
   std::vector<std::pair<std::string, Tensor>> result_input = {
-      {kOut16MoveLogitsName, nn_output_buf_[kMoveIndex]},
-      {kOut16ValueLogitsName, nn_output_buf_[kValueIndex]},
-      {kOut16OwnerLogitsName, nn_output_buf_[kOwnerIndex]},
-      {kOut16ScoreLogitsName, nn_output_buf_[kScoreIndex]}};
+      {kOut32MoveLogitsName, nn_output_buf_[kMoveIndex]},
+      {kOut32ValueLogitsName, nn_output_buf_[kValueIndex]},
+      {kOut32OwnerLogitsName, nn_output_buf_[kOwnerIndex]},
+      {kOut32ScoreLogitsName, nn_output_buf_[kScoreIndex]}};
   TF_CHECK_OK(session_cast_output_->Run(
       result_input,
       {kOut32MoveLogitsName, kOut32ValueProbsName, kOut32OwnerLogitsName,
@@ -311,8 +276,8 @@ void NNInterface::Infer() {
       {}, &result_buf_));
 
   // reset input buffers
-  input_feature_buf_.flat<float>().setZero();
-  input_state_buf_.flat<float>().setZero();
+  nn_input_buf_[0].flat<float>().setZero();
+  nn_input_buf_[1].flat<float>().setZero();
 
   for (auto& thread : thread_info_) {
     if (thread.registered) {
