@@ -25,53 +25,6 @@ http_archive(
     urls = ["https://github.com/abseil/abseil-cpp/archive/a0f9b465212aea24d3264b82d315b8ee59e8d7a0.zip"],
 )
 
-# git_repository(
-#     name = "com_google_absl",
-#     remote = "https://github.com/abseil/abseil-cpp.git",
-#     tag = "20230125.0",
-# )
-
-http_archive(
-    name = "org_tensorflow",
-    sha256 = "99c732b92b1b37fc243a559e02f9aef5671771e272758aa4aec7f34dc92dac48",
-    strip_prefix = "tensorflow-2.11.0",
-    urls = [
-        "https://github.com/tensorflow/tensorflow/archive/refs/tags/v2.11.0.tar.gz",
-    ],
-)
-
-# git_repository(
-#     name = "org_tensorflow",
-#     branch = "r2.11",
-#     remote = "https://github.com/tensorflow/tensorflow.git",
-# )
-
-# http_archive(
-#     name = "org_tensorflow",
-#     sha256 = "71c3e72584107eafa42ae1cdbbda70b7944c681b47b3c0f5c65a8f36fc6d26f4",
-#     strip_prefix = "tensorflow-325aa485592338bc4799ea5e28aa568299cb2b9b",
-#     urls = [
-#         "https://github.com/tensorflow/tensorflow/archive/325aa485592338bc4799ea5e28aa568299cb2b9b.tar.gz",
-#     ],
-# )
-
-# Initialize TensorFlow's external dependencies.
-load("@org_tensorflow//tensorflow:workspace3.bzl", "workspace")
-
-workspace()
-
-load("@org_tensorflow//tensorflow:workspace2.bzl", "workspace")
-
-workspace()
-
-load("@org_tensorflow//tensorflow:workspace1.bzl", "workspace")
-
-workspace()
-
-load("@org_tensorflow//tensorflow:workspace0.bzl", "workspace")
-
-workspace()
-
 # Hedron's Compile Commands Extractor for Bazel
 # https://github.com/hedronvision/bazel-compile-commands-extractor
 http_archive(
@@ -87,14 +40,3 @@ http_archive(
 load("@hedron_compile_commands//:workspace_setup.bzl", "hedron_compile_commands_setup")
 
 hedron_compile_commands_setup()
-
-# Initialize bazel package rules' external dependencies.
-load("@rules_pkg//:deps.bzl", "rules_pkg_dependencies")
-
-rules_pkg_dependencies()
-
-load("@rules_proto//proto:repositories.bzl", "rules_proto_dependencies", "rules_proto_toolchains")
-
-rules_proto_dependencies()
-
-rules_proto_toolchains()
