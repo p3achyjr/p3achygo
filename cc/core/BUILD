@@ -32,7 +32,10 @@ cc_library(
 
 cc_library(
     name = "probability",
-    srcs = ["probability.cc"],
+    srcs = select({
+        "//cc:test": ["probability_dummy.cc"],
+        "//conditions:default": ["probability.cc"],
+    }),
     hdrs = ["probability.h"],
     deps = [":rand"],
 )

@@ -5,6 +5,7 @@ cc_library(
     srcs = ["gumbel.cc"],
     hdrs = ["gumbel.h"],
     deps = [
+        ":leaf_evaluator",
         ":tree",
         "//cc/constants",
         "//cc/core",
@@ -13,6 +14,31 @@ cc_library(
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/status:statusor",
+    ],
+)
+
+cc_test(
+    name = "gumbel_test",
+    srcs = ["gumbel_test.cc"],
+    deps = [
+        ":gumbel",
+        "//cc/core",
+        "//cc/core:doctest",
+    ],
+)
+
+cc_library(
+    name = "leaf_evaluator",
+    srcs = select({
+        "//cc:test": ["leaf_evaluator_dummy.cc"],
+        "//conditions:default": ["leaf_evaluator.cc"],
+    }),
+    hdrs = ["leaf_evaluator.h"],
+    deps = [
+        ":tree",
+        "//cc/game",
+        "//cc/nn:nn_interface",
+        "@com_google_absl//absl/log:check",
     ],
 )
 

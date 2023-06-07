@@ -2,7 +2,9 @@
 #define __MCTS_GUMBEL_H_
 
 #include "cc/core/probability.h"
+#include "cc/game/color.h"
 #include "cc/game/game.h"
+#include "cc/mcts/leaf_evaluator.h"
 #include "cc/mcts/tree.h"
 #include "cc/nn/nn_interface.h"
 
@@ -26,27 +28,28 @@ class GumbelEvaluator final {
   // and the selected move.
   std::pair<game::Loc, game::Loc> SearchRoot(core::Probability& probability,
                                              game::Game& game, TreeNode* node,
-                                             int color_to_move, int n, int k);
+                                             game::Color color_to_move, int n,
+                                             int k);
 
  private:
   // Runs Gumbel non-root search path until leaf, and returns the search path
   // excluding root.
   std::vector<TreeNode*> SearchNonRoot(game::Game& game, TreeNode* node,
-                                       int color_to_move,
-                                       float root_score_estimate);
+                                       game::Color color_to_move,
+                                       float root_score_est);
 
   // Calls `InitTreeNode` and fills initial stats.
-  void EvaluateLeaf(game::Game& game, TreeNode* node, int color_to_move,
-                    float root_score_estimate);
+  void EvaluateLeaf(game::Game& game, TreeNode* node, game::Color color_to_move,
+                    float root_score_est);
 
   // Evaluates a leaf node using the neural net.
-  void InitTreeNode(TreeNode* node, const game::Game& game, int color_to_move);
+  void InitTreeNode(TreeNode* node, const game::Game& game,
+                    game::Color color_to_move);
 
   // Updates all nodes in tree, based on leaf evaluation.
   void Backward(std::vector<TreeNode*>& path);
 
-  nn::NNInterface* nn_interface_;
-  int thread_id_;
+  std::unique_ptr<LeafEvaluator> leaf_evaluator_;
 };
 
 }  // namespace mcts
