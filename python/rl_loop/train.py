@@ -26,12 +26,9 @@ FLAGS = flags.FLAGS
 
 POLL_INTERVAL_S = 10
 BATCH_SIZE = 256
-LR = 1e-2
+LR = 3e-3
 EPOCHS_PER_GEN = 1
 MOMENTUM = .9
-
-# keep in sync with cc/constants.cc: kMaxNumThreads
-MAX_INFER_BATCH_SIZE = 64
 
 flags.DEFINE_integer('num_generations', 10, 'Number of generations to produce.')
 flags.DEFINE_string('run_id', '', 'ID corresponding to the current run.')

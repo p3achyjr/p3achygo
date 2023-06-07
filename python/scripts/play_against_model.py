@@ -21,12 +21,15 @@ def model_move(model, board, last_moves, game_state, color):
       transforms.get_white(tf.constant(board.board)),
       transforms.get_black(tf.constant(board.board))
   ])
-  # print(x.numpy())
+  print(x.numpy())
   x = tf.concat([x, list(last_moves)], axis=0)
   x = tf.expand_dims(x, axis=0)
   x = tf.transpose(x, (0, 2, 3, 1))  # nchw -> nhwc
   move_logits, game_outcome, game_ownership, score_logits, gamma = model(
       x, game_state)
+
+  for i, logit in enumerate(move_logits.numpy()[0]):
+    print(f'{i//19, i % 19}', logit)
 
   score_sample = tf.random.categorical(logits=score_logits,
                                        num_samples=5).numpy() - 399.5

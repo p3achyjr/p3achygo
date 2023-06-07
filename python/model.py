@@ -118,7 +118,7 @@ class ResidualBlock(tf.keras.layers.Layer):
     for block in self.blocks:
       x = block(x, training=training)
 
-    return self.activation(x + res)
+    return self.activation(res + x)
 
 
 class BottleneckResidualConvBlock(ResidualBlock):
@@ -338,14 +338,13 @@ class PolicyHead(tf.keras.layers.Layer):
 
   Layers:
 
-  1) 2 parallel convolutions outputting P, G, tensors of dim b x b x `channels`
-  2) A global pooling bias layer biasing G to P (i.e. P = P + gpool(G))
-  3) Batch normalization of P
-  4) A 1x1 convolution outputting a single b x b matrix with move logits
-  5) A dense layer for gpool(G) to a single output containing the pass logit
+  1) Broadcast Residual Block
+  2) Batch normalization of P
+  3) A 1x1x1 Convolution to logits on the board.
+  4) An FC layer from gpool
   '''
 
-  def __init__(self, channels=32, name=None):
+  def __init__(self, channels=32, board_len=BOARD_LEN, name=None):
     super(PolicyHead, self).__init__(name=name)
     self.conv_p = tf.keras.layers.Conv2D(channels,
                                          1,
@@ -358,8 +357,10 @@ class PolicyHead(tf.keras.layers.Layer):
                                          kernel_regularizer=L2(C_L2),
                                          name='policy_conv_g')
     self.gpool = GlobalPoolBias(channels)
-    self.batch_norm = tf.keras.layers.BatchNormalization(
-        scale=False, momentum=.999, epsilon=1e-3, name='batch_norm_gpool')
+    self.batch_norm = tf.keras.layers.BatchNormalization(scale=False,
+                                                         momentum=.999,
+                                                         epsilon=1e-3,
+                                                         name='policy_bn')
     self.flatten = tf.keras.layers.Flatten()
     self.output_moves = tf.keras.layers.Conv2D(1,
                                                1,
@@ -371,10 +372,10 @@ class PolicyHead(tf.keras.layers.Layer):
         name='policy_output_pass',
         kernel_regularizer=L2(C_L2),
     )
-    self.pass_scaling = tf.Variable(1.0, name='policy_pass_scale')
 
     # save parameters for serialization
     self.channels = channels
+    self.board_len = board_len
 
   def call(self, x, training=False):
     p = self.conv_p(x)
@@ -386,7 +387,9 @@ class PolicyHead(tf.keras.layers.Layer):
 
     p = self.output_moves(p)
 
-    pass_logit = self.pass_scaling * self.output_pass(g_pooled)
+    # Hacky, but forces model to learn when to pass, rather than to learn when
+    # not to.
+    pass_logit = self.output_pass(g_pooled) - 5
 
     p = self.flatten(tf.squeeze(p, axis=3))
 
@@ -395,13 +398,14 @@ class PolicyHead(tf.keras.layers.Layer):
   def get_config(self):
     return {
         'channels': self.channels,
+        'board_len': self.board_len,
         'name': self.name,
     }
 
 
 class ValueHead(tf.keras.layers.Layer):
   '''
-  Implementation of KataGo policy head.
+  Implementation of KataGo value head.
 
   Input: b x b x c feature matrix 
   Output:
@@ -411,16 +415,21 @@ class ValueHead(tf.keras.layers.Layer):
   - (800, ) logits representing score difference
   '''
 
-  def __init__(self, channels=32, c_val=64, score_range=SCORE_RANGE, name=None):
+  def __init__(self,
+               channels=32,
+               c_val=64,
+               board_len=BOARD_LEN,
+               score_range=SCORE_RANGE,
+               name=None):
     super(ValueHead, self).__init__(name=name)
 
     ## Initialize Model Layers ##
-    self.conv_v = tf.keras.layers.Conv2D(channels,
-                                         1,
-                                         padding='same',
-                                         kernel_regularizer=L2(C_L2),
-                                         name='value_conv_v')
-    self.gpool = GlobalPool(channels, 19, 19, name='gpool_v')
+    self.conv = tf.keras.layers.Conv2D(channels,
+                                       1,
+                                       padding='same',
+                                       kernel_regularizer=L2(C_L2),
+                                       name='value_conv')
+    self.gpool = GlobalPool(channels, 19, 19, name='value_gpool')
 
     # Game Outcome Subhead
     self.outcome_biases = tf.keras.layers.Dense(c_val,
@@ -461,10 +470,11 @@ class ValueHead(tf.keras.layers.Layer):
     # Save for serialization
     self.channels = channels
     self.c_val = c_val
+    self.board_len = board_len
     self.score_range = score_range
 
   def call(self, x):
-    v = self.conv_v(x)
+    v = self.conv(x)
     v_pooled = self.gpool(v)
 
     # Compute Game Output
@@ -514,6 +524,7 @@ class ValueHead(tf.keras.layers.Layer):
     return {
         'channels': self.channels,
         'c_val': self.c_val,
+        'board_len': self.board_len,
         'score_range': self.score_range,
         'name': self.name
     }
@@ -584,8 +595,13 @@ class P3achyGoModel(tf.keras.Model):
                                         stack_size=bottleneck_length,
                                         name=f'bottleneck_res_{i}'))
 
-    self.policy_head = PolicyHead(num_head_channels, 'policy_head')
-    self.value_head = ValueHead(num_head_channels, c_val, name='value_head')
+    self.policy_head = PolicyHead(channels=num_head_channels,
+                                  board_len=board_len,
+                                  name='policy_head')
+    self.value_head = ValueHead(num_head_channels,
+                                c_val,
+                                board_len,
+                                name='value_head')
 
     ## Initialize Loss Objects. Defer reduction strategy to loss objects ##
     self.scce_logits = tf.keras.losses.SparseCategoricalCrossentropy(

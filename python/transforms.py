@@ -70,6 +70,10 @@ def as_loc(mv_index: tf.Tensor, bsize=BOARD_LEN) -> tf.Tensor:
   return loc
 
 
+def filter_pass(input, komi, score, score_one_hot, policy, own):
+  return policy != 361
+
+
 def expand_sl(ex):
   """Expands a single training example from a supervised learning dataset."""
   board, komi, color, score, last_moves, policy = (ex['board'], ex['komi'],

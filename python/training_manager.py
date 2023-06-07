@@ -68,7 +68,7 @@ def val_step(w_pi, w_val, w_outcome, w_score, w_own, w_gamma, input, komi,
                                                                      axis=1),
                                                                  training=False)
   (loss, policy_loss, outcome_loss, score_pdf_loss,
-   own_loss) = model.loss(pi_logits, game_outcome, own_pred, score_logits,
+   own_loss) = model.loss(pi_logits, game_outcome, score_logits, own_pred,
                           gamma, policy, score, score_one_hot, own, w_pi, w_val,
                           w_outcome, w_score, w_own, w_gamma)
 
@@ -168,7 +168,7 @@ class TrainingManager:
                                coeffs.w_own,
                                coeffs.w_gamma)
     # yapf: enable
-    
+
     optimizer = tf.keras.optimizers.experimental.SGD(
         learning_rate=learning_rate, momentum=momentum)
     if is_gpu:
@@ -266,9 +266,13 @@ class TrainingManager:
     print(f'Learning Rate: {lr}')
     print(f'Loss: {losses.losses[-1]["loss"]}')
     print(f'Min Loss: {losses.min_losses["loss"]}')
+    print(f'Policy Loss: {losses.losses[-1]["policy"]}')
     print(f'Min Policy Loss: {losses.min_losses["policy"]}')
+    print(f'Outcome Loss: {losses.losses[-1]["outcome"]}')
     print(f'Min Outcome Loss: {losses.min_losses["outcome"]}')
+    print(f'Score PDF Loss: {losses.losses[-1]["score_pdf"]}')
     print(f'Min Score PDF Loss: {losses.min_losses["score_pdf"]}')
+    print(f'Own Loss: {losses.losses[-1]["own"]}')
     print(f'Min Own Loss: {losses.min_losses["own"]}')
     print(f'Predicted Outcome: {tf.nn.softmax(outcome_logits[0])}')
     print(f'Predicted Scores: {top_score_indices}')
@@ -301,4 +305,4 @@ class TrainingManager:
 
   def save_model(self, model: P3achyGoModel, batch_num: int):
     local_path = Path(self.save_path, f'model_b{batch_num}')
-    model.save(str(local_path), signatures={'infer_mixed': model.infer_mixed})
+    model.save(str(local_path))
