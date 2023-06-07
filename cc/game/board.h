@@ -82,7 +82,6 @@ inline std::ostream& operator<<(std::ostream& os,
             << ", current_piece: " << transition.current_piece;
 }
 
-inline int OppositeColor(Color color) { return -color; }
 inline bool MoveOk(MoveStatus status) { return status == MoveStatus::kValid; }
 inline bool MoveOk(MoveResult result) {
   return result.status == MoveStatus::kValid;
