@@ -21,6 +21,10 @@ RUN chmod +x llvm.sh
 RUN ./llvm.sh 12
 RUN rm llvm.sh
 
+ENV PYTHONPATH=/app/python
+
+WORKDIR /app
+
 COPY requirements.txt /app
 
 RUN pip install --upgrade pip
@@ -36,4 +40,9 @@ RUN rm bazelisk-linux-amd64
 
 COPY . /app
 
-WORKDIR /app
+RUN mkdir /p3achygo_local
+RUN mkdir /p3achygo_models
+RUN mkdir /p3achygo_data
+RUN cp /usr/local/lib/python3.8/dist-packages/tensorflow/libtensorflow_cc.so.2 /app/cc/tensorflow/
+RUN cp /usr/local/lib/python3.8/dist-packages/tensorflow/libtensorflow_framework.so.2 /app/cc/tensorflow/
+RUN cp -r /usr/local/lib/python3.8/dist-packages/tensorflow/include /app/cc/tensorflow/

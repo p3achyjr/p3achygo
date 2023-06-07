@@ -6,4 +6,5 @@ dummy_data/**
 bazel-*
 external
 .vscode
-models/**
+cc/tensorflow/*.so.2
+cc/tensorflow/include/**/*

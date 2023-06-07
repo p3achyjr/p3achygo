@@ -66,12 +66,4 @@ cp ${workspace}/external/org_tensorflow/.bazelrc ${workspace}/tensorflow.bazelrc
 cp ${workspace}/external/org_tensorflow/.tf_configure.bazelrc ${workspace}/tf_configure.bazelrc
 
 echo "Building tensorflow package"
-bazel --bazelrc=${workspace}/tensorflow.bazelrc run -c opt \
-  --copt=-Wno-unknown-warning-option \
-  --copt=-Wno-comment \
-  --copt=-Wno-deprecated-declarations \
-  --copt=-Wno-ignored-attributes \
-  --copt=-Wno-maybe-uninitialized \
-  --copt=-Wno-sign-compare \
-  --define=need_trt="$TF_NEED_TENSORRT" \
-  //cc/tensorflow:build -- ${workspace}/cc/tensorflow
+bazel build --config=cuda -c opt --config=opt @org_tensorflow//tensorflow/tools/pip_package:build_pip_package
