@@ -11,6 +11,7 @@ python/scripts/estimate_score.py
 .vscode
 models/**
 data/**
+core
 
 cc/tensorflow/**
 !cc/tensorflow/BUILD

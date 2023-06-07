@@ -35,8 +35,8 @@ build:opt --compilation_mode=opt
 build:opt --copt=-march=native
 build:opt --host_copt=-march=native
 build:opt --copt=-Wno-sign-compare
-build:opt --copt=-fno-dce
 build:opt --host_copt=-Wno-sign-compare
+build:opt --copt=-O3
 
 build:test --compilation_mode=dbg
 build:test --strip=never
