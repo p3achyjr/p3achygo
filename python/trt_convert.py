@@ -2,8 +2,6 @@ import tensorflow as tf
 import transforms
 from tensorflow.python.compiler.tensorrt import trt_convert as trt
 
-from pathlib import Path
-
 # Use the same batch size when running self-play.
 BATCH_SIZE = 48
 NUM_CALIB_BATCHES = 10
@@ -17,11 +15,11 @@ def get_converter(model_path: str, chunk_path: str) -> trt.TrtGraphConverterV2:
 
   def calibration_input_fn():
     for input, komi, _, _, _, _ in calib_ds:
-      yield input, komi
+      yield input, tf.cast(tf.expand_dims(komi, axis=1), dtype=tf.float16)
 
   def input_fn():
     input, komi, _, _, _, _ = next(iter(calib_ds))
-    yield input, komi
+    yield input, tf.cast(tf.expand_dims(komi, axis=1), dtype=tf.float16)
 
   # Instantiate the TF-TRT converter
   converter = trt.TrtGraphConverterV2(

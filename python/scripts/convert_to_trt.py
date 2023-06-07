@@ -24,7 +24,7 @@ def main(_):
   logging.info(f'Model Path: {model_path}')
   logging.info(f'Chunk: {FLAGS.chunk}')
 
-  converter = trt_convert(FLAGS.model_path, FLAGS.chunk)
+  converter = trt_convert.get_converter(FLAGS.model_path, FLAGS.chunk)
   converter.summary()
   converter.save(output_saved_model_dir=str(Path(model_path, '_trt')))
 

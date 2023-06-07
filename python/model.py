@@ -297,11 +297,11 @@ class GlobalPoolBias(tf.keras.layers.Layer):
   works).
   '''
 
-  def __init__(self, channels: int, name=None):
+  def __init__(self, channels: int, board_len=BOARD_LEN, name=None):
     super(GlobalPoolBias, self).__init__(name=name)
     self.batch_norm_g = tf.keras.layers.BatchNormalization(
         scale=False, momentum=.999, epsilon=1e-3, name='batch_norm_gpool')
-    self.gpool = GlobalPool(channels, 19, 19, name='gpool')
+    self.gpool = GlobalPool(channels, board_len, board_len, name='gpool')
     self.dense = tf.keras.layers.Dense(channels)
 
     # save for serialization
@@ -356,7 +356,7 @@ class PolicyHead(tf.keras.layers.Layer):
                                          padding='same',
                                          kernel_regularizer=L2(C_L2),
                                          name='policy_conv_g')
-    self.gpool = GlobalPoolBias(channels)
+    self.gpool = GlobalPoolBias(channels, board_len=board_len)
     self.batch_norm = tf.keras.layers.BatchNormalization(scale=False,
                                                          momentum=.999,
                                                          epsilon=1e-3,
@@ -429,7 +429,7 @@ class ValueHead(tf.keras.layers.Layer):
                                        padding='same',
                                        kernel_regularizer=L2(C_L2),
                                        name='value_conv')
-    self.gpool = GlobalPool(channels, 19, 19, name='value_gpool')
+    self.gpool = GlobalPool(channels, board_len, board_len, name='value_gpool')
 
     # Game Outcome Subhead
     self.outcome_biases = tf.keras.layers.Dense(c_val,
