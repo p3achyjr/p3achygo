@@ -24,11 +24,11 @@ cc_library(
     name = "nn_interface",
     srcs = select({
         "//cc:test": ["nn_interface_dummy.cc"],
-        "//cc:trt": ["nn_interface_trt.cc"],
         "//conditions:default": ["nn_interface.cc"],
     }),
     hdrs = ["nn_interface.h"],
     deps = [
+        ":feed_fetch_names",
         "//cc/constants",
         "//cc/game",
         "//cc/tensorflow",
@@ -41,6 +41,15 @@ cc_library(
             "@com_google_absl//absl/status:statusor",
         ],
     }),
+)
+
+cc_library(
+    name = "feed_fetch_names",
+    srcs = select({
+        "//cc:trt": ["feed_fetch_names_trt.cc"],
+        "//conditions:default": ["feed_fetch_names.cc"],
+    }),
+    hdrs = ["feed_fetch_names.h"],
 )
 
 cc_library(

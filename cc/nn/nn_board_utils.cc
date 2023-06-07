@@ -79,7 +79,7 @@ Tensor AsOneHot(game::Loc loc) {
   }
 
   // fill game state (just komi for now)
-  input_state.matrix<float>()(batch_id, 0) = board.komi() / 15.0;
+  input_state.matrix<float>()(batch_id, 0) = board.komi();
 }
 
 }  // namespace board_utils
