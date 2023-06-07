@@ -46,3 +46,6 @@ RUN mkdir /p3achygo_data
 RUN cp /usr/local/lib/python3.8/dist-packages/tensorflow/libtensorflow_cc.so.2 /app/cc/tensorflow/
 RUN cp /usr/local/lib/python3.8/dist-packages/tensorflow/libtensorflow_framework.so.2 /app/cc/tensorflow/
 RUN cp -r /usr/local/lib/python3.8/dist-packages/tensorflow/include /app/cc/tensorflow/
+
+COPY data/calib.tfrecord.zz /p3achygo_data
+COPY models/model_0 /p3achygo_models/model_0

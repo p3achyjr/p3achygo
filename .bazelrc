@@ -12,8 +12,8 @@ build --genrule_strategy=local
 build --action_env CC="/usr/bin/gcc-9"
 
 # Linker toggle.
-build --linkopt=-fuse-ld=lld
-# build --linkopt=-fuse-ld=gold
+# build --linkopt=-fuse-ld=lld
+build --linkopt=-fuse-ld=gold
 
 build:linux --cpu=k8
 
