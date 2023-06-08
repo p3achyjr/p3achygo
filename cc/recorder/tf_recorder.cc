@@ -131,6 +131,10 @@ void TfRecorderImpl::Flush() {
         return n + examples.size();
       });
 
+  if (num_examples == 0) {
+    return;
+  }
+
   // Create File.
   std::string path =
       FilePath(path_) / absl::StrFormat("batch_b%d_g%d_n%d.tfrecord.zz",

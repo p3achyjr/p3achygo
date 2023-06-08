@@ -105,6 +105,10 @@ void SgfRecorderImpl::Flush() {
     thread_sgfs.clear();
   }
 
+  if (sgfs == "") {
+    return;
+  }
+
   std::string path =
       FilePath(path_) /
       absl::StrFormat("game_b%d_g%d.sgfs", batch_num_, games_in_batch);
