@@ -52,13 +52,10 @@ class NNInterface final {
 
   absl::Status Initialize(std::string&& model_path);
 
-  // In order to ensure thread safety, threads must first call `LoadBatch`, and
-  // then get the result for the corresponding thread index from
-  // `GetInferenceResult`.
-  // `GetInferenceResult` will block until the result for all threads is ready.
-  absl::Status LoadBatch(int thread_id, const game::Game& game,
-                         game::Color color_to_move);
-  NNInferResult GetInferenceResult(int thread_id) ABSL_LOCKS_EXCLUDED(mu_);
+  // Blocks until result is ready.
+  NNInferResult LoadAndGetInference(int thread_id, const game::Game& game,
+                                    game::Color color_to_move)
+      ABSL_LOCKS_EXCLUDED(mu_);
 
   void RegisterThread(int thread_id) ABSL_LOCKS_EXCLUDED(mu_);
   void UnregisterThread(int thread_id) ABSL_LOCKS_EXCLUDED(mu_);
@@ -87,8 +84,6 @@ class NNInterface final {
     bool res_ready = false;   // Whether inference result is ready.
     bool res_cached = false;  // Whether the cache key is cached. Also toggles
                               // whether to cache the NN inference result.
-    game::Symmetry symmetry = game::Symmetry::kIdentity;
-    CacheKey cache_key;
   };
 
   class Cache final {

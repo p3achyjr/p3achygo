@@ -34,9 +34,8 @@ void LeafEvaluator::EvaluateLeaf(Game& game, TreeNode* node,
 void LeafEvaluator::InitTreeNode(TreeNode* node, const Game& game,
                                  Color color_to_move) {
   DCHECK(node->state == TreeNodeState::kNew);
-  CHECK_OK(nn_interface_->LoadBatch(thread_id_, game, color_to_move));
   nn::NNInferResult infer_result =
-      nn_interface_->GetInferenceResult(thread_id_);
+      nn_interface_->LoadAndGetInference(thread_id_, game, color_to_move);
 
   std::copy(infer_result.move_logits,
             infer_result.move_logits + constants::kMaxNumMoves,
@@ -59,7 +58,7 @@ void LeafEvaluator::InitTreeNode(TreeNode* node, const Game& game,
 
   // arbitrary scale to discourage passing, since the current probability is
   // high.
-  node->move_logits[constants::kPassMoveEncoding] -= 4;
+  // node->move_logits[constants::kPassMoveEncoding] -= 3;
 
   AdvanceState(node);
 }

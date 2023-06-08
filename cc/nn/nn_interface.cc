@@ -212,14 +212,9 @@ absl::Status NNInterface::Initialize(std::string&& model_path) {
   return absl::OkStatus();
 }
 
-absl::Status NNInterface::LoadBatch(int thread_id, const Game& game,
-                                    Color color_to_move) {
-  if (!is_initialized_) {
-    return absl::Status(
-        absl::StatusCode::kInternal,
-        "Need to initialize NNInterface before using inference.");
-  }
-
+NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
+                                               Color color_to_move) {
+  DCHECK(is_initialized_);
   ThreadInfo& thread_info = thread_info_[thread_id];
   CacheKey cache_key = CacheKey{
       color_to_move,
@@ -227,14 +222,11 @@ absl::Status NNInterface::LoadBatch(int thread_id, const Game& game,
   };
 
   if (nn_cache_.Contains(thread_id, cache_key)) {
-    // Cached. Immediately signal that result is ready.
+    // Cached. Immediately return result.
     absl::MutexLock l(&mu_);
-    thread_info.res_ready = true;
     thread_info.res_cached = true;
-    thread_info.symmetry = Symmetry::kIdentity;
-    thread_info.cache_key = cache_key;
 
-    return absl::OkStatus();
+    return nn_cache_.Get(thread_id, cache_key).value();
   }
 
   // Not cached. Load for inference.
@@ -242,29 +234,17 @@ absl::Status NNInterface::LoadBatch(int thread_id, const Game& game,
   board_utils::FillNNInput(thread_id, num_threads_, input_feature_buf_,
                            input_state_buf_, game, color_to_move);
 
-  absl::MutexLock l(&mu_);
+  mu_.Lock();
   thread_info.loaded_for_inference = true;
-  thread_info.res_ready = false;  // Force thread to wait for inference.
+  thread_info.res_ready = false;
   thread_info.res_cached = false;
-  thread_info.symmetry = Symmetry::kIdentity;
-  thread_info.cache_key = cache_key;
 
-  return absl::OkStatus();
-}
-
-NNInferResult NNInterface::GetInferenceResult(int thread_id) {
-  auto& thread_info = thread_info_[thread_id];
-  mu_.LockWhen(absl::Condition(&thread_info_[thread_id].res_ready));
+  // Wait for result.
+  mu_.Await(absl::Condition(&thread_info.res_ready));
   thread_info.res_ready = false;
   mu_.Unlock();
 
-  if (thread_info.res_cached) {
-    // Fetch from cache.
-    DCHECK(nn_cache_.Contains(thread_id, thread_info.cache_key));
-    return nn_cache_.Get(thread_id, thread_info.cache_key).value();
-  }
-
-  // Not found in cache. Fetch from NN output buffer.
+  // Inference result is now ready.
   const auto move_logits = result_buf_[kPolicyLogitIndex]
                                .SubSlice(thread_id)
                                .unaligned_flat<float>();
@@ -291,7 +271,7 @@ NNInferResult NNInterface::GetInferenceResult(int thread_id) {
   }
 
   // Cache this result.
-  nn_cache_.Insert(thread_id, thread_info.cache_key, infer_result);
+  nn_cache_.Insert(thread_id, cache_key, infer_result);
   return infer_result;
 }
 
