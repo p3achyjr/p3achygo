@@ -16,6 +16,7 @@
 #define LOG_TO_SINK(severity, sink) LOG(severity).ToSinkOnly(&sink)
 
 namespace {
+static constexpr int kShouldLogShard = 8;
 
 class ThreadSink : public absl::LogSink {
  public:
@@ -59,8 +60,6 @@ void ExecuteSelfPlay(int thread_id, nn::NNInterface* nn_interface,
     mcts::GumbelEvaluator gumbel_evaluator(nn_interface, thread_id);
     auto color_to_move = BLACK;
     while (!game.IsGameOver() && game.move_num() < max_moves) {
-      LOG_TO_SINK(INFO, sink) << "-------------------";
-      LOG_TO_SINK(INFO, sink) << "Searching...";
       auto begin = std::chrono::high_resolution_clock::now();
       std::pair<game::Loc, game::Loc> move_pair =
           gumbel_evaluator.SearchRoot(probability, game, root_node.get(),
@@ -94,21 +93,26 @@ void ExecuteSelfPlay(int thread_id, nn::NNInterface* nn_interface,
                              : (search_dur_ema * 0.9 + search_dur * 0.1);
       }
 
-      LOG_TO_SINK(INFO, sink) << "Raw NN Move: " << nn_move;
-      LOG_TO_SINK(INFO, sink) << "Gumbel Move: " << move;
-      LOG_TO_SINK(INFO, sink) << "Move Num: " << game.move_num();
-      LOG_TO_SINK(INFO, sink)
-          << "Last 5 Moves: " << game.move(game.move_num() - 5) << ", "
-          << game.move(game.move_num() - 4) << ", "
-          << game.move(game.move_num() - 3) << ", "
-          << game.move(game.move_num() - 2) << ", "
-          << game.move(game.move_num() - 1);
-      LOG_TO_SINK(INFO, sink) << "Tree Visit Count: " << root_node->n
-                              << " Player to Move: " << root_node->color_to_move
-                              << " Value: " << root_node->q;
-      LOG_TO_SINK(INFO, sink) << "Board:\n" << game.board();
-      LOG_TO_SINK(INFO, sink) << "Search Took " << search_dur
-                              << "us. Search EMA: " << search_dur_ema << "us.";
+      if (thread_id % kShouldLogShard == 0) {
+        LOG_TO_SINK(INFO, sink) << "-------------------";
+        LOG_TO_SINK(INFO, sink) << "Raw NN Move: " << nn_move;
+        LOG_TO_SINK(INFO, sink) << "Gumbel Move: " << move;
+        LOG_TO_SINK(INFO, sink) << "Move Num: " << game.move_num();
+        LOG_TO_SINK(INFO, sink)
+            << "Last 5 Moves: " << game.move(game.move_num() - 5) << ", "
+            << game.move(game.move_num() - 4) << ", "
+            << game.move(game.move_num() - 3) << ", "
+            << game.move(game.move_num() - 2) << ", "
+            << game.move(game.move_num() - 1);
+        LOG_TO_SINK(INFO, sink)
+            << "Tree Visit Count: " << root_node->n
+            << " Player to Move: " << root_node->color_to_move
+            << " Value: " << root_node->q;
+        LOG_TO_SINK(INFO, sink) << "Board:\n" << game.board();
+        LOG_TO_SINK(INFO, sink)
+            << "Search Took " << search_dur
+            << "us. Search EMA: " << search_dur_ema << "us.";
+      }
     }
 
     nn_interface->UnregisterThread(thread_id);

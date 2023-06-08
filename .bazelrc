@@ -31,12 +31,19 @@ build:dbg --copt -g
 build:dbg --compilation_mode=dbg
 build:dbg --per_file_copt=+tensorflow/core/kernels.*@-g0
 
+build:optcommon --copt=-march=native
+build:optcommon --host_copt=-march=native
+build:optcommon --copt=-Wno-sign-compare
+build:optcommon --host_copt=-Wno-sign-compare
+build:optcommon --copt=-O3
+
+build:opt --config=optcommon
 build:opt --compilation_mode=opt
-build:opt --copt=-march=native
-build:opt --host_copt=-march=native
-build:opt --copt=-Wno-sign-compare
-build:opt --host_copt=-Wno-sign-compare
-build:opt --copt=-O3
+
+build:optdbg --config=optcommon
+build:optdbg --compilation_mode=dbg
+build:optdbg --copt -g
+build:optdbg --per_file_copt=+tensorflow/core/kernels.*@-g0
 
 build:test --compilation_mode=dbg
 build:test --strip=never

@@ -70,11 +70,11 @@ float VMixed(TreeNode* node) {
 
   double weighted_visited_qvalues = 0;
   double total_visited_probability = 0;
-  for (auto i = 0; i < constants::kMaxNumMoves; ++i) {
-    if (N(node->children[i].get()) > 0) {
+  for (auto action = 0; action < constants::kMaxNumMoves; ++action) {
+    if (NAction(node, action) > 0) {
       weighted_visited_qvalues +=
-          (node->move_probs[i] * Q(node->children[i].get()));
-      total_visited_probability += node->move_probs[i];
+          (node->move_probs[action] * QAction(node, action));
+      total_visited_probability += node->move_probs[action];
     }
   }
 
@@ -228,10 +228,11 @@ std::vector<TreeNode*> GumbelEvaluator::SearchNonRoot(Game& game,
     float v_mix = VMixed(node);
     float logits_improved[constants::kMaxNumMoves];
     int max_n = MaxN(node);
-    for (auto i = 0; i < constants::kMaxNumMoves; ++i) {
-      TreeNode* child = node->children[i].get();
-      logits_improved[i] = node->move_logits[i] +
-                           QTransform(N(child) > 0 ? Q(child) : v_mix, max_n);
+    for (auto action = 0; action < constants::kMaxNumMoves; ++action) {
+      logits_improved[action] =
+          node->move_logits[action] +
+          QTransform(NAction(node, action) > 0 ? QAction(node, action) : v_mix,
+                     max_n);
     }
 
     float policy_improved[constants::kMaxNumMoves];

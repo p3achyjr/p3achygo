@@ -20,9 +20,18 @@ void AdvanceState(TreeNode* node) {
 
 float N(TreeNode* node) { return node == nullptr ? 0 : node->n; }
 
+float NAction(TreeNode* node, int action) {
+  return N(node->children[action].get());
+}
+
 float Q(TreeNode* node) {
-  // return minimum value if node is null
+  // return minimum value if node is null (init-to-loss).
   return node == nullptr ? -1.5 : node->q;
+}
+
+float QAction(TreeNode* node, int action) {
+  // remember to flip sign.
+  return -Q(node->children[action].get());
 }
 
 float MaxN(TreeNode* node) {
