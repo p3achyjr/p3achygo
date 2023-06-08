@@ -530,7 +530,6 @@ Board::Board(int length)
     }
   }
 
-  initial_hash_ = hash;
   hash_ = hash;
   seen_states_.insert(hash_);
 }

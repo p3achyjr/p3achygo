@@ -11,8 +11,9 @@ namespace board_utils {
 
 using namespace ::nn;
 using namespace ::tensorflow;
+using namespace ::game;
 
-Tensor GetBlack(const game::Board& board) {
+Tensor GetBlack(const Board& board) {
   Tensor t(DataType::DT_FLOAT, CreateTensorShape({BOARD_LEN, BOARD_LEN}));
   auto t_data = t.matrix<float>();
   for (auto i = 0; i < BOARD_LEN; ++i) {
@@ -24,7 +25,7 @@ Tensor GetBlack(const game::Board& board) {
   return t;
 }
 
-Tensor GetWhite(const game::Board& board) {
+Tensor GetWhite(const Board& board) {
   Tensor t(DataType::DT_FLOAT, CreateTensorShape({BOARD_LEN, BOARD_LEN}));
   auto t_data = t.matrix<float>();
   for (auto i = 0; i < BOARD_LEN; ++i) {
@@ -36,7 +37,7 @@ Tensor GetWhite(const game::Board& board) {
   return t;
 }
 
-Tensor AsOneHot(game::Loc loc) {
+Tensor AsOneHot(Loc loc) {
   Tensor t(DataType::DT_FLOAT, CreateTensorShape({BOARD_LEN, BOARD_LEN}));
   if (loc.i == -1 && loc.j == -1) {
     return t;
@@ -48,7 +49,7 @@ Tensor AsOneHot(game::Loc loc) {
 
 /* static */ void FillNNInput(int batch_id, int batch_size,
                               Tensor& input_features, Tensor& input_state,
-                              const game::Game& game, int color) {
+                              const Game& game, Color color) {
   DCHECK(game.moves().size() >= 5);
 
   const auto& board = game.board();
@@ -62,7 +63,7 @@ Tensor AsOneHot(game::Loc loc) {
     for (auto j = 0; j < BOARD_LEN; ++j) {
       if (board.at(i, j) == color) {
         raw(batch_id, i, j, 0) = 1;
-      } else if (board.at(i, j) == game::OppositeColor(color)) {
+      } else if (board.at(i, j) == OppositeColor(color)) {
         raw(batch_id, i, j, 1) = 1;
       }
     }
@@ -71,15 +72,16 @@ Tensor AsOneHot(game::Loc loc) {
   // fill moves
   auto offset = 2;
   for (auto i = 0; i < constants::kNumLastMoves; ++i) {
-    game::Loc loc = moves[moves.size() - constants::kNumLastMoves + i].loc;
-    if (loc == game::kNoopLoc) continue;
-    if (loc == game::kPassLoc) continue;
+    Loc loc = moves[moves.size() - constants::kNumLastMoves + i].loc;
+    if (loc == kNoopLoc) continue;
+    if (loc == kPassLoc) continue;
 
     raw(batch_id, loc.i, loc.j, i + offset) = 1;
   }
 
   // fill game state (just komi for now)
-  input_state.matrix<float>()(batch_id, 0) = board.komi();
+  input_state.matrix<float>()(batch_id, 0) =
+      color == BLACK ? 0.0 : board.komi();
 }
 
 }  // namespace board_utils

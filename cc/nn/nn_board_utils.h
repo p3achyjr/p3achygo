@@ -6,6 +6,7 @@
 
 #include "cc/constants/constants.h"
 #include "cc/game/board.h"
+#include "cc/game/color.h"
 #include "cc/game/game.h"
 #include "tensorflow/cc/client/client_session.h"
 #include "tensorflow/cc/framework/scope.h"
@@ -24,7 +25,7 @@ namespace board_utils {
 void FillNNInput(int batch_id, int batch_size,
                  ::tensorflow::Tensor& input_features,
                  ::tensorflow::Tensor& input_state, const game::Game& board,
-                 int color);
+                 game::Color color);
 
 }  // namespace board_utils
 }  // namespace nn

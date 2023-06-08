@@ -3,13 +3,18 @@
 
 #include <atomic>
 #include <chrono>
+#include <optional>
 #include <thread>
 
+#include "absl/container/flat_hash_map.h"
 #include "absl/container/inlined_vector.h"
+#include "absl/hash/hash.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "cc/constants/constants.h"
+#include "cc/game/color.h"
 #include "cc/game/game.h"
+#include "cc/game/symmetry.h"
 #include "cc/nn/feed_fetch_names.h"
 #include "tensorflow/cc/client/client_session.h"
 #include "tensorflow/cc/framework/scope.h"
@@ -52,7 +57,7 @@ class NNInterface final {
   // `GetInferenceResult`.
   // `GetInferenceResult` will block until the result for all threads is ready.
   absl::Status LoadBatch(int thread_id, const game::Game& game,
-                         int color_to_move);
+                         game::Color color_to_move);
   NNInferResult GetInferenceResult(int thread_id) ABSL_LOCKS_EXCLUDED(mu_);
 
   void RegisterThread(int thread_id) ABSL_LOCKS_EXCLUDED(mu_);
@@ -60,10 +65,58 @@ class NNInterface final {
 
  private:
   static constexpr int64_t kTimeoutUs = 30000;
+  struct CacheKey {
+    game::Color color_to_move;
+    game::Zobrist::Hash board_hash;
+
+    friend bool operator==(const CacheKey& c0, const CacheKey& c1) {
+      return c0.color_to_move == c1.color_to_move &&
+             c0.board_hash == c1.board_hash;
+    }
+
+    template <typename H>
+    friend H AbslHashValue(H h, const CacheKey& c) {
+      return H::combine(std::move(h), c.color_to_move, c.board_hash);
+    }
+  };
+
   struct ThreadInfo {
-    bool registered = true;
-    bool loaded = false;
-    bool res_ready = false;
+    bool registered = true;  // If this thread is registered.
+    bool loaded_for_inference =
+        false;  // If this thread has loaded its data for inference.
+    bool res_ready = false;   // Whether inference result is ready.
+    bool res_cached = false;  // Whether the cache key is cached. Also toggles
+                              // whether to cache the NN inference result.
+    game::Symmetry symmetry = game::Symmetry::kIdentity;
+    CacheKey cache_key;
+  };
+
+  class Cache final {
+   public:
+    Cache(int num_threads);
+    ~Cache() = default;
+
+    // Disable Copy and Move.
+    Cache(Cache const&) = delete;
+    Cache& operator=(Cache const&) = delete;
+    Cache(Cache&&) = delete;
+    Cache& operator=(Cache&&) = delete;
+
+    void Insert(int thread_id, const CacheKey& cache_key,
+                const NNInferResult& infer_result);
+    bool Contains(int thread_id, const CacheKey& cache_key);
+    std::optional<NNInferResult> Get(int thread_id, const CacheKey& cache_key);
+
+   private:
+    struct CacheElem {
+      size_t hash;
+      NNInferResult infer_res;
+    };
+
+    const int num_threads_;
+    const size_t thread_cache_size_;
+    std::array<std::vector<std::optional<CacheElem>>, constants::kMaxNumThreads>
+        cache_;
   };
 
   void InferLoop();
@@ -88,8 +141,10 @@ class NNInterface final {
   std::unique_ptr<::tensorflow::Session> session_postprocess_;
 
   bool is_initialized_;
-  int num_threads_ ABSL_GUARDED_BY(mu_);
-  const int batch_size_;
+  int num_registered_threads_ ABSL_GUARDED_BY(mu_);
+  const int num_threads_;
+
+  Cache nn_cache_;  // Per-thread cache.
 
   // Synchronization
   absl::Mutex mu_;

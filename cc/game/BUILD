@@ -6,6 +6,7 @@ cc_library(
         ":board",
         ":game_impl",
         ":hdrs",
+        ":symmetry",
         ":zobrist",
         "//cc/constants",
         "//cc/core",
@@ -50,6 +51,11 @@ cc_library(
         "//cc/constants",
         "@com_google_absl//absl/hash",
     ],
+)
+
+cc_library(
+    name = "symmetry",
+    hdrs = ["symmetry.h"],
 )
 
 cc_library(

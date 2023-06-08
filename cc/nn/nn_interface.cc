@@ -17,6 +17,12 @@ namespace nn {
 namespace {
 
 using namespace ::tensorflow;
+using ::game::Color;
+using ::game::Game;
+using ::game::Symmetry;
+
+// 2 ** 20. Assuming ~3kb per inference result, this will be about ~3GB of RAM.
+static constexpr size_t kMaxCacheSize = 1048576;
 
 static constexpr int kPolicyLogitIndex = 0;
 static constexpr int kPolicyProbIndex = 1;
@@ -43,6 +49,46 @@ static constexpr char kSavedModelTagServe[] = "serve";
 
 }  // namespace
 
+NNInterface::Cache::Cache(int num_threads)
+    : num_threads_(num_threads),
+      thread_cache_size_(num_threads == 0 ? 0 : kMaxCacheSize / num_threads) {
+  for (int i = 0; i < num_threads; ++i) {
+    cache_[i].resize(thread_cache_size_);
+  }
+}
+
+void NNInterface::Cache::Insert(int thread_id, const CacheKey& cache_key,
+                                const NNInferResult& infer_result) {
+  size_t hash = absl::HashOf(cache_key);
+  size_t tbl_index = hash % thread_cache_size_;
+  cache_[thread_id][tbl_index] = CacheElem{hash, infer_result};
+}
+
+bool NNInterface::Cache::Contains(int thread_id, const CacheKey& cache_key) {
+  size_t hash = absl::HashOf(cache_key);
+  size_t tbl_index = hash % thread_cache_size_;
+  const std::optional<CacheElem>& elem = cache_[thread_id][tbl_index];
+  if (!elem) {
+    return false;
+  } else if (elem->hash != hash) {
+    return false;
+  }
+
+  return true;
+}
+
+std::optional<NNInferResult> NNInterface::Cache::Get(
+    int thread_id, const CacheKey& cache_key) {
+  size_t hash = absl::HashOf(cache_key);
+  size_t tbl_index = hash % thread_cache_size_;
+  const std::optional<CacheElem>& elem = cache_[thread_id][tbl_index];
+  if (!elem) {
+    return {};
+  }
+
+  return elem->infer_res;
+}
+
 NNInterface::NNInterface(int num_threads)
     : session_options_(SessionOptions()),
       run_options_(RunOptions()),
@@ -51,23 +97,24 @@ NNInterface::NNInterface(int num_threads)
       session_preprocess_(tensorflow::NewSession(session_options_)),
       session_postprocess_(tensorflow::NewSession(session_options_)),
       is_initialized_(false),
+      num_registered_threads_(num_threads),
       num_threads_(num_threads),
-      batch_size_(num_threads),
-      thread_info_(batch_size_),
+      nn_cache_(num_threads_),
+      thread_info_(num_threads_),
       running_(true),
       last_infer_time_(
           std::chrono::time_point<std::chrono::steady_clock>::max()) {
   input_feature_buf_ =
       Tensor(DataType::DT_FLOAT,
-             CreateTensorShape({batch_size_, BOARD_LEN, BOARD_LEN,
+             CreateTensorShape({num_threads_, BOARD_LEN, BOARD_LEN,
                                 constants::kNumInputFeaturePlanes}));
   input_state_buf_ =
-      Tensor(DataType::DT_FLOAT, CreateTensorShape({batch_size_, 1}));
+      Tensor(DataType::DT_FLOAT, CreateTensorShape({num_threads_, 1}));
   nn_input_buf_ = {
       Tensor(DataType::DT_FLOAT,
-             CreateTensorShape({batch_size_, BOARD_LEN, BOARD_LEN,
+             CreateTensorShape({num_threads_, BOARD_LEN, BOARD_LEN,
                                 constants::kNumInputFeaturePlanes})),
-      Tensor(DataType::DT_HALF, CreateTensorShape({batch_size_, 1}))};
+      Tensor(DataType::DT_HALF, CreateTensorShape({num_threads_, 1}))};
 
   input_feature_buf_.flat<float>().setZero();
   input_state_buf_.flat<float>().setZero();
@@ -75,32 +122,32 @@ NNInterface::NNInterface(int num_threads)
   nn_output_buf_ = {
       // move logits
       Tensor(DataType::DT_FLOAT,
-             CreateTensorShape({batch_size_, constants::kMaxNumMoves})),
+             CreateTensorShape({num_threads_, constants::kMaxNumMoves})),
       // win percent
       Tensor(DataType::DT_FLOAT,
-             CreateTensorShape({batch_size_, constants::kNumValueLogits})),
+             CreateTensorShape({num_threads_, constants::kNumValueLogits})),
       // ownership
       Tensor(DataType::DT_FLOAT,
-             CreateTensorShape({batch_size_, BOARD_LEN, BOARD_LEN, 1})),
+             CreateTensorShape({num_threads_, BOARD_LEN, BOARD_LEN, 1})),
       // score prediction
       Tensor(DataType::DT_FLOAT,
-             CreateTensorShape({batch_size_, constants::kNumScoreLogits})),
+             CreateTensorShape({num_threads_, constants::kNumScoreLogits})),
       // gamma, just ignore
-      Tensor(DataType::DT_FLOAT, CreateTensorShape({batch_size_, 1}))};
+      Tensor(DataType::DT_FLOAT, CreateTensorShape({num_threads_, 1}))};
 
   result_buf_ = {
       // move logits
       Tensor(DataType::DT_FLOAT,
-             CreateTensorShape({batch_size_, constants::kMaxNumMoves})),
+             CreateTensorShape({num_threads_, constants::kMaxNumMoves})),
       // move softmax
       Tensor(DataType::DT_FLOAT,
-             CreateTensorShape({batch_size_, constants::kMaxNumMoves})),
+             CreateTensorShape({num_threads_, constants::kMaxNumMoves})),
       // win percent
       Tensor(DataType::DT_FLOAT,
-             CreateTensorShape({batch_size_, constants::kNumValueLogits})),
+             CreateTensorShape({num_threads_, constants::kNumValueLogits})),
       // score prediction
       Tensor(DataType::DT_FLOAT,
-             CreateTensorShape({batch_size_, constants::kNumScoreLogits}))};
+             CreateTensorShape({num_threads_, constants::kNumScoreLogits}))};
 }
 
 NNInterface::~NNInterface() {
@@ -126,8 +173,7 @@ absl::Status NNInterface::Initialize(std::string&& model_path) {
     return ToAbslStatus(status);
   }
 
-  // TODO: Look into whether tensorrt can do this mess automatically.
-  // Create graph to cast input to half precision.
+  // Create graph to cast game state to half precision.
   auto board = ops::Placeholder(scope_preprocess_.WithOpName(kInputBoardName),
                                 DataType::DT_FLOAT);
   auto game = ops::Placeholder(scope_preprocess_.WithOpName(kInputGameName),
@@ -140,7 +186,7 @@ absl::Status NNInterface::Initialize(std::string&& model_path) {
   TF_CHECK_OK(scope_preprocess_.ToGraphDef(&gdef_preprocess_));
   TF_CHECK_OK(session_preprocess_->Create(gdef_preprocess_));
 
-  // Create graph to cast output to float.
+  // Create graph to wrangle NN result into usable data.
   auto nn_move_logits = ops::Placeholder(
       scope_postprocess_.WithOpName(kNNOutMoveLogitsName), DataType::DT_FLOAT);
   auto nn_value_logits = ops::Placeholder(
@@ -166,30 +212,59 @@ absl::Status NNInterface::Initialize(std::string&& model_path) {
   return absl::OkStatus();
 }
 
-absl::Status NNInterface::LoadBatch(int thread_id, const game::Game& game,
-                                    int color_to_move) {
+absl::Status NNInterface::LoadBatch(int thread_id, const Game& game,
+                                    Color color_to_move) {
   if (!is_initialized_) {
     return absl::Status(
         absl::StatusCode::kInternal,
         "Need to initialize NNInterface before using inference.");
   }
 
+  ThreadInfo& thread_info = thread_info_[thread_id];
+  CacheKey cache_key = CacheKey{
+      color_to_move,
+      game.board().hash(),
+  };
+
+  if (nn_cache_.Contains(thread_id, cache_key)) {
+    // Cached. Immediately signal that result is ready.
+    absl::MutexLock l(&mu_);
+    thread_info.res_ready = true;
+    thread_info.res_cached = true;
+    thread_info.symmetry = Symmetry::kIdentity;
+    thread_info.cache_key = cache_key;
+
+    return absl::OkStatus();
+  }
+
+  // Not cached. Load for inference.
   DCHECK(game.moves().size() >= constants::kNumLastMoves);
-  board_utils::FillNNInput(thread_id, batch_size_, input_feature_buf_,
+  board_utils::FillNNInput(thread_id, num_threads_, input_feature_buf_,
                            input_state_buf_, game, color_to_move);
 
-  mu_.Lock();
-  thread_info_[thread_id].loaded = true;
-  mu_.Unlock();
+  absl::MutexLock l(&mu_);
+  thread_info.loaded_for_inference = true;
+  thread_info.res_ready = false;  // Force thread to wait for inference.
+  thread_info.res_cached = false;
+  thread_info.symmetry = Symmetry::kIdentity;
+  thread_info.cache_key = cache_key;
 
   return absl::OkStatus();
 }
 
 NNInferResult NNInterface::GetInferenceResult(int thread_id) {
+  auto& thread_info = thread_info_[thread_id];
   mu_.LockWhen(absl::Condition(&thread_info_[thread_id].res_ready));
-  thread_info_[thread_id].res_ready = false;
+  thread_info.res_ready = false;
   mu_.Unlock();
 
+  if (thread_info.res_cached) {
+    // Fetch from cache.
+    DCHECK(nn_cache_.Contains(thread_id, thread_info.cache_key));
+    return nn_cache_.Get(thread_id, thread_info.cache_key).value();
+  }
+
+  // Not found in cache. Fetch from NN output buffer.
   const auto move_logits = result_buf_[kPolicyLogitIndex]
                                .SubSlice(thread_id)
                                .unaligned_flat<float>();
@@ -200,7 +275,7 @@ NNInferResult NNInterface::GetInferenceResult(int thread_id) {
   const auto score_probs =
       result_buf_[kScoreIndex].SubSlice(thread_id).unaligned_flat<float>();
 
-  // need hand-rolled for loops b/c of potential alignment issues.
+  // Need hand-rolled for loops b/c of potential alignment issues.
   NNInferResult infer_result;
   for (int i = 0; i < constants::kMaxNumMoves; ++i) {
     infer_result.move_logits[i] = move_logits(i);
@@ -214,6 +289,9 @@ NNInferResult NNInterface::GetInferenceResult(int thread_id) {
   for (int i = 0; i < constants::kNumScoreLogits; ++i) {
     infer_result.score_probs[i] = score_probs(i);
   }
+
+  // Cache this result.
+  nn_cache_.Insert(thread_id, thread_info.cache_key, infer_result);
   return infer_result;
 }
 
@@ -226,8 +304,8 @@ void NNInterface::RegisterThread(int thread_id) {
   }
 
   thread.registered = true;
-  thread.loaded = false;
-  ++num_threads_;
+  thread.loaded_for_inference = false;
+  ++num_registered_threads_;
 }
 
 void NNInterface::UnregisterThread(int thread_id) {
@@ -238,7 +316,7 @@ void NNInterface::UnregisterThread(int thread_id) {
     return;
   }
 
-  --num_threads_;
+  --num_registered_threads_;
   thread.registered = false;
 }
 
@@ -250,7 +328,7 @@ void NNInterface::InferLoop() {
 
 void NNInterface::Infer() {
   absl::MutexLock l(&mu_, absl::Condition(this, &NNInterface::ShouldInfer));
-  if (num_threads_ == 0) {
+  if (num_registered_threads_ == 0) {
     return;
   }
 
@@ -287,9 +365,9 @@ void NNInterface::Infer() {
   input_state_buf_.flat<float>().setZero();
 
   for (auto& thread : thread_info_) {
-    if (thread.registered) {
-      thread.loaded = false;
+    if (thread.registered && !thread.res_cached) {
       thread.res_ready = true;
+      thread.loaded_for_inference = false;
     }
   }
 
@@ -306,7 +384,8 @@ bool NNInterface::ShouldInfer() const {
 
   for (int thread_id = 0; thread_id < thread_info_.size(); ++thread_id) {
     const auto& thread = thread_info_[thread_id];
-    if (thread.registered && !thread.loaded) {
+    if (thread.registered && !thread.res_cached &&
+        !thread.loaded_for_inference) {
       return false;
     }
   }
