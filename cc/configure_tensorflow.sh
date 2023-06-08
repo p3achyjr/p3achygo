@@ -22,17 +22,15 @@ if [ -z "${TF_NEED_TENSORRT}" ]; then
   esac
 fi
 
-# Get the P3achyGo workspace root.
-workspace=$(bazel info workspace)
-
-echo ${workspace}
-
 # //org_tensorflow//:configure script must be run from the TensorFlow repository
 # root. Build the script in order to pull the repository contents from GitHub.
 # The `bazel fetch` and `bazel sync` commands that are usually used to fetch
 # external Bazel dependencies don't work correctly on the TensorFlow repository.
 # bazel --bazelrc=/dev/null build @org_tensorflow//:configure --experimental_repo_remote_exec
-bazel build --bazelrc=${workspace}/.bazelrc @org_tensorflow//:configure --experimental_repo_remote_exec
+bazel --bazelrc=/dev/null build @org_tensorflow//:configure --experimental_repo_remote_exec
+
+# Get the p3achygo workspace root.
+workspace=$(bazel info workspace)
 
 # External dependencies are stored in a directory named after the workspace
 # directory name.
@@ -57,24 +55,15 @@ TF_CUDA_CLANG=${TF_CUDA_CLANG:-0} \
 TF_NEED_ROCM=${TF_NEED_ROCM:-0} \
 TF_NEED_MPI=${TF_NEED_MPI:-0} \
 TF_SET_ANDROID_WORKSPACE=${TF_SET_ANDROID_WORKSPACE:-0} \
-bazel --bazelrc=${workspace}/.bazelrc run @org_tensorflow//:configure
-# bazel --bazelrc=/dev/null run @org_tensorflow//:configure
+bazel --bazelrc=/dev/null run @org_tensorflow//:configure
 
 # Copy from the TensorFlow output_base.
-output_base=$(bazel info output_base)
+# output_base=$(bazel info output_base)
 popd
 
 # Copy TensorFlow's bazelrc files to workspace.
-cp ${output_base}/external/org_tensorflow/.bazelrc ${workspace}/tensorflow.bazelrc
-cp ${output_base}/external/org_tensorflow/.tf_configure.bazelrc ${workspace}/tf_configure.bazelrc
+cp ${workspace}/external/org_tensorflow/.bazelrc ${workspace}/tensorflow.bazelrc
+cp ${workspace}/external/org_tensorflow/.tf_configure.bazelrc ${workspace}/tf_configure.bazelrc
 
 echo "Building tensorflow package"
-bazel --bazelrc=${workspace}/.bazelrc run -c opt \
-  --copt=-Wno-unknown-warning-option \
-  --copt=-Wno-comment \
-  --copt=-Wno-deprecated-declarations \
-  --copt=-Wno-ignored-attributes \
-  --copt=-Wno-maybe-uninitialized \
-  --copt=-Wno-sign-compare \
-  --define=need_trt="$TF_NEED_TENSORRT" \
-  //cc/tensorflow:build -- ${workspace}/cc/tensorflow
+bazel build --config=cuda -c opt --config=opt @org_tensorflow//tensorflow/tools/pip_package:build_pip_package

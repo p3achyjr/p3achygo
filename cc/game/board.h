@@ -82,7 +82,6 @@ inline std::ostream& operator<<(std::ostream& os,
             << ", current_piece: " << transition.current_piece;
 }
 
-inline int OppositeColor(Color color) { return -color; }
 inline bool MoveOk(MoveStatus status) { return status == MoveStatus::kValid; }
 inline bool MoveOk(MoveResult result) {
   return result.status == MoveStatus::kValid;
@@ -305,8 +304,6 @@ class Board final {
   int passes_;
   float komi_;
 
-  // Hash value of empty board. Keep to avoid recomputing for each new game.
-  Zobrist::Hash initial_hash_;
   Zobrist::Hash hash_;
   GroupTracker group_tracker_;
   absl::flat_hash_set<Zobrist::Hash> seen_states_;

@@ -46,7 +46,7 @@ def train_step_gpu(w_pi, w_val, w_outcome, w_score, w_own, w_gamma, input, komi,
                             gamma, policy, score, score_one_hot, own, w_pi,
                             w_val, w_outcome, w_score, w_own, w_gamma)
 
-    reg_loss = tf.cast(tf.math.add_n(model.losses), dtype=tf.float16)
+    reg_loss = tf.math.add_n(model.losses)
 
     loss = loss + reg_loss
     scaled_loss = optimizer.get_scaled_loss(loss)
@@ -66,9 +66,9 @@ def val_step(w_pi, w_val, w_outcome, w_score, w_own, w_gamma, input, komi,
                                                                  tf.expand_dims(
                                                                      komi,
                                                                      axis=1),
-                                                                 training=True)
+                                                                 training=False)
   (loss, policy_loss, outcome_loss, score_pdf_loss,
-   own_loss) = model.loss(pi_logits, game_outcome, own_pred, score_logits,
+   own_loss) = model.loss(pi_logits, game_outcome, score_logits, own_pred,
                           gamma, policy, score, score_one_hot, own, w_pi, w_val,
                           w_outcome, w_score, w_own, w_gamma)
 
@@ -77,7 +77,7 @@ def val_step(w_pi, w_val, w_outcome, w_score, w_own, w_gamma, input, komi,
 
 
 class LossTracker:
-  MAX_LOSS = 10000.
+  MAX_LOSS = float('inf')
 
   def __init__(self):
     self.losses = []
@@ -98,7 +98,7 @@ class LossTracker:
     self.min_losses['outcome'] = min(self.min_losses['outcome'], outcome_loss)
     self.min_losses['score_pdf'] = min(self.min_losses['score_pdf'],
                                        score_pdf_loss)
-    self.min_losses['own'] = min(self.min_losses['own'], score_pdf_loss)
+    self.min_losses['own'] = min(self.min_losses['own'], own_loss)
 
 
 class ValMetrics:
@@ -151,12 +151,24 @@ class TrainingManager:
 
     learning_rate = lr if lr else lr_schedule
     model = self.model
+
+    # yapf: disable
     train_fn = functools.partial(train_step_gpu if is_gpu else train_step,
-                                 coeffs.w_pi, coeffs.w_val, coeffs.w_outcome,
-                                 coeffs.w_score, coeffs.w_own, coeffs.w_gamma)
-    val_fn = functools.partial(val_step, coeffs.w_pi, coeffs.w_val,
-                               coeffs.w_outcome, coeffs.w_score, coeffs.w_own,
+                                 coeffs.w_pi,
+                                 coeffs.w_val,
+                                 coeffs.w_outcome,
+                                 coeffs.w_score,
+                                 coeffs.w_own,
+                                 coeffs.w_gamma)
+    val_fn = functools.partial(val_step,
+                               coeffs.w_pi,
+                               coeffs.w_val,
+                               coeffs.w_outcome,
+                               coeffs.w_score,
+                               coeffs.w_own,
                                coeffs.w_gamma)
+    # yapf: enable
+
     optimizer = tf.keras.optimizers.experimental.SGD(
         learning_rate=learning_rate, momentum=momentum)
     if is_gpu:
@@ -178,7 +190,7 @@ class TrainingManager:
         if batch_num % log_interval == 0:
           self.log_train(batch_num, input, pi_logits, score_logits,
                          outcome_logits, policy, score,
-                         optimizer.learning_rate.numpy(), losses_train)
+                         optimizer.learning_rate.numpy(), losses_train, own)
 
         if batch_num % self.save_interval == 0:
           self.save_model(model, batch_num)
@@ -237,11 +249,15 @@ class TrainingManager:
   def log_train(self, batch_num: int, model_input: tf.Tensor,
                 pi_logits: tf.Tensor, score_logits: tf.Tensor,
                 outcome_logits: tf.Tensor, pi: tf.Tensor, score: tf.Tensor,
-                lr: tf.Tensor, losses: LossTracker):
+                lr: tf.Tensor, losses: LossTracker, own: tf.Tensor):
     top_policy_indices = tf.math.top_k(pi_logits[0], k=5).indices
     top_policy_values = tf.math.top_k(pi_logits[0], k=5).values
     board = tf.transpose(model_input, (0, 3, 1, 2))  # NHWC -> NCHW
     board = tf.cast(board[0][0] + (2 * board[0][1]), dtype=tf.int32)
+    own = tf.cast(own[0], dtype=tf.int32)
+    own_black = tf.where(own == BLACK_RL, own, tf.zeros_like(own)) / BLACK_RL
+    own_white = tf.where(own == WHITE_RL, own, tf.zeros_like(own)) / WHITE_RL
+    own = own_black * BLACK + own_white * WHITE
     top_score_indices = tf.math.top_k(score_logits[0],
                                       k=5).indices - SCORE_RANGE_MIDPOINT
     top_score_values = tf.math.top_k(score_logits[0], k=5).values
@@ -250,9 +266,13 @@ class TrainingManager:
     print(f'Learning Rate: {lr}')
     print(f'Loss: {losses.losses[-1]["loss"]}')
     print(f'Min Loss: {losses.min_losses["loss"]}')
+    print(f'Policy Loss: {losses.losses[-1]["policy"]}')
     print(f'Min Policy Loss: {losses.min_losses["policy"]}')
+    print(f'Outcome Loss: {losses.losses[-1]["outcome"]}')
     print(f'Min Outcome Loss: {losses.min_losses["outcome"]}')
+    print(f'Score PDF Loss: {losses.losses[-1]["score_pdf"]}')
     print(f'Min Score PDF Loss: {losses.min_losses["score_pdf"]}')
+    print(f'Own Loss: {losses.losses[-1]["own"]}')
     print(f'Min Own Loss: {losses.min_losses["own"]}')
     print(f'Predicted Outcome: {tf.nn.softmax(outcome_logits[0])}')
     print(f'Predicted Scores: {top_score_indices}')
@@ -261,6 +281,8 @@ class TrainingManager:
     print(f'Predicted Top 5 Moves: {top_policy_indices}')
     print(f'Predicted Top 5 Move Logits: {top_policy_values}')
     print(f'Actual Policy: {pi[0]}')
+    print(f'Own:')
+    print(GoBoard.to_string(own.numpy()))
     print(f'Board:')
     print(GoBoard.to_string(board.numpy()))
 
@@ -283,4 +305,4 @@ class TrainingManager:
 
   def save_model(self, model: P3achyGoModel, batch_num: int):
     local_path = Path(self.save_path, f'model_b{batch_num}')
-    model.save(str(local_path), signatures={'infer_mixed': model.infer_mixed})
+    model.save(str(local_path))

@@ -4,11 +4,11 @@
 
 #include "absl/log/check.h"
 #include "absl/synchronization/mutex.h"
+#include "cc/nn/create_tensor_shape.h"
 #include "cc/nn/nn_board_utils.h"
 #include "tensorflow/cc/ops/array_ops.h"
 #include "tensorflow/cc/ops/math_ops.h"
 #include "tensorflow/cc/ops/nn_ops.h"
-#include "tensorflow/cc/saved_model/tag_constants.h"
 #include "tensorflow/core/graph/default_device.h"
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/public/session.h"
@@ -17,94 +17,137 @@ namespace nn {
 namespace {
 
 using namespace ::tensorflow;
+using ::game::Color;
+using ::game::Game;
+using ::game::Symmetry;
 
-static constexpr int kMoveIndex = 0;
-static constexpr int kValueIndex = 1;
-static constexpr int kOwnerIndex = 2;
+// 2 ** 20. Assuming ~3kb per inference result, this will be about ~3GB of RAM.
+static constexpr size_t kMaxCacheSize = 1048576;
+
+static constexpr int kPolicyLogitIndex = 0;
+static constexpr int kPolicyProbIndex = 1;
+static constexpr int kValueIndex = 2;
 static constexpr int kScoreIndex = 3;
-static constexpr int kMoveProbsIndex = 4;
 
-static const std::vector<std::string> kInputNames = {
-    "infer_mixed_board_state:0",
-    "infer_mixed_game_state:0",
-};
+// Pre-processing feed/fetch names.
+static constexpr char kInputBoardName[] = "input_board_state";
+static constexpr char kInputGameName[] = "input_game_state";
+static constexpr char kNNInputBoardName[] = "nn_input_board_state";
+static constexpr char kNNInputGameName[] = "nn_input_game_state";
 
-static const std::vector<std::string> kOutputNames = {
-    "StatefulPartitionedCall:0", "StatefulPartitionedCall:1",
-    "StatefulPartitionedCall:2", "StatefulPartitionedCall:3",
-    "StatefulPartitionedCall:4",
-};
+// Post-processing feed/fetch names.
+static constexpr char kNNOutMoveLogitsName[] = "nn_out_move_logits";
+static constexpr char kNNOutValueLogitsName[] = "nn_out_value_logits";
+static constexpr char kNNOutScoreLogitsName[] = "nn_out_score_logits";
 
-// input feed and fetch names for F32 -> F16 cast.
-static constexpr char kInput32BoardName[] = "input32_board_state";
-static constexpr char kInput32GameName[] = "input32_game_state";
+static constexpr char kOutMoveLogitsName[] = "out_move_logits";
+static constexpr char kOutMoveProbsName[] = "out_move_probs";
+static constexpr char kOutValueProbsName[] = "out_value_probs";
+static constexpr char kOutScoreProbsName[] = "out_score_probs";
 
-static constexpr char kInput16BoardName[] = "input16_board_state";
-static constexpr char kInput16GameName[] = "input16_game_state";
-
-// output feed and fetch names for F16 -> F32 cast.
-static constexpr char kOut16MoveLogitsName[] = "out16_move_logits";
-static constexpr char kOut16ValueLogitsName[] = "out16_value_logits";
-static constexpr char kOut16OwnerLogitsName[] = "out16_owner_logits";
-static constexpr char kOut16ScoreLogitsName[] = "out16_score_logits";
-
-static constexpr char kOut32MoveLogitsName[] = "out32_move_logits";
-static constexpr char kOut32ValueProbsName[] = "out32_value_probs";
-static constexpr char kOut32OwnerLogitsName[] = "out32_owner_logits";
-static constexpr char kOut32ScoreProbsName[] = "out32_score_probs";
-static constexpr char kOut32MoveProbsName[] = "out32_move_probs";
+static constexpr char kSavedModelTagServe[] = "serve";
 
 }  // namespace
+
+NNInterface::Cache::Cache(int num_threads)
+    : num_threads_(num_threads),
+      thread_cache_size_(num_threads == 0 ? 0 : kMaxCacheSize / num_threads) {
+  for (int i = 0; i < num_threads; ++i) {
+    cache_[i].resize(thread_cache_size_);
+  }
+}
+
+void NNInterface::Cache::Insert(int thread_id, const CacheKey& cache_key,
+                                const NNInferResult& infer_result) {
+  size_t hash = absl::HashOf(cache_key);
+  size_t tbl_index = hash % thread_cache_size_;
+  cache_[thread_id][tbl_index] = CacheElem{hash, infer_result};
+}
+
+bool NNInterface::Cache::Contains(int thread_id, const CacheKey& cache_key) {
+  size_t hash = absl::HashOf(cache_key);
+  size_t tbl_index = hash % thread_cache_size_;
+  const std::optional<CacheElem>& elem = cache_[thread_id][tbl_index];
+  if (!elem) {
+    return false;
+  } else if (elem->hash != hash) {
+    return false;
+  }
+
+  return true;
+}
+
+std::optional<NNInferResult> NNInterface::Cache::Get(
+    int thread_id, const CacheKey& cache_key) {
+  size_t hash = absl::HashOf(cache_key);
+  size_t tbl_index = hash % thread_cache_size_;
+  const std::optional<CacheElem>& elem = cache_[thread_id][tbl_index];
+  if (!elem) {
+    return {};
+  }
+
+  return elem->infer_res;
+}
 
 NNInterface::NNInterface(int num_threads)
     : session_options_(SessionOptions()),
       run_options_(RunOptions()),
-      scope_cast_input_(Scope::NewRootScope()),
-      scope_cast_output_(Scope::NewRootScope()),
-      session_cast_input_(tensorflow::NewSession(session_options_)),
-      session_cast_output_(tensorflow::NewSession(session_options_)),
+      scope_preprocess_(Scope::NewRootScope()),
+      scope_postprocess_(Scope::NewRootScope()),
+      session_preprocess_(tensorflow::NewSession(session_options_)),
+      session_postprocess_(tensorflow::NewSession(session_options_)),
       is_initialized_(false),
+      num_registered_threads_(num_threads),
       num_threads_(num_threads),
-      batch_size_(num_threads),
-      thread_info_(batch_size_),
+      nn_cache_(num_threads_),
+      thread_info_(num_threads_),
       running_(true),
       last_infer_time_(
           std::chrono::time_point<std::chrono::steady_clock>::max()) {
-  input_feature_buf_ = Tensor(
-      DataType::DT_FLOAT,
-      {batch_size_, BOARD_LEN, BOARD_LEN, constants::kNumInputFeaturePlanes});
-  input_state_buf_ = Tensor(DataType::DT_FLOAT, {batch_size_, 1});
+  input_feature_buf_ =
+      Tensor(DataType::DT_FLOAT,
+             CreateTensorShape({num_threads_, BOARD_LEN, BOARD_LEN,
+                                constants::kNumInputFeaturePlanes}));
+  input_state_buf_ =
+      Tensor(DataType::DT_FLOAT, CreateTensorShape({num_threads_, 1}));
   nn_input_buf_ = {
-      Tensor(DataType::DT_HALF, {batch_size_, BOARD_LEN, BOARD_LEN,
-                                 constants::kNumInputFeaturePlanes}),
-      Tensor(DataType::DT_HALF, {batch_size_, 1})};
+      Tensor(DataType::DT_FLOAT,
+             CreateTensorShape({num_threads_, BOARD_LEN, BOARD_LEN,
+                                constants::kNumInputFeaturePlanes})),
+      Tensor(DataType::DT_HALF, CreateTensorShape({num_threads_, 1}))};
 
   input_feature_buf_.flat<float>().setZero();
   input_state_buf_.flat<float>().setZero();
 
   nn_output_buf_ = {
       // move logits
-      Tensor(DataType::DT_HALF, {batch_size_, constants::kMaxNumMoves}),
+      Tensor(DataType::DT_FLOAT,
+             CreateTensorShape({num_threads_, constants::kMaxNumMoves})),
       // win percent
-      Tensor(DataType::DT_HALF, {batch_size_, constants::kNumValueLogits}),
+      Tensor(DataType::DT_FLOAT,
+             CreateTensorShape({num_threads_, constants::kNumValueLogits})),
       // ownership
-      Tensor(DataType::DT_HALF, {batch_size_, BOARD_LEN, BOARD_LEN, 1}),
+      Tensor(DataType::DT_FLOAT,
+             CreateTensorShape({num_threads_, BOARD_LEN, BOARD_LEN, 1})),
       // score prediction
-      Tensor(DataType::DT_HALF, {batch_size_, constants::kNumScoreLogits}),
+      Tensor(DataType::DT_FLOAT,
+             CreateTensorShape({num_threads_, constants::kNumScoreLogits})),
       // gamma, just ignore
-      Tensor(DataType::DT_HALF, {batch_size_, 1})};
+      Tensor(DataType::DT_FLOAT, CreateTensorShape({num_threads_, 1}))};
 
   result_buf_ = {
       // move logits
-      Tensor(DataType::DT_FLOAT, {batch_size_, constants::kMaxNumMoves}),
-      // win percent
-      Tensor(DataType::DT_FLOAT, {batch_size_, constants::kNumValueLogits}),
-      // ownership
-      Tensor(DataType::DT_FLOAT, {batch_size_, BOARD_LEN, BOARD_LEN, 1}),
-      // score prediction
-      Tensor(DataType::DT_FLOAT, {batch_size_, constants::kNumScoreLogits}),
+      Tensor(DataType::DT_FLOAT,
+             CreateTensorShape({num_threads_, constants::kMaxNumMoves})),
       // move softmax
-      Tensor(DataType::DT_FLOAT, {batch_size_, constants::kMaxNumMoves})};
+      Tensor(DataType::DT_FLOAT,
+             CreateTensorShape({num_threads_, constants::kMaxNumMoves})),
+      // win percent
+      Tensor(DataType::DT_FLOAT,
+             CreateTensorShape({num_threads_, constants::kNumValueLogits})),
+      // score prediction
+      Tensor(DataType::DT_FLOAT,
+             CreateTensorShape({num_threads_, constants::kNumScoreLogits}))};
 }
 
 NNInterface::~NNInterface() {
@@ -114,108 +157,105 @@ NNInterface::~NNInterface() {
     infer_thread_.join();
   }
 
-  if (session_cast_input_) {
-    session_cast_input_->Close().IgnoreError();
+  if (session_preprocess_) {
+    session_preprocess_->Close().IgnoreError();
   }
 
-  if (session_cast_output_) {
-    session_cast_output_->Close().IgnoreError();
+  if (session_postprocess_) {
+    session_postprocess_->Close().IgnoreError();
   }
 }
 
 absl::Status NNInterface::Initialize(std::string&& model_path) {
-  auto status =
-      LoadSavedModel(session_options_, run_options_, model_path,
-                     {tensorflow::kSavedModelTagServe}, &model_bundle_);
+  auto status = LoadSavedModel(session_options_, run_options_, model_path,
+                               {kSavedModelTagServe}, &model_bundle_);
   if (!status.ok()) {
     return ToAbslStatus(status);
   }
 
-  // TODO: Look into whether tensorrt can do this mess automatically.
-  // Create graph to cast input to half precision.
-  auto board = ops::Placeholder(scope_cast_input_.WithOpName(kInput32BoardName),
+  // Create graph to cast game state to half precision.
+  auto board = ops::Placeholder(scope_preprocess_.WithOpName(kInputBoardName),
                                 DataType::DT_FLOAT);
-  auto game = ops::Placeholder(scope_cast_input_.WithOpName(kInput32GameName),
+  auto game = ops::Placeholder(scope_preprocess_.WithOpName(kInputGameName),
                                DataType::DT_FLOAT);
-  auto cast_board = ops::Cast(scope_cast_input_.WithOpName(kInput16BoardName),
-                              board, DataType::DT_HALF);
-  auto cast_game = ops::Cast(scope_cast_input_.WithOpName(kInput16GameName),
-                             game, DataType::DT_HALF);
+  auto nn_board =
+      ops::Identity(scope_preprocess_.WithOpName(kNNInputBoardName), board);
+  auto nn_game = ops::Cast(scope_preprocess_.WithOpName(kNNInputGameName), game,
+                           DataType::DT_HALF);
 
-  TF_CHECK_OK(scope_cast_input_.ToGraphDef(&gdef_cast_input_));
-  TF_CHECK_OK(session_cast_input_->Create(gdef_cast_input_));
+  TF_CHECK_OK(scope_preprocess_.ToGraphDef(&gdef_preprocess_));
+  TF_CHECK_OK(session_preprocess_->Create(gdef_preprocess_));
 
-  // Create graph to cast output to float.
-  auto move_logits = ops::Placeholder(
-      scope_cast_output_.WithOpName(kOut16MoveLogitsName), DataType::DT_HALF);
-  auto value_logits = ops::Placeholder(
-      scope_cast_output_.WithOpName(kOut16ValueLogitsName), DataType::DT_HALF);
-  auto owner_logits = ops::Placeholder(
-      scope_cast_output_.WithOpName(kOut16OwnerLogitsName), DataType::DT_HALF);
-  auto score_logits = ops::Placeholder(
-      scope_cast_output_.WithOpName(kOut16ScoreLogitsName), DataType::DT_HALF);
+  // Create graph to wrangle NN result into usable data.
+  auto nn_move_logits = ops::Placeholder(
+      scope_postprocess_.WithOpName(kNNOutMoveLogitsName), DataType::DT_FLOAT);
+  auto nn_value_logits = ops::Placeholder(
+      scope_postprocess_.WithOpName(kNNOutValueLogitsName), DataType::DT_FLOAT);
+  auto nn_score_logits = ops::Placeholder(
+      scope_postprocess_.WithOpName(kNNOutScoreLogitsName), DataType::DT_FLOAT);
 
-  auto cast_move_logits =
-      ops::Cast(scope_cast_output_.WithOpName(kOut32MoveLogitsName),
-                move_logits, DataType::DT_FLOAT);
-  auto value_probs = ops::Softmax(
-      scope_cast_output_.WithOpName(kOut32ValueProbsName),
-      ops::Cast(scope_cast_output_, value_logits, DataType::DT_FLOAT));
-  auto cast_owner_logits =
-      ops::Cast(scope_cast_output_.WithOpName(kOut32OwnerLogitsName),
-                owner_logits, DataType::DT_FLOAT);
-  auto score_probs = ops::Softmax(
-      scope_cast_output_.WithOpName(kOut32ScoreProbsName),
-      ops::Cast(scope_cast_output_, score_logits, DataType::DT_FLOAT));
+  auto move_logits = ops::Identity(
+      scope_postprocess_.WithOpName(kOutMoveLogitsName), nn_move_logits);
   auto move_probs = ops::Softmax(
-      scope_cast_output_.WithOpName(kOut32MoveProbsName),
-      ops::Cast(scope_cast_output_, move_logits, DataType::DT_FLOAT));
+      scope_postprocess_.WithOpName(kOutMoveProbsName), nn_move_logits);
+  auto value_probs = ops::Softmax(
+      scope_postprocess_.WithOpName(kOutValueProbsName), nn_value_logits);
+  auto score_probs = ops::Softmax(
+      scope_postprocess_.WithOpName(kOutScoreProbsName), nn_score_logits);
 
-  TF_CHECK_OK(scope_cast_output_.ToGraphDef(&gdef_cast_output_));
-  TF_CHECK_OK(session_cast_output_->Create(gdef_cast_output_));
+  TF_CHECK_OK(scope_postprocess_.ToGraphDef(&gdef_postprocess_));
+  TF_CHECK_OK(session_postprocess_->Create(gdef_postprocess_));
 
-  infer_thread_ = std::move(std::thread(&NNInterface::InferLoop, this));
+  infer_thread_ = std::thread(&NNInterface::InferLoop, this);
   is_initialized_ = true;
 
   return absl::OkStatus();
 }
 
-absl::Status NNInterface::LoadBatch(int thread_id, const game::Game& game,
-                                    int color_to_move) {
-  if (!is_initialized_) {
-    return absl::Status(
-        absl::StatusCode::kInternal,
-        "Need to initialize NNInterface before using inference.");
+NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
+                                               Color color_to_move) {
+  DCHECK(is_initialized_);
+  ThreadInfo& thread_info = thread_info_[thread_id];
+  CacheKey cache_key = CacheKey{
+      color_to_move,
+      game.board().hash(),
+  };
+
+  if (nn_cache_.Contains(thread_id, cache_key)) {
+    // Cached. Immediately return result.
+    absl::MutexLock l(&mu_);
+    thread_info.res_cached = true;
+
+    return nn_cache_.Get(thread_id, cache_key).value();
   }
 
+  // Not cached. Load for inference.
   DCHECK(game.moves().size() >= constants::kNumLastMoves);
-  NNBoardUtils::FillNNInput(thread_id, batch_size_, input_feature_buf_,
-                            input_state_buf_, game, color_to_move);
+  board_utils::FillNNInput(thread_id, num_threads_, input_feature_buf_,
+                           input_state_buf_, game, color_to_move);
 
   mu_.Lock();
-  thread_info_[thread_id].loaded = true;
+  thread_info.loaded_for_inference = true;
+  thread_info.res_ready = false;
+  thread_info.res_cached = false;
+
+  // Wait for result.
+  mu_.Await(absl::Condition(&thread_info.res_ready));
+  thread_info.res_ready = false;
   mu_.Unlock();
 
-  return absl::OkStatus();
-}
-
-NNInferResult NNInterface::GetInferenceResult(int thread_id) {
-  mu_.LockWhen(absl::Condition(&thread_info_[thread_id].res_ready));
-  thread_info_[thread_id].res_ready = false;
-  mu_.Unlock();
-
-  const auto move_logits =
-      result_buf_[kMoveIndex].SubSlice(thread_id).unaligned_flat<float>();
+  // Inference result is now ready.
+  const auto move_logits = result_buf_[kPolicyLogitIndex]
+                               .SubSlice(thread_id)
+                               .unaligned_flat<float>();
+  const auto move_probs =
+      result_buf_[kPolicyProbIndex].SubSlice(thread_id).unaligned_flat<float>();
   const auto value_probs =
       result_buf_[kValueIndex].SubSlice(thread_id).unaligned_flat<float>();
-  const auto ownership =
-      result_buf_[kOwnerIndex].SubSlice(thread_id).unaligned_flat<float>();
   const auto score_probs =
       result_buf_[kScoreIndex].SubSlice(thread_id).unaligned_flat<float>();
-  const auto move_probs =
-      result_buf_[kMoveProbsIndex].SubSlice(thread_id).unaligned_flat<float>();
 
-  // need hand-rolled for loops b/c of potential alignment issues.
+  // Need hand-rolled for loops b/c of potential alignment issues.
   NNInferResult infer_result;
   for (int i = 0; i < constants::kMaxNumMoves; ++i) {
     infer_result.move_logits[i] = move_logits(i);
@@ -226,12 +266,12 @@ NNInferResult NNInterface::GetInferenceResult(int thread_id) {
   for (int i = 0; i < constants::kNumValueLogits; ++i) {
     infer_result.value_probs[i] = value_probs(i);
   }
-  for (int i = 0; i < constants::kMaxNumBoardLocs; ++i) {
-    infer_result.ownership[i] = ownership(i);
-  }
   for (int i = 0; i < constants::kNumScoreLogits; ++i) {
     infer_result.score_probs[i] = score_probs(i);
   }
+
+  // Cache this result.
+  nn_cache_.Insert(thread_id, cache_key, infer_result);
   return infer_result;
 }
 
@@ -244,8 +284,8 @@ void NNInterface::RegisterThread(int thread_id) {
   }
 
   thread.registered = true;
-  thread.loaded = false;
-  ++num_threads_;
+  thread.loaded_for_inference = false;
+  ++num_registered_threads_;
 }
 
 void NNInterface::UnregisterThread(int thread_id) {
@@ -256,7 +296,7 @@ void NNInterface::UnregisterThread(int thread_id) {
     return;
   }
 
-  --num_threads_;
+  --num_registered_threads_;
   thread.registered = false;
 }
 
@@ -268,16 +308,17 @@ void NNInterface::InferLoop() {
 
 void NNInterface::Infer() {
   absl::MutexLock l(&mu_, absl::Condition(this, &NNInterface::ShouldInfer));
-  if (num_threads_ == 0) {
+  if (num_registered_threads_ == 0) {
     return;
   }
 
-  // Cast to half.
-  std::vector<std::pair<std::string, Tensor>> cast_input = {
-      {kInput32BoardName, input_feature_buf_},
-      {kInput32GameName, input_state_buf_}};
-  TF_CHECK_OK(session_cast_input_->Run(
-      cast_input, {kInput16BoardName, kInput16GameName}, {}, &nn_input_buf_));
+  // Pre-process (cast game state to half).
+  std::vector<std::pair<std::string, Tensor>> preprocess_input = {
+      {kInputBoardName, input_feature_buf_},
+      {kInputGameName, input_state_buf_}};
+  TF_CHECK_OK(session_preprocess_->Run(preprocess_input,
+                                       {kNNInputBoardName, kNNInputGameName},
+                                       {}, &nn_input_buf_));
 
   // Run Inference.
   std::vector<std::pair<std::string, Tensor>> nn_input = {
@@ -285,26 +326,28 @@ void NNInterface::Infer() {
   TF_CHECK_OK(model_bundle_.GetSession()->Run(nn_input, kOutputNames, {},
                                               &nn_output_buf_));
 
-  // cast back to float
-  std::vector<std::pair<std::string, Tensor>> result_input = {
-      {kOut16MoveLogitsName, nn_output_buf_[kMoveIndex]},
-      {kOut16ValueLogitsName, nn_output_buf_[kValueIndex]},
-      {kOut16OwnerLogitsName, nn_output_buf_[kOwnerIndex]},
-      {kOut16ScoreLogitsName, nn_output_buf_[kScoreIndex]}};
-  TF_CHECK_OK(session_cast_output_->Run(
-      result_input,
-      {kOut32MoveLogitsName, kOut32ValueProbsName, kOut32OwnerLogitsName,
-       kOut32ScoreProbsName, kOut32MoveProbsName},
-      {}, &result_buf_));
+  // Post-process (softmax for moves, value, score).
+  // Keep indices into nn_output_buf_ consistent with order of fetch names from
+  // model.
+  std::vector<std::pair<std::string, Tensor>> postprocess_input = {
+      {kNNOutMoveLogitsName, nn_output_buf_[kNNPolicyIndex]},
+      {kNNOutValueLogitsName, nn_output_buf_[kNNOutcomeIndex]},
+      {kNNOutScoreLogitsName, nn_output_buf_[kNNScoreIndex]}};
+  TF_CHECK_OK(
+      session_postprocess_->Run(postprocess_input,
+                                // Keep the order consistent with kOut*Index
+                                {kOutMoveLogitsName, kOutMoveProbsName,
+                                 kOutValueProbsName, kOutScoreProbsName},
+                                {}, &result_buf_));
 
   // reset input buffers
   input_feature_buf_.flat<float>().setZero();
   input_state_buf_.flat<float>().setZero();
 
   for (auto& thread : thread_info_) {
-    if (thread.registered) {
-      thread.loaded = false;
+    if (thread.registered && !thread.res_cached) {
       thread.res_ready = true;
+      thread.loaded_for_inference = false;
     }
   }
 
@@ -321,7 +364,8 @@ bool NNInterface::ShouldInfer() const {
 
   for (int thread_id = 0; thread_id < thread_info_.size(); ++thread_id) {
     const auto& thread = thread_info_[thread_id];
-    if (thread.registered && !thread.loaded) {
+    if (thread.registered && !thread.res_cached &&
+        !thread.loaded_for_inference) {
       return false;
     }
   }

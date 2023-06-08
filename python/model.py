@@ -118,7 +118,7 @@ class ResidualBlock(tf.keras.layers.Layer):
     for block in self.blocks:
       x = block(x, training=training)
 
-    return self.activation(x + res)
+    return self.activation(res + x)
 
 
 class BottleneckResidualConvBlock(ResidualBlock):
@@ -297,11 +297,11 @@ class GlobalPoolBias(tf.keras.layers.Layer):
   works).
   '''
 
-  def __init__(self, channels: int, name=None):
+  def __init__(self, channels: int, board_len=BOARD_LEN, name=None):
     super(GlobalPoolBias, self).__init__(name=name)
     self.batch_norm_g = tf.keras.layers.BatchNormalization(
         scale=False, momentum=.999, epsilon=1e-3, name='batch_norm_gpool')
-    self.gpool = GlobalPool(channels, 19, 19, name='gpool')
+    self.gpool = GlobalPool(channels, board_len, board_len, name='gpool')
     self.dense = tf.keras.layers.Dense(channels)
 
     # save for serialization
@@ -338,14 +338,13 @@ class PolicyHead(tf.keras.layers.Layer):
 
   Layers:
 
-  1) 2 parallel convolutions outputting P, G, tensors of dim b x b x `channels`
-  2) A global pooling bias layer biasing G to P (i.e. P = P + gpool(G))
-  3) Batch normalization of P
-  4) A 1x1 convolution outputting a single b x b matrix with move logits
-  5) A dense layer for gpool(G) to a single output containing the pass logit
+  1) Broadcast Residual Block
+  2) Batch normalization of P
+  3) A 1x1x1 Convolution to logits on the board.
+  4) An FC layer from gpool
   '''
 
-  def __init__(self, channels=32, name=None):
+  def __init__(self, channels=32, board_len=BOARD_LEN, name=None):
     super(PolicyHead, self).__init__(name=name)
     self.conv_p = tf.keras.layers.Conv2D(channels,
                                          1,
@@ -357,9 +356,11 @@ class PolicyHead(tf.keras.layers.Layer):
                                          padding='same',
                                          kernel_regularizer=L2(C_L2),
                                          name='policy_conv_g')
-    self.gpool = GlobalPoolBias(channels)
-    self.batch_norm = tf.keras.layers.BatchNormalization(
-        scale=False, momentum=.999, epsilon=1e-3, name='batch_norm_gpool')
+    self.gpool = GlobalPoolBias(channels, board_len=board_len)
+    self.batch_norm = tf.keras.layers.BatchNormalization(scale=False,
+                                                         momentum=.999,
+                                                         epsilon=1e-3,
+                                                         name='policy_bn')
     self.flatten = tf.keras.layers.Flatten()
     self.output_moves = tf.keras.layers.Conv2D(1,
                                                1,
@@ -371,11 +372,10 @@ class PolicyHead(tf.keras.layers.Layer):
         name='policy_output_pass',
         kernel_regularizer=L2(C_L2),
     )
-    # self.scaling_pass = tf.keras.layers.Rescaling(3e-1,
-    #                                               name='policy_output_scale')
 
     # save parameters for serialization
     self.channels = channels
+    self.board_len = board_len
 
   def call(self, x, training=False):
     p = self.conv_p(x)
@@ -387,8 +387,9 @@ class PolicyHead(tf.keras.layers.Layer):
 
     p = self.output_moves(p)
 
-    pass_logit = self.output_pass(g_pooled)
-    # pass_logit = self.scaling_pass(pass_logit)
+    # Hacky, but forces model to learn when to pass, rather than to learn when
+    # not to.
+    pass_logit = self.output_pass(g_pooled) - 5
 
     p = self.flatten(tf.squeeze(p, axis=3))
 
@@ -397,13 +398,14 @@ class PolicyHead(tf.keras.layers.Layer):
   def get_config(self):
     return {
         'channels': self.channels,
+        'board_len': self.board_len,
         'name': self.name,
     }
 
 
 class ValueHead(tf.keras.layers.Layer):
   '''
-  Implementation of KataGo policy head.
+  Implementation of KataGo value head.
 
   Input: b x b x c feature matrix 
   Output:
@@ -413,16 +415,21 @@ class ValueHead(tf.keras.layers.Layer):
   - (800, ) logits representing score difference
   '''
 
-  def __init__(self, channels=32, c_val=64, score_range=SCORE_RANGE, name=None):
+  def __init__(self,
+               channels=32,
+               c_val=64,
+               board_len=BOARD_LEN,
+               score_range=SCORE_RANGE,
+               name=None):
     super(ValueHead, self).__init__(name=name)
 
     ## Initialize Model Layers ##
-    self.conv_v = tf.keras.layers.Conv2D(channels,
-                                         1,
-                                         padding='same',
-                                         kernel_regularizer=L2(C_L2),
-                                         name='value_conv_v')
-    self.gpool = GlobalPool(channels, 19, 19, name='gpool_v')
+    self.conv = tf.keras.layers.Conv2D(channels,
+                                       1,
+                                       padding='same',
+                                       kernel_regularizer=L2(C_L2),
+                                       name='value_conv')
+    self.gpool = GlobalPool(channels, board_len, board_len, name='value_gpool')
 
     # Game Outcome Subhead
     self.outcome_biases = tf.keras.layers.Dense(c_val,
@@ -463,10 +470,11 @@ class ValueHead(tf.keras.layers.Layer):
     # Save for serialization
     self.channels = channels
     self.c_val = c_val
+    self.board_len = board_len
     self.score_range = score_range
 
   def call(self, x):
-    v = self.conv_v(x)
+    v = self.conv(x)
     v_pooled = self.gpool(v)
 
     # Compute Game Output
@@ -516,6 +524,7 @@ class ValueHead(tf.keras.layers.Layer):
     return {
         'channels': self.channels,
         'c_val': self.c_val,
+        'board_len': self.board_len,
         'score_range': self.score_range,
         'name': self.name
     }
@@ -586,14 +595,19 @@ class P3achyGoModel(tf.keras.Model):
                                         stack_size=bottleneck_length,
                                         name=f'bottleneck_res_{i}'))
 
-    self.policy_head = PolicyHead(num_head_channels, 'policy_head')
-    self.value_head = ValueHead(num_head_channels, c_val, name='value_head')
+    self.policy_head = PolicyHead(channels=num_head_channels,
+                                  board_len=board_len,
+                                  name='policy_head')
+    self.value_head = ValueHead(num_head_channels,
+                                c_val,
+                                board_len,
+                                name='value_head')
 
     ## Initialize Loss Objects. Defer reduction strategy to loss objects ##
     self.scce_logits = tf.keras.losses.SparseCategoricalCrossentropy(
         from_logits=True)
     self.scce = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)
-    self.cce = tf.keras.losses.CategoricalCrossentropy(from_logits=False)
+    self.mse = tf.keras.losses.MeanSquaredError()
     self.identity = tf.keras.layers.Activation(
         'linear')  # need for mixed-precision
 
@@ -633,15 +647,8 @@ class P3achyGoModel(tf.keras.Model):
            w_gamma):
     policy_loss = self.scce_logits(policy, pi_logits)
 
-    # tf.print('Policy Loss:', policy_loss)
-
     did_win = score >= 0
     outcome_loss = self.scce_logits(did_win, game_outcome)
-    # outcome_clip_max = 100.0
-    # outcome_loss = tf.clip_by_value(outcome_loss, -outcome_clip_max,
-    #                                  outcome_clip_max)
-
-    # tf.print('Outcome Loss:', outcome_loss)
 
     score_index = score + SCORE_RANGE_MIDPOINT
     score_distribution = tf.keras.activations.softmax(score_logits)
@@ -652,19 +659,11 @@ class P3achyGoModel(tf.keras.Model):
             tf.math.cumsum(score_distribution, axis=1)),
                            axis=1))
 
-    # tf.print('Score PDF Loss:', score_pdf_loss)
-    # tf.print('Score CDF Loss:', score_cdf_loss)
-    # tf.print('Score Loss:', score_loss)
-
-    # {-1, 0, 1} -> {0, .5, 1}
-    own = tf.cast((own + 1) / 2, dtype=tf.float32)
-    own_pred = (own_pred + 1) / 2
-    own_loss = self.cce(own, own_pred)
+    own_pred = tf.squeeze(own_pred, -1)  # tailing 1 dim.
+    own_loss = self.mse(own, own_pred)
 
     gamma = tf.squeeze(gamma, axis=-1)
     gamma_loss = tf.math.reduce_mean(gamma * gamma * w_gamma)
-
-    # tf.print('Gamma Loss:', gamma_loss)
 
     woutcome_loss = w_outcome * outcome_loss
     wscore_pdf_loss = w_score * score_pdf_loss
@@ -674,6 +673,21 @@ class P3achyGoModel(tf.keras.Model):
                         wown_loss) + wscore_cdf_loss
 
     loss = w_pi * policy_loss + val_loss + gamma_loss
+
+    # yapf: disable
+    # tf.print('Loss:', loss,
+    #          '\nPolicy Loss:', policy_loss,
+    #          '\nWeighted Policy Loss:', w_pi * policy_loss,
+    #          '\nOutcome Loss:', outcome_loss,
+    #          '\nWeighted Outcome Loss:', woutcome_loss,
+    #          '\nScore PDF Loss:', score_pdf_loss,
+    #          '\nWeighted Score PDF Loss:', wscore_pdf_loss,
+    #          '\nScore CDF Loss:', score_cdf_loss,
+    #          '\nWeighted Score CDF Loss:', wscore_cdf_loss,
+    #          '\nOwn Loss:', own_loss,
+    #          '\nWeighted Own Loss:', wown_loss,
+    #          '\nGamma Loss:', gamma_loss)
+    # yapf: enable
     return loss, policy_loss, outcome_loss, score_pdf_loss, own_loss
 
   def get_config(self):

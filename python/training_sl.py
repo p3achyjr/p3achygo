@@ -6,6 +6,10 @@ We will train our model on samples generated from professional games.
 
 from __future__ import annotations
 
+import datasets.badukmovies
+import datasets.badukmovies_scored
+import datasets.badukmovies_all
+
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
@@ -60,18 +64,18 @@ def main(_):
     logging.warning('Please provide --model_save_path.')
     return
 
-  train_ds, val_ds = tfds.load(
-      FLAGS.dataset,
-      split=['train[0:32]', 'train[32:48]'],
-      # split=['train[:95%]', 'train[95%:]'],
-      shuffle_files=True)
+  train_ds, val_ds = tfds.load(FLAGS.dataset,
+                               split=['train[:99.9%]', 'train[99.9%:]'],
+                               shuffle_files=True)
 
   # setup training dataset
   batch_size = FLAGS.batch_size
   train_ds = train_ds.map(transforms.expand_sl,
                           num_parallel_calls=tf.data.AUTOTUNE)
+  train_ds = train_ds.shuffle(50000)
   train_ds = train_ds.batch(batch_size)
-  train_ds = train_ds.shuffle(1000)
+  train_ds = train_ds.skip(5000)
+  train_ds = train_ds.take(100000)
   train_ds = train_ds.prefetch(tf.data.AUTOTUNE)
 
   # setup test dataset
@@ -111,7 +115,7 @@ def main(_):
                          coeffs=LossCoeffs.SLCoeffs(),
                          is_gpu=is_gpu)
   model_path = Path(FLAGS.model_save_path, 'p3achygo_sl')
-  model.save(str(model_path), signatures={'infer_mixed': model.infer_mixed})
+  model.save(str(model_path))
 
 
 if __name__ == '__main__':

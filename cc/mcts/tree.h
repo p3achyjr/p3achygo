@@ -42,7 +42,9 @@ struct TreeNode final {
 
 void AdvanceState(TreeNode* node);
 float N(TreeNode* node);
+float NAction(TreeNode* node, int action);
 float Q(TreeNode* node);
+float QAction(TreeNode* node, int action);
 float MaxN(TreeNode* node);
 float SumChildrenN(TreeNode* node);
 

@@ -116,3 +116,14 @@ Next Tasks:
 - Implement Docker Containers
 - Write some minimal Gumbel tests
 - Implement KL loss instead of one-hot for policy. I imagine this will be important for me, since early training samples are likely to make the policy net _worse_ as a result of how bad the value net is.
+
+## 5-27-2023
+
+This week has been such a blur that I don't even remember what I've done. I've written a bunch of python wrapper scripts for the RL loop, written a C++ shuffler, and set up GCS. I still don't know if I'll be able to directly scp files between docker containers or machines, so in case I can't, I'll just use GCS for IPC as well.
+
+Next Tasks:
+
+- Implement KL Divergence on completed q-values.
+- Implement/benchmark caching for NN evaluations.
+- Implement opening noise (0-30 moves of purely drawing from policy).
+- Use TensorRT.

@@ -21,12 +21,15 @@ def model_move(model, board, last_moves, game_state, color):
       transforms.get_white(tf.constant(board.board)),
       transforms.get_black(tf.constant(board.board))
   ])
-  # print(x.numpy())
+  print(x.numpy())
   x = tf.concat([x, list(last_moves)], axis=0)
   x = tf.expand_dims(x, axis=0)
   x = tf.transpose(x, (0, 2, 3, 1))  # nchw -> nhwc
   move_logits, game_outcome, game_ownership, score_logits, gamma = model(
       x, game_state)
+
+  for i, logit in enumerate(move_logits.numpy()[0]):
+    print(f'{i//19, i % 19}', logit)
 
   score_sample = tf.random.categorical(logits=score_logits,
                                        num_samples=5).numpy() - 399.5
@@ -39,16 +42,28 @@ def model_move(model, board, last_moves, game_state, color):
       f'Predicted Top 5 Moves: {[GoBoard.move_as_tuple(move.numpy()) for move in top_policy_indices[0]]}'
   )
   logging.info(f'Predicted Top 5 Move Values: {top_policy_values}')
-  while True:
-    # move_sample = tf.random.categorical(logits=move_logits, num_samples=1)
-    # moves = [GoBoard.move_as_tuple(move_sample[0, 0].numpy())]
-    # move = moves[0]
-    move_sample = tf.argmax(move_logits, axis=1).numpy()[0]
-    move = GoBoard.move_as_tuple(move_sample)
+  for move in top_policy_indices[0]:
+    print(move)
+    move = GoBoard.move_as_tuple(move.numpy())
     logging.info(f'P3achyGo Considering Move: {move}')
+    if move == PASS_MOVE or move == PASS_MOVE_RL:
+      continue
+
     if board.move(color, move[0], move[1]):
       chosen_move = move
       break
+  # while True:
+  #   # move_sample = tf.random.categorical(logits=move_logits, num_samples=1)
+  #   # moves = [GoBoard.move_as_tuple(move_sample[0, 0].numpy())]
+  #   # move = moves[0]
+  #   move_sample = tf.argmax(move_logits, axis=1).numpy()[0]
+  #   move = GoBoard.move_as_tuple(move_sample)
+  #   if move == PASS_MOVE or move == PASS_MOVE_RL:
+  #     continue
+  #   logging.info(f'P3achyGo Considering Move: {move}')
+  #   if board.move(color, move[0], move[1]):
+  #     chosen_move = move
+  #     break
 
   assert chosen_move != None
 

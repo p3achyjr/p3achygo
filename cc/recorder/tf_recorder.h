@@ -28,7 +28,7 @@ class TfRecorder : public Recorder {
   void RecordGame(int thread_id, const game::Game& game) override = 0;
 
   // Flushes all pending writes. Not thread safe.
-  virtual void FlushThread(int thread_id) = 0;
+  virtual void Flush() = 0;
 
   static std::unique_ptr<TfRecorder> Create(std::string path, int num_threads);
 

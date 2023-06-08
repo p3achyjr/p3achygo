@@ -35,6 +35,7 @@ class GameRecorderImpl final : public GameRecorder {
 
  private:
   void IoThread();
+  void Flush() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
 
   const std::unique_ptr<SgfRecorder> sgf_recorder_;
   const std::unique_ptr<TfRecorder> tf_recorder_;
@@ -63,7 +64,7 @@ GameRecorderImpl::GameRecorderImpl(std::string path, int num_threads,
       should_flush_(false),
       num_threads_(num_threads),
       flush_interval_(flush_interval) {
-  io_thread_ = std::move(std::thread(&GameRecorderImpl::IoThread, this));
+  io_thread_ = std::thread(&GameRecorderImpl::IoThread, this);
 }
 
 GameRecorderImpl::~GameRecorderImpl() {
@@ -72,6 +73,9 @@ GameRecorderImpl::~GameRecorderImpl() {
   if (io_thread_.joinable()) {
     io_thread_.join();
   }
+
+  absl::MutexLock l(&mu_);
+  Flush();
 }
 
 void GameRecorderImpl::RecordGame(int thread_id, const game::Game& game) {
@@ -84,7 +88,7 @@ void GameRecorderImpl::RecordGame(int thread_id, const game::Game& game) {
   ++games_buffered_;
   should_flush_ = games_buffered_ >= flush_interval_;
 
-  LOG(INFO) << games_buffered_ << " games buffered.";
+  LOG_EVERY_N_SEC(INFO, 5) << games_buffered_ << " games buffered.";
 }
 
 void GameRecorderImpl::IoThread() {
@@ -93,12 +97,7 @@ void GameRecorderImpl::IoThread() {
     LOG(INFO) << "Flushing...";
 
     auto begin = std::chrono::high_resolution_clock::now();
-    for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
-      thread_mus_[thread_id].Lock();
-      sgf_recorder_->FlushThread(thread_id);
-      tf_recorder_->FlushThread(thread_id);
-      thread_mus_[thread_id].Unlock();
-    }
+    Flush();
     auto end = std::chrono::high_resolution_clock::now();
 
     games_written_ += games_buffered_;
@@ -111,6 +110,21 @@ void GameRecorderImpl::IoThread() {
     LOG(INFO) << "Flushing took " << flush_us << "us. Written "
               << games_written_ << " games so far.";
     mu_.Unlock();
+  }
+}
+
+void GameRecorderImpl::Flush() {
+  // Lock all threads.
+  for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
+    thread_mus_[thread_id].Lock();
+  }
+
+  sgf_recorder_->Flush();
+  tf_recorder_->Flush();
+
+  // Unlock all threads.
+  for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
+    thread_mus_[thread_id].Unlock();
   }
 }
 }  // namespace

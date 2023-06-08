@@ -96,9 +96,9 @@ cc_library(
         "//cc/constants",
         "//cc/core:filepath",
         "//cc/game",
+        "//cc/tensorflow",
         "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
-        "@org_tensorflow//tensorflow/core:lib",
-        "@org_tensorflow//tensorflow/core/example:example_protos_cc",
     ],
 )

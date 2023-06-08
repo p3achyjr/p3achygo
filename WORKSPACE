@@ -1,5 +1,16 @@
-load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+# Bazel Skylib rules.
+git_repository(
+    name = "bazel_skylib",
+    remote = "https://github.com/bazelbuild/bazel-skylib.git",
+    tag = "1.4.1",
+)
+
+load("@bazel_skylib//:workspace.bzl", "bazel_skylib_workspace")
+
+bazel_skylib_workspace()
 
 git_repository(
     name = "doctest",
@@ -9,47 +20,10 @@ git_repository(
 
 http_archive(
     name = "com_google_absl",
+    sha256 = "3e0b4a1b8edc78026cd3dc4ecfe793ec5794ae692081db459e1b7bb6d9844375",
     strip_prefix = "abseil-cpp-a0f9b465212aea24d3264b82d315b8ee59e8d7a0",
     urls = ["https://github.com/abseil/abseil-cpp/archive/a0f9b465212aea24d3264b82d315b8ee59e8d7a0.zip"],
 )
-
-# tensorflow_http_archive(
-#     name = "org_tensorflow",
-#     sha256 = "99c732b92b1b37fc243a559e02f9aef5671771e272758aa4aec7f34dc92dac48",
-#     version = "2.11.0",
-# )
-
-http_archive(
-    name = "org_tensorflow",
-    sha256 = "99c732b92b1b37fc243a559e02f9aef5671771e272758aa4aec7f34dc92dac48",
-    strip_prefix = "tensorflow-2.11.0",
-    urls = [
-        "https://github.com/tensorflow/tensorflow/archive/refs/tags/v2.11.0.tar.gz",
-    ],
-)
-
-# git_repository(
-#     name = "org_tensorflow",
-#     commit = "0db597d0d758aba578783b5bf46c889700a45085",
-#     remote = "https://github.com/tensorflow/tensorflow.git",
-# )
-
-# Initialize TensorFlow's external dependencies.
-load("@org_tensorflow//tensorflow:workspace3.bzl", "workspace")
-
-workspace()
-
-load("@org_tensorflow//tensorflow:workspace2.bzl", "workspace")
-
-workspace()
-
-load("@org_tensorflow//tensorflow:workspace1.bzl", "workspace")
-
-workspace()
-
-load("@org_tensorflow//tensorflow:workspace0.bzl", "workspace")
-
-workspace()
 
 # Hedron's Compile Commands Extractor for Bazel
 # https://github.com/hedronvision/bazel-compile-commands-extractor
@@ -66,14 +40,3 @@ http_archive(
 load("@hedron_compile_commands//:workspace_setup.bzl", "hedron_compile_commands_setup")
 
 hedron_compile_commands_setup()
-
-# Initialize bazel package rules' external dependencies.
-load("@rules_pkg//:deps.bzl", "rules_pkg_dependencies")
-
-rules_pkg_dependencies()
-
-load("@rules_proto//proto:repositories.bzl", "rules_proto_dependencies", "rules_proto_toolchains")
-
-rules_proto_dependencies()
-
-rules_proto_toolchains()
