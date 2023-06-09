@@ -23,7 +23,6 @@ static constexpr float kSmallLogit = -100000;
 static constexpr float kMaxNonRootDisparity = -100000;
 static constexpr int kVisit = 50;
 static constexpr float kValueScale = 1.0;
-static constexpr float kScoreScale = .5;
 
 struct GumbelMoveInfo {
   float logit = 0;
@@ -46,10 +45,6 @@ int log2(int x) {
   }
 
   return i - 1;
-}
-
-float ScoreTransform(float score_est, float root_score_est, int board_length) {
-  return 2 / M_PI * std::atan((score_est - root_score_est) / board_length);
 }
 
 // `q`: value estimate of action
@@ -289,11 +284,15 @@ std::vector<TreeNode*> GumbelEvaluator::SearchNonRoot(Game& game,
         color_to_move == BLACK ? scores.black_score : scores.white_score;
     float opp_score =
         color_to_move == BLACK ? scores.white_score : scores.black_score;
-    float final_score =
-        player_score - opp_score + constants::kScoreInflectionPoint;
-    float empirical_q =
-        (player_score > opp_score ? 1.0 : -1.0) +
-        ScoreTransform(final_score, root_score_est, game.board_len());
+    // float final_score =
+    //     player_score - opp_score + constants::kScoreInflectionPoint;
+    // float empirical_q =
+    //     (player_score > opp_score ? 1.0 : -1.0) +
+    //     ScoreTransform(final_score, root_score_est, game.board_len());
+
+    // TODO: Experiment with this.
+    float empirical_q = player_score > opp_score ? 1.5 : -1.5;
+
     leaf_node->is_terminal = true;
     leaf_node->q = empirical_q;
   }

@@ -32,7 +32,7 @@ float Q(TreeNode* node) {
 float QAction(TreeNode* node, int action) {
   // remember to flip sign. In bare MCTS, this will also cause MCTS to make deep
   // reads.
-  return node == nullptr ? -1.5 : -node->children[action]->q;
+  return !node->children[action] ? -1.5 : -node->children[action]->q;
 }
 
 float MaxN(TreeNode* node) {

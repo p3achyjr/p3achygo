@@ -11,7 +11,8 @@ using ::game::Loc;
 static constexpr float kScoreScale = .5;
 
 float ScoreTransform(float score_est, float root_score_est, int board_length) {
-  return 2 / M_PI * std::atan((score_est - root_score_est) / board_length);
+  return kScoreScale * M_2_PI *
+         std::atan((score_est - root_score_est) / board_length);
 }
 }  // namespace
 
@@ -32,7 +33,6 @@ void LeafEvaluator::EvaluateLeaf(const Game& game, TreeNode* node,
                                  Color color_to_move, float root_score_est) {
   InitTreeNode(node, game, color_to_move);
   float score_utility =
-      kScoreScale *
       ScoreTransform(node->score_est, root_score_est, game.board_len());
 
   node->n = 1;
