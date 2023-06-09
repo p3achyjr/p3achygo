@@ -10,7 +10,6 @@
 #include "absl/container/inlined_vector.h"
 #include "absl/hash/hash.h"
 #include "absl/status/status.h"
-#include "absl/status/statusor.h"
 #include "cc/constants/constants.h"
 #include "cc/game/color.h"
 #include "cc/game/game.h"
@@ -28,10 +27,10 @@ class Tensor;
 namespace nn {
 
 struct NNInferResult {
-  float move_logits[constants::kMaxNumMoves];
-  float move_probs[constants::kMaxNumMoves];
-  float value_probs[constants::kNumValueLogits];
-  float score_probs[constants::kNumScoreLogits];
+  std::array<float, constants::kMaxNumMoves> move_logits;
+  std::array<float, constants::kMaxNumMoves> move_probs;
+  std::array<float, constants::kNumValueLogits> value_probs;
+  std::array<float, constants::kNumScoreLogits> score_probs;
 };
 
 /*

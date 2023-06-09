@@ -18,7 +18,17 @@ float ScoreTransform(float score_est, float root_score_est, int board_length) {
 LeafEvaluator::LeafEvaluator(nn::NNInterface* nn_interface, int thread_id)
     : nn_interface_(nn_interface), thread_id_(thread_id) {}
 
-void LeafEvaluator::EvaluateLeaf(Game& game, TreeNode* node,
+void LeafEvaluator::EvaluateRoot(const Game& game, TreeNode* node,
+                                 Color color_to_move) {
+  // Call for any not-yet-evaluated root nodes.
+  InitTreeNode(node, game, color_to_move);
+  node->n = 1;
+  node->w = node->value_est;
+  node->q = node->w;
+  node->init_util_est = node->w;
+}
+
+void LeafEvaluator::EvaluateLeaf(const Game& game, TreeNode* node,
                                  Color color_to_move, float root_score_est) {
   InitTreeNode(node, game, color_to_move);
   float score_utility =
@@ -37,12 +47,10 @@ void LeafEvaluator::InitTreeNode(TreeNode* node, const Game& game,
   nn::NNInferResult infer_result =
       nn_interface_->LoadAndGetInference(thread_id_, game, color_to_move);
 
-  std::copy(infer_result.move_logits,
-            infer_result.move_logits + constants::kMaxNumMoves,
-            node->move_logits);
-  std::copy(infer_result.move_probs,
-            infer_result.move_probs + constants::kMaxNumMoves,
-            node->move_probs);
+  std::copy(infer_result.move_logits.begin(), infer_result.move_logits.end(),
+            node->move_logits.begin());
+  std::copy(infer_result.move_probs.begin(), infer_result.move_probs.end(),
+            node->move_probs.begin());
 
   float value_est =
       infer_result.value_probs[0] * -1 + infer_result.value_probs[1] * 1;

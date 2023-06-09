@@ -362,15 +362,19 @@ bool NNInterface::ShouldInfer() const {
     return true;
   }
 
+  // Only return true if at least one leaf evaluation is pending.
+  bool exists_pending = false;
   for (int thread_id = 0; thread_id < thread_info_.size(); ++thread_id) {
     const auto& thread = thread_info_[thread_id];
-    if (thread.registered && !thread.res_cached &&
-        !thread.loaded_for_inference) {
+    if (!thread.registered) continue;
+    if (!thread.res_cached && !thread.loaded_for_inference) {
       return false;
     }
+
+    if (!thread.res_cached) exists_pending = true;
   }
 
-  return true;
+  return exists_pending;
 }
 
 }  // namespace nn

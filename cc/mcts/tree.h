@@ -33,8 +33,8 @@ struct TreeNode final {
   std::array<std::unique_ptr<TreeNode>, constants::kMaxNumMoves> children{};
 
   // write-once
-  float move_logits[constants::kMaxNumMoves]{};
-  float move_probs[constants::kMaxNumMoves]{};
+  std::array<float, constants::kMaxNumMoves> move_logits{};
+  std::array<float, constants::kMaxNumMoves> move_probs{};
   float value_est = 0;
   float score_est = 0;
   float init_util_est = 0;  // mix value estimate and score estimate.

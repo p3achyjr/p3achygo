@@ -10,6 +10,12 @@
 
 namespace mcts {
 
+struct GumbelResult {
+  game::Loc nn_move;
+  game::Loc mcts_move;
+  std::array<float, constants::kMaxNumMoves> pi_improved;
+};
+
 /*
  * Class responsible for executing gumbel search.
  */
@@ -26,30 +32,31 @@ class GumbelEvaluator final {
 
   // Performs a full Gumbel root search. Returns a pair of the original move,
   // and the selected move.
-  std::pair<game::Loc, game::Loc> SearchRoot(core::Probability& probability,
-                                             game::Game& game, TreeNode* node,
-                                             game::Color color_to_move, int n,
-                                             int k);
+  GumbelResult SearchRoot(core::Probability& probability, game::Game& game,
+                          TreeNode* root, game::Color color_to_move, int n,
+                          int k);
 
  private:
   // Runs Gumbel non-root search path until leaf, and returns the search path
-  // excluding root.
-  std::vector<TreeNode*> SearchNonRoot(game::Game& game, TreeNode* node,
+  // including root.
+  std::vector<TreeNode*> SearchNonRoot(game::Game& game, TreeNode* root,
+                                       TreeNode* node,
                                        game::Color color_to_move,
                                        float root_score_est);
 
-  // Calls `InitTreeNode` and fills initial stats.
-  void EvaluateLeaf(game::Game& game, TreeNode* node, game::Color color_to_move,
-                    float root_score_est);
-
-  // Evaluates a leaf node using the neural net.
-  void InitTreeNode(TreeNode* node, const game::Game& game,
+  // Special case of `EvaluateLeaf` where the leaf node is the root.
+  void EvaluateRoot(const game::Game& game, TreeNode* node,
                     game::Color color_to_move);
+
+  // Evaluates a leaf node.
+  void EvaluateLeaf(const game::Game& game, TreeNode* node,
+                    game::Color color_to_move, float root_score_est);
 
   // Updates all nodes in tree, based on leaf evaluation.
   void Backward(std::vector<TreeNode*>& path);
 
-  std::unique_ptr<LeafEvaluator> leaf_evaluator_;
+  // Leaf Evaluation module.
+  LeafEvaluator leaf_evaluator_;
 };
 
 }  // namespace mcts

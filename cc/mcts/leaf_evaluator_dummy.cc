@@ -7,8 +7,13 @@ using ::game::Loc;
 
 LeafEvaluator::LeafEvaluator(nn::NNInterface* nn_interface, int thread_id)
     : nn_interface_(nn_interface), thread_id_(thread_id) {}
+void LeafEvaluator::EvaluateRoot(const Game& game, TreeNode* node,
+                                 Color color_to_move) {
+  // Call for any not-yet-evaluated root nodes.
+  InitTreeNode(node, game, color_to_move);
+}
 
-void LeafEvaluator::EvaluateLeaf(Game& game, TreeNode* node,
+void LeafEvaluator::EvaluateLeaf(const Game& game, TreeNode* node,
                                  Color color_to_move, float root_score_est) {
   InitTreeNode(node, game, color_to_move);
 }
