@@ -6,7 +6,6 @@
 
 #include "absl/container/inlined_vector.h"
 #include "cc/game/game.h"
-#include "cc/recorder/recorder.h"
 
 namespace recorder {
 
@@ -15,9 +14,9 @@ namespace recorder {
  *
  * This class is not thread safe.
  */
-class SgfRecorder : public Recorder {
+class SgfRecorder {
  public:
-  ~SgfRecorder() = default;
+  virtual ~SgfRecorder() = default;
 
   // Disable Copy and Move.
   SgfRecorder(SgfRecorder const&) = delete;
@@ -26,7 +25,7 @@ class SgfRecorder : public Recorder {
   SgfRecorder& operator=(SgfRecorder&&) = delete;
 
   // Recorder Impl.
-  void RecordGame(int thread_id, const game::Game& game) override = 0;
+  virtual void RecordGame(int thread_id, const game::Game& game) = 0;
 
   // Flushes all pending writes.
   virtual void Flush() = 0;

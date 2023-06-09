@@ -36,8 +36,8 @@ tensorflow::Feature MakeBytesFeature(const std::array<T, N>& data) {
 tensorflow::Example MakeTfExample(
     const std::array<Color, BOARD_LEN * BOARD_LEN>& board,
     const std::array<int16_t, constants::kNumLastMoves>& last_moves,
-    int16_t policy, const Game::Result result, Color color, float komi,
-    uint8_t bsize) {
+    const std::array<float, constants::kMaxNumMoves>& pi_improved,
+    const Game::Result result, Color color, float komi, uint8_t bsize) {
   tensorflow::Example example;
   auto& features = *example.mutable_features()->mutable_feature();
 
@@ -49,8 +49,7 @@ tensorflow::Example MakeTfExample(
       reinterpret_cast<const void*>(&color), sizeof(Color));
   features["komi"].mutable_float_list()->add_value(komi);
   features["own"] = MakeBytesFeature(result.ownership);
-  features["pi"].mutable_bytes_list()->add_value(
-      reinterpret_cast<const void*>(&policy), sizeof(uint16_t));
+  features["pi"] = MakeBytesFeature(pi_improved);
 
   float margin = color == BLACK ? result.bscore - result.wscore
                                 : result.wscore - result.bscore;
@@ -70,7 +69,8 @@ class TfRecorderImpl final : public TfRecorder {
   TfRecorderImpl(TfRecorderImpl&&) = delete;
   TfRecorderImpl& operator=(TfRecorderImpl&&) = delete;
 
-  void RecordGame(int thread_id, const Game& game) override;
+  void RecordGame(int thread_id, const Game& game,
+                  const ImprovedPolicies& mcts_pis) override;
   void Flush() override;
 
  private:
@@ -89,8 +89,10 @@ TfRecorderImpl::TfRecorderImpl(std::string path, int num_threads)
       thread_game_counts_{},
       batch_num_(0) {}
 
-void TfRecorderImpl::RecordGame(int thread_id, const Game& game) {
+void TfRecorderImpl::RecordGame(int thread_id, const Game& game,
+                                const ImprovedPolicies& mcts_pis) {
   CHECK(game.has_result());
+  CHECK(game.num_moves() == mcts_pis.size());
 
   std::vector<tensorflow::Example>& thread_tf_examples =
       tf_examples_[thread_id];
@@ -98,18 +100,16 @@ void TfRecorderImpl::RecordGame(int thread_id, const Game& game) {
   // Replay game from beginning. We do not store full board positions in `Game`
   // because MCTS performs many copies of `Game` objects.
   Board board;
-  for (int i = Game::kMoveOffset; i < game.moves().size(); ++i) {
+  for (int move_num = 0; move_num < game.num_moves(); ++move_num) {
     // Populate last moves as indices.
     std::array<int16_t, constants::kNumLastMoves> last_moves;
-    for (int j = 0; j < constants::kNumLastMoves; ++j) {
-      int off = constants::kNumLastMoves - j;
-      Loc last_move = game.moves()[i - off].loc;
-      last_moves[j] = last_move.as_index(game.board_len());
+    for (int off = 0; off < constants::kNumLastMoves; ++off) {
+      Loc last_move = game.moves()[move_num + off].loc;
+      last_moves[off] = last_move.as_index(game.board_len());
     }
 
-    Move move = game.moves()[i];
-    int16_t pi = move.loc.as_index(game.board_len());
-
+    Move move = game.move(move_num);
+    const std::array<float, constants::kMaxNumMoves>& pi = mcts_pis[move_num];
     thread_tf_examples.emplace_back(
         MakeTfExample(board.position(), last_moves, pi, game.result(),
                       move.color, game.komi(), game.board_len()));

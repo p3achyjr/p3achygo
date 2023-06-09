@@ -2,6 +2,7 @@
 
 #include <chrono>
 
+#include "absl/container/inlined_vector.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/strings/str_format.h"
@@ -56,30 +57,37 @@ void ExecuteSelfPlay(int thread_id, nn::NNInterface* nn_interface,
     game::Game game;
     std::unique_ptr<mcts::TreeNode> root_node =
         std::make_unique<mcts::TreeNode>();
+    std::vector<std::array<float, constants::kMaxNumMoves>> mcts_pis;
 
     mcts::GumbelEvaluator gumbel_evaluator(nn_interface, thread_id);
     auto color_to_move = BLACK;
-    while (!game.IsGameOver() && game.move_num() < max_moves) {
+    while (!game.IsGameOver() && game.num_moves() < max_moves) {
       auto begin = std::chrono::high_resolution_clock::now();
-      std::pair<game::Loc, game::Loc> move_pair =
+      mcts::GumbelResult gumbel_res =
           gumbel_evaluator.SearchRoot(probability, game, root_node.get(),
                                       color_to_move, gumbel_n, gumbel_k);
       auto end = std::chrono::high_resolution_clock::now();
-      game::Loc nn_move = move_pair.first;
-      game::Loc move = move_pair.second;
+      game::Loc nn_move = gumbel_res.nn_move;
+      game::Loc move = gumbel_res.mcts_move;
+      float nn_move_q =
+          mcts::QAction(root_node.get(), nn_move.as_index(game.board_len()));
+      float move_q =
+          mcts::QAction(root_node.get(), move.as_index(game.board_len()));
+      mcts_pis.push_back(gumbel_res.pi_improved);
       game.PlayMove(move, color_to_move);
       color_to_move = game::OppositeColor(color_to_move);
+
       root_node =
           std::move(root_node->children[move.as_index(game.board_len())]);
       if (!root_node) {
         // this is possible if pass is the only legal move found in search.
         LOG(INFO) << "Root node is nullptr. "
-                  << "Last 5 Moves: " << game.move(game.move_num() - 5) << ", "
-                  << game.move(game.move_num() - 4) << ", "
-                  << game.move(game.move_num() - 3) << ", "
-                  << game.move(game.move_num() - 2) << ", "
-                  << game.move(game.move_num() - 1)
-                  << ", Move Count: " << game.move_num();
+                  << "Last 5 Moves: " << game.move(game.num_moves() - 5) << ", "
+                  << game.move(game.num_moves() - 4) << ", "
+                  << game.move(game.num_moves() - 3) << ", "
+                  << game.move(game.num_moves() - 2) << ", "
+                  << game.move(game.num_moves() - 1)
+                  << ", Move Count: " << game.num_moves();
         LOG(INFO) << "Board:\n" << game.board();
         root_node = std::make_unique<mcts::TreeNode>();
       }
@@ -87,23 +95,22 @@ void ExecuteSelfPlay(int thread_id, nn::NNInterface* nn_interface,
       auto search_dur =
           std::chrono::duration_cast<std::chrono::microseconds>(end - begin)
               .count();
-      if (game.move_num() > 1) {
-        search_dur_ema = search_dur_ema == 0
-                             ? search_dur
-                             : (search_dur_ema * 0.9 + search_dur * 0.1);
-      }
+      search_dur_ema = search_dur_ema == 0
+                           ? search_dur
+                           : (search_dur_ema * 0.9 + search_dur * 0.1);
 
       if (thread_id % kShouldLogShard == 0) {
         LOG_TO_SINK(INFO, sink) << "-------------------";
-        LOG_TO_SINK(INFO, sink) << "Raw NN Move: " << nn_move;
-        LOG_TO_SINK(INFO, sink) << "Gumbel Move: " << move;
-        LOG_TO_SINK(INFO, sink) << "Move Num: " << game.move_num();
         LOG_TO_SINK(INFO, sink)
-            << "Last 5 Moves: " << game.move(game.move_num() - 5) << ", "
-            << game.move(game.move_num() - 4) << ", "
-            << game.move(game.move_num() - 3) << ", "
-            << game.move(game.move_num() - 2) << ", "
-            << game.move(game.move_num() - 1);
+            << "Raw NN Move: " << nn_move << ", q: " << nn_move_q;
+        LOG_TO_SINK(INFO, sink) << "Gumbel Move: " << move << ", q: " << move_q;
+        LOG_TO_SINK(INFO, sink) << "Move Num: " << game.num_moves();
+        LOG_TO_SINK(INFO, sink)
+            << "Last 5 Moves: " << game.move(game.num_moves() - 5) << ", "
+            << game.move(game.num_moves() - 4) << ", "
+            << game.move(game.num_moves() - 3) << ", "
+            << game.move(game.num_moves() - 2) << ", "
+            << game.move(game.num_moves() - 1);
         LOG_TO_SINK(INFO, sink)
             << "Tree Visit Count: " << root_node->n
             << " Player to Move: " << root_node->color_to_move
@@ -122,7 +129,7 @@ void ExecuteSelfPlay(int thread_id, nn::NNInterface* nn_interface,
     LOG_TO_SINK(INFO, sink) << "White Score: " << game.result().wscore;
 
     auto begin = std::chrono::high_resolution_clock::now();
-    game_recorder->RecordGame(thread_id, game);
+    game_recorder->RecordGame(thread_id, game, mcts_pis);
     auto end = std::chrono::high_resolution_clock::now();
 
     LOG_TO_SINK(INFO, sink)
