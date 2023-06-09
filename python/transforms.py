@@ -40,6 +40,24 @@ def get_color(board: tf.Tensor, color) -> tf.Tensor:
       dtype=tf.float32)
 
 
+def as_pi_vec(move: tf.Tensor, bsize=BOARD_LEN) -> tf.Tensor:
+  """Broadcast move tuple to 1D one-hot tensor."""
+  non_move = tf.constant(NON_MOVE, dtype=tf.int32)
+  pass_move = tf.constant(PASS_MOVE, dtype=tf.int32)
+  pass_move_rl = tf.constant(PASS_MOVE_RL, dtype=tf.int32)
+  shape = (bsize * bsize + 1,)
+  if tf.reduce_all(move == non_move):
+    return tf.zeros(shape, dtype=tf.float32)
+
+  is_pass = tf.reduce_all(move == pass_move) or tf.reduce_all(
+      move == pass_move_rl)
+  index = bsize * bsize + 1 if is_pass else move[0] * bsize + move[1]
+  return tf.cast(tf.scatter_nd(indices=[[index]],
+                               updates=tf.constant([1.0]),
+                               shape=shape),
+                 dtype=tf.float32)
+
+
 def as_one_hot(move: tf.Tensor, bsize=BOARD_LEN) -> tf.Tensor:
   """Broadcast a move tuple to a one-hot 2D tensor."""
   non_move = tf.constant(NON_MOVE, dtype=tf.int32)
@@ -124,15 +142,14 @@ def expand_rl(tf_example):
       tf.reshape(tf.io.decode_raw(ex['color'], tf.int8), shape=(1,)))
   komi = ex['komi']
   own = tf.reshape(tf.io.decode_raw(ex['own'], tf.int8), shape=(bsize * bsize,))
-  policy = tf.squeeze(
-      tf.reshape(tf.io.decode_raw(ex['pi'], tf.uint16), shape=(1,)))
+  policy = tf.reshape(tf.io.decode_raw(ex['pi'], tf.float32),
+                      shape=(bsize * bsize + 1,))
   score = ex['result']  # score from perspective of current player.
 
   # cast b/c TF hates you.
   board = tf.cast(board, dtype=tf.int32)
   last_moves = tf.cast(last_moves, dtype=tf.int32)
   own = tf.cast(own, dtype=tf.int32)
-  policy = tf.cast(policy, dtype=tf.int32)
 
   # reshape for compatibility with TrainingManager.
   board = tf.reshape(board, shape=(bsize, bsize))

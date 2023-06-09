@@ -10,6 +10,7 @@ import gcs_utils as gcs
 import sys, time
 import tensorflow as tf
 import transforms
+import trt_convert
 
 from absl import app, flags, logging
 from constants import *
@@ -36,9 +37,22 @@ flags.DEFINE_string('local_run_dir', '',
                     'Local path to store models and training chunks.')
 flags.DEFINE_string('model_checkpoint_dir', '/tmp/p3achygo_checkpoints',
                     'Local path to store intermediate models.')
+flags.DEFINE_string('calib_ds_path', '', 'Local path to TRT calibration.')
 flags.DEFINE_integer(
     'log_interval', 100,
     'Interval at which to log training information (in mini-batches)')
+
+
+def save_trt_and_upload(model: P3achyGoModel, calib_ds_path: str,
+                        local_model_dir: str, gen: int):
+  model_path = Path(local_model_dir, f'model_{gen}')
+  model.save(str(model_path))
+
+  logging.info('Converting to Trt...')
+  trt_converter = trt_convert.get_converter(model_path, calib_ds_path)
+  trt_converter.summary()
+  trt_converter.save(output_saved_model_dir=str(Path(model_path, '_trt')))
+  gcs.upload_model(FLAGS.run_id, str(local_model_dir), gen)
 
 
 def main(_):
@@ -48,6 +62,10 @@ def main(_):
 
   if FLAGS.local_run_dir == '':
     logging.error('No --local_run_dir specified.')
+    return
+
+  if FLAGS.calib_ds_path == '':
+    logging.error('No --calib_ds_path specified.')
     return
 
   is_gpu = False
@@ -72,6 +90,8 @@ def main(_):
                                  num_input_planes=NUM_INPUT_PLANES,
                                  num_input_features=NUM_INPUT_FEATURES,
                                  name=f'p3achygo_{FLAGS.run_id}')
+    # upload for self-play to pick up.
+    save_trt_and_upload(model, FLAGS.calib_ds_path, model_dir, 0)
   else:
     model_path = gcs.download_model(FLAGS.run_id, str(model_dir), model_gen)
     model = tf.keras.models.load_model(
@@ -107,10 +127,8 @@ def main(_):
                            log_interval=FLAGS.log_interval,
                            coeffs=LossCoeffs.RLCoeffs(),
                            is_gpu=is_gpu)
-    model_filename = Path(model_dir, f'model_{next_model_gen}')
-    model.save(str(model_filename),
-               signatures={'infer_mixed': model.infer_mixed})
-    gcs.upload_model(FLAGS.run_id, str(model_dir), next_model_gen)
+
+    save_trt_and_upload(model, FLAGS.calib_ds_path, model_dir, next_model_gen)
     model_gen += 1
 
 
