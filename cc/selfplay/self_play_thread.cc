@@ -1,4 +1,4 @@
-#include "cc/self_play_thread.h"
+#include "cc/selfplay/self_play_thread.h"
 
 #include <chrono>
 

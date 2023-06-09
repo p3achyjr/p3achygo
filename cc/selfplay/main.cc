@@ -18,7 +18,7 @@
 #include "cc/nn/nn_interface.h"
 #include "cc/recorder/dir.h"
 #include "cc/recorder/game_recorder.h"
-#include "cc/self_play_thread.h"
+#include "cc/selfplay/self_play_thread.h"
 
 ABSL_FLAG(std::string, model_path, "", "Path to model.");
 ABSL_FLAG(int, num_threads, 1, "Number of threads to use.");
