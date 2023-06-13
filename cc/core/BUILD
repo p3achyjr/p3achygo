@@ -3,10 +3,19 @@ package(default_visibility = ["//visibility:public"])
 cc_library(
     name = "core",
     deps = [
+        ":cache",
         ":filepath",
         ":probability",
         ":rand",
         ":util",
+    ],
+)
+
+cc_library(
+    name = "cache",
+    hdrs = ["cache.h"],
+    deps = [
+        "@com_google_absl//absl/hash",
     ],
 )
 

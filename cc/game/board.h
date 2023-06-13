@@ -9,6 +9,7 @@
 #include "absl/container/inlined_vector.h"
 #include "absl/log/check.h"
 #include "cc/constants/constants.h"
+#include "cc/core/cache.h"
 #include "cc/core/util.h"
 #include "cc/game/color.h"
 #include "cc/game/loc.h"
@@ -22,6 +23,8 @@ namespace game {
 
 using groupid = int;
 using LocVec = absl::InlinedVector<Loc, constants::kMaxNumBoardLocs>;
+using BensonCache =
+    core::Cache<Zobrist::Hash, std::array<Color, BOARD_LEN * BOARD_LEN>>;
 
 /*
  * State transition for a single point on the grid.
@@ -224,7 +227,7 @@ class GroupTracker final {
 
   // calculates pass-alive regions according to Benson's algorithm
   // https://senseis.xmp.net/?BensonsAlgorithm
-  void CalculatePassAliveRegions();
+  void CalculatePassAliveRegions(Zobrist::Hash hash);
   void CalculatePassAliveRegionForColor(Color color);
 
   bool IsPassAlive(Loc loc) const;

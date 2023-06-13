@@ -17,6 +17,7 @@ namespace nn {
 namespace {
 
 using namespace ::tensorflow;
+using ::core::Cache;
 using ::game::Color;
 using ::game::Game;
 using ::game::Symmetry;
@@ -49,46 +50,6 @@ static constexpr char kSavedModelTagServe[] = "serve";
 
 }  // namespace
 
-NNInterface::Cache::Cache(int num_threads)
-    : num_threads_(num_threads),
-      thread_cache_size_(num_threads == 0 ? 0 : kMaxCacheSize / num_threads) {
-  for (int i = 0; i < num_threads; ++i) {
-    cache_[i].resize(thread_cache_size_);
-  }
-}
-
-void NNInterface::Cache::Insert(int thread_id, const CacheKey& cache_key,
-                                const NNInferResult& infer_result) {
-  size_t hash = absl::HashOf(cache_key);
-  size_t tbl_index = hash % thread_cache_size_;
-  cache_[thread_id][tbl_index] = CacheElem{hash, infer_result};
-}
-
-bool NNInterface::Cache::Contains(int thread_id, const CacheKey& cache_key) {
-  size_t hash = absl::HashOf(cache_key);
-  size_t tbl_index = hash % thread_cache_size_;
-  const std::optional<CacheElem>& elem = cache_[thread_id][tbl_index];
-  if (!elem) {
-    return false;
-  } else if (elem->hash != hash) {
-    return false;
-  }
-
-  return true;
-}
-
-std::optional<NNInferResult> NNInterface::Cache::Get(
-    int thread_id, const CacheKey& cache_key) {
-  size_t hash = absl::HashOf(cache_key);
-  size_t tbl_index = hash % thread_cache_size_;
-  const std::optional<CacheElem>& elem = cache_[thread_id][tbl_index];
-  if (!elem) {
-    return {};
-  }
-
-  return elem->infer_res;
-}
-
 NNInterface::NNInterface(int num_threads)
     : session_options_(SessionOptions()),
       run_options_(RunOptions()),
@@ -99,11 +60,17 @@ NNInterface::NNInterface(int num_threads)
       is_initialized_(false),
       num_registered_threads_(num_threads),
       num_threads_(num_threads),
-      nn_cache_(num_threads_),
       thread_info_(num_threads_),
       running_(true),
       last_infer_time_(
           std::chrono::time_point<std::chrono::steady_clock>::max()) {
+  // Initialize thread caches.
+  for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
+    thread_caches_[thread_id] =
+        Cache<NNKey, NNInferResult>(kMaxCacheSize / num_threads_);
+  }
+
+  // Allocate inference buffers.
   input_feature_buf_ =
       Tensor(DataType::DT_FLOAT,
              CreateTensorShape({num_threads_, BOARD_LEN, BOARD_LEN,
@@ -216,17 +183,17 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
                                                Color color_to_move) {
   DCHECK(is_initialized_);
   ThreadInfo& thread_info = thread_info_[thread_id];
-  CacheKey cache_key = CacheKey{
+  NNKey cache_key = NNKey{
       color_to_move,
       game.board().hash(),
   };
 
-  if (nn_cache_.Contains(thread_id, cache_key)) {
+  if (thread_caches_[thread_id].Contains(cache_key)) {
     // Cached. Immediately return result.
     absl::MutexLock l(&mu_);
     thread_info.res_cached = true;
 
-    return nn_cache_.Get(thread_id, cache_key).value();
+    return thread_caches_[thread_id].Get(cache_key).value();
   }
 
   // Not cached. Load for inference.
@@ -271,7 +238,7 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
   }
 
   // Cache this result.
-  nn_cache_.Insert(thread_id, cache_key, infer_result);
+  thread_caches_[thread_id].Insert(cache_key, infer_result);
   return infer_result;
 }
 

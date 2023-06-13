@@ -11,6 +11,7 @@
 #include "absl/hash/hash.h"
 #include "absl/status/status.h"
 #include "cc/constants/constants.h"
+#include "cc/core/cache.h"
 #include "cc/game/color.h"
 #include "cc/game/game.h"
 #include "cc/game/symmetry.h"
@@ -61,17 +62,17 @@ class NNInterface final {
 
  private:
   static constexpr int64_t kTimeoutUs = 30000;
-  struct CacheKey {
+  struct NNKey {
     game::Color color_to_move;
     game::Zobrist::Hash board_hash;
 
-    friend bool operator==(const CacheKey& c0, const CacheKey& c1) {
+    friend bool operator==(const NNKey& c0, const NNKey& c1) {
       return c0.color_to_move == c1.color_to_move &&
              c0.board_hash == c1.board_hash;
     }
 
     template <typename H>
-    friend H AbslHashValue(H h, const CacheKey& c) {
+    friend H AbslHashValue(H h, const NNKey& c) {
       return H::combine(std::move(h), c.color_to_move, c.board_hash);
     }
   };
@@ -83,34 +84,6 @@ class NNInterface final {
     bool res_ready = false;   // Whether inference result is ready.
     bool res_cached = false;  // Whether the cache key is cached. Also toggles
                               // whether to cache the NN inference result.
-  };
-
-  class Cache final {
-   public:
-    Cache(int num_threads);
-    ~Cache() = default;
-
-    // Disable Copy and Move.
-    Cache(Cache const&) = delete;
-    Cache& operator=(Cache const&) = delete;
-    Cache(Cache&&) = delete;
-    Cache& operator=(Cache&&) = delete;
-
-    void Insert(int thread_id, const CacheKey& cache_key,
-                const NNInferResult& infer_result);
-    bool Contains(int thread_id, const CacheKey& cache_key);
-    std::optional<NNInferResult> Get(int thread_id, const CacheKey& cache_key);
-
-   private:
-    struct CacheElem {
-      size_t hash;
-      NNInferResult infer_res;
-    };
-
-    const int num_threads_;
-    const size_t thread_cache_size_;
-    std::array<std::vector<std::optional<CacheElem>>, constants::kMaxNumThreads>
-        cache_;
   };
 
   void InferLoop();
@@ -138,7 +111,8 @@ class NNInterface final {
   int num_registered_threads_ ABSL_GUARDED_BY(mu_);
   const int num_threads_;
 
-  Cache nn_cache_;  // Per-thread cache.
+  std::array<core::Cache<NNKey, NNInferResult>, constants::kMaxNumThreads>
+      thread_caches_;  // Per-thread cache.
 
   // Synchronization
   absl::Mutex mu_;

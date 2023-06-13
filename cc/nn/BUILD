@@ -30,6 +30,7 @@ cc_library(
     deps = [
         ":feed_fetch_names",
         "//cc/constants",
+        "//cc/core:cache",
         "//cc/game",
         "//cc/tensorflow",
         "@com_google_absl//absl/status",
