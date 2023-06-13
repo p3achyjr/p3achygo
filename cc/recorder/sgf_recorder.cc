@@ -42,8 +42,7 @@ class SgfRecorderImpl final : public SgfRecorder {
   std::unique_ptr<SgfNode> ToSgfNode(const Game& game);
 
   const std::string path_;
-  std::array<std::vector<std::unique_ptr<SgfNode>>, constants::kMaxNumThreads>
-      sgfs_;
+  std::array<std::vector<Game>, constants::kMaxNumThreads> games_;
   const int num_threads_;
   int batch_num_;
 };
@@ -54,8 +53,8 @@ SgfRecorderImpl::SgfRecorderImpl(std::string path, int num_threads)
 void SgfRecorderImpl::RecordGame(int thread_id, const Game& game) {
   CHECK(game.has_result());
 
-  std::vector<std::unique_ptr<SgfNode>>& thread_sgfs = sgfs_[thread_id];
-  thread_sgfs.emplace_back(ToSgfNode(game));
+  std::vector<Game>& thread_games = games_[thread_id];
+  thread_games.emplace_back(game);
 }
 
 std::unique_ptr<SgfNode> SgfRecorderImpl::ToSgfNode(const Game& game) {
@@ -91,18 +90,18 @@ void SgfRecorderImpl::Flush() {
   std::string sgfs = "";
   SgfSerializer serializer;
   for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
-    std::vector<std::unique_ptr<SgfNode>>& thread_sgfs = sgfs_[thread_id];
-    if (thread_sgfs.empty()) {
+    std::vector<Game>& thread_games = games_[thread_id];
+    if (thread_games.empty()) {
       continue;
     }
 
-    for (const auto& sgf : thread_sgfs) {
-      sgfs += serializer.Serialize(sgf.get());
+    for (const auto& game : thread_games) {
+      sgfs += serializer.Serialize(ToSgfNode(game).get());
       sgfs += "\n";
 
       ++games_in_batch;
     }
-    thread_sgfs.clear();
+    thread_games.clear();
   }
 
   if (sgfs == "") {

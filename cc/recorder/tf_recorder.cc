@@ -74,11 +74,15 @@ class TfRecorderImpl final : public TfRecorder {
   void Flush() override;
 
  private:
+  struct Record {
+    Game game;
+    ImprovedPolicies mcts_pis;
+  };
+
   const std::string path_;
   const int num_threads_;
 
-  std::array<std::vector<tensorflow::Example>, constants::kMaxNumThreads>
-      tf_examples_;
+  std::array<std::vector<Record>, constants::kMaxNumThreads> thread_records_;
   std::array<int, constants::kMaxNumThreads> thread_game_counts_;
   int batch_num_;
 };
@@ -93,29 +97,7 @@ void TfRecorderImpl::RecordGame(int thread_id, const Game& game,
                                 const ImprovedPolicies& mcts_pis) {
   CHECK(game.has_result());
   CHECK(game.num_moves() == mcts_pis.size());
-
-  std::vector<tensorflow::Example>& thread_tf_examples =
-      tf_examples_[thread_id];
-
-  // Replay game from beginning. We do not store full board positions in `Game`
-  // because MCTS performs many copies of `Game` objects.
-  Board board;
-  for (int move_num = 0; move_num < game.num_moves(); ++move_num) {
-    // Populate last moves as indices.
-    std::array<int16_t, constants::kNumLastMoves> last_moves;
-    for (int off = 0; off < constants::kNumLastMoves; ++off) {
-      Loc last_move = game.moves()[move_num + off].loc;
-      last_moves[off] = last_move.as_index(game.board_len());
-    }
-
-    Move move = game.move(move_num);
-    const std::array<float, constants::kMaxNumMoves>& pi = mcts_pis[move_num];
-    thread_tf_examples.emplace_back(
-        MakeTfExample(board.position(), last_moves, pi, game.result(),
-                      move.color, game.komi(), game.board_len()));
-    board.PlayMove(move.loc, move.color);
-  }
-
+  thread_records_[thread_id].emplace_back(Record{game, mcts_pis});
   ++thread_game_counts_[thread_id];
 }
 
@@ -125,20 +107,24 @@ void TfRecorderImpl::Flush() {
   int num_games =
       std::accumulate(thread_game_counts_.begin(),
                       thread_game_counts_.begin() + num_threads_, 0);
-  int num_examples = std::accumulate(
-      tf_examples_.begin(), tf_examples_.begin() + num_threads_, 0,
-      [](int n, const std::vector<tensorflow::Example>& examples) {
-        return n + examples.size();
+  int num_records = std::accumulate(
+      thread_records_.begin(), thread_records_.begin() + num_threads_, 0,
+      [](int n, const std::vector<Record>& records) {
+        for (const auto& record : records) {
+          n += record.game.num_moves();
+        }
+
+        return n;
       });
 
-  if (num_examples == 0) {
+  if (num_records == 0) {
     return;
   }
 
   // Create File.
   std::string path =
       FilePath(path_) / absl::StrFormat("batch_b%d_g%d_n%d.tfrecord.zz",
-                                        batch_num_, num_games, num_examples);
+                                        batch_num_, num_games, num_records);
   std::unique_ptr<tensorflow::WritableFile> file;
   TF_CHECK_OK(tensorflow::Env::Default()->NewWritableFile(path, &file));
 
@@ -150,18 +136,43 @@ void TfRecorderImpl::Flush() {
 
   // Flush each thread.
   for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
-    std::vector<tensorflow::Example>& thread_examples = tf_examples_[thread_id];
-    if (thread_examples.empty()) {
+    std::vector<Record>& records = thread_records_[thread_id];
+    if (records.empty()) {
       continue;
     }
 
-    for (const auto& example : thread_examples) {
-      std::string data;
-      example.SerializeToString(&data);
-      TF_CHECK_OK(writer.WriteRecord(data));
+    for (const auto& record : records) {
+      // Replay game from beginning. We do not store full board positions in
+      // `Game` because MCTS performs many copies of `Game` objects.
+      const Game& game = record.game;
+      const ImprovedPolicies& mcts_pis = record.mcts_pis;
+      Board board;
+      for (int move_num = 0; move_num < game.num_moves(); ++move_num) {
+        // Populate last moves as indices.
+        std::array<int16_t, constants::kNumLastMoves> last_moves;
+        for (int off = 0; off < constants::kNumLastMoves; ++off) {
+          Loc last_move = game.moves()[move_num + off].loc;
+          last_moves[off] = last_move.as_index(game.board_len());
+        }
+
+        Move move = game.move(move_num);
+        const std::array<float, constants::kMaxNumMoves>& pi =
+            mcts_pis[move_num];
+
+        // Coerce into example and write result.
+        tensorflow::Example example =
+            MakeTfExample(board.position(), last_moves, pi, game.result(),
+                          move.color, game.komi(), game.board_len());
+        std::string data;
+        example.SerializeToString(&data);
+        TF_CHECK_OK(writer.WriteRecord(data));
+
+        // Play next move.
+        board.PlayMove(move.loc, move.color);
+      }
     }
 
-    thread_examples.clear();
+    records.clear();
   }
 
   // Close file.
