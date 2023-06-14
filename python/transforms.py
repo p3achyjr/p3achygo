@@ -175,9 +175,15 @@ def expand_rl(tf_example):
   ],
                                dtype=tf.float32)
   input = tf.transpose(input, perm=(1, 2, 0))  # CHW -> HWC
-  score_index = tf.cast([[score + SCORE_RANGE_MIDPOINT]], dtype=tf.int32)
+  score_index = tf.cast(score + SCORE_RANGE_MIDPOINT - .5, dtype=tf.int32)
+  if score_index < 0:
+    score_index = 0
+  elif score_index >= SCORE_RANGE:
+    score_index = SCORE_RANGE - 1
+
+  score_index = tf.cast([[score_index]], dtype=tf.int32)
   score_one_hot = tf.cast(tf.scatter_nd(score_index, [1.0],
                                         shape=(SCORE_RANGE,)),
                           dtype=tf.float32)
 
-  return input, komi, score, score_one_hot, policy, own
+  return input, komi, score - .5, score_one_hot, policy, own

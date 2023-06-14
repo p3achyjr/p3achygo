@@ -18,9 +18,8 @@ import transforms
 
 from absl import app, flags, logging
 from constants import *
-from loss_coeffs import LossCoeffs
 from lr_schedule import CyclicLRDecaySchedule
-from training_manager import TrainingManager
+from training_manager import TrainingManager, TrainingMode
 from model import P3achyGoModel
 from model_config import ModelConfig
 from pathlib import Path
@@ -112,7 +111,7 @@ def main(_):
                          momentum,
                          lr_schedule=lr_schedule,
                          log_interval=FLAGS.log_interval,
-                         coeffs=LossCoeffs.SLCoeffs(),
+                         mode=TrainingMode.SL,
                          is_gpu=is_gpu)
   model_path = Path(FLAGS.model_save_path, 'p3achygo_sl')
   model.save(str(model_path))

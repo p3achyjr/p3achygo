@@ -14,11 +14,12 @@ using namespace ::core;
 
 namespace {
 static constexpr char kGenPrefix[] = "gen";
+static constexpr char kBatchPrefix[] = "batch";
 static constexpr char kTfRecordSuffix[] = ".tfrecord.zz";
 
 // Find generation number from filepath. Assumes gen{i}/** format.
 int FindGen(fs::path path) {
-  for (const std::string& p : path) {
+  for (const std::string p : path) {
     if (p.find(kGenPrefix, 0) != std::string::npos) {
       return std::atoi(p.c_str() + 3);
     }
@@ -75,10 +76,9 @@ absl::flat_hash_set<std::string> TfRecordWatcher::GlobFiles() {
       return false;
     }
 
-    bool starts_with_gen_prefix =
-        static_cast<std::string>(*rel_path.begin()).rfind(kDataGenPrefix, 0) ==
-        0;
-    if (!starts_with_gen_prefix) {
+    bool starts_with_batch_prefix =
+        static_cast<std::string>(*rel_path.begin()).rfind(kBatchPrefix, 0) == 0;
+    if (!starts_with_batch_prefix) {
       return false;
     }
 

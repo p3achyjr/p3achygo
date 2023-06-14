@@ -761,7 +761,7 @@ Board::ScoreAndOwnership(Color color) const {
         if (AtLoc(loc) == OppositeColor(color)) {
           if (group_tracker_.IsPassAliveForColor(loc, color)) {
             region.emplace_back(loc);
-            region_score += 2;
+            ++region_score;  // dead stone should not be double-counted.
           } else {
             seen_opp_color = true;
           }

@@ -13,16 +13,23 @@ from typing import Optional
 from loss_coeffs import LossCoeffs
 
 
+class TrainingMode:
+  SL = "sl"
+  RL = "rl"
+
+
 @tf.function
-def train_step(w_pi, w_val, w_outcome, w_score, w_own, w_gamma, input, komi,
-               score, score_one_hot, policy, own, model, optimizer):
+def train_step(w_pi, w_val, w_outcome, w_score, w_own, w_gamma, use_kl_loss,
+               input, komi, score, score_one_hot, policy, own, model,
+               optimizer):
   with tf.GradientTape() as g:
     pi_logits, game_outcome, own_pred, score_logits, gamma = model(
         input, tf.expand_dims(komi, axis=1), training=True)
     (loss, policy_loss, outcome_loss, score_pdf_loss,
      own_loss) = model.loss(pi_logits, game_outcome, score_logits, own_pred,
                             gamma, policy, score, score_one_hot, own, w_pi,
-                            w_val, w_outcome, w_score, w_own, w_gamma)
+                            w_val, w_outcome, w_score, w_own, w_gamma,
+                            use_kl_loss)
 
     reg_loss = tf.math.add_n(model.losses)
 
@@ -36,19 +43,21 @@ def train_step(w_pi, w_val, w_outcome, w_score, w_own, w_gamma, input, komi,
 
 
 @tf.function
-def train_step_gpu(w_pi, w_val, w_outcome, w_score, w_own, w_gamma, input, komi,
-                   score, score_one_hot, policy, own, model, optimizer):
+def train_step_gpu(w_pi, w_val, w_outcome, w_score, w_own, w_gamma, use_kl_loss,
+                   input, komi, score, score_one_hot, policy, own, model,
+                   optimizer):
   with tf.GradientTape() as g:
     pi_logits, game_outcome, own_pred, score_logits, gamma = model(
         input, tf.expand_dims(komi, axis=1), training=True)
     (loss, policy_loss, outcome_loss, score_pdf_loss,
      own_loss) = model.loss(pi_logits, game_outcome, score_logits, own_pred,
                             gamma, policy, score, score_one_hot, own, w_pi,
-                            w_val, w_outcome, w_score, w_own, w_gamma)
+                            w_val, w_outcome, w_score, w_own, w_gamma,
+                            use_kl_loss)
 
     reg_loss = tf.math.add_n(model.losses)
 
-    loss = loss + reg_loss
+    loss = tf.cast(loss, dtype=tf.float32) + reg_loss
     scaled_loss = optimizer.get_scaled_loss(loss)
 
   scaled_gradients = g.gradient(scaled_loss, model.trainable_variables)
@@ -60,8 +69,8 @@ def train_step_gpu(w_pi, w_val, w_outcome, w_score, w_own, w_gamma, input, komi,
 
 
 @tf.function
-def val_step(w_pi, w_val, w_outcome, w_score, w_own, w_gamma, input, komi,
-             score, score_one_hot, policy, own, model):
+def val_step(w_pi, w_val, w_outcome, w_score, w_own, w_gamma, use_kl_loss,
+             input, komi, score, score_one_hot, policy, own, model):
   pi_logits, game_outcome, own_pred, score_logits, gamma = model(input,
                                                                  tf.expand_dims(
                                                                      komi,
@@ -70,7 +79,7 @@ def val_step(w_pi, w_val, w_outcome, w_score, w_own, w_gamma, input, komi,
   (loss, policy_loss, outcome_loss, score_pdf_loss,
    own_loss) = model.loss(pi_logits, game_outcome, score_logits, own_pred,
                           gamma, policy, score, score_one_hot, own, w_pi, w_val,
-                          w_outcome, w_score, w_own, w_gamma)
+                          w_outcome, w_score, w_own, w_gamma, use_kl_loss)
 
   return (pi_logits, game_outcome, score_logits, loss, policy_loss,
           outcome_loss, score_pdf_loss, own_loss)
@@ -138,7 +147,7 @@ class TrainingManager:
             epochs: int,
             momentum: float,
             log_interval: int,
-            coeffs: LossCoeffs,
+            mode: TrainingMode,
             lr: Optional[float] = None,
             lr_schedule: Optional[
                 tf.keras.optimizers.schedules.LearningRateSchedule] = None,
@@ -151,6 +160,9 @@ class TrainingManager:
 
     learning_rate = lr if lr else lr_schedule
     model = self.model
+    coeffs = (LossCoeffs.SLCoeffs()
+              if mode == TrainingMode.SL else LossCoeffs.RLCoeffs())
+    use_kl_loss = mode == TrainingMode.RL
 
     # yapf: disable
     train_fn = functools.partial(train_step_gpu if is_gpu else train_step,
@@ -159,14 +171,16 @@ class TrainingManager:
                                  coeffs.w_outcome,
                                  coeffs.w_score,
                                  coeffs.w_own,
-                                 coeffs.w_gamma)
+                                 coeffs.w_gamma,
+                                 use_kl_loss)
     val_fn = functools.partial(val_step,
                                coeffs.w_pi,
                                coeffs.w_val,
                                coeffs.w_outcome,
                                coeffs.w_score,
                                coeffs.w_own,
-                               coeffs.w_gamma)
+                               coeffs.w_gamma,
+                               use_kl_loss)
     # yapf: enable
 
     optimizer = tf.keras.optimizers.experimental.SGD(
@@ -207,12 +221,15 @@ class TrainingManager:
         losses_val.update_losses(loss, policy_loss, outcome_loss,
                                  score_pdf_loss, own_loss)
 
+        true_move = policy if len(policy.shape) == 1 else tf.math.argmax(
+            policy, axis=1, output_type=tf.int32)
         predicted_move = tf.math.argmax(pi_logits, axis=1, output_type=tf.int32)
         predicted_outcome = tf.math.argmax(outcome_logits,
                                            axis=1,
                                            output_type=tf.int32)
 
-        correct_move = tf.cast(tf.equal(policy, predicted_move), dtype=tf.int32)
+        correct_move = tf.cast(tf.equal(true_move, predicted_move),
+                               dtype=tf.int32)
         correct_outcome = tf.cast(tf.equal(
             tf.where(score >= 0, tf.ones_like(predicted_outcome,
                                               dtype=tf.int32),
@@ -261,6 +278,7 @@ class TrainingManager:
     top_score_indices = tf.math.top_k(score_logits[0],
                                       k=5).indices - SCORE_RANGE_MIDPOINT
     top_score_values = tf.math.top_k(score_logits[0], k=5).values
+    actual_policy = pi[0] if len(pi.shape) == 1 else tf.math.argmax(pi[0])
 
     print(f'---------- Batch {batch_num} -----------')
     print(f'Learning Rate: {lr}')
@@ -280,7 +298,7 @@ class TrainingManager:
     print(f'Actual Score: {score[0]}')
     print(f'Predicted Top 5 Moves: {top_policy_indices}')
     print(f'Predicted Top 5 Move Logits: {top_policy_values}')
-    print(f'Actual Policy: {pi[0]}')
+    print(f'Actual Policy: {actual_policy}')
     print(f'Own:')
     print(GoBoard.to_string(own.numpy()))
     print(f'Board:')

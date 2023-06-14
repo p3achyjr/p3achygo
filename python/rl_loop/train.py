@@ -14,9 +14,8 @@ import trt_convert
 
 from absl import app, flags, logging
 from constants import *
-from loss_coeffs import LossCoeffs
 from pathlib import Path
-from training_manager import TrainingManager
+from training_manager import TrainingManager, TrainingMode
 from model import P3achyGoModel
 from model_config import ModelConfig
 
@@ -37,7 +36,8 @@ flags.DEFINE_string('local_run_dir', '',
                     'Local path to store models and training chunks.')
 flags.DEFINE_string('model_checkpoint_dir', '/tmp/p3achygo_checkpoints',
                     'Local path to store intermediate models.')
-flags.DEFINE_string('calib_ds_path', '', 'Local path to TRT calibration.')
+flags.DEFINE_string('val_ds_path', '',
+                    'Local path to validation DS. Also used for calibration')
 flags.DEFINE_integer(
     'log_interval', 100,
     'Interval at which to log training information (in mini-batches)')
@@ -64,8 +64,8 @@ def main(_):
     logging.error('No --local_run_dir specified.')
     return
 
-  if FLAGS.calib_ds_path == '':
-    logging.error('No --calib_ds_path specified.')
+  if FLAGS.val_ds_path == '':
+    logging.error('No --val_ds_path specified.')
     return
 
   is_gpu = False
@@ -91,7 +91,7 @@ def main(_):
                                  num_input_features=NUM_INPUT_FEATURES,
                                  name=f'p3achygo_{FLAGS.run_id}')
     # upload for self-play to pick up.
-    save_trt_and_upload(model, FLAGS.calib_ds_path, model_dir, 0)
+    save_trt_and_upload(model, FLAGS.val_ds_path, model_dir, 0)
   else:
     model_path = gcs.download_model(FLAGS.run_id, str(model_dir), model_gen)
     model = tf.keras.models.load_model(
@@ -109,26 +109,32 @@ def main(_):
     chunk_filename = gcs.download_golden_chunk(FLAGS.run_id, str(chunk_dir),
                                                next_model_gen)
     ds = tf.data.TFRecordDataset(chunk_filename, compression_type='ZLIB')
-    ds = ds.map(transforms.expand_rl, num_parallel_calls=8)
+    ds = ds.map(transforms.expand_rl, num_parallel_calls=tf.data.AUTOTUNE)
     ds = ds.batch(BATCH_SIZE)
     ds = ds.prefetch(tf.data.AUTOTUNE)
 
+    val_ds = tf.data.TFRecordDataset(FLAGS.val_ds_path, compression_type='ZLIB')
+    val_ds = val_ds.map(transforms.expand_rl,
+                        num_parallel_calls=tf.data.AUTOTUNE)
+    val_ds = val_ds.batch(BATCH_SIZE)
+    val_ds = ds.prefetch(tf.data.AUTOTUNE)
+
     training_manager = TrainingManager(model,
                                        ds,
-                                       tf.data.Dataset.from_tensor_slices([]),
+                                       val_ds,
                                        save_interval=1000,
                                        save_path=ckpt_dir)
 
     logging.info(f'Training model {next_model_gen}...')
-    logging.info(f'{model.summary(batch_size=BATCH_SIZE)}')
+    model.summary(batch_size=BATCH_SIZE)
     training_manager.train(EPOCHS_PER_GEN,
                            MOMENTUM,
                            lr=LR,
                            log_interval=FLAGS.log_interval,
-                           coeffs=LossCoeffs.RLCoeffs(),
+                           mode=TrainingMode.RL,
                            is_gpu=is_gpu)
 
-    save_trt_and_upload(model, FLAGS.calib_ds_path, model_dir, next_model_gen)
+    save_trt_and_upload(model, FLAGS.val_ds_path, model_dir, next_model_gen)
     model_gen += 1
 
 

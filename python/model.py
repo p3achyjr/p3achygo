@@ -644,8 +644,15 @@ class P3achyGoModel(tf.keras.Model):
 
   def loss(self, pi_logits, game_outcome, score_logits, own_pred, gamma, policy,
            score, score_one_hot, own, w_pi, w_val, w_outcome, w_score, w_own,
-           w_gamma):
-    policy_loss = self.scce_logits(policy, pi_logits)
+           w_gamma, use_kl_policy_loss):
+    policy_loss = tf.reduce_mean(
+        tf.keras.metrics.kl_divergence(
+            tf.cast(policy, tf.float32),
+            tf.keras.activations.softmax(tf.cast(
+                pi_logits,
+                tf.float32)))) if use_kl_policy_loss else self.scce_logits(
+                    policy, pi_logits)
+    policy_loss = self.identity(policy_loss)
 
     did_win = score >= 0
     outcome_loss = self.scce_logits(did_win, game_outcome)
