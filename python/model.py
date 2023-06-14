@@ -341,7 +341,7 @@ class PolicyHead(tf.keras.layers.Layer):
   1) Broadcast Residual Block
   2) Batch normalization of P
   3) A 1x1x1 Convolution to logits on the board.
-  4) An FC layer from gpool
+  4) An FC layer from gpool to pass logit.
   '''
 
   def __init__(self, channels=32, board_len=BOARD_LEN, name=None):
@@ -640,7 +640,9 @@ class P3achyGoModel(tf.keras.Model):
     pi_logits = self.policy_head(x, training=training)
     game_outcome, game_ownership, score_logits, gamma = self.value_head(x)
 
-    return pi_logits, game_outcome, game_ownership, score_logits, gamma
+    return (tf.cast(pi_logits, tf.float32), tf.cast(game_outcome, tf.float32),
+            tf.cast(game_ownership, tf.float32),
+            tf.cast(score_logits, tf.float32), tf.cast(gamma, tf.float32))
 
   def loss(self, pi_logits, game_outcome, score_logits, own_pred, gamma, policy,
            score, score_one_hot, own, w_pi, w_val, w_outcome, w_score, w_own,
@@ -652,7 +654,6 @@ class P3achyGoModel(tf.keras.Model):
                 pi_logits,
                 tf.float32)))) if use_kl_policy_loss else self.scce_logits(
                     policy, pi_logits)
-    policy_loss = self.identity(policy_loss)
 
     did_win = score >= 0
     outcome_loss = self.scce_logits(did_win, game_outcome)
@@ -662,7 +663,7 @@ class P3achyGoModel(tf.keras.Model):
     score_pdf_loss = self.scce(score_index, score_distribution)
     score_cdf_loss = tf.math.reduce_mean(
         tf.math.reduce_sum(tf.math.square(
-            tf.math.cumsum(self.identity(score_one_hot), axis=1) -
+            tf.math.cumsum(score_one_hot, axis=1) -
             tf.math.cumsum(score_distribution, axis=1)),
                            axis=1))
 
@@ -679,7 +680,8 @@ class P3achyGoModel(tf.keras.Model):
     val_loss = w_val * (woutcome_loss + wscore_pdf_loss +
                         wown_loss) + wscore_cdf_loss
 
-    loss = w_pi * policy_loss + val_loss + gamma_loss
+    loss = w_pi * tf.cast(policy_loss, tf.float32) + tf.cast(
+        val_loss, tf.float32) + tf.cast(gamma_loss, tf.float32)
 
     # yapf: disable
     # tf.print('Loss:', loss,

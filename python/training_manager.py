@@ -57,7 +57,7 @@ def train_step_gpu(w_pi, w_val, w_outcome, w_score, w_own, w_gamma, use_kl_loss,
 
     reg_loss = tf.math.add_n(model.losses)
 
-    loss = tf.cast(loss, dtype=tf.float32) + reg_loss
+    loss = loss + reg_loss
     scaled_loss = optimizer.get_scaled_loss(loss)
 
   scaled_gradients = g.gradient(scaled_loss, model.trainable_variables)
