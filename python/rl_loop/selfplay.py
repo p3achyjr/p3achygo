@@ -63,7 +63,7 @@ def main(_):
     time.sleep(POLL_INTERVAL_S)
     model_gen = gcs.get_most_recent_model(run_id)
 
-  model_path = gcs.download_model(run_id, local_model_dir, model_gen)
+  model_path = gcs.download_model(run_id, str(local_model_dir), model_gen)
   trt_model_path = str(Path(model_path, '_trt'))
 
   cmd = shlex.split(f'{FLAGS.bin_path} --num_threads={NUM_SELFPLAY_THREADS}' +

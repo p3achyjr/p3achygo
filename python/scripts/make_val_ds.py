@@ -6,7 +6,6 @@ from constants import *
 from pathlib import Path
 
 import transforms
-import functools
 
 FLAGS = flags.FLAGS
 DATASET = 'badukmovies_all'
@@ -31,6 +30,9 @@ def _float_feature(value: tf.Tensor):
 # Keep in sync with //cc/recorder/tf_recorder.cc:MakeTfExample.
 def serialize(board, komi, _, score, last_moves, policy):
   assert (last_moves.shape == (5, 2))
+  black, white = transforms.get_black(board), transforms.get_white(board)
+  board = black * BLACK_RL + white * WHITE_RL
+
   own = tf.zeros((BOARD_LEN, BOARD_LEN), dtype=tf.int8)
   # tf.map_fn error spams.
   last_move_0 = transforms.as_index(tf.cast(last_moves[0], dtype=tf.int32))
@@ -46,7 +48,7 @@ def serialize(board, komi, _, score, last_moves, policy):
                   tf.int8)  # every position in the SL dataset is black to move.
 
   feature = {
-      "bsize": _bytes_feature(BOARD_LEN, tf.uint8),
+      "bsize": _bytes_feature(tf.constant(BOARD_LEN), tf.uint8),
       "board": _bytes_feature(board, tf.int8),
       "last_moves": _bytes_feature(last_moves, tf.int16),
       "color": _bytes_feature(color, tf.int8),

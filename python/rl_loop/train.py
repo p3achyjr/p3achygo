@@ -10,12 +10,12 @@ import gcs_utils as gcs
 import sys, time
 import tensorflow as tf
 import transforms
+import train
 import trt_convert
 
 from absl import app, flags, logging
 from constants import *
 from pathlib import Path
-from training_manager import TrainingManager, TrainingMode
 from model import P3achyGoModel
 from model_config import ModelConfig
 
@@ -29,6 +29,7 @@ BATCH_SIZE = 256
 LR = 3e-3
 EPOCHS_PER_GEN = 1
 MOMENTUM = .9
+SWA_MOMENTUM = .75
 
 flags.DEFINE_integer('num_generations', 10, 'Number of generations to produce.')
 flags.DEFINE_string('run_id', '', 'ID corresponding to the current run.')
@@ -43,13 +44,20 @@ flags.DEFINE_integer(
     'Interval at which to log training information (in mini-batches)')
 
 
+def avg_weights(prev_weights: list, cur_weights: list) -> list:
+  return [
+      prev_layer_weights * SWA_MOMENTUM + layer_weights * (1 - SWA_MOMENTUM)
+      for prev_layer_weights, layer_weights in zip(prev_weights, cur_weights)
+  ]
+
+
 def save_trt_and_upload(model: P3achyGoModel, calib_ds_path: str,
                         local_model_dir: str, gen: int):
   model_path = Path(local_model_dir, f'model_{gen}')
   model.save(str(model_path))
 
   logging.info('Converting to Trt...')
-  trt_converter = trt_convert.get_converter(model_path, calib_ds_path)
+  trt_converter = trt_convert.get_converter(str(model_path), calib_ds_path)
   trt_converter.summary()
   trt_converter.save(output_saved_model_dir=str(Path(model_path, '_trt')))
   gcs.upload_model(FLAGS.run_id, str(local_model_dir), gen)
@@ -91,12 +99,20 @@ def main(_):
                                  num_input_features=NUM_INPUT_FEATURES,
                                  name=f'p3achygo_{FLAGS.run_id}')
     # upload for self-play to pick up.
-    save_trt_and_upload(model, FLAGS.val_ds_path, model_dir, 0)
+    save_trt_and_upload(model, FLAGS.val_ds_path, str(model_dir), 0)
   else:
     model_path = gcs.download_model(FLAGS.run_id, str(model_dir), model_gen)
     model = tf.keras.models.load_model(
         model_path, custom_objects=P3achyGoModel.custom_objects())
 
+  model.summary(batch_size=BATCH_SIZE)
+  val_ds = tf.data.TFRecordDataset(FLAGS.val_ds_path, compression_type='ZLIB')
+  val_ds = val_ds.map(transforms.expand_rl, num_parallel_calls=tf.data.AUTOTUNE)
+  val_ds = val_ds.batch(BATCH_SIZE)
+  val_ds = val_ds.prefetch(tf.data.AUTOTUNE)
+
+  logging.info(f'Collecting initial validation stats...')
+  train.val(model, mode=train.Mode.RL, val_ds=val_ds)
   while model_gen < FLAGS.num_generations:
     next_model_gen = model_gen + 1
     most_recent_chunk = gcs.get_most_recent_chunk(FLAGS.run_id)
@@ -113,28 +129,30 @@ def main(_):
     ds = ds.batch(BATCH_SIZE)
     ds = ds.prefetch(tf.data.AUTOTUNE)
 
-    val_ds = tf.data.TFRecordDataset(FLAGS.val_ds_path, compression_type='ZLIB')
-    val_ds = val_ds.map(transforms.expand_rl,
-                        num_parallel_calls=tf.data.AUTOTUNE)
-    val_ds = val_ds.batch(BATCH_SIZE)
-    val_ds = ds.prefetch(tf.data.AUTOTUNE)
-
-    training_manager = TrainingManager(model,
-                                       ds,
-                                       val_ds,
-                                       save_interval=1000,
-                                       save_path=ckpt_dir)
+    prev_weights = model.get_weights()
 
     logging.info(f'Training model {next_model_gen}...')
-    model.summary(batch_size=BATCH_SIZE)
-    training_manager.train(EPOCHS_PER_GEN,
-                           MOMENTUM,
-                           lr=LR,
-                           log_interval=FLAGS.log_interval,
-                           mode=TrainingMode.RL,
-                           is_gpu=is_gpu)
+    train.train(model,
+                ds,
+                EPOCHS_PER_GEN,
+                MOMENTUM,
+                lr=LR,
+                log_interval=FLAGS.log_interval,
+                mode=train.Mode.RL,
+                save_interval=1000,
+                save_path=ckpt_dir,
+                is_gpu=is_gpu)
 
-    save_trt_and_upload(model, FLAGS.val_ds_path, model_dir, next_model_gen)
+    logging.info(f'Running validation for post checkpoint...')
+    train.val(model, mode=train.Mode.RL, val_ds=val_ds)
+
+    new_weights = avg_weights(prev_weights, model.get_weights())
+    model.set_weights(new_weights)
+    logging.info(f'Running validation for new model...')
+    train.val(model, mode=train.Mode.RL, val_ds=val_ds)
+
+    save_trt_and_upload(model, FLAGS.val_ds_path, str(model_dir),
+                        next_model_gen)
     model_gen += 1
 
 
