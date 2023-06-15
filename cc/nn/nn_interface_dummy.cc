@@ -6,24 +6,28 @@
 namespace nn {
 namespace {
 using namespace ::tensorflow;
-static constexpr int kNumMovesToDraw = 16;
-static constexpr int kValuableCounters[] = {16, 17, 35, 41, 57};
-
-bool IsValuableCounter(int counter) {
-  for (int v_counter : kValuableCounters) {
-    if (v_counter == counter) {
-      return true;
-    }
-  }
-
-  return false;
-}
 }  // namespace
 
+NNInterface::Cache::Cache(int num_threads)
+    : num_threads_(num_threads), thread_cache_size_(num_threads) {}
+
+void NNInterface::Cache::Insert(int thread_id, const CacheKey& cache_key,
+                                const NNInferResult& infer_result) {}
+
+bool NNInterface::Cache::Contains(int thread_id, const CacheKey& cache_key) {
+  return false;
+}
+
+std::optional<NNInferResult> NNInterface::Cache::Get(
+    int thread_id, const CacheKey& cache_key) {
+  return std::nullopt;
+}
+
 NNInterface::NNInterface(int _num_threads)
-    : scope_cast_input_(Scope::NewRootScope()),
-      scope_cast_output_(Scope::NewRootScope()),
-      batch_size_(0) {}
+    : scope_preprocess_(Scope::NewRootScope()),
+      scope_postprocess_(Scope::NewRootScope()),
+      num_threads_(0),
+      nn_cache_(0) {}
 
 NNInterface::~NNInterface() = default;
 
@@ -31,21 +35,15 @@ absl::Status NNInterface::Initialize(std::string&& _model_path) {
   return absl::OkStatus();
 }
 
-absl::Status NNInterface::LoadBatch(int _thread_id, const game::Game& _game,
-                                    int _color_to_move) {
-  return absl::OkStatus();
-}
-
-NNInferResult NNInterface::GetInferenceResult(int _thread_id) {
-  NNInferResult result{
+NNInferResult NNInterface::LoadAndGetInference(int _thread_id,
+                                               const game::Game& _game,
+                                               game::Color _color_to_move) {
+  return NNInferResult{
       .move_logits{},
       .move_probs{},
       .value_probs{},
-      .ownership{},
       .score_probs{},
   };
-
-  return result;
 }
 
 void NNInterface::RegisterThread(int thread_id) {}

@@ -4,6 +4,7 @@
 
 #include "absl/log/check.h"
 #include "absl/synchronization/mutex.h"
+#include "absl/time/time.h"
 #include "cc/nn/create_tensor_shape.h"
 #include "cc/nn/nn_board_utils.h"
 #include "tensorflow/cc/ops/array_ops.h"
@@ -17,6 +18,7 @@ namespace nn {
 namespace {
 
 using namespace ::tensorflow;
+using ::core::Cache;
 using ::game::Color;
 using ::game::Game;
 using ::game::Symmetry;
@@ -49,61 +51,25 @@ static constexpr char kSavedModelTagServe[] = "serve";
 
 }  // namespace
 
-NNInterface::Cache::Cache(int num_threads)
-    : num_threads_(num_threads),
-      thread_cache_size_(num_threads == 0 ? 0 : kMaxCacheSize / num_threads) {
-  for (int i = 0; i < num_threads; ++i) {
-    cache_[i].resize(thread_cache_size_);
-  }
-}
-
-void NNInterface::Cache::Insert(int thread_id, const CacheKey& cache_key,
-                                const NNInferResult& infer_result) {
-  size_t hash = absl::HashOf(cache_key);
-  size_t tbl_index = hash % thread_cache_size_;
-  cache_[thread_id][tbl_index] = CacheElem{hash, infer_result};
-}
-
-bool NNInterface::Cache::Contains(int thread_id, const CacheKey& cache_key) {
-  size_t hash = absl::HashOf(cache_key);
-  size_t tbl_index = hash % thread_cache_size_;
-  const std::optional<CacheElem>& elem = cache_[thread_id][tbl_index];
-  if (!elem) {
-    return false;
-  } else if (elem->hash != hash) {
-    return false;
-  }
-
-  return true;
-}
-
-std::optional<NNInferResult> NNInterface::Cache::Get(
-    int thread_id, const CacheKey& cache_key) {
-  size_t hash = absl::HashOf(cache_key);
-  size_t tbl_index = hash % thread_cache_size_;
-  const std::optional<CacheElem>& elem = cache_[thread_id][tbl_index];
-  if (!elem) {
-    return {};
-  }
-
-  return elem->infer_res;
-}
-
 NNInterface::NNInterface(int num_threads)
+    : NNInterface(num_threads, kTimeoutUs) {}
+
+NNInterface::NNInterface(int num_threads, int64_t timeout)
     : session_options_(SessionOptions()),
       run_options_(RunOptions()),
       scope_preprocess_(Scope::NewRootScope()),
       scope_postprocess_(Scope::NewRootScope()),
       session_preprocess_(tensorflow::NewSession(session_options_)),
       session_postprocess_(tensorflow::NewSession(session_options_)),
+      id_(id),
       is_initialized_(false),
       num_registered_threads_(num_threads),
       num_threads_(num_threads),
-      nn_cache_(num_threads_),
       thread_info_(num_threads_),
-      running_(true),
-      last_infer_time_(
-          std::chrono::time_point<std::chrono::steady_clock>::max()) {
+      running_(true) {
+  InitializeCache();
+
+  // Allocate inference buffers.
   input_feature_buf_ =
       Tensor(DataType::DT_FLOAT,
              CreateTensorShape({num_threads_, BOARD_LEN, BOARD_LEN,
@@ -216,17 +182,17 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
                                                Color color_to_move) {
   DCHECK(is_initialized_);
   ThreadInfo& thread_info = thread_info_[thread_id];
-  CacheKey cache_key = CacheKey{
+  NNKey cache_key = NNKey{
       color_to_move,
       game.board().hash(),
   };
 
-  if (nn_cache_.Contains(thread_id, cache_key)) {
+  if (CacheContains(thread_id, cache_key)) {
     // Cached. Immediately return result.
     absl::MutexLock l(&mu_);
     thread_info.res_cached = true;
 
-    return nn_cache_.Get(thread_id, cache_key).value();
+    return CacheGet(thread_id, cache_key).value();
   }
 
   // Not cached. Load for inference.
@@ -271,7 +237,7 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
   }
 
   // Cache this result.
-  nn_cache_.Insert(thread_id, cache_key, infer_result);
+  CacheInsert(thread_id, cache_key, infer_result);
   return infer_result;
 }
 
@@ -300,6 +266,27 @@ void NNInterface::UnregisterThread(int thread_id) {
   thread.registered = false;
 }
 
+void NNInterface::InitializeCache() {
+  for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
+    thread_caches_[thread_id] =
+        Cache<NNKey, NNInferResult>(kMaxCacheSize / num_threads_);
+  }
+}
+
+bool NNInterface::CacheContains(int thread_id, const NNKey& key) {
+  return thread_caches_[thread_id].Contains(key);
+}
+
+std::optional<NNInferResult> NNInterface::CacheGet(int thread_id,
+                                                   const NNKey& key) {
+  return thread_caches_[thread_id].Get(key);
+}
+
+void NNInterface::CacheInsert(int thread_id, const NNKey& key,
+                              const NNInferResult& result) {
+  thread_caches_[thread_id].Insert(key, result);
+}
+
 void NNInterface::InferLoop() {
   while (running_.load(std::memory_order_acquire)) {
     Infer();
@@ -307,8 +294,10 @@ void NNInterface::InferLoop() {
 }
 
 void NNInterface::Infer() {
-  absl::MutexLock l(&mu_, absl::Condition(this, &NNInterface::ShouldInfer));
+  mu_.LockWhenWithTimeout(absl::Condition(this, &NNInterface::ShouldInfer),
+                          absl::Microseconds(timeout_));
   if (num_registered_threads_ == 0) {
+    mu_.Unlock();
     return;
   }
 
@@ -351,26 +340,23 @@ void NNInterface::Infer() {
     }
   }
 
-  last_infer_time_ = std::chrono::steady_clock::now();
+  mu_.Unlock();
 }
 
 bool NNInterface::ShouldInfer() const {
-  auto now = std::chrono::steady_clock::now();
-  auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
-      now - last_infer_time_);
-  if (duration.count() >= kTimeoutUs) {
-    return true;
-  }
-
+  // Only return true if at least one leaf evaluation is pending.
+  bool exists_pending = false;
   for (int thread_id = 0; thread_id < thread_info_.size(); ++thread_id) {
     const auto& thread = thread_info_[thread_id];
-    if (thread.registered && !thread.res_cached &&
-        !thread.loaded_for_inference) {
+    if (!thread.registered) continue;
+    if (!thread.res_cached && !thread.loaded_for_inference) {
       return false;
     }
+
+    if (!thread.res_cached) exists_pending = true;
   }
 
-  return true;
+  return exists_pending;
 }
 
 }  // namespace nn

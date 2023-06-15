@@ -15,21 +15,11 @@ namespace shuffler {
  * The file structure will look like this:
  *
  * `dir`/:
- *   gen0/
- *   gen1/
- *   gen2/
- *     mach0/
- *       batch_0_g0_{b}.tfrecord.zz
- *       batch_1_g{b}_{2b}.tfrecord.zz
- *       ...
- *     mach1/
- *     ...
- *     mach{m}/
- *   ...
- *   gen{n}/
+ *   batch_b0_g{G}_n{N}.tfrecord.zz
+ *   batch_b1_g{G}_n{N}.tfrecord.zz
  *   goldens/
  *
- * where there are `n` generations, `m` machines, and `b` games per batch.
+ * where each batch contains `G` games and `N` examples.
  */
 class TfRecordWatcher final {
  public:

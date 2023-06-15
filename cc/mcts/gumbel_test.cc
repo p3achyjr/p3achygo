@@ -27,7 +27,7 @@ void BuildMctsTree(TreeNode* node, int child_index, Color color_to_move,
   node->color_to_move = color_to_move;
 
   float q_mult = color_to_move == BLACK ? 1.0 : -1.0;
-  float q = q_mult * (-0.5 + child_index * (1.0 / 3.0));
+  float q = child_index == -1 ? 0 : q_mult * (-0.5 + child_index * (1.0 / 3.0));
   node->value_est = q;
   node->score_est = 0.0;
 
@@ -71,28 +71,41 @@ TEST_CASE("GumbelTest") {
 
   std::unique_ptr<mcts::TreeNode> root_node =
       std::make_unique<mcts::TreeNode>();
-  BuildMctsTree(root_node.get(), 0, BLACK, 0, 3);
+  BuildMctsTree(root_node.get(), -1 /* hack to initialize root q to 0. */,
+                BLACK, 0, 3);
 
   // Build an MCTS tree but do not advance node states. This will "trick" the
   // evaluator into believing the nodes are new. We link dummy implementations
   // for gumbel and leaf evaluation for testing.
-  std::pair<game::Loc, game::Loc> move_pair = gumbel_evaluator.SearchRoot(
+  GumbelResult gumbel_result = gumbel_evaluator.SearchRoot(
       probability, game, root_node.get(), BLACK, kGumbelN, kGumbelK);
 
   // Check move predictions are correct.
-  CHECK(move_pair.first == expected_nn_move);
-  CHECK(move_pair.second == expected_gumbel_move);
+  CHECK(gumbel_result.nn_move == expected_nn_move);
+  CHECK(gumbel_result.mcts_move == expected_gumbel_move);
 
   // Sanity check Q values and visit counts at children.
+  int expected_root_n = 9;
+  CHECK(root_node->n == expected_root_n);
+  CHECK(root_node->max_child_n == 3);
   CHECK(root_node->children[0]->n == 1);
   CHECK(root_node->children[1]->n == 1);
   CHECK(root_node->children[2]->n == 3);
   CHECK(root_node->children[3]->n == 3);
 
+  float q0 = -.5;
+  float q1 = -.5 + 1. / 3;
+  float q2 = -.5 + 2. / 3;
+  float q3 = .5;
+  float expected_root_q =
+      (q0 + q1 + 3 * q2 + 3 * q3) / static_cast<float>(expected_root_n);
+
+  CHECK(root_node->q == doctest::Approx(expected_root_q));
+
   // Flip q-values because these are from the perspective of the opponent.
-  CHECK(-root_node->children[0]->q == doctest::Approx(-.5));
-  CHECK(-root_node->children[1]->q == doctest::Approx(-.5 + 1. / 3));
-  CHECK(-root_node->children[2]->q == doctest::Approx(-.5 + 2. / 3));
-  CHECK(-root_node->children[3]->q == doctest::Approx(.5));
+  CHECK(-root_node->children[0]->q == doctest::Approx(q0));
+  CHECK(-root_node->children[1]->q == doctest::Approx(q1));
+  CHECK(-root_node->children[2]->q == doctest::Approx(q2));
+  CHECK(-root_node->children[3]->q == doctest::Approx(q3));
 }
 }  // namespace mcts

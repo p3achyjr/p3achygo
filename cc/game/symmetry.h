@@ -7,6 +7,7 @@
 #include "cc/core/rand.h"
 
 namespace game {
+static constexpr int kSymUpperBound = 8;
 enum class Symmetry : uint8_t {
   kIdentity = 0,
   kRot90 = 1,
@@ -18,10 +19,27 @@ enum class Symmetry : uint8_t {
   kFlipRot270 = 7,
 };
 
+enum class Rotation : uint8_t {
+  k90 = 0,
+  k180 = 1,
+  k270 = 2,
+};
+
+int Rotate(int index, size_t grid_len, Rotation rot);
+int TransformIndex(Symmetry sym, int index, size_t grid_len);
+
 Symmetry GetRandomSymmetry(core::PRng& prng);
 
-template <typename T, int N>
-std::array<T, N> ApplySymmetry(const std::array<T, N>) {}
+template <typename T, size_t N>
+std::array<T, N> ApplySymmetry(Symmetry sym, const std::array<T, N>& grid,
+                               size_t grid_len) {
+  std::array<T, N> sym_grid;
+  for (size_t i = 0; i < N; ++i) {
+    sym_grid[TransformIndex(sym, i, grid_len)] = grid[i];
+  }
+
+  return sym_grid;
+}
 
 }  // namespace game
 

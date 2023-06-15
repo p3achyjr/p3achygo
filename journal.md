@@ -127,3 +127,36 @@ Next Tasks:
 - Implement/benchmark caching for NN evaluations.
 - Implement opening noise (0-30 moves of purely drawing from policy).
 - Use TensorRT.
+
+## 6-09-2023
+
+Was traveling last week so forgot to update this.
+
+I have rudimentary python wrappers around all the main processes now. I got sidetracked trying to figure out why the pass logit from SL models is very high--the tl;dr is that I still don't know, but using a FC layer for policy instead of the conv + gpool based architecture would be a huge waste of compute. The model has ~1.5mil parameters, and switching out the FC layer would cause the parameter count to jump to ~1.8mil. 300k parameters in a single layer seems excessive and a bad use of compute.
+
+I ran an ablation disabling all pass examples in the SL dataset. The result was that the pass logit is still a bit higher than the logits for other moves (i.e. -7 for pass, -12 for corner moves). One theory is that policy gradients for board moves do not affect the FC layer from global pooling to the pass logit, so the only time that layer gets negative examples is if the model predicts pass, but the true policy is elsewhere. I haven't had time to look into it further.
+
+I have TRT set up now. It's about ~25% faster for single inference. In the process, I had to deal with tensorflow model signatures and contemplate jumping off a bridge while doing it. I also found a bug (I think?) in tf.data where \<dataset>.map() is not thread safe. What can you do :)
+
+I also discovered a serious bug wherein non-root search selects the _worst_ node to traverse instead of the best. The lesson here is to remember to flip your signs :)
+
+I created a validation dataset from pro games, and can use that in RL training to see how the model is doing. I also wrote a rudimentary MCTS test that doesn't do much of anything, but at least it's there.
+
+I also extract completed-Q values at root nodes now. We should be able to train using KL divergence now. This is still yet to be done.
+
+I also implemented an NN cache, which ended up being a massive headache getting it to work with the current concurrency model. While beforehand, each thread would load and fetch inference in lockstep, with caching, one thread can fetch multiple results before loading a batch for inference. I ended up adding a few flags to address this. I haven't verified that deadlock is impossible or that the results are always correct, but it runs well and seems fine. At the moment there is honestly just too much to do to stop and verify everything.
+
+I feel like I am constantly so, so close to kicking off the whole thing, but I've been there for a couple weeks now. Next steps, in order of importance, would be:
+
+- Read Kubernetes docs and figure out what the capabilities are. As corollary, figure out how to sync local data to shuffler (GCS? Direct SCP?). GCS seems like the easiest, so I might just go with that. Also as corollary, figure out how to tell when we have played enough games within a generation.
+- Rewrite shuffler to adapt to new filename scheme.
+- Figure out how to flush pending games on self-play shutdown. Across several machines, we can potentially lose lots of games if we terminate without flushing our game buffer.
+- Train using KL loss on RL examples.
+- Implement evaluation. This should just play ~50 games using some high number of evaluations (16, 196) and somehow signal which model is better. Maybe we can keep a single golden in GCS, and on new models, pull the new model, have the models play each other, and swap the GCS golden if it's better. I actually haven't tried running two TF models at once, so hopefully it doesn't all crash and burn.
+- Implement opening noise.
+- Implement Gumbel K, N buckets. The idea is instead of a flat 8, 64, we can draw from a pool of (K, N) tuples, each of which has different characteristics for search. I.e. if we run (16, 192), we get higher quality policy samples, but if we run (2, 8), we play more games and can generate more independent samples for value training.
+- Implement GoExploit buffer (LRU cache of positions to sample from).
+- True random seeds for each separate process, to prevent processes starting at the same time from generating the exact same examples.
+- Read EfficientZero [paper](https://arxiv.org/pdf/2111.00210.pdf) and see if there's anything there that might be useful.
+
+At this point the most important thing to do is just to get this thing off the ground--so close :)

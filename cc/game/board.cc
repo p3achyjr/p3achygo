@@ -14,6 +14,8 @@ using namespace ::core;
 using GroupMap = GroupTracker::BensonSolver::GroupMap;
 using RegionMap = GroupTracker::BensonSolver::RegionMap;
 
+static constexpr size_t kBensonCacheSize = 16384;
+
 inline unsigned ZobristState(int state) { return state + 1; }
 
 inline absl::InlinedVector<Loc, 4> Adjacent(Loc loc, int length) {
@@ -229,9 +231,15 @@ groupid GroupTracker::CoalesceGroups(Loc loc) {
   return canonical_group_id;
 }
 
-void GroupTracker::CalculatePassAliveRegions() {
+void GroupTracker::CalculatePassAliveRegions(Zobrist::Hash hash) {
+  thread_local BensonCache benson_cache(kBensonCacheSize);
+  if (benson_cache.Contains(hash)) {
+    pass_alive_ = benson_cache.Get(hash).value();
+  }
+
   CalculatePassAliveRegionForColor(BLACK);
   CalculatePassAliveRegionForColor(WHITE);
+  benson_cache.Insert(hash, pass_alive_);
 }
 
 void GroupTracker::CalculatePassAliveRegionForColor(Color color) {
@@ -597,7 +605,7 @@ MoveStatus Board::Pass(Color color) {
   passes_++;
 
   if (!IsGameOver() && passes_ >= constants::kNumPassesBeforeBensons) {
-    group_tracker_.CalculatePassAliveRegions();
+    group_tracker_.CalculatePassAliveRegions(hash_);
   }
 
   return MoveStatus::kValid;
@@ -655,7 +663,7 @@ MoveResult Board::PlayMoveDry(Loc loc, Color color) const {
 
 Scores Board::GetScores() {
   // (re) calculate PA regions for score accuracy.
-  group_tracker_.CalculatePassAliveRegions();
+  group_tracker_.CalculatePassAliveRegions(hash_);
   std::pair<float, std::array<Color, BOARD_LEN* BOARD_LEN>> bscore_ownership =
       ScoreAndOwnership(BLACK);
   std::pair<float, std::array<Color, BOARD_LEN* BOARD_LEN>> wscore_ownership =
@@ -753,7 +761,7 @@ Board::ScoreAndOwnership(Color color) const {
         if (AtLoc(loc) == OppositeColor(color)) {
           if (group_tracker_.IsPassAliveForColor(loc, color)) {
             region.emplace_back(loc);
-            region_score += 2;
+            ++region_score;  // dead stone should not be double-counted.
           } else {
             seen_opp_color = true;
           }

@@ -22,9 +22,13 @@ class LeafEvaluator final {
   LeafEvaluator(LeafEvaluator&&) = delete;
   LeafEvaluator& operator=(LeafEvaluator&&) = delete;
 
+  // Calls `InitTreeNode` and fills initial stats for unevaluated root nodes.
+  void EvaluateRoot(const game::Game& game, TreeNode* node,
+                    game::Color color_to_move);
+
   // Calls `InitTreeNode` and fills initial stats.
-  void EvaluateLeaf(game::Game& game, TreeNode* node, game::Color color_to_move,
-                    float root_score_estimate);
+  void EvaluateLeaf(const game::Game& game, TreeNode* node,
+                    game::Color color_to_move, float root_score_estimate);
 
   // Evaluates a leaf node using the neural net.
   void InitTreeNode(TreeNode* node, const game::Game& game,

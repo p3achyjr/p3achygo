@@ -17,7 +17,7 @@ const absl::InlinedVector<Move, constants::kMaxGameLen>& Game::moves() const {
   return moves_;
 }
 
-int Game::move_num() const { return moves_.size() - kMoveOffset; }
+int Game::num_moves() const { return moves_.size() - kMoveOffset; }
 
 Move Game::move(int move_num) const { return moves_[move_num + kMoveOffset]; }
 

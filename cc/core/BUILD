@@ -3,10 +3,29 @@ package(default_visibility = ["//visibility:public"])
 cc_library(
     name = "core",
     deps = [
+        ":cache",
+        ":file_log_sink",
         ":filepath",
         ":probability",
         ":rand",
         ":util",
+    ],
+)
+
+cc_library(
+    name = "cache",
+    hdrs = ["cache.h"],
+    deps = [
+        "@com_google_absl//absl/hash",
+    ],
+)
+
+cc_library(
+    name = "file_log_sink",
+    hdrs = ["file_log_sink.h"],
+    deps = [
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/strings",
     ],
 )
 

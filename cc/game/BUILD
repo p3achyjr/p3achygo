@@ -55,7 +55,11 @@ cc_library(
 
 cc_library(
     name = "symmetry",
+    srcs = ["symmetry.cc"],
     hdrs = ["symmetry.h"],
+    deps = [
+        "//cc/core:rand",
+    ],
 )
 
 cc_library(
@@ -77,5 +81,14 @@ cc_test(
         ":board",
         "//cc/core:doctest",
         "@com_google_absl//absl/container:flat_hash_set",
+    ],
+)
+
+cc_test(
+    name = "symmetry_test",
+    srcs = ["symmetry_test.cc"],
+    deps = [
+        ":symmetry",
+        "//cc/core:doctest",
     ],
 )

@@ -15,12 +15,11 @@ import tensorflow_datasets as tfds
 
 import sys
 import transforms
+import train
 
 from absl import app, flags, logging
 from constants import *
-from loss_coeffs import LossCoeffs
 from lr_schedule import CyclicLRDecaySchedule
-from training_manager import TrainingManager
 from model import P3achyGoModel
 from model_config import ModelConfig
 from pathlib import Path
@@ -89,11 +88,6 @@ def main(_):
                                num_input_planes=NUM_INPUT_PLANES,
                                num_input_features=NUM_INPUT_FEATURES,
                                name='p3achygo_sl')
-  training_manager = TrainingManager(model,
-                                     train_ds,
-                                     val_ds,
-                                     save_interval=FLAGS.model_save_interval,
-                                     save_path=FLAGS.model_save_path)
   lr_schedule = CyclicLRDecaySchedule(lr, lr * 10, len(train_ds) * epochs)
   print(lr_schedule.info())
   print(model.summary(batch_size=batch_size))
@@ -108,12 +102,16 @@ def main(_):
     is_gpu = True
 
   logging.info(f'Starting Training...')
-  training_manager.train(epochs,
-                         momentum,
-                         lr_schedule=lr_schedule,
-                         log_interval=FLAGS.log_interval,
-                         coeffs=LossCoeffs.SLCoeffs(),
-                         is_gpu=is_gpu)
+  train.train(model,
+              train_ds,
+              epochs,
+              momentum,
+              lr_schedule=lr_schedule,
+              log_interval=FLAGS.log_interval,
+              mode=train.Mode.SL,
+              save_interval=FLAGS.model_save_interval,
+              save_path=FLAGS.model_save_path,
+              is_gpu=is_gpu)
   model_path = Path(FLAGS.model_save_path, 'p3achygo_sl')
   model.save(str(model_path))
 

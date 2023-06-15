@@ -34,7 +34,7 @@ class Game final {
   const absl::InlinedVector<Move, constants::kMaxGameLen>& moves() const;
 
   // returns number of _player made_ moves.
-  int move_num() const;
+  int num_moves() const;
 
   // returns the `move_num`th _player made_ move.
   Move move(int move_num) const;

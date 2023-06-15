@@ -35,5 +35,17 @@ class ModelConfig:
                        c_val=16)
 
   @staticmethod
+  def b6c96():
+    # Tries to mimic KataGo architecture. Need 8 blocks b/c model creates
+    # `blocks-2` blocks in the trunk.
+    return ModelConfig(blocks=8,
+                       broadcast_interval=4,
+                       bottleneck_length=3,
+                       channels=96,
+                       bottleneck_channels=48,
+                       head_channels=32,
+                       c_val=48)
+
+  @staticmethod
   def small():
     return ModelConfig()

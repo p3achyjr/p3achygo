@@ -10,8 +10,8 @@
 #include "absl/container/inlined_vector.h"
 #include "absl/hash/hash.h"
 #include "absl/status/status.h"
-#include "absl/status/statusor.h"
 #include "cc/constants/constants.h"
+#include "cc/core/cache.h"
 #include "cc/game/color.h"
 #include "cc/game/game.h"
 #include "cc/game/symmetry.h"
@@ -28,10 +28,10 @@ class Tensor;
 namespace nn {
 
 struct NNInferResult {
-  float move_logits[constants::kMaxNumMoves];
-  float move_probs[constants::kMaxNumMoves];
-  float value_probs[constants::kNumValueLogits];
-  float score_probs[constants::kNumScoreLogits];
+  std::array<float, constants::kMaxNumMoves> move_logits;
+  std::array<float, constants::kMaxNumMoves> move_probs;
+  std::array<float, constants::kNumValueLogits> value_probs;
+  std::array<float, constants::kNumScoreLogits> score_probs;
 };
 
 /*
@@ -44,6 +44,7 @@ struct NNInferResult {
 class NNInterface final {
  public:
   NNInterface(int num_threads);
+  NNInterface(int num_threads, int64_t timeout);
   ~NNInterface();
 
   // Disable Copy
@@ -62,17 +63,17 @@ class NNInterface final {
 
  private:
   static constexpr int64_t kTimeoutUs = 30000;
-  struct CacheKey {
+  struct NNKey {
     game::Color color_to_move;
     game::Zobrist::Hash board_hash;
 
-    friend bool operator==(const CacheKey& c0, const CacheKey& c1) {
+    friend bool operator==(const NNKey& c0, const NNKey& c1) {
       return c0.color_to_move == c1.color_to_move &&
              c0.board_hash == c1.board_hash;
     }
 
     template <typename H>
-    friend H AbslHashValue(H h, const CacheKey& c) {
+    friend H AbslHashValue(H h, const NNKey& c) {
       return H::combine(std::move(h), c.color_to_move, c.board_hash);
     }
   };
@@ -86,34 +87,14 @@ class NNInterface final {
                               // whether to cache the NN inference result.
   };
 
-  class Cache final {
-   public:
-    Cache(int num_threads);
-    ~Cache() = default;
+  // Cache Helpers.
+  void InitializeCache();
+  bool CacheContains(int thread_id, const NNKey& key);
+  std::optional<NNInferResult> CacheGet(int thread_id, const NNKey& key);
+  void CacheInsert(int thread_id, const NNKey& key,
+                   const NNInferResult& result);
 
-    // Disable Copy and Move.
-    Cache(Cache const&) = delete;
-    Cache& operator=(Cache const&) = delete;
-    Cache(Cache&&) = delete;
-    Cache& operator=(Cache&&) = delete;
-
-    void Insert(int thread_id, const CacheKey& cache_key,
-                const NNInferResult& infer_result);
-    bool Contains(int thread_id, const CacheKey& cache_key);
-    std::optional<NNInferResult> Get(int thread_id, const CacheKey& cache_key);
-
-   private:
-    struct CacheElem {
-      size_t hash;
-      NNInferResult infer_res;
-    };
-
-    const int num_threads_;
-    const size_t thread_cache_size_;
-    std::array<std::vector<std::optional<CacheElem>>, constants::kMaxNumThreads>
-        cache_;
-  };
-
+  // Inference Loop.
   void InferLoop();
   void Infer() ABSL_LOCKS_EXCLUDED(mu_);
   bool ShouldInfer() const;
@@ -135,11 +116,10 @@ class NNInterface final {
   std::unique_ptr<::tensorflow::Session> session_preprocess_;
   std::unique_ptr<::tensorflow::Session> session_postprocess_;
 
+  std::string id_;
   bool is_initialized_;
   int num_registered_threads_ ABSL_GUARDED_BY(mu_);
   const int num_threads_;
-
-  Cache nn_cache_;  // Per-thread cache.
 
   // Synchronization
   absl::Mutex mu_;
@@ -149,7 +129,9 @@ class NNInterface final {
   std::thread infer_thread_;
   std::atomic<bool> running_;
 
-  std::chrono::time_point<std::chrono::steady_clock> last_infer_time_;
+  std::array<core::Cache<NNKey, NNInferResult>, constants::kMaxNumThreads>
+      thread_caches_;  // Per-thread cache.
+  const int64_t timeout_;
 };
 
 }  // namespace nn

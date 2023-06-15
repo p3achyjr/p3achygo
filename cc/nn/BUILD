@@ -30,15 +30,16 @@ cc_library(
     deps = [
         ":feed_fetch_names",
         "//cc/constants",
+        "//cc/core:cache",
         "//cc/game",
         "//cc/tensorflow",
+        "@com_google_absl//absl/status",
     ] + select({
         "//cc:test": [],
         "//conditions:default": [
             ":create_tensor_shape",
             ":nn_board_utils",
             "@com_google_absl//absl/container:inlined_vector",
-            "@com_google_absl//absl/status:statusor",
         ],
     }),
 )

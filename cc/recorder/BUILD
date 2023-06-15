@@ -16,17 +16,11 @@ cc_library(
 )
 
 cc_library(
-    name = "recorder_base",
-    hdrs = ["recorder.h"],
-)
-
-cc_library(
     name = "game_recorder",
     srcs = ["game_recorder.cc"],
     hdrs = ["game_recorder.h"],
     deps = [
         ":dir",
-        ":recorder_base",
         ":sgf_recorder",
         ":tf_recorder",
         "//cc/core:filepath",
@@ -40,7 +34,6 @@ cc_library(
     srcs = ["sgf_recorder.cc"],
     hdrs = ["sgf_recorder.h"],
     deps = [
-        ":recorder_base",
         ":sgf_serializer",
         ":sgf_tree",
         "//cc/constants",
@@ -92,7 +85,6 @@ cc_library(
     srcs = ["tf_recorder.cc"],
     hdrs = ["tf_recorder.h"],
     deps = [
-        ":recorder_base",
         "//cc/constants",
         "//cc/core:filepath",
         "//cc/game",

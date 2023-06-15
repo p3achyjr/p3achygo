@@ -4,7 +4,6 @@
 #include <string>
 
 #include "cc/game/game.h"
-#include "cc/recorder/recorder.h"
 #include "cc/recorder/sgf_recorder.h"
 #include "cc/recorder/tf_recorder.h"
 
@@ -15,9 +14,11 @@ namespace recorder {
  *
  * Does not do any actual recording--proxies to `TfRecorder` and `SgfRecorder`.
  */
-class GameRecorder : public Recorder {
+class GameRecorder {
  public:
-  ~GameRecorder() = default;
+  using ImprovedPolicies =
+      std::vector<std::array<float, constants::kMaxNumMoves>>;
+  virtual ~GameRecorder() = default;
 
   // Disable Copy and Move.
   GameRecorder(GameRecorder const&) = delete;
@@ -25,7 +26,8 @@ class GameRecorder : public Recorder {
   GameRecorder(GameRecorder&&) = delete;
   GameRecorder& operator=(GameRecorder&&) = delete;
 
-  void RecordGame(int thread_id, const game::Game& game) override = 0;
+  virtual void RecordGame(int thread_id, const game::Game& game,
+                          const ImprovedPolicies& mcts_pis) = 0;
 
   static std::unique_ptr<GameRecorder> Create(std::string path, int num_threads,
                                               int flush_interval);
