@@ -2,13 +2,10 @@
 
 #include <chrono>
 
-#include "absl/container/inlined_vector.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
-#include "absl/strings/str_format.h"
-#include "absl/strings/str_split.h"
-#include "absl/strings/string_view.h"
 #include "cc/constants/constants.h"
+#include "cc/core/file_log_sink.h"
 #include "cc/core/probability.h"
 #include "cc/game/game.h"
 #include "cc/mcts/gumbel.h"
@@ -17,65 +14,45 @@
 #define LOG_TO_SINK(severity, sink) LOG(severity).ToSinkOnly(&sink)
 
 namespace {
+using namespace ::game;
+using namespace ::core;
+using namespace ::mcts;
+using namespace ::nn;
+using namespace ::recorder;
 static constexpr int kShouldLogShard = 8;
-
-class ThreadSink : public absl::LogSink {
- public:
-  ThreadSink(const char* filename)
-      : filename_(filename), fp_(fopen(filename, "w")) {
-    PCHECK(fp_ != nullptr) << "Failed to open " << filename_;
-  }
-  ~ThreadSink() {
-    fputc('\f', fp_);
-    fflush(fp_);
-    PCHECK(fclose(fp_) == 0) << "Failed to close " << filename_;
-  }
-
-  void Send(const absl::LogEntry& entry) override {
-    absl::FPrintF(fp_, "%s\r\n", entry.text_message_with_prefix());
-    fflush(fp_);
-  }
-
- private:
-  const char* filename_;
-  FILE* const fp_;
-};
-
 }  // namespace
 
-void ExecuteSelfPlay(int thread_id, nn::NNInterface* nn_interface,
-                     recorder::GameRecorder* game_recorder, std::string logfile,
+void ExecuteSelfPlay(int thread_id, NNInterface* nn_interface,
+                     GameRecorder* game_recorder, std::string logfile,
                      int gumbel_n, int gumbel_k, int max_moves) {
-  ThreadSink sink(logfile.c_str());
-  core::Probability probability(static_cast<uint64_t>(std::time(nullptr)) +
-                                thread_id);
+  FileSink sink(logfile.c_str());
+  Probability probability(static_cast<uint64_t>(std::time(nullptr)) +
+                          thread_id);
   auto search_dur_ema = 0;
 
   // Main loop.
   while (true) {
     // Initialize game related objects.
-    game::Game game;
-    std::unique_ptr<mcts::TreeNode> root_node =
-        std::make_unique<mcts::TreeNode>();
+    Game game;
+    std::unique_ptr<TreeNode> root_node = std::make_unique<TreeNode>();
     std::vector<std::array<float, constants::kMaxNumMoves>> mcts_pis;
 
-    mcts::GumbelEvaluator gumbel_evaluator(nn_interface, thread_id);
+    GumbelEvaluator gumbel_evaluator(nn_interface, thread_id);
     auto color_to_move = BLACK;
     while (!game.IsGameOver() && game.num_moves() < max_moves) {
       auto begin = std::chrono::high_resolution_clock::now();
-      mcts::GumbelResult gumbel_res =
+      GumbelResult gumbel_res =
           gumbel_evaluator.SearchRoot(probability, game, root_node.get(),
                                       color_to_move, gumbel_n, gumbel_k);
       auto end = std::chrono::high_resolution_clock::now();
-      game::Loc nn_move = gumbel_res.nn_move;
-      game::Loc move = gumbel_res.mcts_move;
+      Loc nn_move = gumbel_res.nn_move;
+      Loc move = gumbel_res.mcts_move;
       float nn_move_q =
-          mcts::QAction(root_node.get(), nn_move.as_index(game.board_len()));
-      float move_q =
-          mcts::QAction(root_node.get(), move.as_index(game.board_len()));
+          QAction(root_node.get(), nn_move.as_index(game.board_len()));
+      float move_q = QAction(root_node.get(), move.as_index(game.board_len()));
       mcts_pis.push_back(gumbel_res.pi_improved);
       game.PlayMove(move, color_to_move);
-      color_to_move = game::OppositeColor(color_to_move);
+      color_to_move = OppositeColor(color_to_move);
 
       root_node =
           std::move(root_node->children[move.as_index(game.board_len())]);
@@ -89,7 +66,7 @@ void ExecuteSelfPlay(int thread_id, nn::NNInterface* nn_interface,
                   << game.move(game.num_moves() - 1)
                   << ", Move Count: " << game.num_moves();
         LOG(INFO) << "Board:\n" << game.board();
-        root_node = std::make_unique<mcts::TreeNode>();
+        root_node = std::make_unique<TreeNode>();
       }
 
       auto search_dur =

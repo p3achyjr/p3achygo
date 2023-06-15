@@ -44,6 +44,7 @@ struct NNInferResult {
 class NNInterface final {
  public:
   NNInterface(int num_threads);
+  NNInterface(int num_threads, int64_t timeout);
   ~NNInterface();
 
   // Disable Copy
@@ -86,6 +87,14 @@ class NNInterface final {
                               // whether to cache the NN inference result.
   };
 
+  // Cache Helpers.
+  void InitializeCache();
+  bool CacheContains(int thread_id, const NNKey& key);
+  std::optional<NNInferResult> CacheGet(int thread_id, const NNKey& key);
+  void CacheInsert(int thread_id, const NNKey& key,
+                   const NNInferResult& result);
+
+  // Inference Loop.
   void InferLoop();
   void Infer() ABSL_LOCKS_EXCLUDED(mu_);
   bool ShouldInfer() const;
@@ -107,12 +116,10 @@ class NNInterface final {
   std::unique_ptr<::tensorflow::Session> session_preprocess_;
   std::unique_ptr<::tensorflow::Session> session_postprocess_;
 
+  std::string id_;
   bool is_initialized_;
   int num_registered_threads_ ABSL_GUARDED_BY(mu_);
   const int num_threads_;
-
-  std::array<core::Cache<NNKey, NNInferResult>, constants::kMaxNumThreads>
-      thread_caches_;  // Per-thread cache.
 
   // Synchronization
   absl::Mutex mu_;
@@ -122,7 +129,9 @@ class NNInterface final {
   std::thread infer_thread_;
   std::atomic<bool> running_;
 
-  std::chrono::time_point<std::chrono::steady_clock> last_infer_time_;
+  std::array<core::Cache<NNKey, NNInferResult>, constants::kMaxNumThreads>
+      thread_caches_;  // Per-thread cache.
+  const int64_t timeout_;
 };
 
 }  // namespace nn

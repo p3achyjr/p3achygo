@@ -4,6 +4,7 @@
 
 #include "absl/log/check.h"
 #include "absl/synchronization/mutex.h"
+#include "absl/time/time.h"
 #include "cc/nn/create_tensor_shape.h"
 #include "cc/nn/nn_board_utils.h"
 #include "tensorflow/cc/ops/array_ops.h"
@@ -51,24 +52,22 @@ static constexpr char kSavedModelTagServe[] = "serve";
 }  // namespace
 
 NNInterface::NNInterface(int num_threads)
+    : NNInterface(num_threads, kTimeoutUs) {}
+
+NNInterface::NNInterface(int num_threads, int64_t timeout)
     : session_options_(SessionOptions()),
       run_options_(RunOptions()),
       scope_preprocess_(Scope::NewRootScope()),
       scope_postprocess_(Scope::NewRootScope()),
       session_preprocess_(tensorflow::NewSession(session_options_)),
       session_postprocess_(tensorflow::NewSession(session_options_)),
+      id_(id),
       is_initialized_(false),
       num_registered_threads_(num_threads),
       num_threads_(num_threads),
       thread_info_(num_threads_),
-      running_(true),
-      last_infer_time_(
-          std::chrono::time_point<std::chrono::steady_clock>::max()) {
-  // Initialize thread caches.
-  for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
-    thread_caches_[thread_id] =
-        Cache<NNKey, NNInferResult>(kMaxCacheSize / num_threads_);
-  }
+      running_(true) {
+  InitializeCache();
 
   // Allocate inference buffers.
   input_feature_buf_ =
@@ -188,12 +187,12 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
       game.board().hash(),
   };
 
-  if (thread_caches_[thread_id].Contains(cache_key)) {
+  if (CacheContains(thread_id, cache_key)) {
     // Cached. Immediately return result.
     absl::MutexLock l(&mu_);
     thread_info.res_cached = true;
 
-    return thread_caches_[thread_id].Get(cache_key).value();
+    return CacheGet(thread_id, cache_key).value();
   }
 
   // Not cached. Load for inference.
@@ -238,7 +237,7 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
   }
 
   // Cache this result.
-  thread_caches_[thread_id].Insert(cache_key, infer_result);
+  CacheInsert(thread_id, cache_key, infer_result);
   return infer_result;
 }
 
@@ -267,6 +266,27 @@ void NNInterface::UnregisterThread(int thread_id) {
   thread.registered = false;
 }
 
+void NNInterface::InitializeCache() {
+  for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
+    thread_caches_[thread_id] =
+        Cache<NNKey, NNInferResult>(kMaxCacheSize / num_threads_);
+  }
+}
+
+bool NNInterface::CacheContains(int thread_id, const NNKey& key) {
+  return thread_caches_[thread_id].Contains(key);
+}
+
+std::optional<NNInferResult> NNInterface::CacheGet(int thread_id,
+                                                   const NNKey& key) {
+  return thread_caches_[thread_id].Get(key);
+}
+
+void NNInterface::CacheInsert(int thread_id, const NNKey& key,
+                              const NNInferResult& result) {
+  thread_caches_[thread_id].Insert(key, result);
+}
+
 void NNInterface::InferLoop() {
   while (running_.load(std::memory_order_acquire)) {
     Infer();
@@ -274,8 +294,10 @@ void NNInterface::InferLoop() {
 }
 
 void NNInterface::Infer() {
-  absl::MutexLock l(&mu_, absl::Condition(this, &NNInterface::ShouldInfer));
+  mu_.LockWhenWithTimeout(absl::Condition(this, &NNInterface::ShouldInfer),
+                          absl::Microseconds(timeout_));
   if (num_registered_threads_ == 0) {
+    mu_.Unlock();
     return;
   }
 
@@ -318,17 +340,10 @@ void NNInterface::Infer() {
     }
   }
 
-  last_infer_time_ = std::chrono::steady_clock::now();
+  mu_.Unlock();
 }
 
 bool NNInterface::ShouldInfer() const {
-  auto now = std::chrono::steady_clock::now();
-  auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
-      now - last_infer_time_);
-  if (duration.count() >= kTimeoutUs) {
-    return true;
-  }
-
   // Only return true if at least one leaf evaluation is pending.
   bool exists_pending = false;
   for (int thread_id = 0; thread_id < thread_info_.size(); ++thread_id) {

@@ -2,6 +2,7 @@
 #define __GAME_COLOR_H_
 
 #include <cstdint>
+#include <iostream>
 
 namespace game {
 using Color = int8_t;

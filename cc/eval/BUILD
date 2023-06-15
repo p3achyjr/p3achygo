@@ -1,4 +1,4 @@
-# Selfplay Binary
+# Eval Binary
 
 cc_binary(
     name = "main",
@@ -8,9 +8,9 @@ cc_binary(
         "-Wl,-ldl",
     ],
     deps = [
-        ":self_play",
+        ":eval",
+        "//cc/core",
         "//cc/nn",
-        "//cc/recorder",
         "@com_google_absl//absl/flags:flag",
         "@com_google_absl//absl/flags:parse",
         "@com_google_absl//absl/log",
@@ -21,16 +21,15 @@ cc_binary(
 )
 
 cc_library(
-    name = "self_play",
-    srcs = ["self_play_thread.cc"],
-    hdrs = ["self_play_thread.h"],
+    name = "eval",
+    srcs = ["eval.cc"],
+    hdrs = ["eval.h"],
     deps = [
         "//cc/constants",
         "//cc/core",
         "//cc/game",
         "//cc/mcts",
         "//cc/nn",
-        "//cc/recorder",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/strings",
