@@ -5,6 +5,7 @@
 #include "absl/log/check.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
+#include "cc/game/symmetry.h"
 #include "cc/nn/create_tensor_shape.h"
 #include "cc/nn/nn_board_utils.h"
 #include "tensorflow/cc/ops/array_ops.h"
@@ -16,12 +17,9 @@
 
 namespace nn {
 namespace {
-
+using namespace ::core;
+using namespace ::game;
 using namespace ::tensorflow;
-using ::core::Cache;
-using ::game::Color;
-using ::game::Game;
-using ::game::Symmetry;
 
 // 2 ** 20. Assuming ~3kb per inference result, this will be about ~3GB of RAM.
 static constexpr size_t kMaxCacheSize = 1048576;
@@ -61,12 +59,12 @@ NNInterface::NNInterface(int num_threads, int64_t timeout)
       scope_postprocess_(Scope::NewRootScope()),
       session_preprocess_(tensorflow::NewSession(session_options_)),
       session_postprocess_(tensorflow::NewSession(session_options_)),
-      id_(id),
       is_initialized_(false),
       num_registered_threads_(num_threads),
       num_threads_(num_threads),
       thread_info_(num_threads_),
-      running_(true) {
+      running_(true),
+      timeout_(timeout) {
   InitializeCache();
 
   // Allocate inference buffers.
@@ -197,8 +195,9 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
 
   // Not cached. Load for inference.
   DCHECK(game.moves().size() >= constants::kNumLastMoves);
+  Symmetry sym = GetRandomSymmetry(prng_);
   board_utils::FillNNInput(thread_id, num_threads_, input_feature_buf_,
-                           input_state_buf_, game, color_to_move);
+                           input_state_buf_, game, color_to_move, sym);
 
   mu_.Lock();
   thread_info.loaded_for_inference = true;
@@ -235,6 +234,24 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
   for (int i = 0; i < constants::kNumScoreLogits; ++i) {
     infer_result.score_probs[i] = score_probs(i);
   }
+
+  // Unapply symmetry.
+  std::array<float, constants::kMaxNumBoardLocs> grid_logits_sym;
+  std::array<float, constants::kMaxNumBoardLocs> grid_probs_sym;
+  std::copy(infer_result.move_logits.begin(),
+            infer_result.move_logits.begin() + constants::kMaxNumBoardLocs,
+            grid_logits_sym.begin());
+  std::copy(infer_result.move_probs.begin(),
+            infer_result.move_probs.begin() + constants::kMaxNumBoardLocs,
+            grid_probs_sym.begin());
+  std::array<float, constants::kMaxNumBoardLocs> grid_logits =
+      ApplyInverse(sym, grid_logits_sym, game.board_len());
+  std::array<float, constants::kMaxNumBoardLocs> grid_probs =
+      ApplyInverse(sym, grid_probs_sym, game.board_len());
+  std::copy(grid_logits.begin(), grid_logits.end(),
+            infer_result.move_logits.begin());
+  std::copy(grid_probs.begin(), grid_probs.end(),
+            infer_result.move_probs.begin());
 
   // Cache this result.
   CacheInsert(thread_id, cache_key, infer_result);
@@ -296,6 +313,7 @@ void NNInterface::InferLoop() {
 void NNInterface::Infer() {
   mu_.LockWhenWithTimeout(absl::Condition(this, &NNInterface::ShouldInfer),
                           absl::Microseconds(timeout_));
+  auto begin = std::chrono::steady_clock::now();
   if (num_registered_threads_ == 0) {
     mu_.Unlock();
     return;
@@ -308,12 +326,15 @@ void NNInterface::Infer() {
   TF_CHECK_OK(session_preprocess_->Run(preprocess_input,
                                        {kNNInputBoardName, kNNInputGameName},
                                        {}, &nn_input_buf_));
+  auto end_preprocess = std::chrono::steady_clock::now();
 
   // Run Inference.
   std::vector<std::pair<std::string, Tensor>> nn_input = {
       {kInputNames[0], nn_input_buf_[0]}, {kInputNames[1], nn_input_buf_[1]}};
+  auto begin_graph = std::chrono::steady_clock::now();
   TF_CHECK_OK(model_bundle_.GetSession()->Run(nn_input, kOutputNames, {},
                                               &nn_output_buf_));
+  auto end_graph = std::chrono::steady_clock::now();
 
   // Post-process (softmax for moves, value, score).
   // Keep indices into nn_output_buf_ consistent with order of fetch names from
@@ -339,6 +360,25 @@ void NNInterface::Infer() {
       thread.loaded_for_inference = false;
     }
   }
+  auto end = std::chrono::steady_clock::now();
+  LOG_EVERY_N_SEC(INFO, 5)
+      << std::chrono::duration_cast<std::chrono::microseconds>(end - begin)
+             .count()
+      << "us for INFERENCE.";
+  LOG_EVERY_N_SEC(INFO, 5)
+      << std::chrono::duration_cast<std::chrono::microseconds>(end_preprocess -
+                                                               begin)
+             .count()
+      << "us for PREPROCESS.";
+  LOG_EVERY_N_SEC(INFO, 5)
+      << std::chrono::duration_cast<std::chrono::microseconds>(end_graph -
+                                                               begin_graph)
+             .count()
+      << "us for JUST GRAPH.";
+  LOG_EVERY_N_SEC(INFO, 5)
+      << std::chrono::duration_cast<std::chrono::microseconds>(end - end_graph)
+             .count()
+      << "us for POSTPROCESS.";
 
   mu_.Unlock();
 }

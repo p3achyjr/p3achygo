@@ -8,6 +8,7 @@
 #include "cc/game/board.h"
 #include "cc/game/color.h"
 #include "cc/game/game.h"
+#include "cc/game/symmetry.h"
 #include "tensorflow/cc/client/client_session.h"
 #include "tensorflow/cc/framework/scope.h"
 #include "tensorflow/core/framework/tensor.h"
@@ -25,7 +26,7 @@ namespace board_utils {
 void FillNNInput(int batch_id, int batch_size,
                  ::tensorflow::Tensor& input_features,
                  ::tensorflow::Tensor& input_state, const game::Game& board,
-                 game::Color color);
+                 game::Color color, game::Symmetry sym);
 
 }  // namespace board_utils
 }  // namespace nn

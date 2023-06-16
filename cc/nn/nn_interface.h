@@ -12,6 +12,7 @@
 #include "absl/status/status.h"
 #include "cc/constants/constants.h"
 #include "cc/core/cache.h"
+#include "cc/core/rand.h"
 #include "cc/game/color.h"
 #include "cc/game/game.h"
 #include "cc/game/symmetry.h"
@@ -131,6 +132,7 @@ class NNInterface final {
 
   std::array<core::Cache<NNKey, NNInferResult>, constants::kMaxNumThreads>
       thread_caches_;  // Per-thread cache.
+  core::PRng prng_;
   const int64_t timeout_;
 };
 

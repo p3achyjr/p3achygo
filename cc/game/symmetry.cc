@@ -56,8 +56,36 @@ int TransformIndex(Symmetry sym, int index, size_t grid_len) {
   return index;
 }
 
+int TransformInv(Symmetry sym, int index, size_t grid_len) {
+  switch (sym) {
+    case Symmetry::kIdentity:
+      return index;
+    case Symmetry::kRot90:
+      return Rotate(index, grid_len, Rotation::k270);
+    case Symmetry::kRot180:
+      return Rotate(index, grid_len, Rotation::k180);
+    case Symmetry::kRot270:
+      return Rotate(index, grid_len, Rotation::k90);
+    case Symmetry::kFlip:
+      return Flip(index, grid_len);
+    case Symmetry::kFlipRot90:
+      return Flip(Rotate(index, grid_len, Rotation::k270), grid_len);
+    case Symmetry::kFlipRot180:
+      return Flip(Rotate(index, grid_len, Rotation::k180), grid_len);
+    case Symmetry::kFlipRot270:
+      return Flip(Rotate(index, grid_len, Rotation::k90), grid_len);
+  }
+
+  return index;
+}
+
 Symmetry GetRandomSymmetry(core::PRng& prng) {
   return static_cast<Symmetry>(core::RandRange(prng, 0, kSymUpperBound));
+}
+
+Loc ApplySymmetry(Symmetry sym, Loc loc, size_t grid_len) {
+  auto sym_index = TransformIndex(sym, loc.as_index(grid_len), grid_len);
+  return AsLoc(sym_index, grid_len);
 }
 
 }  // namespace game
