@@ -15,11 +15,11 @@ def get_converter(model_path: str, chunk_path: str) -> trt.TrtGraphConverterV2:
 
   def calibration_input_fn():
     for input, komi, _, _, _, _ in calib_ds:
-      yield input, tf.cast(tf.expand_dims(komi, axis=1), dtype=tf.float16)
+      yield input, komi
 
   def input_fn():
     input, komi, _, _, _, _ = next(iter(calib_ds))
-    yield input, tf.cast(tf.expand_dims(komi, axis=1), dtype=tf.float16)
+    yield input, komi
 
   # Instantiate the TF-TRT converter
   converter = trt.TrtGraphConverterV2(

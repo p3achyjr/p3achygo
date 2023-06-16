@@ -123,7 +123,7 @@ def expand_sl(ex):
   input = tf.transpose(input, perm=(1, 2, 0))  # CHW -> HWC
   own = tf.zeros(shape=(BOARD_LEN, BOARD_LEN))
 
-  return input, komi, score, score_one_hot, policy, own
+  return input, [komi], score, score_one_hot, policy, own
 
 
 def expand_rl(tf_example):
@@ -185,5 +185,5 @@ def expand_rl(tf_example):
   score_one_hot = tf.cast(tf.scatter_nd(score_index, [1.0],
                                         shape=(SCORE_RANGE,)),
                           dtype=tf.float32)
-
-  return input, komi, score - .5, score_one_hot, policy, own
+  score -= .5
+  return input, [komi], score, score_one_hot, policy, own

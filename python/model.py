@@ -572,16 +572,14 @@ class P3achyGoModel(tf.keras.Model):
 
     ## Initialize Model Layers ##
     self.init_board_conv = ConvBlock(num_channels,
-                                     conv_size,
+                                     conv_size + 2,
                                      name='init_board_conv')
     self.init_game_layer = tf.keras.layers.Dense(num_channels,
                                                  kernel_regularizer=L2(C_L2),
                                                  name='init_game_layer')
     self.blocks = []
     for i in range(num_blocks - 2):
-      if i == 0:
-        self.blocks.append(ConvBlock(num_channels, conv_size, name='init_conv'))
-      elif i % broadcast_interval == 0:
+      if i > 0 and i % broadcast_interval == 0:
         self.blocks.append(
             BroadcastResidualBlock(num_channels,
                                    board_len,
@@ -638,10 +636,12 @@ class P3achyGoModel(tf.keras.Model):
       x = block(x, training=training)
 
     pi_logits = self.policy_head(x, training=training)
+    pi = tf.keras.activations.softmax(pi_logits)
     game_outcome, game_ownership, score_logits, gamma = self.value_head(x)
 
-    return (tf.cast(pi_logits, tf.float32), tf.cast(game_outcome, tf.float32),
-            tf.cast(game_ownership, tf.float32),
+    return (tf.cast(pi_logits, tf.float32), tf.cast(pi, tf.float32),
+            tf.cast(game_outcome,
+                    tf.float32), tf.cast(game_ownership, tf.float32),
             tf.cast(score_logits, tf.float32), tf.cast(gamma, tf.float32))
 
   def loss(self, pi_logits, game_outcome, score_logits, own_pred, gamma, policy,
