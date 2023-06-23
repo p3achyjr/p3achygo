@@ -30,7 +30,7 @@ class GameRecorder {
                           const ImprovedPolicies& mcts_pis) = 0;
 
   static std::unique_ptr<GameRecorder> Create(std::string path, int num_threads,
-                                              int flush_interval);
+                                              int flush_interval, int gen);
 
  protected:
   GameRecorder() = default;

@@ -18,7 +18,8 @@ using ::core::FilePath;
 
 class GameRecorderImpl final : public GameRecorder {
  public:
-  GameRecorderImpl(std::string path, int num_threads, int flush_interval);
+  GameRecorderImpl(std::string path, int num_threads, int flush_interval,
+                   int gen);
   ~GameRecorderImpl();
 
   // Disable Copy and Move.
@@ -54,11 +55,11 @@ class GameRecorderImpl final : public GameRecorder {
 };
 
 GameRecorderImpl::GameRecorderImpl(std::string path, int num_threads,
-                                   int flush_interval)
-    : sgf_recorder_(
-          SgfRecorder::Create(FilePath(path) / recorder::kSgfDir, num_threads)),
-      tf_recorder_(
-          TfRecorder::Create(FilePath(path) / recorder::kTfDir, num_threads)),
+                                   int flush_interval, int gen)
+    : sgf_recorder_(SgfRecorder::Create(FilePath(path) / recorder::kSgfDir,
+                                        num_threads, gen)),
+      tf_recorder_(TfRecorder::Create(FilePath(path) / recorder::kTfDir,
+                                      num_threads, gen)),
       running_(true),
       games_buffered_(0),
       games_written_(0),
@@ -132,7 +133,8 @@ void GameRecorderImpl::Flush() {
 }  // namespace
 
 /* static */ std::unique_ptr<GameRecorder> GameRecorder::Create(
-    std::string path, int num_threads, int flush_interval) {
-  return std::make_unique<GameRecorderImpl>(path, num_threads, flush_interval);
+    std::string path, int num_threads, int flush_interval, int gen) {
+  return std::make_unique<GameRecorderImpl>(path, num_threads, flush_interval,
+                                            gen);
 }
 }  // namespace recorder

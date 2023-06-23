@@ -32,7 +32,8 @@ class TfRecorder {
   // Flushes all pending writes. Not thread safe.
   virtual void Flush() = 0;
 
-  static std::unique_ptr<TfRecorder> Create(std::string path, int num_threads);
+  static std::unique_ptr<TfRecorder> Create(std::string path, int num_threads,
+                                            int gen);
 
  protected:
   TfRecorder() = default;
