@@ -12,6 +12,7 @@
 #include "absl/status/status.h"
 #include "cc/constants/constants.h"
 #include "cc/core/cache.h"
+#include "cc/core/rand.h"
 #include "cc/game/color.h"
 #include "cc/game/game.h"
 #include "cc/game/symmetry.h"
@@ -44,7 +45,7 @@ struct NNInferResult {
 class NNInterface final {
  public:
   NNInterface(int num_threads);
-  NNInterface(int num_threads, int64_t timeout);
+  NNInterface(int num_threads, int64_t timeout, size_t cache_size);
   ~NNInterface();
 
   // Disable Copy
@@ -88,7 +89,7 @@ class NNInterface final {
   };
 
   // Cache Helpers.
-  void InitializeCache();
+  void InitializeCache(size_t cache_size);
   bool CacheContains(int thread_id, const NNKey& key);
   std::optional<NNInferResult> CacheGet(int thread_id, const NNKey& key);
   void CacheInsert(int thread_id, const NNKey& key,
@@ -103,18 +104,8 @@ class NNInterface final {
   ::tensorflow::SessionOptions session_options_;
   ::tensorflow::RunOptions run_options_;
 
-  ::tensorflow::Scope scope_preprocess_;
-  ::tensorflow::Scope scope_postprocess_;
-  ::tensorflow::GraphDef gdef_preprocess_;
-  ::tensorflow::GraphDef gdef_postprocess_;
-  ::tensorflow::Tensor input_feature_buf_;
-  ::tensorflow::Tensor input_state_buf_;
   std::vector<::tensorflow::Tensor> nn_input_buf_;
   std::vector<::tensorflow::Tensor> nn_output_buf_;
-  std::vector<::tensorflow::Tensor> result_buf_;
-
-  std::unique_ptr<::tensorflow::Session> session_preprocess_;
-  std::unique_ptr<::tensorflow::Session> session_postprocess_;
 
   std::string id_;
   bool is_initialized_;
@@ -131,6 +122,7 @@ class NNInterface final {
 
   std::array<core::Cache<NNKey, NNInferResult>, constants::kMaxNumThreads>
       thread_caches_;  // Per-thread cache.
+  core::PRng prng_;
   const int64_t timeout_;
 };
 

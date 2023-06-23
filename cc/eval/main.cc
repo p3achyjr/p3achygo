@@ -48,9 +48,11 @@ int main(int argc, char** argv) {
 
   // Initialize NN evaluators. Disable caching to enforce stepping in lockstep.
   std::unique_ptr<nn::NNInterface> cur_nn_interface =
-      std::make_unique<nn::NNInterface>(kNumEvalGames, kTimeoutUs);
+      std::make_unique<nn::NNInterface>(kNumEvalGames, kTimeoutUs,
+                                        constants::kDefaultNNCacheSize / 2);
   std::unique_ptr<nn::NNInterface> cand_nn_interface =
-      std::make_unique<nn::NNInterface>(kNumEvalGames, kTimeoutUs);
+      std::make_unique<nn::NNInterface>(kNumEvalGames, kTimeoutUs,
+                                        constants::kDefaultNNCacheSize / 2);
   CHECK_OK(cur_nn_interface->Initialize(std::move(cur_model_path)));
   CHECK_OK(cand_nn_interface->Initialize(std::move(cand_model_path)));
 

@@ -30,7 +30,8 @@ class SgfRecorder {
   // Flushes all pending writes.
   virtual void Flush() = 0;
 
-  std::unique_ptr<SgfRecorder> static Create(std::string path, int num_threads);
+  std::unique_ptr<SgfRecorder> static Create(std::string path, int num_threads,
+                                             int gen);
 
  protected:
   SgfRecorder() = default;

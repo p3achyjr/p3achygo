@@ -25,7 +25,7 @@ static constexpr char kP3achyGoName[] = "p3achygo";
 
 class SgfRecorderImpl final : public SgfRecorder {
  public:
-  SgfRecorderImpl(std::string path, int num_threads);
+  SgfRecorderImpl(std::string path, int num_threads, int gen);
   ~SgfRecorderImpl() override = default;
 
   // Disable Copy and Move.
@@ -44,11 +44,12 @@ class SgfRecorderImpl final : public SgfRecorder {
   const std::string path_;
   std::array<std::vector<Game>, constants::kMaxNumThreads> games_;
   const int num_threads_;
+  const int gen_;
   int batch_num_;
 };
 
-SgfRecorderImpl::SgfRecorderImpl(std::string path, int num_threads)
-    : path_(path), num_threads_(num_threads), batch_num_(0) {}
+SgfRecorderImpl::SgfRecorderImpl(std::string path, int num_threads, int gen)
+    : path_(path), num_threads_(num_threads), gen_(gen), batch_num_(0) {}
 
 void SgfRecorderImpl::RecordGame(int thread_id, const Game& game) {
   CHECK(game.has_result());
@@ -110,7 +111,7 @@ void SgfRecorderImpl::Flush() {
 
   std::string path =
       FilePath(path_) /
-      absl::StrFormat("game_b%d_g%d.sgfs", batch_num_, games_in_batch);
+      absl::StrFormat("gen%d_b%d_g%d.sgfs", gen_, batch_num_, games_in_batch);
   FILE* const sgf_file = fopen(path.c_str(), "w");
   absl::FPrintF(sgf_file, "%s", sgfs);
   fclose(sgf_file);
@@ -120,7 +121,8 @@ void SgfRecorderImpl::Flush() {
 }  // namespace
 
 /* static */ std::unique_ptr<SgfRecorder> SgfRecorder::Create(std::string path,
-                                                              int num_threads) {
-  return std::make_unique<SgfRecorderImpl>(path, num_threads);
+                                                              int num_threads,
+                                                              int gen) {
+  return std::make_unique<SgfRecorderImpl>(path, num_threads, gen);
 }
 }  // namespace recorder

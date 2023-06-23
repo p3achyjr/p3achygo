@@ -44,6 +44,14 @@ flags.DEFINE_integer(
     'Interval at which to log training information (in mini-batches)')
 
 
+def new_model(name: str) -> P3achyGoModel:
+  return P3achyGoModel.create(config=ModelConfig.small(),
+                              board_len=BOARD_LEN,
+                              num_input_planes=NUM_INPUT_PLANES,
+                              num_input_features=NUM_INPUT_FEATURES,
+                              name=name)
+
+
 def avg_weights(prev_weights: list, cur_weights: list) -> list:
   return [
       prev_layer_weights * SWA_MOMENTUM + layer_weights * (1 - SWA_MOMENTUM)
@@ -93,11 +101,7 @@ def main(_):
 
   model_gen, model = 0, None
   if gcs.get_most_recent_model(FLAGS.run_id) < 0:
-    model = P3achyGoModel.create(config=ModelConfig.small(),
-                                 board_len=BOARD_LEN,
-                                 num_input_planes=NUM_INPUT_PLANES,
-                                 num_input_features=NUM_INPUT_FEATURES,
-                                 name=f'p3achygo_{FLAGS.run_id}')
+    model = new_model(name=f'p3achygo_{FLAGS.run_id}')
     # upload for self-play to pick up.
     save_trt_and_upload(model, FLAGS.val_ds_path, str(model_dir), 0)
   else:

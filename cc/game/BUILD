@@ -58,6 +58,7 @@ cc_library(
     srcs = ["symmetry.cc"],
     hdrs = ["symmetry.h"],
     deps = [
+        ":hdrs",
         "//cc/core:rand",
     ],
 )

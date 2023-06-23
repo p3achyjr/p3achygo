@@ -49,11 +49,12 @@ Tensor AsOneHot(Loc loc) {
 
 /* static */ void FillNNInput(int batch_id, int batch_size,
                               Tensor& input_features, Tensor& input_state,
-                              const Game& game, Color color) {
+                              const Game& game, Color color, Symmetry sym) {
   DCHECK(game.moves().size() >= 5);
 
   const auto& board = game.board();
   const auto& moves = game.moves();
+  auto sym_grid = ApplySymmetry(sym, board.position(), game.board_len());
 
   auto raw = input_features.shaped<float, 4>(
       {batch_size, BOARD_LEN, BOARD_LEN, constants::kNumInputFeaturePlanes});
@@ -61,9 +62,9 @@ Tensor AsOneHot(Loc loc) {
   // fill board state
   for (auto i = 0; i < BOARD_LEN; ++i) {
     for (auto j = 0; j < BOARD_LEN; ++j) {
-      if (board.at(i, j) == color) {
+      if (sym_grid[i * BOARD_LEN + j] == color) {
         raw(batch_id, i, j, 0) = 1;
-      } else if (board.at(i, j) == OppositeColor(color)) {
+      } else if (sym_grid[i * BOARD_LEN + j] == OppositeColor(color)) {
         raw(batch_id, i, j, 1) = 1;
       }
     }
@@ -76,7 +77,8 @@ Tensor AsOneHot(Loc loc) {
     if (loc == kNoopLoc) continue;
     if (loc == kPassLoc) continue;
 
-    raw(batch_id, loc.i, loc.j, i + offset) = 1;
+    Loc sym_loc = ApplySymmetry(sym, loc, game.board_len());
+    raw(batch_id, sym_loc.i, sym_loc.j, i + offset) = 1;
   }
 
   // fill game state (just komi for now)

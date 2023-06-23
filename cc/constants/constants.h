@@ -1,6 +1,8 @@
 #ifndef __CONSTANTS_CONSTANTS_H_
 #define __CONSTANTS_CONSTANTS_H_
 
+#include <cstddef>
+
 /* Length of one side of board */
 #ifndef BOARD_LEN
 #define BOARD_LEN 19
@@ -61,6 +63,9 @@ static constexpr int kNumPassesBeforeBensons = 3;
 
 /* Maximum number of threads. */
 static constexpr int kMaxNumThreads = 64;
+
+/* Default Max NN Cache Size */
+static constexpr size_t kDefaultNNCacheSize = 1048576;
 
 }  // namespace constants
 

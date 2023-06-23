@@ -7,6 +7,7 @@ const std::vector<std::string> kInputNames = {"serving_default_args_0:0",
 const std::vector<std::string> kOutputNames = {
     "StatefulPartitionedCall:0", "StatefulPartitionedCall:1",
     "StatefulPartitionedCall:2", "StatefulPartitionedCall:3",
-    "StatefulPartitionedCall:4",
+    "StatefulPartitionedCall:4", "StatefulPartitionedCall:5",
+    "StatefulPartitionedCall:6",
 };
 }  // namespace nn

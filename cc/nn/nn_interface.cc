@@ -5,6 +5,7 @@
 #include "absl/log/check.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
+#include "cc/game/symmetry.h"
 #include "cc/nn/create_tensor_shape.h"
 #include "cc/nn/nn_board_utils.h"
 #include "tensorflow/cc/ops/array_ops.h"
@@ -16,77 +17,44 @@
 
 namespace nn {
 namespace {
-
+using namespace ::core;
+using namespace ::game;
 using namespace ::tensorflow;
-using ::core::Cache;
-using ::game::Color;
-using ::game::Game;
-using ::game::Symmetry;
 
 // 2 ** 20. Assuming ~3kb per inference result, this will be about ~3GB of RAM.
-static constexpr size_t kMaxCacheSize = 1048576;
-
-static constexpr int kPolicyLogitIndex = 0;
-static constexpr int kPolicyProbIndex = 1;
-static constexpr int kValueIndex = 2;
-static constexpr int kScoreIndex = 3;
-
-// Pre-processing feed/fetch names.
-static constexpr char kInputBoardName[] = "input_board_state";
-static constexpr char kInputGameName[] = "input_game_state";
-static constexpr char kNNInputBoardName[] = "nn_input_board_state";
-static constexpr char kNNInputGameName[] = "nn_input_game_state";
-
-// Post-processing feed/fetch names.
-static constexpr char kNNOutMoveLogitsName[] = "nn_out_move_logits";
-static constexpr char kNNOutValueLogitsName[] = "nn_out_value_logits";
-static constexpr char kNNOutScoreLogitsName[] = "nn_out_score_logits";
-
-static constexpr char kOutMoveLogitsName[] = "out_move_logits";
-static constexpr char kOutMoveProbsName[] = "out_move_probs";
-static constexpr char kOutValueProbsName[] = "out_value_probs";
-static constexpr char kOutScoreProbsName[] = "out_score_probs";
-
 static constexpr char kSavedModelTagServe[] = "serve";
 
 }  // namespace
 
 NNInterface::NNInterface(int num_threads)
-    : NNInterface(num_threads, kTimeoutUs) {}
+    : NNInterface(num_threads, kTimeoutUs, constants::kDefaultNNCacheSize) {}
 
-NNInterface::NNInterface(int num_threads, int64_t timeout)
+NNInterface::NNInterface(int num_threads, int64_t timeout, size_t cache_size)
     : session_options_(SessionOptions()),
       run_options_(RunOptions()),
-      scope_preprocess_(Scope::NewRootScope()),
-      scope_postprocess_(Scope::NewRootScope()),
-      session_preprocess_(tensorflow::NewSession(session_options_)),
-      session_postprocess_(tensorflow::NewSession(session_options_)),
-      id_(id),
       is_initialized_(false),
       num_registered_threads_(num_threads),
       num_threads_(num_threads),
       thread_info_(num_threads_),
-      running_(true) {
-  InitializeCache();
+      running_(true),
+      timeout_(timeout) {
+  InitializeCache(cache_size);
 
   // Allocate inference buffers.
-  input_feature_buf_ =
-      Tensor(DataType::DT_FLOAT,
-             CreateTensorShape({num_threads_, BOARD_LEN, BOARD_LEN,
-                                constants::kNumInputFeaturePlanes}));
-  input_state_buf_ =
-      Tensor(DataType::DT_FLOAT, CreateTensorShape({num_threads_, 1}));
   nn_input_buf_ = {
       Tensor(DataType::DT_FLOAT,
              CreateTensorShape({num_threads_, BOARD_LEN, BOARD_LEN,
                                 constants::kNumInputFeaturePlanes})),
-      Tensor(DataType::DT_HALF, CreateTensorShape({num_threads_, 1}))};
+      Tensor(DataType::DT_FLOAT, CreateTensorShape({num_threads_, 1}))};
 
-  input_feature_buf_.flat<float>().setZero();
-  input_state_buf_.flat<float>().setZero();
+  nn_input_buf_[0].flat<float>().setZero();
+  nn_input_buf_[1].flat<float>().setZero();
 
   nn_output_buf_ = {
       // move logits
+      Tensor(DataType::DT_FLOAT,
+             CreateTensorShape({num_threads_, constants::kMaxNumMoves})),
+      // move softmax
       Tensor(DataType::DT_FLOAT,
              CreateTensorShape({num_threads_, constants::kMaxNumMoves})),
       // win percent
@@ -100,20 +68,6 @@ NNInterface::NNInterface(int num_threads, int64_t timeout)
              CreateTensorShape({num_threads_, constants::kNumScoreLogits})),
       // gamma, just ignore
       Tensor(DataType::DT_FLOAT, CreateTensorShape({num_threads_, 1}))};
-
-  result_buf_ = {
-      // move logits
-      Tensor(DataType::DT_FLOAT,
-             CreateTensorShape({num_threads_, constants::kMaxNumMoves})),
-      // move softmax
-      Tensor(DataType::DT_FLOAT,
-             CreateTensorShape({num_threads_, constants::kMaxNumMoves})),
-      // win percent
-      Tensor(DataType::DT_FLOAT,
-             CreateTensorShape({num_threads_, constants::kNumValueLogits})),
-      // score prediction
-      Tensor(DataType::DT_FLOAT,
-             CreateTensorShape({num_threads_, constants::kNumScoreLogits}))};
 }
 
 NNInterface::~NNInterface() {
@@ -121,14 +75,6 @@ NNInterface::~NNInterface() {
 
   if (infer_thread_.joinable()) {
     infer_thread_.join();
-  }
-
-  if (session_preprocess_) {
-    session_preprocess_->Close().IgnoreError();
-  }
-
-  if (session_postprocess_) {
-    session_postprocess_->Close().IgnoreError();
   }
 }
 
@@ -138,39 +84,6 @@ absl::Status NNInterface::Initialize(std::string&& model_path) {
   if (!status.ok()) {
     return ToAbslStatus(status);
   }
-
-  // Create graph to cast game state to half precision.
-  auto board = ops::Placeholder(scope_preprocess_.WithOpName(kInputBoardName),
-                                DataType::DT_FLOAT);
-  auto game = ops::Placeholder(scope_preprocess_.WithOpName(kInputGameName),
-                               DataType::DT_FLOAT);
-  auto nn_board =
-      ops::Identity(scope_preprocess_.WithOpName(kNNInputBoardName), board);
-  auto nn_game = ops::Cast(scope_preprocess_.WithOpName(kNNInputGameName), game,
-                           DataType::DT_HALF);
-
-  TF_CHECK_OK(scope_preprocess_.ToGraphDef(&gdef_preprocess_));
-  TF_CHECK_OK(session_preprocess_->Create(gdef_preprocess_));
-
-  // Create graph to wrangle NN result into usable data.
-  auto nn_move_logits = ops::Placeholder(
-      scope_postprocess_.WithOpName(kNNOutMoveLogitsName), DataType::DT_FLOAT);
-  auto nn_value_logits = ops::Placeholder(
-      scope_postprocess_.WithOpName(kNNOutValueLogitsName), DataType::DT_FLOAT);
-  auto nn_score_logits = ops::Placeholder(
-      scope_postprocess_.WithOpName(kNNOutScoreLogitsName), DataType::DT_FLOAT);
-
-  auto move_logits = ops::Identity(
-      scope_postprocess_.WithOpName(kOutMoveLogitsName), nn_move_logits);
-  auto move_probs = ops::Softmax(
-      scope_postprocess_.WithOpName(kOutMoveProbsName), nn_move_logits);
-  auto value_probs = ops::Softmax(
-      scope_postprocess_.WithOpName(kOutValueProbsName), nn_value_logits);
-  auto score_probs = ops::Softmax(
-      scope_postprocess_.WithOpName(kOutScoreProbsName), nn_score_logits);
-
-  TF_CHECK_OK(scope_postprocess_.ToGraphDef(&gdef_postprocess_));
-  TF_CHECK_OK(session_postprocess_->Create(gdef_postprocess_));
 
   infer_thread_ = std::thread(&NNInterface::InferLoop, this);
   is_initialized_ = true;
@@ -197,8 +110,9 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
 
   // Not cached. Load for inference.
   DCHECK(game.moves().size() >= constants::kNumLastMoves);
-  board_utils::FillNNInput(thread_id, num_threads_, input_feature_buf_,
-                           input_state_buf_, game, color_to_move);
+  Symmetry sym = GetRandomSymmetry(prng_);
+  board_utils::FillNNInput(thread_id, num_threads_, nn_input_buf_[0],
+                           nn_input_buf_[1], game, color_to_move, sym);
 
   mu_.Lock();
   thread_info.loaded_for_inference = true;
@@ -211,15 +125,16 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
   mu_.Unlock();
 
   // Inference result is now ready.
-  const auto move_logits = result_buf_[kPolicyLogitIndex]
+  const auto move_logits = nn_output_buf_[kPiLogitsIndex]
                                .SubSlice(thread_id)
                                .unaligned_flat<float>();
   const auto move_probs =
-      result_buf_[kPolicyProbIndex].SubSlice(thread_id).unaligned_flat<float>();
+      nn_output_buf_[kPiProbsIndex].SubSlice(thread_id).unaligned_flat<float>();
   const auto value_probs =
-      result_buf_[kValueIndex].SubSlice(thread_id).unaligned_flat<float>();
-  const auto score_probs =
-      result_buf_[kScoreIndex].SubSlice(thread_id).unaligned_flat<float>();
+      nn_output_buf_[kOutcomeIndex].SubSlice(thread_id).unaligned_flat<float>();
+  const auto score_probs = nn_output_buf_[kScoreProbsIndex]
+                               .SubSlice(thread_id)
+                               .unaligned_flat<float>();
 
   // Need hand-rolled for loops b/c of potential alignment issues.
   NNInferResult infer_result;
@@ -235,6 +150,24 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
   for (int i = 0; i < constants::kNumScoreLogits; ++i) {
     infer_result.score_probs[i] = score_probs(i);
   }
+
+  // Unapply symmetry.
+  std::array<float, constants::kMaxNumBoardLocs> grid_logits_sym;
+  std::array<float, constants::kMaxNumBoardLocs> grid_probs_sym;
+  std::copy(infer_result.move_logits.begin(),
+            infer_result.move_logits.begin() + constants::kMaxNumBoardLocs,
+            grid_logits_sym.begin());
+  std::copy(infer_result.move_probs.begin(),
+            infer_result.move_probs.begin() + constants::kMaxNumBoardLocs,
+            grid_probs_sym.begin());
+  std::array<float, constants::kMaxNumBoardLocs> grid_logits =
+      ApplyInverse(sym, grid_logits_sym, game.board_len());
+  std::array<float, constants::kMaxNumBoardLocs> grid_probs =
+      ApplyInverse(sym, grid_probs_sym, game.board_len());
+  std::copy(grid_logits.begin(), grid_logits.end(),
+            infer_result.move_logits.begin());
+  std::copy(grid_probs.begin(), grid_probs.end(),
+            infer_result.move_probs.begin());
 
   // Cache this result.
   CacheInsert(thread_id, cache_key, infer_result);
@@ -266,10 +199,10 @@ void NNInterface::UnregisterThread(int thread_id) {
   thread.registered = false;
 }
 
-void NNInterface::InitializeCache() {
+void NNInterface::InitializeCache(size_t cache_size) {
   for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
     thread_caches_[thread_id] =
-        Cache<NNKey, NNInferResult>(kMaxCacheSize / num_threads_);
+        Cache<NNKey, NNInferResult>(cache_size / num_threads_);
   }
 }
 
@@ -301,37 +234,15 @@ void NNInterface::Infer() {
     return;
   }
 
-  // Pre-process (cast game state to half).
-  std::vector<std::pair<std::string, Tensor>> preprocess_input = {
-      {kInputBoardName, input_feature_buf_},
-      {kInputGameName, input_state_buf_}};
-  TF_CHECK_OK(session_preprocess_->Run(preprocess_input,
-                                       {kNNInputBoardName, kNNInputGameName},
-                                       {}, &nn_input_buf_));
-
   // Run Inference.
   std::vector<std::pair<std::string, Tensor>> nn_input = {
       {kInputNames[0], nn_input_buf_[0]}, {kInputNames[1], nn_input_buf_[1]}};
   TF_CHECK_OK(model_bundle_.GetSession()->Run(nn_input, kOutputNames, {},
                                               &nn_output_buf_));
 
-  // Post-process (softmax for moves, value, score).
-  // Keep indices into nn_output_buf_ consistent with order of fetch names from
-  // model.
-  std::vector<std::pair<std::string, Tensor>> postprocess_input = {
-      {kNNOutMoveLogitsName, nn_output_buf_[kNNPolicyIndex]},
-      {kNNOutValueLogitsName, nn_output_buf_[kNNOutcomeIndex]},
-      {kNNOutScoreLogitsName, nn_output_buf_[kNNScoreIndex]}};
-  TF_CHECK_OK(
-      session_postprocess_->Run(postprocess_input,
-                                // Keep the order consistent with kOut*Index
-                                {kOutMoveLogitsName, kOutMoveProbsName,
-                                 kOutValueProbsName, kOutScoreProbsName},
-                                {}, &result_buf_));
-
   // reset input buffers
-  input_feature_buf_.flat<float>().setZero();
-  input_state_buf_.flat<float>().setZero();
+  nn_input_buf_[0].flat<float>().setZero();
+  nn_input_buf_[1].flat<float>().setZero();
 
   for (auto& thread : thread_info_) {
     if (thread.registered && !thread.res_cached) {

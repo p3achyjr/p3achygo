@@ -13,6 +13,7 @@ from typing import Optional
 from loss_coeffs import LossCoeffs
 from enum import Enum
 
+
 class Mode(Enum):
   SL = 1
   RL = 2
@@ -23,8 +24,8 @@ def train_step(w_pi, w_val, w_outcome, w_score, w_own, w_gamma, use_kl_loss,
                input, komi, score, score_one_hot, policy, own, model,
                optimizer):
   with tf.GradientTape() as g:
-    pi_logits, game_outcome, own_pred, score_logits, gamma = model(
-        input, tf.expand_dims(komi, axis=1), training=True)
+    pi_logits, _, game_outcome, _, own_pred, score_logits, _, gamma = model(
+        input, tf.cast(komi, tf.float32), training=True)
     (loss, policy_loss, outcome_loss, score_pdf_loss,
      own_loss) = model.loss(pi_logits, game_outcome, score_logits, own_pred,
                             gamma, policy, score, score_one_hot, own, w_pi,
@@ -47,8 +48,8 @@ def train_step_gpu(w_pi, w_val, w_outcome, w_score, w_own, w_gamma, use_kl_loss,
                    input, komi, score, score_one_hot, policy, own, model,
                    optimizer):
   with tf.GradientTape() as g:
-    pi_logits, game_outcome, own_pred, score_logits, gamma = model(
-        input, tf.expand_dims(komi, axis=1), training=True)
+    pi_logits, _, game_outcome, _, own_pred, score_logits, _, gamma = model(
+        input, tf.cast(komi, tf.float32), training=True)
     (loss, policy_loss, outcome_loss, score_pdf_loss,
      own_loss) = model.loss(pi_logits, game_outcome, score_logits, own_pred,
                             gamma, policy, score, score_one_hot, own, w_pi,
@@ -71,11 +72,8 @@ def train_step_gpu(w_pi, w_val, w_outcome, w_score, w_own, w_gamma, use_kl_loss,
 @tf.function
 def val_step(w_pi, w_val, w_outcome, w_score, w_own, w_gamma, use_kl_loss,
              input, komi, score, score_one_hot, policy, own, model):
-  pi_logits, game_outcome, own_pred, score_logits, gamma = model(input,
-                                                                 tf.expand_dims(
-                                                                     komi,
-                                                                     axis=1),
-                                                                 training=False)
+  pi_logits, _, game_outcome, _, own_pred, score_logits, _, gamma = model(
+      input, tf.cast(komi, tf.float32), training=False)
   (loss, policy_loss, outcome_loss, score_pdf_loss,
    own_loss) = model.loss(pi_logits, game_outcome, score_logits, own_pred,
                           gamma, policy, score, score_one_hot, own, w_pi, w_val,
@@ -147,8 +145,7 @@ def train(model: P3achyGoModel,
     logging.error('Exactly one of `lr` and `lr_schedule` must be set.')
 
   learning_rate = lr if lr else lr_schedule
-  coeffs = (LossCoeffs.SLCoeffs()
-            if mode == Mode.SL else LossCoeffs.RLCoeffs())
+  coeffs = (LossCoeffs.SLCoeffs() if mode == Mode.SL else LossCoeffs.RLCoeffs())
   use_kl_loss = mode == Mode.RL
 
   # yapf: disable
@@ -244,8 +241,7 @@ def save_model(model: P3achyGoModel, batch_num: int, save_path: str):
 
 
 def val(model: P3achyGoModel, mode: Mode, val_ds: tf.data.Dataset):
-  coeffs = (LossCoeffs.SLCoeffs()
-            if mode == Mode.SL else LossCoeffs.RLCoeffs())
+  coeffs = (LossCoeffs.SLCoeffs() if mode == Mode.SL else LossCoeffs.RLCoeffs())
   use_kl_loss = mode == Mode.RL
   # yapf: disable
   val_fn = functools.partial(val_step,

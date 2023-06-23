@@ -6,16 +6,13 @@ We will train our model on samples generated from professional games.
 
 from __future__ import annotations
 
-import datasets.badukmovies
-import datasets.badukmovies_scored
-import datasets.badukmovies_all
-
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
 import sys
 import transforms
 import train
+import trt_convert
 
 from absl import app, flags, logging
 from constants import *
@@ -34,18 +31,14 @@ flags.DEFINE_boolean('upload_to_gcs', False, 'Whether to upload models to GCS.')
 
 # Flags for local storage
 flags.DEFINE_string('model_save_path', '', 'Folder under which to save models.')
+flags.DEFINE_string('calib_ds', '', 'Dataset to use for TRT calibration.')
 
 # Flags for training configuration
 flags.DEFINE_integer('batch_size', 32, 'Mini-batch size')
 flags.DEFINE_integer('epochs', 1, 'Number of Epochs')
 flags.DEFINE_float('learning_rate', 1e-3, 'Initial Learning Rate')
 flags.DEFINE_float('momentum', .9, 'SGD Momentum')
-flags.DEFINE_integer(
-    'learning_rate_interval', 200000,
-    'Interval at which to anneal learning rate (in mini-batches)')
-flags.DEFINE_integer(
-    'learning_rate_cutoff', 800000,
-    'Point after which to stop annealing learning rate (in mini-batches)')
+flags.DEFINE_integer('shuf_buf_size', 100000, 'Shuffle Buffer Size')
 flags.DEFINE_integer(
     'log_interval', 100,
     'Interval at which to log training information (in mini-batches)')
@@ -59,21 +52,24 @@ def main(_):
     logging.warning('Please provide --dataset from ~/tensorflow_datasets')
     return
 
+  if FLAGS.calib_ds == '':
+    logging.warning('Please provide --calib_ds file (.tfrecord.zz)')
+    return
+
   if FLAGS.model_save_path == '':
     logging.warning('Please provide --model_save_path.')
     return
 
   train_ds, val_ds = tfds.load(FLAGS.dataset,
-                               split=['train[:99.9%]', 'train[99.9%:]'],
+                               split=['train[:-25600]', 'train[-25600:]'],
                                shuffle_files=True)
 
   # setup training dataset
   batch_size = FLAGS.batch_size
   train_ds = train_ds.map(transforms.expand_sl,
                           num_parallel_calls=tf.data.AUTOTUNE)
-  train_ds = train_ds.shuffle(50000)
+  train_ds = train_ds.shuffle(FLAGS.shuf_buf_size)
   train_ds = train_ds.batch(batch_size)
-  train_ds = train_ds.skip(5000)
   train_ds = train_ds.take(100000)
   train_ds = train_ds.prefetch(tf.data.AUTOTUNE)
 
@@ -112,8 +108,14 @@ def main(_):
               save_interval=FLAGS.model_save_interval,
               save_path=FLAGS.model_save_path,
               is_gpu=is_gpu)
-  model_path = Path(FLAGS.model_save_path, 'p3achygo_sl')
-  model.save(str(model_path))
+  train.val(model, mode=train.Mode.SL, val_ds=val_ds)
+
+  model_path = str(Path(FLAGS.model_save_path, 'p3achygo_sl'))
+  model.save(model_path)
+
+  converter = trt_convert.get_converter(model_path, FLAGS.calib_ds)
+  converter.summary()
+  converter.save(output_saved_model_dir=str(Path(model_path, '_trt')))
 
 
 if __name__ == '__main__':

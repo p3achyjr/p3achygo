@@ -25,7 +25,7 @@ def model_move(model, board, last_moves, game_state, color):
   x = tf.concat([x, list(last_moves)], axis=0)
   x = tf.expand_dims(x, axis=0)
   x = tf.transpose(x, (0, 2, 3, 1))  # nchw -> nhwc
-  move_logits, game_outcome, game_ownership, score_logits, gamma = model(
+  move_logits, _, game_outcome, game_ownership, score_logits, gamma = model(
       x, game_state)
 
   for i, logit in enumerate(move_logits.numpy()[0]):

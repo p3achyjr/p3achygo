@@ -61,6 +61,47 @@ TEST_CASE("BoardTest") {
         ApplySymmetry(Symmetry::kFlipRot180, grid, kGridLen));
   CHECK(grid_flip_rot270 ==
         ApplySymmetry(Symmetry::kFlipRot270, grid, kGridLen));
+
+  CHECK(grid == ApplyInverse(Symmetry::kIdentity,
+                             ApplySymmetry(Symmetry::kIdentity, grid, kGridLen),
+                             kGridLen));
+  CHECK(grid == ApplyInverse(Symmetry::kRot90,
+                             ApplySymmetry(Symmetry::kRot90, grid, kGridLen),
+                             kGridLen));
+  CHECK(grid == ApplyInverse(Symmetry::kRot180,
+                             ApplySymmetry(Symmetry::kRot180, grid, kGridLen),
+                             kGridLen));
+  CHECK(grid == ApplyInverse(Symmetry::kRot270,
+                             ApplySymmetry(Symmetry::kRot270, grid, kGridLen),
+                             kGridLen));
+  CHECK(grid == ApplyInverse(Symmetry::kFlip,
+                             ApplySymmetry(Symmetry::kFlip, grid, kGridLen),
+                             kGridLen));
+  CHECK(grid ==
+        ApplyInverse(Symmetry::kFlipRot90,
+                     ApplySymmetry(Symmetry::kFlipRot90, grid, kGridLen),
+                     kGridLen));
+  CHECK(grid ==
+        ApplyInverse(Symmetry::kFlipRot180,
+                     ApplySymmetry(Symmetry::kFlipRot180, grid, kGridLen),
+                     kGridLen));
+  CHECK(grid ==
+        ApplyInverse(Symmetry::kFlipRot270,
+                     ApplySymmetry(Symmetry::kFlipRot270, grid, kGridLen),
+                     kGridLen));
+}
+
+TEST_CASE("LocTest") {
+  Loc loc = Loc{2, 3};
+  size_t grid_len = 9;
+  CHECK_EQ(ApplySymmetry(Symmetry::kIdentity, loc, grid_len), Loc{2, 3});
+  CHECK_EQ(ApplySymmetry(Symmetry::kRot90, loc, grid_len), Loc{3, 6});
+  CHECK_EQ(ApplySymmetry(Symmetry::kRot180, loc, grid_len), Loc{6, 5});
+  CHECK_EQ(ApplySymmetry(Symmetry::kRot270, loc, grid_len), Loc{5, 2});
+  CHECK_EQ(ApplySymmetry(Symmetry::kFlip, loc, grid_len), Loc{2, 5});
+  CHECK_EQ(ApplySymmetry(Symmetry::kFlipRot90, loc, grid_len), Loc{5, 6});
+  CHECK_EQ(ApplySymmetry(Symmetry::kFlipRot180, loc, grid_len), Loc{6, 3});
+  CHECK_EQ(ApplySymmetry(Symmetry::kFlipRot270, loc, grid_len), Loc{3, 2});
 }
 
 }  // namespace game

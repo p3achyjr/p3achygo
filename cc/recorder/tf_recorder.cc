@@ -60,7 +60,7 @@ tensorflow::Example MakeTfExample(
 
 class TfRecorderImpl final : public TfRecorder {
  public:
-  TfRecorderImpl(std::string path, int num_threads);
+  TfRecorderImpl(std::string path, int num_threads, int gen);
   ~TfRecorderImpl() = default;
 
   // Disable Copy and Move.
@@ -81,15 +81,17 @@ class TfRecorderImpl final : public TfRecorder {
 
   const std::string path_;
   const int num_threads_;
+  const int gen_;
 
   std::array<std::vector<Record>, constants::kMaxNumThreads> thread_records_;
   std::array<int, constants::kMaxNumThreads> thread_game_counts_;
   int batch_num_;
 };
 
-TfRecorderImpl::TfRecorderImpl(std::string path, int num_threads)
+TfRecorderImpl::TfRecorderImpl(std::string path, int num_threads, int gen)
     : path_(path),
       num_threads_(num_threads),
+      gen_(gen),
       thread_game_counts_{},
       batch_num_(0) {}
 
@@ -123,7 +125,7 @@ void TfRecorderImpl::Flush() {
 
   // Create File.
   std::string path =
-      FilePath(path_) / absl::StrFormat("batch_b%d_g%d_n%d.tfrecord.zz",
+      FilePath(path_) / absl::StrFormat("gen%d_b%d_g%d_n%d.tfrecord.zz", gen_,
                                         batch_num_, num_games, num_records);
   std::unique_ptr<tensorflow::WritableFile> file;
   TF_CHECK_OK(tensorflow::Env::Default()->NewWritableFile(path, &file));
@@ -187,8 +189,9 @@ void TfRecorderImpl::Flush() {
 }  // namespace
 
 /* static */ std::unique_ptr<TfRecorder> TfRecorder::Create(std::string path,
-                                                            int num_threads) {
-  return std::make_unique<TfRecorderImpl>(path, num_threads);
+                                                            int num_threads,
+                                                            int gen) {
+  return std::make_unique<TfRecorderImpl>(path, num_threads, gen);
 }
 
 }  // namespace recorder
