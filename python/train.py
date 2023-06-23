@@ -24,7 +24,7 @@ def train_step(w_pi, w_val, w_outcome, w_score, w_own, w_gamma, use_kl_loss,
                input, komi, score, score_one_hot, policy, own, model,
                optimizer):
   with tf.GradientTape() as g:
-    pi_logits, _, game_outcome, own_pred, score_logits, gamma = model(
+    pi_logits, _, game_outcome, _, own_pred, score_logits, _, gamma = model(
         input, tf.cast(komi, tf.float32), training=True)
     (loss, policy_loss, outcome_loss, score_pdf_loss,
      own_loss) = model.loss(pi_logits, game_outcome, score_logits, own_pred,
@@ -48,7 +48,7 @@ def train_step_gpu(w_pi, w_val, w_outcome, w_score, w_own, w_gamma, use_kl_loss,
                    input, komi, score, score_one_hot, policy, own, model,
                    optimizer):
   with tf.GradientTape() as g:
-    pi_logits, _, game_outcome, own_pred, score_logits, gamma = model(
+    pi_logits, _, game_outcome, _, own_pred, score_logits, _, gamma = model(
         input, tf.cast(komi, tf.float32), training=True)
     (loss, policy_loss, outcome_loss, score_pdf_loss,
      own_loss) = model.loss(pi_logits, game_outcome, score_logits, own_pred,
@@ -72,7 +72,7 @@ def train_step_gpu(w_pi, w_val, w_outcome, w_score, w_own, w_gamma, use_kl_loss,
 @tf.function
 def val_step(w_pi, w_val, w_outcome, w_score, w_own, w_gamma, use_kl_loss,
              input, komi, score, score_one_hot, policy, own, model):
-  pi_logits, _, game_outcome, own_pred, score_logits, gamma = model(
+  pi_logits, _, game_outcome, _, own_pred, score_logits, _, gamma = model(
       input, tf.cast(komi, tf.float32), training=False)
   (loss, policy_loss, outcome_loss, score_pdf_loss,
    own_loss) = model.loss(pi_logits, game_outcome, score_logits, own_pred,

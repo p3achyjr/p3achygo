@@ -31,19 +31,14 @@ flags.DEFINE_boolean('upload_to_gcs', False, 'Whether to upload models to GCS.')
 
 # Flags for local storage
 flags.DEFINE_string('model_save_path', '', 'Folder under which to save models.')
-flags.DEFINE_string('calib_ds', '', 'Dataset to use for calibration.')
+flags.DEFINE_string('calib_ds', '', 'Dataset to use for TRT calibration.')
 
 # Flags for training configuration
 flags.DEFINE_integer('batch_size', 32, 'Mini-batch size')
 flags.DEFINE_integer('epochs', 1, 'Number of Epochs')
 flags.DEFINE_float('learning_rate', 1e-3, 'Initial Learning Rate')
 flags.DEFINE_float('momentum', .9, 'SGD Momentum')
-flags.DEFINE_integer(
-    'learning_rate_interval', 200000,
-    'Interval at which to anneal learning rate (in mini-batches)')
-flags.DEFINE_integer(
-    'learning_rate_cutoff', 800000,
-    'Point after which to stop annealing learning rate (in mini-batches)')
+flags.DEFINE_integer('shuf_buf_size', 100000, 'Shuffle Buffer Size')
 flags.DEFINE_integer(
     'log_interval', 100,
     'Interval at which to log training information (in mini-batches)')
@@ -73,7 +68,7 @@ def main(_):
   batch_size = FLAGS.batch_size
   train_ds = train_ds.map(transforms.expand_sl,
                           num_parallel_calls=tf.data.AUTOTUNE)
-  train_ds = train_ds.shuffle(500000)
+  train_ds = train_ds.shuffle(FLAGS.shuf_buf_size)
   train_ds = train_ds.batch(batch_size)
   train_ds = train_ds.take(100000)
   train_ds = train_ds.prefetch(tf.data.AUTOTUNE)
@@ -113,6 +108,8 @@ def main(_):
               save_interval=FLAGS.model_save_interval,
               save_path=FLAGS.model_save_path,
               is_gpu=is_gpu)
+  train.val(model, mode=train.Mode.SL, val_ds=val_ds)
+
   model_path = Path(FLAGS.model_save_path, 'p3achygo_sl')
   model.save(str(model_path))
 

@@ -637,12 +637,20 @@ class P3achyGoModel(tf.keras.Model):
 
     pi_logits = self.policy_head(x, training=training)
     pi = tf.keras.activations.softmax(pi_logits)
-    game_outcome, game_ownership, score_logits, gamma = self.value_head(x)
+    outcome_logits, ownership, score_logits, gamma = self.value_head(x)
+    outcome_probs = tf.keras.activations.softmax(outcome_logits)
+    score_probs = tf.keras.activations.softmax(score_logits)
 
-    return (tf.cast(pi_logits, tf.float32), tf.cast(pi, tf.float32),
-            tf.cast(game_outcome,
-                    tf.float32), tf.cast(game_ownership, tf.float32),
-            tf.cast(score_logits, tf.float32), tf.cast(gamma, tf.float32))
+    # yapf: disable
+    return (tf.cast(pi_logits, tf.float32),
+            tf.cast(pi, tf.float32),
+            tf.cast(outcome_logits, tf.float32),
+            tf.cast(outcome_probs, tf.float32),
+            tf.cast(ownership, tf.float32),
+            tf.cast(score_logits, tf.float32),
+            tf.cast(score_probs, tf.float32),
+            tf.cast(gamma, tf.float32))
+    # yapf: enable
 
   def loss(self, pi_logits, game_outcome, score_logits, own_pred, gamma, policy,
            score, score_one_hot, own, w_pi, w_val, w_outcome, w_score, w_own,
