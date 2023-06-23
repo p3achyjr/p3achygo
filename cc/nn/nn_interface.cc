@@ -22,15 +22,14 @@ using namespace ::game;
 using namespace ::tensorflow;
 
 // 2 ** 20. Assuming ~3kb per inference result, this will be about ~3GB of RAM.
-static constexpr size_t kMaxCacheSize = 1048576;
 static constexpr char kSavedModelTagServe[] = "serve";
 
 }  // namespace
 
 NNInterface::NNInterface(int num_threads)
-    : NNInterface(num_threads, kTimeoutUs) {}
+    : NNInterface(num_threads, kTimeoutUs, constants::kDefaultNNCacheSize) {}
 
-NNInterface::NNInterface(int num_threads, int64_t timeout)
+NNInterface::NNInterface(int num_threads, int64_t timeout, size_t cache_size)
     : session_options_(SessionOptions()),
       run_options_(RunOptions()),
       is_initialized_(false),
@@ -39,7 +38,7 @@ NNInterface::NNInterface(int num_threads, int64_t timeout)
       thread_info_(num_threads_),
       running_(true),
       timeout_(timeout) {
-  InitializeCache();
+  InitializeCache(cache_size);
 
   // Allocate inference buffers.
   nn_input_buf_ = {
@@ -200,10 +199,10 @@ void NNInterface::UnregisterThread(int thread_id) {
   thread.registered = false;
 }
 
-void NNInterface::InitializeCache() {
+void NNInterface::InitializeCache(size_t cache_size) {
   for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
     thread_caches_[thread_id] =
-        Cache<NNKey, NNInferResult>(kMaxCacheSize / num_threads_);
+        Cache<NNKey, NNInferResult>(cache_size / num_threads_);
   }
 }
 

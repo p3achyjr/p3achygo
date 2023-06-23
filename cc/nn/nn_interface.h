@@ -45,7 +45,7 @@ struct NNInferResult {
 class NNInterface final {
  public:
   NNInterface(int num_threads);
-  NNInterface(int num_threads, int64_t timeout);
+  NNInterface(int num_threads, int64_t timeout, size_t cache_size);
   ~NNInterface();
 
   // Disable Copy
@@ -89,7 +89,7 @@ class NNInterface final {
   };
 
   // Cache Helpers.
-  void InitializeCache();
+  void InitializeCache(size_t cache_size);
   bool CacheContains(int thread_id, const NNKey& key);
   std::optional<NNInferResult> CacheGet(int thread_id, const NNKey& key);
   void CacheInsert(int thread_id, const NNKey& key,
