@@ -64,10 +64,6 @@ void LeafEvaluator::InitTreeNode(TreeNode* node, const Game& game,
   node->value_est = value_est;
   node->score_est = score_est;
 
-  // arbitrary scale to discourage passing, since the current probability is
-  // high.
-  // node->move_logits[constants::kPassMoveEncoding] -= 3;
-
   AdvanceState(node);
 }
 }  // namespace mcts

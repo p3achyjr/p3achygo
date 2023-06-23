@@ -104,18 +104,8 @@ class NNInterface final {
   ::tensorflow::SessionOptions session_options_;
   ::tensorflow::RunOptions run_options_;
 
-  ::tensorflow::Scope scope_preprocess_;
-  ::tensorflow::Scope scope_postprocess_;
-  ::tensorflow::GraphDef gdef_preprocess_;
-  ::tensorflow::GraphDef gdef_postprocess_;
-  ::tensorflow::Tensor input_feature_buf_;
-  ::tensorflow::Tensor input_state_buf_;
   std::vector<::tensorflow::Tensor> nn_input_buf_;
   std::vector<::tensorflow::Tensor> nn_output_buf_;
-  std::vector<::tensorflow::Tensor> result_buf_;
-
-  std::unique_ptr<::tensorflow::Session> session_preprocess_;
-  std::unique_ptr<::tensorflow::Session> session_postprocess_;
 
   std::string id_;
   bool is_initialized_;

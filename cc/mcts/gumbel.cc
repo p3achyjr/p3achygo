@@ -87,10 +87,10 @@ std::array<float, constants::kMaxNumMoves> Softmax(
                  [&](double x) { return std::exp(x); });
   double total = std::accumulate(exps.begin(), exps.end(), 0.0);
 
-  std::array<float, constants::kMaxNumMoves> pi_improved;
-  std::transform(exps.begin(), exps.end(), pi_improved.begin(),
+  std::array<float, constants::kMaxNumMoves> softmax;
+  std::transform(exps.begin(), exps.end(), softmax.begin(),
                  [&](double x) { return x / total; });
-  return pi_improved;
+  return softmax;
 }
 
 int Argmax(std::array<float, constants::kMaxNumMoves>& logits) {
