@@ -1,0 +1,37 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: p3achygo-selfplay
+spec:
+  parallelism: 3
+  completions: 3
+  template:
+    metadata:
+      name: selfplay
+    spec:
+      containers:
+      - name: player
+        image: <SP_IMAGE_NAME>
+        imagePullPolicy: Always
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+            cpu: "16"
+          requests:
+            nvidia.com/gpu: 1
+            cpu: "16"
+        volumeMounts:
+        - name: service-credentials
+          mountPath: /etc/credentials
+        env:
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: /etc/credentials/service-account.json
+        - name: LD_LIBRARY_PATH
+          value: /usr/local/nvidia/lib64
+        - name: UID
+          value: metadata.uid
+      volumes:
+      - name: service-credentials
+        secret:
+          secretName: $SERVICE_ACCOUNT-creds
+      restartPolicy: OnFailure
