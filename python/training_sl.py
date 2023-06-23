@@ -110,8 +110,8 @@ def main(_):
               is_gpu=is_gpu)
   train.val(model, mode=train.Mode.SL, val_ds=val_ds)
 
-  model_path = Path(FLAGS.model_save_path, 'p3achygo_sl')
-  model.save(str(model_path))
+  model_path = str(Path(FLAGS.model_save_path, 'p3achygo_sl'))
+  model.save(model_path)
 
   converter = trt_convert.get_converter(model_path, FLAGS.calib_ds)
   converter.summary()

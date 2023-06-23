@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import symmetry as sym
 import tensorflow as tf
 from constants import *
 
@@ -88,6 +89,15 @@ def as_loc(mv_index: tf.Tensor, bsize=BOARD_LEN) -> tf.Tensor:
   return loc
 
 
+def apply_loc_symmetry(symmetry: tf.Tensor, loc: tf.Tensor,
+                       grid_len: int) -> tf.Tensor:
+  if (tf.reduce_all(loc == NON_MOVE) or tf.reduce_all(loc == PASS_MOVE) or
+      tf.reduce_all(loc == PASS_MOVE_RL)):
+    return loc
+
+  return sym.apply_loc_symmetry(symmetry, loc, grid_len)
+
+
 def filter_pass(input, komi, score, score_one_hot, policy, own):
   return policy != 361
 
@@ -151,10 +161,21 @@ def expand_rl(tf_example):
   last_moves = tf.cast(last_moves, dtype=tf.int32)
   own = tf.cast(own, dtype=tf.int32)
 
-  # reshape for compatibility with TrainingManager.
+  # reshape for compatibility with training.
   board = tf.reshape(board, shape=(bsize, bsize))
   last_moves = tf.map_fn(functools.partial(as_loc, bsize=bsize), last_moves)
   own = tf.reshape(own, shape=(bsize, bsize))
+
+  # apply symmetry.
+  symmetry = sym.get_random_symmetry()
+  board = sym.apply_grid_symmetry(symmetry, board)
+  last_moves = tf.map_fn(lambda mv: apply_loc_symmetry(symmetry, mv, bsize),
+                         last_moves)
+  board_policy = policy[0:bsize * bsize]
+  board_policy = tf.reshape(board_policy, shape=(bsize, bsize))
+  board_policy = sym.apply_grid_symmetry(symmetry, board_policy)
+  board_policy = tf.reshape(board_policy, shape=(bsize * bsize,))
+  policy = tf.concat([board_policy, [policy[bsize * bsize]]], axis=0)
 
   # view ownership from perspective of current player.
   own = tf.cond(color == BLACK_RL, lambda: own, lambda: -own)

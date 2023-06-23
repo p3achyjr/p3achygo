@@ -151,12 +151,11 @@ def main(_):
     train.val(model, mode=train.Mode.RL, val_ds=val_ds)
 
     new_weights = avg_weights(prev_weights, model.get_weights())
-    model_cand = new_model(name=f'p3achygo_{FLAGS.run_id}_cand_{model_gen}')
-    model_cand.set_weights(new_weights)
+    model.set_weights(new_weights)
     logging.info(f'Running validation for new model...')
-    train.val(model_cand, mode=train.Mode.RL, val_ds=val_ds)
+    train.val(model, mode=train.Mode.RL, val_ds=val_ds)
 
-    save_trt_and_upload(model_cand, FLAGS.val_ds_path, str(model_dir),
+    save_trt_and_upload(model, FLAGS.val_ds_path, str(model_dir),
                         next_model_gen)
     model_gen += 1
 
