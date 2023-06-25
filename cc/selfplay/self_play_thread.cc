@@ -13,18 +13,22 @@
 
 #define LOG_TO_SINK(severity, sink) LOG(severity).ToSinkOnly(&sink)
 
+namespace selfplay {
 namespace {
 using namespace ::game;
 using namespace ::core;
 using namespace ::mcts;
 using namespace ::nn;
 using namespace ::recorder;
+
 static constexpr int kShouldLogShard = 8;
+
+static std::atomic<bool> running = true;
+
 }  // namespace
 
-void ExecuteSelfPlay(int thread_id, NNInterface* nn_interface,
-                     GameRecorder* game_recorder, std::string logfile,
-                     int gumbel_n, int gumbel_k, int max_moves) {
+void Run(int thread_id, NNInterface* nn_interface, GameRecorder* game_recorder,
+         std::string logfile, int gumbel_n, int gumbel_k, int max_moves) {
   FileSink sink(logfile.c_str());
   Probability probability(static_cast<uint64_t>(std::time(nullptr)) +
                           thread_id);
@@ -39,7 +43,7 @@ void ExecuteSelfPlay(int thread_id, NNInterface* nn_interface,
 
     GumbelEvaluator gumbel_evaluator(nn_interface, thread_id);
     auto color_to_move = BLACK;
-    while (!game.IsGameOver() && game.num_moves() < max_moves) {
+    while (IsRunning() && !game.IsGameOver() && game.num_moves() < max_moves) {
       auto begin = std::chrono::high_resolution_clock::now();
       GumbelResult gumbel_res =
           gumbel_evaluator.SearchRoot(probability, game, root_node.get(),
@@ -100,6 +104,8 @@ void ExecuteSelfPlay(int thread_id, NNInterface* nn_interface,
     }
 
     nn_interface->UnregisterThread(thread_id);
+    if (!IsRunning()) break;
+
     game.WriteResult();
 
     LOG_TO_SINK(INFO, sink) << "Black Score: " << game.result().bscore;
@@ -120,5 +126,11 @@ void ExecuteSelfPlay(int thread_id, NNInterface* nn_interface,
     nn_interface->RegisterThread(thread_id);
   }
 }
+
+void SignalStop() { running.store(false, std::memory_order_release); }
+
+bool IsRunning() { return running.load(std::memory_order_acquire); }
+
+}  // namespace selfplay
 
 #undef LOG_TO_SINK

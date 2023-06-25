@@ -56,6 +56,7 @@ int main(int argc, char** argv) {
                                        absl::GetFlag(FLAGS_p), exclude_gens);
   std::thread wait_thread(WaitForSignal, &chunk_manager);
 
+  // CreateChunk blocks until we receive a signal from stdin.
   chunk_manager.CreateChunk();
   chunk_manager.ShuffleAndFlush();
 
