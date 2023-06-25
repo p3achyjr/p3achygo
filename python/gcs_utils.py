@@ -20,6 +20,9 @@ MODEL_PREFIX = 'model'
 MODEL_FORMAT = MODEL_PREFIX + '_{}'
 MODEL_RE = re.compile(MODEL_PREFIX + '_([0-9]+)')
 
+DONE_PREFIX = 'DONE'
+DONE_FILENAME = 'DONE'
+
 
 def _get_num(blob_path: str, regex: re.Pattern) -> int:
   p, match = Path(blob_path), None
@@ -142,3 +145,24 @@ def download_golden_chunk(run_id: str, local_chunk_dir: str, gen: int) -> str:
 
 def download_model(run_id: str, local_models_dir: str, gen: int) -> str:
   return _download_model(run_id, local_models_dir, MODEL_FORMAT.format(gen))
+
+
+def download_val_ds(local_dir: str) -> str:
+  local_path = Path(local_dir, 'val.tfrecord.zz')
+  return _download(str(local_path), 'common/val.tfrecord.zz')
+
+
+def is_done(run_id: str) -> bool:
+  blobs = GCS_CLIENT.list_blobs(GCS_BUCKET, prefix=Path(run_id, DONE_PREFIX))
+  for blob in blobs:
+    path = Path(blob.name)
+    if path.parent.name == DONE_PREFIX and path.name == DONE_FILENAME:
+      return True
+
+  return False
+
+
+def signal_done(run_id: str):
+  path = str(Path(run_id, DONE_PREFIX, DONE_FILENAME))
+  blob = GCS_CLIENT.bucket(GCS_BUCKET).blob(path)
+  blob.upload_from_string(b'')
