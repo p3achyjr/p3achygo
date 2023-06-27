@@ -28,7 +28,18 @@ def avg_weights(prev_weights: list, cur_weights: list) -> list:
 
 
 def save_trt_and_upload(model: P3achyGoModel, calib_ds_path: str,
-                        local_model_dir: str, gen: int, run_id: str):
+                        local_model_dir: str, gen: int, run_id: str) -> str:
+  model_path = save_trt(model, calib_ds_path, local_model_dir, gen)
+  gcs.upload_model(run_id, str(local_model_dir), gen)
+
+  return model_path
+
+
+def save_trt(model: P3achyGoModel, calib_ds_path: str, local_model_dir: str,
+             gen: input) -> str:
+  '''
+  Saves model and returns _base_ path of model.
+  '''
   model_path = Path(local_model_dir, f'model_{gen}')
   model.save(str(model_path))
 
@@ -36,4 +47,5 @@ def save_trt_and_upload(model: P3achyGoModel, calib_ds_path: str,
   trt_converter = trt_convert.get_converter(str(model_path), calib_ds_path)
   trt_converter.summary()
   trt_converter.save(output_saved_model_dir=str(Path(model_path, '_trt')))
-  gcs.upload_model(run_id, str(local_model_dir), gen)
+
+  return str(model_path)

@@ -131,6 +131,11 @@ def get_most_recent_chunk(run_id: str) -> int:
   return most_recent
 
 
+def upload(run_id: str, local_path: str):
+  cmd = f'gsutil -m cp -r gs://{GCS_BUCKET}/{str(run_id)} {local_path}'
+  subprocess.run(shlex.split(cmd), check=True)
+
+
 def upload_chunk(run_id: str, local_chunk_dir: str, gen: int):
   _upload_chunk(run_id, local_chunk_dir, CHUNK_FORMAT.format(gen))
 

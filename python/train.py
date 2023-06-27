@@ -180,7 +180,7 @@ def train(model: P3achyGoModel,
                   score_logits, outcome_logits, policy, score,
                   optimizer.learning_rate.numpy(), losses_train, own)
 
-      if batch_num % save_interval == 0:
+      if save_path and save_interval and batch_num % save_interval == 0:
         save_model(model, batch_num, save_path)
 
       batch_num += 1

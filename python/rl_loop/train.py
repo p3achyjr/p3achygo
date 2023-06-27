@@ -43,6 +43,40 @@ flags.DEFINE_integer(
     'Interval at which to log training information (in mini-batches)')
 
 
+def train_one_gen(model: P3achyGoModel,
+                  gen: int,
+                  chunk_path: str,
+                  val_ds: tf.data.TFRecordDataset,
+                  log_interval=100,
+                  is_gpu=True):
+  '''
+  Trains through dataset held at `chunk_path`.
+  '''
+  ds = tf.data.TFRecordDataset(chunk_path, compression_type='ZLIB')
+  ds = ds.map(transforms.expand_rl, num_parallel_calls=tf.data.AUTOTUNE)
+  ds = ds.batch(BATCH_SIZE)
+  ds = ds.prefetch(tf.data.AUTOTUNE)
+
+  prev_weights = model.get_weights()
+
+  logging.info(f'Training model {gen + 1}...')
+  train.train(model,
+              ds,
+              EPOCHS_PER_GEN,
+              MOMENTUM,
+              lr=LR,
+              log_interval=log_interval,
+              mode=train.Mode.RL,
+              save_interval=None,
+              save_path=None,
+              is_gpu=is_gpu)
+
+  new_weights = model_utils.avg_weights(prev_weights, model.get_weights())
+  model.set_weights(new_weights)
+  logging.info(f'Running validation for new model...')
+  train.val(model, mode=train.Mode.RL, val_ds=val_ds)
+
+
 def main(_):
   if FLAGS.run_id == '':
     logging.error('No --run_id specified.')
@@ -104,32 +138,8 @@ def main(_):
     logging.info(f'Found chunk: {most_recent_chunk}')
     chunk_filename = gcs.download_golden_chunk(FLAGS.run_id, str(chunk_dir),
                                                next_model_gen)
-    ds = tf.data.TFRecordDataset(chunk_filename, compression_type='ZLIB')
-    ds = ds.map(transforms.expand_rl, num_parallel_calls=tf.data.AUTOTUNE)
-    ds = ds.batch(BATCH_SIZE)
-    ds = ds.prefetch(tf.data.AUTOTUNE)
-
-    prev_weights = model.get_weights()
-
-    logging.info(f'Training model {next_model_gen}...')
-    train.train(model,
-                ds,
-                EPOCHS_PER_GEN,
-                MOMENTUM,
-                lr=LR,
-                log_interval=FLAGS.log_interval,
-                mode=train.Mode.RL,
-                save_interval=1000,
-                save_path=ckpt_dir,
-                is_gpu=is_gpu)
-
-    logging.info(f'Running validation for post checkpoint...')
-    train.val(model, mode=train.Mode.RL, val_ds=val_ds)
-
-    new_weights = model_utils.avg_weights(prev_weights, model.get_weights())
-    model.set_weights(new_weights)
-    logging.info(f'Running validation for new model...')
-    train.val(model, mode=train.Mode.RL, val_ds=val_ds)
+    train_one_gen(model, model_gen, chunk_filename, val_ds, FLAGS.log_interval,
+                  is_gpu)
 
     model_utils.save_trt_and_upload(model,
                                     FLAGS.val_ds_path,
