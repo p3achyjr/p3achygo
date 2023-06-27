@@ -25,6 +25,9 @@ using ::tensorflow::io::RecordWriterOptions;
 
 using ::core::FilePath;
 
+// Keep in sync with //cc/shuffler/chunk_info.h
+static constexpr char kChunkFormat[] = "gen%d_b%d_g%d_n%d.tfrecord.zz";
+
 template <typename T, size_t N>
 tensorflow::Feature MakeBytesFeature(const std::array<T, N>& data) {
   tensorflow::Feature feature;
@@ -125,8 +128,8 @@ void TfRecorderImpl::Flush() {
 
   // Create File.
   std::string path =
-      FilePath(path_) / absl::StrFormat("gen%d_b%d_g%d_n%d.tfrecord.zz", gen_,
-                                        batch_num_, num_games, num_records);
+      FilePath(path_) /
+      absl::StrFormat(kChunkFormat, gen_, batch_num_, num_games, num_records);
   std::unique_ptr<tensorflow::WritableFile> file;
   TF_CHECK_OK(tensorflow::Env::Default()->NewWritableFile(path, &file));
 

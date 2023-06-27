@@ -4,7 +4,7 @@
 namespace recorder {
 
 static constexpr char kSgfDir[] = "sgf";
-static constexpr char kTfDir[] = "tf";
+static constexpr char kChunkDir[] = "chunks";
 }  // namespace recorder
 
 #endif
