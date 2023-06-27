@@ -1,6 +1,7 @@
 #ifndef __SHUFFLER_CHUNK_MANAGER_H_
 #define __SHUFFLER_CHUNK_MANAGER_H_
 
+#include <atomic>
 #include <deque>
 #include <string>
 #include <thread>
@@ -31,6 +32,7 @@ namespace shuffler {
  * `max_chunk_size`: Max size of chunk.
  * `cycle_len`: Number of files to interleave reading from.
  * `poll_len`: Number of examples to scan before checking for new files.
+ * `games_per_chunk`: Number of games to play before writing chunk.
  * `exclude_gens`: Generations to exclude.
  */
 class ChunkManager final {
@@ -39,7 +41,7 @@ class ChunkManager final {
   ChunkManager(std::string dir, int gen, float p,
                std::vector<int> exclude_gens);
   ChunkManager(std::string dir, int gen, float p, std::vector<int> exclude_gens,
-               size_t chunk_size, int poll_interval_s);
+               size_t chunk_size, int games_per_chunk, int poll_interval_s);
   ~ChunkManager();
 
   // Disable Copy
@@ -51,6 +53,7 @@ class ChunkManager final {
   void SignalStop();
 
  private:
+  std::optional<std::string> PopFile();
   void AppendToChunk(::tensorflow::tstring&& proto);
   void FsThread();  // runs in `fs_thread_`.
 
@@ -59,6 +62,7 @@ class ChunkManager final {
   float p_;
   size_t chunk_size_;
   int poll_interval_s_;
+  int games_per_chunk_;
   std::vector<int> exclude_gens_;
 
   core::Probability probability_;
@@ -70,7 +74,7 @@ class ChunkManager final {
   std::deque<::tensorflow::tstring> chunk_;
 
   // thread to scan and update file list.
-  bool running_ ABSL_GUARDED_BY(mu_);
+  std::atomic<bool> running_;
   std::thread fs_thread_;
 };
 }  // namespace shuffler

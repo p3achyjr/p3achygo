@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
+#include "cc/shuffler/chunk_info.h"
 
 namespace shuffler {
 
