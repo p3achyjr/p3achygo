@@ -32,10 +32,11 @@ std::string ToString(const Color& color) {
 
 }  // namespace
 
-void PlayEvalGame(int thread_id, NNInterface* cur_nn, NNInterface* cand_nn,
-                  std::string logfile, std::promise<Winner> result) {
+void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
+                  NNInterface* cand_nn, std::string logfile,
+                  std::promise<Winner> result) {
   FileSink sink(logfile.c_str());
-  Probability probability(std::time(nullptr) + thread_id);
+  Probability probability(seed + thread_id);
   bool cur_is_black = thread_id % 2 == 0;
   NNInterface* black_nn = cur_is_black ? cur_nn : cand_nn;
   NNInterface* white_nn = cur_is_black ? cand_nn : cur_nn;
