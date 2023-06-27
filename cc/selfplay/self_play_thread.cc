@@ -27,11 +27,11 @@ static std::atomic<bool> running = true;
 
 }  // namespace
 
-void Run(int thread_id, NNInterface* nn_interface, GameRecorder* game_recorder,
-         std::string logfile, int gumbel_n, int gumbel_k, int max_moves) {
+void Run(size_t seed, int thread_id, NNInterface* nn_interface,
+         GameRecorder* game_recorder, std::string logfile, int gumbel_n,
+         int gumbel_k, int max_moves) {
   FileSink sink(logfile.c_str());
-  Probability probability(static_cast<uint64_t>(std::time(nullptr)) +
-                          thread_id);
+  Probability probability(seed + thread_id);
   auto search_dur_ema = 0;
 
   // Main loop.
