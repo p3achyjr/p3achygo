@@ -9,10 +9,9 @@ import shlex, sys, time
 import train
 import tensorflow as tf
 import transforms
-import trt_convert
 import rl_loop.config as config
 import rl_loop.model_utils as model_utils
-import rl_loop.selfplay as selfplay
+import rl_loop.sp_loop as sp
 import rl_loop.train
 
 from absl import app, flags, logging
@@ -20,7 +19,6 @@ from constants import *
 from dataclasses import dataclass
 from pathlib import Path
 from model import P3achyGoModel
-from model_config import ModelConfig
 from queue import Queue
 from subprocess import Popen, PIPE, STDOUT
 from threading import Thread
@@ -60,7 +58,7 @@ def eval(eval_bin_path: str, eval_write_path: str, cur_model_path: str,
   cmd = shlex.split(f'{eval_bin_path}' +
                     f' --cur_model_path={cur_model_path_trt}' +
                     f' --cand_model_path={cand_model_path_trt}' +
-                    f' --eval_write_path={eval_write_path}')
+                    f' --res_write_path={eval_write_path}')
   eval_proc = Popen(cmd,
                     stdin=PIPE,
                     stdout=PIPE,
@@ -102,8 +100,9 @@ def loop(run_id: str, config: config.RunConfig, model: P3achyGoModel,
 
   while model_gen < config.num_generations:
     # Start self-play.
+    logging.info(f'Model Generation: {model_gen}')
     sp_queue = Queue()
-    sp_thread = Thread(target=selfplay.loop,
+    sp_thread = Thread(target=sp.loop,
                        args=(sp_bin_path, run_id, local_run_dir,
                              config.shared_volume_path, config.num_sp_threads,
                              sp_queue))
@@ -118,7 +117,7 @@ def loop(run_id: str, config: config.RunConfig, model: P3achyGoModel,
 
     # Found new chunk.
     logging.info(f'Found training chunk {latest_chunk_gen}.' +
-                 ' Current generation is {generation}')
+                 f' Current generation is {model_gen}')
     model_gen = latest_chunk_gen
     sp_queue.put(())  # Send any message to trigger shutdown.
     sp_thread.join()

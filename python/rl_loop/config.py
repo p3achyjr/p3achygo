@@ -16,7 +16,7 @@ class RunConfig(object):
 
 
 def parse(run_id: str) -> RunConfig:
-  proj_root = Path(__file__).parent.parent
+  proj_root = Path(__file__).parent.parent.parent
   config_path = Path(proj_root, 'config', run_id + '.json')
 
   with open(config_path) as f:

@@ -40,11 +40,13 @@ def loop(bin_path: str, run_id: str, config: config.RunConfig):
   Continually produces new training chunks until reaching a specified number of
   generations.
   '''
-  chunk_gen = gcs.get_most_recent_chunk() + 1
+  chunk_gen = gcs.get_most_recent_chunk(run_id) + 1
   data_dir = str(Path(config.shared_volume_path, 'chunks'))
+  logging.info(f'Using {data_dir} as shared data dir.')
   while chunk_gen <= config.num_generations:
     cmd = shlex.split(f'{bin_path} --data_path={data_dir}' +
-                      f' --model_gen={chunk_gen}')
+                      f' --gen={chunk_gen}' +
+                      f' --games_per_gen={config.games_per_gen}')
     shuf_proc = Popen(cmd,
                       stdin=PIPE,
                       stdout=PIPE,
@@ -56,11 +58,16 @@ def loop(bin_path: str, run_id: str, config: config.RunConfig):
     while running and shuf_proc.poll() is None:
       time.sleep(POLL_INTERVAL_S)
 
+    if shuf_proc.poll() is None:
+      shuf_proc.communicate('\n')  # force a flush just to be safe.
+
     logging.info(f'Shuffler exited with status {shuf_proc.poll()}')
-    
-    gcs.upload_chunk(run_id, gcs.local_chunk_dir(data_dir), data_dir)
+
+    gcs.upload_chunk(run_id, gcs.local_chunk_dir(data_dir), chunk_gen)
     logging.info(f'Uploaded chunk gen {chunk_gen} to gs://p3achygo/{run_id}')
     chunk_gen += 1
+
+  logging.info(f'Chunk gen: {chunk_gen}. Shutting down.')
 
 
 def main(_):
