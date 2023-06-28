@@ -1,5 +1,6 @@
 #include "cc/shuffler/chunk_info.h"
 
+#include <iostream>
 #include <regex>
 
 #include "absl/log/check.h"

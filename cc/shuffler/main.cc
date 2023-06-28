@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
                  [](const std::string& s) { return std::atoi(s.c_str()); });
 
   shuffler::ChunkManager chunk_manager(data_path, gen, absl::GetFlag(FLAGS_p),
-                                       exclude_gens);
+                                       games_per_gen, exclude_gens);
   std::thread wait_thread(WaitForSignal, &chunk_manager);
 
   // CreateChunk blocks until we receive a signal, or play `games_per_gen`
@@ -68,9 +68,7 @@ int main(int argc, char** argv) {
   chunk_manager.CreateChunk();
   chunk_manager.ShuffleAndFlush();
 
-  if (wait_thread.joinable()) {
-    wait_thread.join();
-  }
-
+  // WaitForSignal may not have exited
+  std::exit(0);
   return 0;
 }

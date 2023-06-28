@@ -59,7 +59,7 @@ GameRecorderImpl::GameRecorderImpl(std::string path, int num_threads,
                                    int flush_interval, int gen)
     : sgf_recorder_(SgfRecorder::Create(FilePath(path) / recorder::kSgfDir,
                                         num_threads, gen)),
-      tf_recorder_(TfRecorder::Create(FilePath(path) / recorder::kTfDir,
+      tf_recorder_(TfRecorder::Create(FilePath(path) / recorder::kChunkDir,
                                       num_threads, gen)),
       running_(true),
       games_buffered_(0),

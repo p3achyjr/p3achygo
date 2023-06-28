@@ -26,7 +26,6 @@ using ::tensorflow::io::compression::kZlib;
 
 static constexpr size_t kDefaultChunkSize = 2048000;
 static constexpr int kDefaultPollIntervalS = 30;
-static constexpr int kDefaultNumNewGames = 5000;
 static constexpr int kLoggingInterval = 1000000;
 
 // keep in sync with python/gcs_utils.py
@@ -50,25 +49,15 @@ void WriteChunkToDisk(std::string filename, const std::vector<tstring>& chunk) {
 }
 }  // namespace
 
-ChunkManager::ChunkManager(std::string dir, int gen, float p)
-    : ChunkManager(dir, gen, p, {} /* exclude_gens */) {}
-
-ChunkManager::ChunkManager(std::string dir, int gen, float p,
+ChunkManager::ChunkManager(std::string dir, int gen, float p, int games_per_gen,
                            std::vector<int> exclude_gens)
-    : ChunkManager(dir, gen, p, exclude_gens, kDefaultChunkSize,
-                   kDefaultNumNewGames, kDefaultPollIntervalS) {}
-
-ChunkManager::ChunkManager(std::string dir, int gen, float p,
-                           std::vector<int> exclude_gens, size_t chunk_size,
-                           int games_per_chunk, int poll_interval_s)
     : dir_(dir),
       gen_(gen),
       p_(p),
-      chunk_size_(chunk_size),
-      poll_interval_s_(poll_interval_s),
-      games_per_chunk_(games_per_chunk),
+      chunk_size_(kDefaultChunkSize),
+      poll_interval_s_(kDefaultPollIntervalS),
+      games_per_gen_(games_per_gen),
       exclude_gens_(exclude_gens),
-      probability_(static_cast<uint64_t>(std::time(nullptr))),
       watcher_(dir_, exclude_gens_),
       fbuffer_(watcher_.GetFiles()),
       running_(true) {
@@ -89,10 +78,8 @@ void ChunkManager::CreateChunk() {
   LOG(INFO) << "Creating Chunk...";
 
   int num_scanned = 0;
-  int num_new_games = 0;
   auto start = std::chrono::steady_clock::now();
-  while (running_.load(std::memory_order_acquire) &&
-         num_new_games < games_per_chunk_) {
+  while (running_.load(std::memory_order_acquire)) {
     // Pop file to read, if one exists.
     LOG_EVERY_N_SEC(INFO, 30) << fbuffer_.size() << " files in buffer.";
     std::optional<std::string> f = PopFile();
@@ -104,12 +91,6 @@ void ChunkManager::CreateChunk() {
       cv_.WaitWithTimeout(&mu_, absl::Seconds(poll_interval_s_));
       continue;
     }
-
-    // Update number of games played.
-    std::optional<ChunkInfo> chunk_info =
-        ParseChunkFilename(fs::path(f.value()).filename());
-    CHECK(chunk_info);
-    num_new_games += chunk_info->games;
 
     // Read file into memory.
     std::unique_ptr<tensorflow::RandomAccessFile> file;
@@ -191,7 +172,16 @@ void ChunkManager::FsThread() {
     }
 
     std::vector<std::string> new_files = watcher_.UpdateAndGetNew();
-    LOG(INFO) << "Found " << new_files.size() << " new files.";
+    LOG(INFO) << "Found " << new_files.size() << " new files. "
+              << watcher_.NumGamesSinceInit()
+              << " new games played since init.";
+
+    // If we have received enough new files, flush.
+    if (watcher_.NumGamesSinceInit() >= games_per_gen_) {
+      running_.store(false, std::memory_order_release);
+      break;
+    }
+
     fbuffer_.AddNewFiles(new_files);
   }
 }

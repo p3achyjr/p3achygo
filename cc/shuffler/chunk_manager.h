@@ -32,16 +32,13 @@ namespace shuffler {
  * `max_chunk_size`: Max size of chunk.
  * `cycle_len`: Number of files to interleave reading from.
  * `poll_len`: Number of examples to scan before checking for new files.
- * `games_per_chunk`: Number of games to play before writing chunk.
+ * `games_per_gen`: Number of games to play before writing chunk.
  * `exclude_gens`: Generations to exclude.
  */
 class ChunkManager final {
  public:
-  ChunkManager(std::string dir, int gen, float p);
-  ChunkManager(std::string dir, int gen, float p,
+  ChunkManager(std::string dir, int gen, float p, int games_per_gen,
                std::vector<int> exclude_gens);
-  ChunkManager(std::string dir, int gen, float p, std::vector<int> exclude_gens,
-               size_t chunk_size, int games_per_chunk, int poll_interval_s);
   ~ChunkManager();
 
   // Disable Copy
@@ -62,7 +59,7 @@ class ChunkManager final {
   float p_;
   size_t chunk_size_;
   int poll_interval_s_;
-  int games_per_chunk_;
+  int games_per_gen_;
   std::vector<int> exclude_gens_;
 
   core::Probability probability_;
