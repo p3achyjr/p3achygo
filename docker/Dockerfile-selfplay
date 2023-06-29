@@ -1,4 +1,7 @@
 FROM <INSERT_NAME_HERE>
+ARG RUN_ID
+
+WORKDIR /app
 
 RUN bazel build --config=opt --config=trt //cc/selfplay:main
 ENTRYPOINT <INSERT_CMD_HERE>
