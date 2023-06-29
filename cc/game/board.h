@@ -291,7 +291,8 @@ class Board final {
   std::pair<float, std::array<Color, BOARD_LEN * BOARD_LEN>> ScoreAndOwnership(
       Color color) const;
 
-  std::vector<groupid> GetCapturedGroups(Loc loc, int captured_color) const;
+  absl::InlinedVector<groupid, 4> GetCapturedGroups(Loc loc,
+                                                    int captured_color) const;
   absl::InlinedVector<Loc, 4> AdjacentOfColor(Loc loc, Color color) const;
   Zobrist::Hash RecomputeHash(
       const Transition& move_transition,

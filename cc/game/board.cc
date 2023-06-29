@@ -52,13 +52,14 @@ groupid GroupTracker::GroupAt(Loc loc) const { return groups_[loc]; }
 groupid GroupTracker::NewGroup(Loc loc, Color color) {
   // precondition: loc is not connected to any other group.
   int liberties = 0;
-  std::vector<groupid> seen_groups;  // can only subtract up to 1 liberty from
-                                     // each adjacent group
+  absl::InlinedVector<groupid, 4>
+      seen_groups;  // can only subtract up to 1 liberty from
+                    // each adjacent group
   for (const Loc& nloc : Adjacent(loc)) {
     if (GroupAt(nloc) == kInvalidGroupId) {
       liberties++;
     } else if (group_info_map_[GroupAt(nloc)].color == OppositeColor(color)) {
-      if (VecContains(seen_groups, GroupAt(nloc))) continue;
+      if (InlinedVecContains(seen_groups, GroupAt(nloc))) continue;
       seen_groups.emplace_back(GroupAt(nloc));
       group_info_map_[GroupAt(nloc)].liberties--;
     }
@@ -72,7 +73,7 @@ groupid GroupTracker::NewGroup(Loc loc, Color color) {
 
 void GroupTracker::AddToGroup(Loc loc, groupid gid) {
   // precondition: loc is strongly connected to groupid `id`.
-  std::vector<groupid> adjacent_groups;
+  absl::InlinedVector<groupid, 4> adjacent_groups;
   for (const Loc& nloc : Adjacent(loc)) {
     if (GroupAt(nloc) == kInvalidGroupId) {
       // liberty of stone, and thereby liberty of group it is now connected to.
@@ -87,7 +88,7 @@ void GroupTracker::AddToGroup(Loc loc, groupid gid) {
       }
 
       if (!is_counted) group_info_map_[gid].liberties++;
-    } else if (!VecContains(adjacent_groups, GroupAt(nloc))) {
+    } else if (!InlinedVecContains(adjacent_groups, GroupAt(nloc))) {
       // neighboring group, need to subtract liberty to account for stone.
       adjacent_groups.emplace_back(GroupAt(nloc));
     }
@@ -177,11 +178,11 @@ void GroupTracker::RemoveCaptures(const LocVec& captures) {
   for (const Loc& loc : captures) {
     SetGroupInvalid(GroupAt(loc));
 
-    std::vector<groupid> adj_groups;
+    absl::InlinedVector<groupid, 4> adj_groups;
     for (const Loc& nloc : Adjacent(loc)) {
       if (GroupAt(nloc) == kInvalidGroupId) {
         continue;
-      } else if (VecContains(adj_groups, GroupAt(nloc))) {
+      } else if (InlinedVecContains(adj_groups, GroupAt(nloc))) {
         continue;
       }
 
@@ -616,7 +617,7 @@ MoveResult Board::PlayMoveDry(Loc loc, Color color) const {
   }
 
   // check for captures.
-  std::vector<groupid> captured_groups =
+  absl::InlinedVector<groupid, 4> captured_groups =
       GetCapturedGroups(loc, OppositeColor(color));
 
   // if no captures, check for self-atari.
@@ -782,14 +783,14 @@ Board::ScoreAndOwnership(Color color) const {
       static_cast<float>(score) + (color == WHITE ? komi_ : 0), ownership);
 }
 
-std::vector<groupid> Board::GetCapturedGroups(Loc loc,
-                                              int captured_color) const {
-  std::vector<groupid> captured_groups;
+absl::InlinedVector<groupid, 4> Board::GetCapturedGroups(
+    Loc loc, int captured_color) const {
+  absl::InlinedVector<groupid, 4> captured_groups;
 
   for (Loc& nloc : Adjacent(loc)) {
     groupid id = group_tracker_.GroupAt(nloc);
     if (AtLoc(nloc) == captured_color && IsInAtari(nloc) &&
-        !VecContains(captured_groups, id)) {
+        !InlinedVecContains(captured_groups, id)) {
       // this group is in atari, and we have filled the last liberty.
       captured_groups.emplace_back(group_tracker_.GroupAt(nloc));
     }
