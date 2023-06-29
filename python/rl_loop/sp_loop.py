@@ -38,12 +38,16 @@ def loop(bin_path: str,
   # first model is now uploaded. Get it and start run.
   model_path = gcs.download_model(run_id, str(local_run_dir), model_gen)
   model_path = str(Path(model_path, '_trt'))
+
+  # most recent chunk tells us which generation we are making self-play data for.
+  gen = gcs.get_most_recent_chunk(run_id)
   while True:
-    cmd = shlex.split(f'{bin_path} --num_threads={num_threads}' +
-                      f' --model_path={str(model_path)}' +
-                      f' --recorder_path={shared_run_dir}' +
-                      f' --flush_interval={num_threads}' +
-                      f' --gumbel_n=8 --gumbel_k=2')
+    cmd = shlex.split(
+        f'{bin_path} --num_threads={num_threads}' +
+        f' --model_path={str(model_path)}' +
+        f' --recorder_path={shared_run_dir}' +
+        f' --flush_interval={num_threads} --gen={gen}' +
+        f' --gumbel_n=36 --gumbel_k=4')
     selfplay_proc = Popen(cmd,
                           stdin=PIPE,
                           stdout=PIPE,

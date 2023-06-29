@@ -63,6 +63,7 @@ def loop(bin_path: str, run_id: str, config: config.RunConfig):
 
     logging.info(f'Shuffler exited with status {shuf_proc.poll()}')
 
+    # Upload chunk.
     gcs.upload_chunk(run_id, gcs.local_chunk_dir(data_dir), chunk_gen)
     logging.info(f'Uploaded chunk gen {chunk_gen} to gs://p3achygo/{run_id}')
     chunk_gen += 1

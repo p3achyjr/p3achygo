@@ -94,7 +94,7 @@ def _download_chunk(run_id: str, local_chunk_dir: str,
 
 
 def local_models_dir(model_dir: str) -> str:
-  return str(Path(model_dir, GOLDEN_CHUNK_DIR))
+  return str(Path(model_dir, MODELS_DIR))
 
 
 def local_chunk_dir(data_dir: str) -> str:
@@ -131,17 +131,18 @@ def get_most_recent_chunk(run_id: str) -> int:
   return most_recent
 
 
-def upload(run_id: str, local_path: str):
-  cmd = f'gsutil -m cp -r gs://{GCS_BUCKET}/{str(run_id)} {local_path}'
-  subprocess.run(shlex.split(cmd), check=True)
-
-
 def upload_chunk(run_id: str, local_chunk_dir: str, gen: int):
   _upload_chunk(run_id, local_chunk_dir, CHUNK_FORMAT.format(gen))
 
 
 def upload_model(run_id: str, local_models_dir: str, gen: int):
   _upload_model(run_id, local_models_dir, MODEL_FORMAT.format(gen))
+
+
+def upload_sgfs(run_id: str, local_dir: str):
+  glob_pat = "{}/*.sgf".format(str(Path(local_dir, 'sgf')))
+  cmd = f'gsutil -m cp {glob_pat} gs://{GCS_BUCKET}/{str(run_id)}/sgf'
+  subprocess.run(shlex.split(cmd), check=True)
 
 
 def download_golden_chunk(run_id: str, local_chunk_dir: str, gen: int) -> str:

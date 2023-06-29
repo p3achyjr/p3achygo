@@ -104,7 +104,8 @@ def main(_):
     logging.info(f'Found chunk: {most_recent_chunk}')
     chunk_filename = gcs.download_golden_chunk(FLAGS.run_id, str(chunk_dir),
                                                next_model_gen)
-    rl_loop.train.train_one_gen(model, model_gen, chunk_filename, val_ds,
+    logging.info(f'Training model gen {model_gen}...')
+    rl_loop.train.train_one_gen(model, chunk_filename, val_ds,
                                 FLAGS.log_interval, is_gpu)
 
     model_utils.save_trt_and_upload(model,

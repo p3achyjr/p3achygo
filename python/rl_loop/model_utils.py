@@ -36,7 +36,7 @@ def save_trt_and_upload(model: P3achyGoModel, calib_ds_path: str,
 
 
 def save_trt(model: P3achyGoModel, calib_ds_path: str, local_model_dir: str,
-             gen: input) -> str:
+             gen: int) -> str:
   '''
   Saves model and returns _base_ path of model.
   '''
