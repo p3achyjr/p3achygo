@@ -94,7 +94,6 @@ int main(int argc, char** argv) {
                     .count();
   std::vector<std::thread> threads;
   for (int thread_id = 0; thread_id < num_threads; ++thread_id) {
-    LOG(INFO) << "Spawning Thread " << thread_id << ".";
     std::thread thread(
         selfplay::Run, seed, thread_id, nn_interface.get(), game_recorder.get(),
         absl::StrFormat("/tmp/thread%d_log.txt", thread_id),
@@ -102,6 +101,8 @@ int main(int argc, char** argv) {
         absl::GetFlag(FLAGS_max_moves));
     threads.emplace_back(std::move(thread));
   }
+
+  LOG(INFO) << "Spawned " << num_threads << " threads.";
 
   // Block until we receive signal from stdin.
   WaitForSignal();

@@ -81,12 +81,8 @@ void ChunkManager::CreateChunk() {
   auto start = std::chrono::steady_clock::now();
   while (running_.load(std::memory_order_acquire)) {
     // Pop file to read, if one exists.
-    LOG_EVERY_N_SEC(INFO, 30) << fbuffer_.size() << " files in buffer.";
     std::optional<std::string> f = PopFile();
     if (f == std::nullopt) {
-      LOG(INFO) << "No files remaining. Sleeping for " << poll_interval_s_
-                << "s.";
-
       absl::MutexLock l(&mu_);
       cv_.WaitWithTimeout(&mu_, absl::Seconds(poll_interval_s_));
       continue;
@@ -110,13 +106,6 @@ void ChunkManager::CreateChunk() {
       }
 
       ++num_scanned;
-      LOG_IF(INFO, num_scanned % kLoggingInterval == 0)
-          << "Time so far: "
-          << std::chrono::duration<float>(std::chrono::steady_clock::now() -
-                                          start)
-                 .count()
-          << "s. Num scanned so far: " << num_scanned
-          << ". Chunk size: " << chunk_.size() << ".";
     }
   }
   auto end = std::chrono::steady_clock::now();
@@ -172,9 +161,9 @@ void ChunkManager::FsThread() {
     }
 
     std::vector<std::string> new_files = watcher_.UpdateAndGetNew();
-    LOG(INFO) << "Found " << new_files.size() << " new files. "
-              << watcher_.NumGamesSinceInit()
-              << " new games played since init.";
+    LOG_IF(INFO, new_files.size() > 0)
+        << "Found " << new_files.size() << " new files. "
+        << watcher_.NumGamesSinceInit() << " new games played since init.";
 
     // If we have received enough new files, flush.
     if (watcher_.NumGamesSinceInit() >= games_per_gen_) {

@@ -54,7 +54,7 @@ Tensor AsOneHot(Loc loc) {
 
   const auto& board = game.board();
   const auto& moves = game.moves();
-  auto sym_grid = ApplySymmetry(sym, board.position(), game.board_len());
+  auto sym_grid = ApplySymmetry(sym, board.position(), BOARD_LEN);
 
   auto raw = input_features.shaped<float, 4>(
       {batch_size, BOARD_LEN, BOARD_LEN, constants::kNumInputFeaturePlanes});
@@ -77,7 +77,7 @@ Tensor AsOneHot(Loc loc) {
     if (loc == kNoopLoc) continue;
     if (loc == kPassLoc) continue;
 
-    Loc sym_loc = ApplySymmetry(sym, loc, game.board_len());
+    Loc sym_loc = ApplySymmetry(sym, loc, BOARD_LEN);
     raw(batch_id, sym_loc.i, sym_loc.j, i + offset) = 1;
   }
 

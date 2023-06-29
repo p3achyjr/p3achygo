@@ -207,10 +207,9 @@ class GroupTracker final {
     GroupTracker* group_tracker_;
   };
 
-  GroupTracker(int length);
+  GroupTracker();
   ~GroupTracker() = default;
 
-  int length() const;
   groupid GroupAt(Loc loc) const;
   groupid NewGroup(Loc loc, Color color);
   void AddToGroup(Loc loc, groupid id);
@@ -243,7 +242,6 @@ class GroupTracker final {
   bool LocIsEmpty(Loc loc);
   int ColorAt(Loc loc);
 
-  int length_;
   std::array<groupid, BOARD_LEN * BOARD_LEN> groups_;
   std::array<Color, BOARD_LEN * BOARD_LEN> pass_alive_;
   absl::InlinedVector<GroupInfo, BOARD_LEN * BOARD_LEN> group_info_map_;
@@ -258,10 +256,8 @@ class Board final {
  public:
   using BoardData = std::array<Color, BOARD_LEN * BOARD_LEN>;
   Board();
-  Board(int length);
   ~Board() = default;
 
-  int length() const;
   int at(int i, int j) const;
   float komi() const;
   Zobrist::Hash hash() const;
@@ -276,6 +272,8 @@ class Board final {
   MoveStatus PlayMove(Loc loc, Color color);
   MoveStatus Pass(Color color);
   MoveResult PlayMoveDry(Loc loc, Color color) const;
+
+  void CalculatePassAliveRegions();
 
   Scores GetScores();
 
@@ -300,7 +298,6 @@ class Board final {
       const MoveInfo::Transitions& capture_transitions) const;
 
   const Zobrist& zobrist_;
-  int length_;
   BoardData board_;
   int move_count_;
   int consecutive_passes_;
@@ -329,16 +326,16 @@ inline std::ostream& operator<<(std::ostream& os,
   };
 
   int col_widths[BOARD_LEN]{};
-  for (auto j = 0; j < group_tracker.length_; ++j) {
-    for (auto i = 0; i < group_tracker.length_; ++i) {
+  for (auto j = 0; j < BOARD_LEN; ++j) {
+    for (auto i = 0; i < BOARD_LEN; ++i) {
       auto gid = group_tracker.GroupAt(Loc{i, j});
       col_widths[j] = std::max(col_widths[j], width(gid));
     }
   }
 
   os << "----Groups----\n";
-  for (auto i = 0; i < group_tracker.length_; i++) {
-    for (auto j = 0; j < group_tracker.length_; j++) {
+  for (auto i = 0; i < BOARD_LEN; i++) {
+    for (auto j = 0; j < BOARD_LEN; j++) {
       auto gid = group_tracker.GroupAt(Loc{i, j});
       int padding = col_widths[j] - width(gid) + 1;
       if (gid == kInvalidGroupId) {
@@ -365,8 +362,8 @@ inline std::ostream& operator<<(std::ostream& os,
   }
 
   os << "----Pass Alive Regions----\n";
-  for (auto i = 0; i < group_tracker.length_; i++) {
-    for (auto j = 0; j < group_tracker.length_; j++) {
+  for (auto i = 0; i < BOARD_LEN; i++) {
+    for (auto j = 0; j < BOARD_LEN; j++) {
       if (group_tracker.IsPassAliveForColor(Loc{i, j}, BLACK)) {
         os << "○ ";
       } else if (group_tracker.IsPassAliveForColor(Loc{i, j}, WHITE)) {
@@ -387,12 +384,12 @@ inline std::ostream& operator<<(std::ostream& os, const Board& board) {
     return (i == 3 || i == 9 || i == 15) && (j == 3 || j == 9 || j == 15);
   };
 
-  for (auto i = 0; i < board.length_; i++) {
+  for (auto i = 0; i < BOARD_LEN; i++) {
     if (i < 10)
       os << i << "  ";
     else
       os << i << " ";
-    for (auto j = 0; j < board.length_; j++) {
+    for (auto j = 0; j < BOARD_LEN; j++) {
       if (board.at(i, j) == EMPTY && is_star_point(i, j)) {
         os << "+ ";
       } else if (board.at(i, j) == EMPTY) {

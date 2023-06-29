@@ -28,7 +28,6 @@ class Game final {
   ~Game() = default;
 
   const Board& board() const;
-  int board_len() const;
 
   // returns moves _with_ noop padding at the beginning.
   const absl::InlinedVector<Move, constants::kMaxGameLen>& moves() const;
@@ -48,6 +47,8 @@ class Game final {
   bool IsValidMove(Loc loc, Color color) const;
   bool PlayMove(Loc loc, Color color);
   bool Pass(Color color);
+
+  void CalculatePassAliveRegions();
 
   Scores GetScores();
   void WriteResult();

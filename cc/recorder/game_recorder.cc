@@ -91,7 +91,7 @@ void GameRecorderImpl::RecordGame(int thread_id, const game::Game& game,
   ++games_buffered_;
   should_flush_ = games_buffered_ >= flush_interval_;
 
-  LOG_EVERY_N_SEC(INFO, 5) << games_buffered_ << " games buffered.";
+  DLOG_EVERY_N_SEC(INFO, 5) << games_buffered_ << " games buffered.";
 }
 
 void GameRecorderImpl::IoThread() {

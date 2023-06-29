@@ -157,7 +157,7 @@ void TfRecorderImpl::Flush() {
         std::array<int16_t, constants::kNumLastMoves> last_moves;
         for (int off = 0; off < constants::kNumLastMoves; ++off) {
           Loc last_move = game.moves()[move_num + off].loc;
-          last_moves[off] = last_move.as_index(game.board_len());
+          last_moves[off] = last_move;
         }
 
         Move move = game.move(move_num);
@@ -167,7 +167,7 @@ void TfRecorderImpl::Flush() {
         // Coerce into example and write result.
         tensorflow::Example example =
             MakeTfExample(board.position(), last_moves, pi, game.result(),
-                          move.color, game.komi(), game.board_len());
+                          move.color, game.komi(), BOARD_LEN);
         std::string data;
         example.SerializeToString(&data);
         TF_CHECK_OK(writer.WriteRecord(data));

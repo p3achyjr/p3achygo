@@ -22,6 +22,7 @@ using namespace ::nn;
 using namespace ::recorder;
 
 static constexpr int kShouldLogShard = 8;
+static constexpr int kComputePAMoveNums[] = {250, 300, 350, 400};
 
 static std::atomic<bool> running = true;
 
@@ -51,25 +52,27 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       auto end = std::chrono::high_resolution_clock::now();
       Loc nn_move = gumbel_res.nn_move;
       Loc move = gumbel_res.mcts_move;
-      float nn_move_q =
-          QAction(root_node.get(), nn_move.as_index(game.board_len()));
-      float move_q = QAction(root_node.get(), move.as_index(game.board_len()));
+      float nn_move_q = QAction(root_node.get(), nn_move);
+      float move_q = QAction(root_node.get(), move);
       mcts_pis.push_back(gumbel_res.pi_improved);
       game.PlayMove(move, color_to_move);
+      if (std::find(std::begin(kComputePAMoveNums),
+                    std::end(kComputePAMoveNums), game.num_moves())) {
+        game.CalculatePassAliveRegions();
+      }
       color_to_move = OppositeColor(color_to_move);
 
-      root_node =
-          std::move(root_node->children[move.as_index(game.board_len())]);
+      root_node = std::move(root_node->children[move]);
       if (!root_node) {
         // this is possible if pass is the only legal move found in search.
-        LOG(INFO) << "Root node is nullptr. "
-                  << "Last 5 Moves: " << game.move(game.num_moves() - 5) << ", "
-                  << game.move(game.num_moves() - 4) << ", "
-                  << game.move(game.num_moves() - 3) << ", "
-                  << game.move(game.num_moves() - 2) << ", "
-                  << game.move(game.num_moves() - 1)
-                  << ", Move Count: " << game.num_moves();
-        LOG(INFO) << "Board:\n" << game.board();
+        DLOG(INFO) << "Root node is nullptr. "
+                   << "Last 5 Moves: " << game.move(game.num_moves() - 5)
+                   << ", " << game.move(game.num_moves() - 4) << ", "
+                   << game.move(game.num_moves() - 3) << ", "
+                   << game.move(game.num_moves() - 2) << ", "
+                   << game.move(game.num_moves() - 1)
+                   << ", Move Count: " << game.num_moves();
+        DLOG(INFO) << "Board:\n" << game.board();
         root_node = std::make_unique<TreeNode>();
       }
 

@@ -58,13 +58,12 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
         gumbel.SearchRoot(probability, game, player_tree.get(), color_to_move,
                           kGumbelN, kGumbelK);
     Loc move = gumbel_res.mcts_move;
-    float move_q = QAction(player_tree.get(), move.as_index(game.board_len()));
+    float move_q = QAction(player_tree.get(), move);
     game.PlayMove(move, color_to_move);
     color_to_move = OppositeColor(color_to_move);
 
-    player_tree =
-        std::move(player_tree->children[move.as_index(game.board_len())]);
-    opp_tree = std::move(opp_tree->children[move.as_index(game.board_len())]);
+    player_tree = std::move(player_tree->children[move]);
+    opp_tree = std::move(opp_tree->children[move]);
     if (!player_tree) player_tree = std::make_unique<TreeNode>();
     if (!opp_tree) opp_tree = std::make_unique<TreeNode>();
 
@@ -101,8 +100,10 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
   cand_nn->UnregisterThread(thread_id);
   game.WriteResult();
 
-  LOG_TO_SINK(INFO, sink) << "Black Score: " << game.result().bscore;
-  LOG_TO_SINK(INFO, sink) << "White Score: " << game.result().wscore;
+  LOG(INFO) << "Thread " << thread_id << ", Cand is "
+            << (cur_is_black ? "W" : "B")
+            << ", Black Score: " << game.result().bscore
+            << ", White Score: " << game.result().wscore;
 
   Winner winner =
       cur_is_black

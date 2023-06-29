@@ -24,9 +24,11 @@
 ABSL_FLAG(std::string, cur_model_path, "", "Path to current best model.");
 ABSL_FLAG(std::string, cand_model_path, "", "Path to candidate model.");
 ABSL_FLAG(std::string, res_write_path, "", "Path to write result to.");
+ABSL_FLAG(int, cache_size, constants::kDefaultNNCacheSize / 2,
+          "Default size of cache.");
 
 static constexpr int kNumEvalGames = 48;
-static constexpr int64_t kTimeoutUs = 3000;
+static constexpr int64_t kTimeoutUs = 4000;
 
 std::string ToString(const Winner& winner) {
   return winner == Winner::kCur ? "CUR" : "CAND";
@@ -59,13 +61,12 @@ int main(int argc, char** argv) {
                     std::chrono::steady_clock::now().time_since_epoch())
                     .count();
 
-  // Initialize NN evaluators. Disable caching to enforce stepping in lockstep.
+  // Initialize NN evaluators.
+  int cache_size = absl::GetFlag(FLAGS_cache_size);
   std::unique_ptr<nn::NNInterface> cur_nn_interface =
-      std::make_unique<nn::NNInterface>(kNumEvalGames, kTimeoutUs,
-                                        constants::kDefaultNNCacheSize / 2);
+      std::make_unique<nn::NNInterface>(kNumEvalGames, kTimeoutUs, cache_size);
   std::unique_ptr<nn::NNInterface> cand_nn_interface =
-      std::make_unique<nn::NNInterface>(kNumEvalGames, kTimeoutUs,
-                                        constants::kDefaultNNCacheSize / 2);
+      std::make_unique<nn::NNInterface>(kNumEvalGames, kTimeoutUs, cache_size);
   CHECK_OK(cur_nn_interface->Initialize(std::move(cur_model_path)));
   CHECK_OK(cand_nn_interface->Initialize(std::move(cand_model_path)));
 

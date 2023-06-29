@@ -154,7 +154,7 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
     gmove_info[i].logit = root->move_logits[i];
     gmove_info[i].gumbel_noise = probability.GumbelSample();
     gmove_info[i].move_encoding = i;
-    gmove_info[i].move_loc = game::AsLoc(i, game.board_len());
+    gmove_info[i].move_loc = game::AsLoc(i);
 
     ++k_valid;
   }
@@ -206,7 +206,7 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
 
   AdvanceState(root);
 
-  Loc raw_nn_move = game::AsLoc(Argmax(root->move_logits), game.board_len());
+  Loc raw_nn_move = game::AsLoc(Argmax(root->move_logits));
   GumbelResult result = {raw_nn_move, gmove_info[0].move_loc};
 
   // Get improved policy from completed-Q values.
@@ -263,7 +263,7 @@ std::vector<TreeNode*> GumbelEvaluator::SearchNonRoot(Game& game,
       node->children[selected_action] = std::make_unique<TreeNode>();
     }
 
-    Loc move_loc = game::AsLoc(selected_action, game.board_len());
+    Loc move_loc = game::AsLoc(selected_action);
     game.PlayMove(move_loc, color_to_move);
     path.emplace_back(node->children[selected_action].get());
     color_to_move = game::OppositeColor(color_to_move);
@@ -288,7 +288,7 @@ std::vector<TreeNode*> GumbelEvaluator::SearchNonRoot(Game& game,
     //     player_score - opp_score + constants::kScoreInflectionPoint;
     // float empirical_q =
     //     (player_score > opp_score ? 1.0 : -1.0) +
-    //     ScoreTransform(final_score, root_score_est, game.board_len());
+    //     ScoreTransform(final_score, root_score_est, BOARD_LEN);
 
     // TODO: Experiment with this.
     float empirical_q = player_score > opp_score ? 1.5 : -1.5;
