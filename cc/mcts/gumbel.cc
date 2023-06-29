@@ -20,7 +20,7 @@ using ::game::Game;
 using ::game::Loc;
 
 static constexpr float kSmallLogit = -100000;
-static constexpr float kMaxNonRootDisparity = -100000;
+static constexpr float kMinNonRootDisparity = -100000;
 static constexpr int kVisit = 50;
 static constexpr float kValueScale = 1.0;
 
@@ -186,7 +186,7 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
         Game search_game = game;
         search_game.PlayMove(move_info.move_loc, color_to_move);
 
-        std::vector<TreeNode*> search_path =
+        absl::InlinedVector<TreeNode*, kMaxPathLenEst> search_path =
             SearchNonRoot(search_game, root, child,
                           game::OppositeColor(color_to_move), root->score_est);
 
@@ -221,12 +221,10 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
 // `color_to_move`: Color whose turn it is to move next
 // `root_score_est`: Value estimate for root node. Subsequent node score
 // estimates will be centered against this value.
-std::vector<TreeNode*> GumbelEvaluator::SearchNonRoot(Game& game,
-                                                      TreeNode* root,
-                                                      TreeNode* node,
-                                                      Color color_to_move,
-                                                      float root_score_est) {
-  std::vector<TreeNode*> path = {root, node};
+absl::InlinedVector<TreeNode*, GumbelEvaluator::kMaxPathLenEst>
+GumbelEvaluator::SearchNonRoot(Game& game, TreeNode* root, TreeNode* node,
+                               Color color_to_move, float root_score_est) {
+  absl::InlinedVector<TreeNode*, kMaxPathLenEst> path = {root, node};
   if (node->state == TreeNodeState::kNew) {
     // leaf node. evaluate and return.
     EvaluateLeaf(game, node, color_to_move, root_score_est);
@@ -244,16 +242,12 @@ std::vector<TreeNode*> GumbelEvaluator::SearchNonRoot(Game& game,
     // select node with greatest disparity between expected value and visit
     // count.
     int selected_action = 0;
-    float max_disparity = kMaxNonRootDisparity;
+    float max_disparity = kMinNonRootDisparity;
     for (int i = 0; i < constants::kMaxNumMoves; ++i) {
-      if (!game.IsValidMove(i, color_to_move)) {
-        continue;
-      }
-
       TreeNode* child = node->children[i].get();
       float disparity =
           policy_improved[i] - (N(child) / (1 + SumChildrenN(node)));
-      if (disparity > max_disparity) {
+      if (disparity > max_disparity && game.IsValidMove(i, color_to_move)) {
         max_disparity = disparity;
         selected_action = i;
       }
@@ -310,7 +304,8 @@ void GumbelEvaluator::EvaluateLeaf(const Game& game, TreeNode* node,
   leaf_evaluator_.EvaluateLeaf(game, node, color_to_move, root_score_est);
 }
 
-void GumbelEvaluator::Backward(std::vector<TreeNode*>& path) {
+void GumbelEvaluator::Backward(
+    absl::InlinedVector<TreeNode*, kMaxPathLenEst>& path) {
   float leaf_util = path[path.size() - 1]->q;
 
   for (int i = path.size() - 2; i >= 0; --i) {
