@@ -1,5 +1,5 @@
 {
-  "num_generations": 5,
+  "num_generations": 10,
   "games_per_gen": 1000,
   "num_sp_threads": 48,
   "shared_volume_path": "/p3achygo_runs/test"

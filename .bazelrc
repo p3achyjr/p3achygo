@@ -50,3 +50,6 @@ build:test --strip=never
 build:test --//cc:is_test
 
 build:trt --//cc:is_trt
+
+build:b19 --copt -DBOARD_LEN=19
+build:b9 --copt -DBOARD_LEN=9
