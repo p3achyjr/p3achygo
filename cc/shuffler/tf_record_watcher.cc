@@ -4,6 +4,7 @@
 #include <iterator>
 
 #include "absl/container/flat_hash_set.h"
+#include "absl/log/check.h"
 #include "cc/core/util.h"
 #include "cc/shuffler/constants.h"
 
@@ -12,44 +13,11 @@ namespace fs = std::filesystem;
 
 using namespace ::core;
 
-namespace {
-static constexpr char kGenPrefix[] = "gen";
-static constexpr char kBatchPrefix[] = "batch";
-static constexpr char kTfRecordSuffix[] = ".tfrecord.zz";
-
-// Find generation number from filepath. Assumes gen{i}/** format.
-int FindGen(fs::path path) {
-  for (const std::string p : path) {
-    if (p.find(kGenPrefix, 0) != std::string::npos) {
-      return std::atoi(p.c_str() + 3);
-    }
-  }
-
-  return -1;
-}
-
-fs::path RelativePath(fs::path base_path, fs::path path) {
-  fs::path rel_path;
-  auto path_it = path.begin();
-  for (const auto& p : base_path) {
-    if (p != *path_it) {
-      return rel_path;
-    }
-
-    path_it = std::next(path_it);
-  }
-
-  for (auto it = path_it; it != path.end(); it = std::next(it)) {
-    rel_path /= *it;
-  }
-
-  return rel_path;
-}
-
-}  // namespace
-
 TfRecordWatcher::TfRecordWatcher(std::string dir, std::vector<int> exclude_gens)
-    : dir_(dir), exclude_gens_(exclude_gens), files_(GlobFiles()) {}
+    : dir_(dir),
+      exclude_gens_(exclude_gens),
+      files_(GlobFiles()),
+      num_new_games_(0) {}
 
 const absl::flat_hash_set<std::string>& TfRecordWatcher::GetFiles() {
   return files_;
@@ -62,6 +30,10 @@ std::vector<std::string> TfRecordWatcher::UpdateAndGetNew() {
   for (const auto& f : files) {
     if (!files_.contains(f)) {
       new_files.emplace_back(f);
+      std::optional<ChunkInfo> chunk_info =
+          ParseChunkFilename(fs::path(f).filename());
+      CHECK(chunk_info);
+      num_new_games_ += chunk_info->games;
     }
   }
 
@@ -69,26 +41,9 @@ std::vector<std::string> TfRecordWatcher::UpdateAndGetNew() {
   return new_files;
 }
 
+int TfRecordWatcher::NumGamesSinceInit() { return num_new_games_; }
+
 absl::flat_hash_set<std::string> TfRecordWatcher::GlobFiles() {
-  auto should_include = [&](const fs::directory_entry& dir_entry) {
-    fs::path rel_path = RelativePath(dir_, dir_entry);
-    if (rel_path.empty()) {
-      return false;
-    }
-
-    bool starts_with_batch_prefix =
-        static_cast<std::string>(*rel_path.begin()).rfind(kBatchPrefix, 0) == 0;
-    if (!starts_with_batch_prefix) {
-      return false;
-    }
-
-    if (VecContains(exclude_gens_, FindGen(rel_path))) {
-      return false;
-    }
-
-    return true;
-  };
-
   auto dir_it = fs::recursive_directory_iterator(dir_);
   absl::flat_hash_set<std::string> files;
   for (const auto& dir_entry : dir_it) {
@@ -96,7 +51,9 @@ absl::flat_hash_set<std::string> TfRecordWatcher::GlobFiles() {
       continue;
     }
 
-    if (!should_include(dir_entry)) {
+    std::optional<ChunkInfo> chunk_info =
+        ParseChunkFilename(dir_entry.path().filename());
+    if (!chunk_info || VecContains(exclude_gens_, chunk_info->gen)) {
       continue;
     }
 

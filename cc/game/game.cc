@@ -11,8 +11,6 @@ Game::Game()
 
 const Board& Game::board() const { return board_; }
 
-int Game::board_len() const { return board_.length(); }
-
 const absl::InlinedVector<Move, constants::kMaxGameLen>& Game::moves() const {
   return moves_;
 }
@@ -30,7 +28,7 @@ float Game::komi() const { return board_.komi(); }
 bool Game::IsGameOver() const { return board_.IsGameOver(); }
 
 bool Game::IsValidMove(int index, Color color) const {
-  return IsValidMove(AsLoc(index, board_len()), color);
+  return IsValidMove(AsLoc(index), color);
 }
 
 bool Game::IsValidMove(Loc loc, Color color) const {
@@ -53,6 +51,10 @@ bool Game::Pass(Color color) {
   }
 
   return ok;
+}
+
+void Game::CalculatePassAliveRegions() {
+  board_.CalculatePassAliveRegions();
 }
 
 Scores Game::GetScores() { return board_.GetScores(); }

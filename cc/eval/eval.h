@@ -11,7 +11,7 @@ enum class Winner : uint8_t {
   kCand = 1,
 };
 
-void PlayEvalGame(int thread_id, nn::NNInterface* cur_nn,
+void PlayEvalGame(size_t seed, int thread_id, nn::NNInterface* cur_nn,
                   nn::NNInterface* cand_nn, std::string logfile,
                   std::promise<Winner> winner);
 

@@ -84,7 +84,7 @@ Symmetry GetRandomSymmetry(core::PRng& prng) {
 }
 
 Loc ApplySymmetry(Symmetry sym, Loc loc, size_t grid_len) {
-  auto sym_index = TransformIndex(sym, loc.as_index(grid_len), grid_len);
+  auto sym_index = TransformIndex(sym, AsIndex(loc, grid_len), grid_len);
   return AsLoc(sym_index, grid_len);
 }
 

@@ -13,21 +13,26 @@
 
 #define LOG_TO_SINK(severity, sink) LOG(severity).ToSinkOnly(&sink)
 
+namespace selfplay {
 namespace {
 using namespace ::game;
 using namespace ::core;
 using namespace ::mcts;
 using namespace ::nn;
 using namespace ::recorder;
+
 static constexpr int kShouldLogShard = 8;
+static constexpr int kComputePAMoveNums[] = {250, 300, 350, 400};
+
+static std::atomic<bool> running = true;
+
 }  // namespace
 
-void ExecuteSelfPlay(int thread_id, NNInterface* nn_interface,
-                     GameRecorder* game_recorder, std::string logfile,
-                     int gumbel_n, int gumbel_k, int max_moves) {
+void Run(size_t seed, int thread_id, NNInterface* nn_interface,
+         GameRecorder* game_recorder, std::string logfile, int gumbel_n,
+         int gumbel_k, int max_moves) {
   FileSink sink(logfile.c_str());
-  Probability probability(static_cast<uint64_t>(std::time(nullptr)) +
-                          thread_id);
+  Probability probability(seed + thread_id);
   auto search_dur_ema = 0;
 
   // Main loop.
@@ -39,7 +44,7 @@ void ExecuteSelfPlay(int thread_id, NNInterface* nn_interface,
 
     GumbelEvaluator gumbel_evaluator(nn_interface, thread_id);
     auto color_to_move = BLACK;
-    while (!game.IsGameOver() && game.num_moves() < max_moves) {
+    while (IsRunning() && !game.IsGameOver() && game.num_moves() < max_moves) {
       auto begin = std::chrono::high_resolution_clock::now();
       GumbelResult gumbel_res =
           gumbel_evaluator.SearchRoot(probability, game, root_node.get(),
@@ -47,25 +52,27 @@ void ExecuteSelfPlay(int thread_id, NNInterface* nn_interface,
       auto end = std::chrono::high_resolution_clock::now();
       Loc nn_move = gumbel_res.nn_move;
       Loc move = gumbel_res.mcts_move;
-      float nn_move_q =
-          QAction(root_node.get(), nn_move.as_index(game.board_len()));
-      float move_q = QAction(root_node.get(), move.as_index(game.board_len()));
+      float nn_move_q = QAction(root_node.get(), nn_move);
+      float move_q = QAction(root_node.get(), move);
       mcts_pis.push_back(gumbel_res.pi_improved);
       game.PlayMove(move, color_to_move);
+      if (std::find(std::begin(kComputePAMoveNums),
+                    std::end(kComputePAMoveNums), game.num_moves())) {
+        game.CalculatePassAliveRegions();
+      }
       color_to_move = OppositeColor(color_to_move);
 
-      root_node =
-          std::move(root_node->children[move.as_index(game.board_len())]);
+      root_node = std::move(root_node->children[move]);
       if (!root_node) {
         // this is possible if pass is the only legal move found in search.
-        LOG(INFO) << "Root node is nullptr. "
-                  << "Last 5 Moves: " << game.move(game.num_moves() - 5) << ", "
-                  << game.move(game.num_moves() - 4) << ", "
-                  << game.move(game.num_moves() - 3) << ", "
-                  << game.move(game.num_moves() - 2) << ", "
-                  << game.move(game.num_moves() - 1)
-                  << ", Move Count: " << game.num_moves();
-        LOG(INFO) << "Board:\n" << game.board();
+        DLOG(INFO) << "Root node is nullptr. "
+                   << "Last 5 Moves: " << game.move(game.num_moves() - 5)
+                   << ", " << game.move(game.num_moves() - 4) << ", "
+                   << game.move(game.num_moves() - 3) << ", "
+                   << game.move(game.num_moves() - 2) << ", "
+                   << game.move(game.num_moves() - 1)
+                   << ", Move Count: " << game.num_moves();
+        DLOG(INFO) << "Board:\n" << game.board();
         root_node = std::make_unique<TreeNode>();
       }
 
@@ -100,6 +107,8 @@ void ExecuteSelfPlay(int thread_id, NNInterface* nn_interface,
     }
 
     nn_interface->UnregisterThread(thread_id);
+    if (!IsRunning()) break;
+
     game.WriteResult();
 
     LOG_TO_SINK(INFO, sink) << "Black Score: " << game.result().bscore;
@@ -120,5 +129,11 @@ void ExecuteSelfPlay(int thread_id, NNInterface* nn_interface,
     nn_interface->RegisterThread(thread_id);
   }
 }
+
+void SignalStop() { running.store(false, std::memory_order_release); }
+
+bool IsRunning() { return running.load(std::memory_order_acquire); }
+
+}  // namespace selfplay
 
 #undef LOG_TO_SINK

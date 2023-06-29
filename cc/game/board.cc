@@ -14,11 +14,12 @@ using namespace ::core;
 using GroupMap = GroupTracker::BensonSolver::GroupMap;
 using RegionMap = GroupTracker::BensonSolver::RegionMap;
 
-static constexpr size_t kBensonCacheSize = 16384;
+// 2 ** 18 total size across program.
+static constexpr size_t kBensonCacheSize = 262144 / constants::kMaxNumThreads;
 
 inline unsigned ZobristState(int state) { return state + 1; }
 
-inline absl::InlinedVector<Loc, 4> Adjacent(Loc loc, int length) {
+inline absl::InlinedVector<Loc, 4> Adjacent(Loc loc) {
   absl::InlinedVector<Loc, 4> adjacent_points;
 
   if (loc.i > 0) {
@@ -29,11 +30,11 @@ inline absl::InlinedVector<Loc, 4> Adjacent(Loc loc, int length) {
     adjacent_points.emplace_back(Loc{loc.i, loc.j - 1});
   }
 
-  if (loc.i < length - 1) {
+  if (loc.i < BOARD_LEN - 1) {
     adjacent_points.emplace_back(Loc{loc.i + 1, loc.j});
   }
 
-  if (loc.j < length - 1) {
+  if (loc.j < BOARD_LEN - 1) {
     adjacent_points.emplace_back(Loc{loc.i, loc.j + 1});
   }
 
@@ -42,27 +43,23 @@ inline absl::InlinedVector<Loc, 4> Adjacent(Loc loc, int length) {
 
 }  // namespace
 
-GroupTracker::GroupTracker(int length)
-    : length_(length), pass_alive_(), next_group_id_(0) {
+GroupTracker::GroupTracker() : pass_alive_(), next_group_id_(0) {
   groups_.fill(kInvalidGroupId);
 }
 
-int GroupTracker::length() const { return length_; }
-
-groupid GroupTracker::GroupAt(Loc loc) const {
-  return groups_[loc.as_index(length_)];
-}
+groupid GroupTracker::GroupAt(Loc loc) const { return groups_[loc]; }
 
 groupid GroupTracker::NewGroup(Loc loc, Color color) {
   // precondition: loc is not connected to any other group.
   int liberties = 0;
-  std::vector<groupid> seen_groups;  // can only subtract up to 1 liberty from
-                                     // each adjacent group
-  for (const Loc& nloc : Adjacent(loc, length_)) {
+  absl::InlinedVector<groupid, 4>
+      seen_groups;  // can only subtract up to 1 liberty from
+                    // each adjacent group
+  for (const Loc& nloc : Adjacent(loc)) {
     if (GroupAt(nloc) == kInvalidGroupId) {
       liberties++;
     } else if (group_info_map_[GroupAt(nloc)].color == OppositeColor(color)) {
-      if (VecContains(seen_groups, GroupAt(nloc))) continue;
+      if (InlinedVecContains(seen_groups, GroupAt(nloc))) continue;
       seen_groups.emplace_back(GroupAt(nloc));
       group_info_map_[GroupAt(nloc)].liberties--;
     }
@@ -76,12 +73,12 @@ groupid GroupTracker::NewGroup(Loc loc, Color color) {
 
 void GroupTracker::AddToGroup(Loc loc, groupid gid) {
   // precondition: loc is strongly connected to groupid `id`.
-  std::vector<groupid> adjacent_groups;
-  for (const Loc& nloc : Adjacent(loc, length_)) {
+  absl::InlinedVector<groupid, 4> adjacent_groups;
+  for (const Loc& nloc : Adjacent(loc)) {
     if (GroupAt(nloc) == kInvalidGroupId) {
       // liberty of stone, and thereby liberty of group it is now connected to.
       bool is_counted = false;
-      for (const Loc& nloc : Adjacent(nloc, length_)) {
+      for (const Loc& nloc : Adjacent(nloc)) {
         if (nloc == loc) {
           continue;
         } else if (GroupAt(nloc) == gid) {
@@ -91,7 +88,7 @@ void GroupTracker::AddToGroup(Loc loc, groupid gid) {
       }
 
       if (!is_counted) group_info_map_[gid].liberties++;
-    } else if (!VecContains(adjacent_groups, GroupAt(nloc))) {
+    } else if (!InlinedVecContains(adjacent_groups, GroupAt(nloc))) {
       // neighboring group, need to subtract liberty to account for stone.
       adjacent_groups.emplace_back(GroupAt(nloc));
     }
@@ -106,7 +103,7 @@ void GroupTracker::AddToGroup(Loc loc, groupid gid) {
 
 void GroupTracker::Move(Loc loc, Color color) {
   absl::InlinedVector<groupid, 4> adjacent_groups;
-  for (const Loc& nloc : Adjacent(loc, length_)) {
+  for (const Loc& nloc : Adjacent(loc)) {
     if (ColorAt(nloc) != color) {
       continue;
     }
@@ -135,7 +132,7 @@ void GroupTracker::Move(Loc loc, Color color) {
 
 int GroupTracker::LibertiesAt(Loc loc) const {
   int l = 0;
-  for (const Loc& nloc : Adjacent(loc, length_)) {
+  for (const Loc& nloc : Adjacent(loc)) {
     if (GroupAt(nloc) == kInvalidGroupId) {
       l++;
     }
@@ -165,7 +162,7 @@ LocVec GroupTracker::ExpandGroup(groupid gid) const {
     group.emplace_back(loc);
 
     DCHECK(GroupAt(loc) == gid);
-    for (const Loc& nloc : Adjacent(loc, length_)) {
+    for (const Loc& nloc : Adjacent(loc)) {
       if (GroupAt(nloc) == gid) {
         // visitor ensures each node is only visited once, so we do not need to
         // do any additional filtering.
@@ -181,11 +178,11 @@ void GroupTracker::RemoveCaptures(const LocVec& captures) {
   for (const Loc& loc : captures) {
     SetGroupInvalid(GroupAt(loc));
 
-    std::vector<groupid> adj_groups;
-    for (const Loc& nloc : Adjacent(loc, length_)) {
+    absl::InlinedVector<groupid, 4> adj_groups;
+    for (const Loc& nloc : Adjacent(loc)) {
       if (GroupAt(nloc) == kInvalidGroupId) {
         continue;
-      } else if (VecContains(adj_groups, GroupAt(nloc))) {
+      } else if (InlinedVecContains(adj_groups, GroupAt(nloc))) {
         continue;
       }
 
@@ -214,8 +211,8 @@ groupid GroupTracker::CoalesceGroups(Loc loc) {
     } else {
       DCHECK(ColorAt(loc) == color);
 
-      groups_[loc.as_index(length_)] = canonical_group_id;
-      for (const Loc& nloc : Adjacent(loc, length_)) {
+      groups_[loc] = canonical_group_id;
+      for (const Loc& nloc : Adjacent(loc)) {
         // add all liberties and stones of color.
         // Visitor ensures that each liberty is only counted once.
         if (ColorAt(nloc) == OppositeColor(color)) {
@@ -248,16 +245,14 @@ void GroupTracker::CalculatePassAliveRegionForColor(Color color) {
 }
 
 bool GroupTracker::IsPassAlive(Loc loc) const {
-  return pass_alive_[loc.as_index(length_)] != EMPTY;
+  return pass_alive_[loc] != EMPTY;
 }
 
 bool GroupTracker::IsPassAliveForColor(Loc loc, Color color) const {
-  return pass_alive_[loc.as_index(length_)] == color;
+  return pass_alive_[loc] == color;
 }
 
-void GroupTracker::SetLoc(Loc loc, groupid id) {
-  groups_[loc.as_index(length_)] = id;
-}
+void GroupTracker::SetLoc(Loc loc, groupid id) { groups_[loc] = id; }
 
 groupid GroupTracker::EmplaceGroup(GroupInfo group_info) {
   groupid gid;
@@ -311,15 +306,13 @@ void GroupTracker::BensonSolver::CalculatePassAliveRegionForColor(Color color) {
     }
     LocVec group = group_tracker_->ExpandGroup(gid);
     for (auto& loc : group) {
-      group_tracker_->pass_alive_[loc.as_index(group_tracker_->length_)] =
-          color;
+      group_tracker_->pass_alive_[loc] = color;
     }
   }
 
   for (auto& [rid, region_info] : region_map) {
     for (auto& loc : region_info.locs) {
-      group_tracker_->pass_alive_[loc.as_index(group_tracker_->length_)] =
-          color;
+      group_tracker_->pass_alive_[loc] = color;
     }
   }
 }
@@ -351,8 +344,8 @@ RegionMap GroupTracker::BensonSolver::GetRegionMap(Color color) {
   int next_region_id = 1;
 
   bool seen[BOARD_LEN][BOARD_LEN] = {};
-  for (int i = 0; i < group_tracker_->length_; ++i) {
-    for (int j = 0; j < group_tracker_->length_; ++j) {
+  for (int i = 0; i < BOARD_LEN; ++i) {
+    for (int j = 0; j < BOARD_LEN; ++j) {
       if (seen[i][j]) {
         continue;
       }
@@ -374,7 +367,7 @@ RegionMap GroupTracker::BensonSolver::GetRegionMap(Color color) {
         seen[loc.i][loc.j] = true;
 
         bool loc_is_liberty = group_tracker_->LocIsEmpty(loc) ? false : true;
-        for (const auto& nloc : Adjacent(loc, group_tracker_->length())) {
+        for (const auto& nloc : Adjacent(loc)) {
           if (group_tracker_->ColorAt(nloc) == color) {
             // `loc` is a liberty of a `color` chain. Thus, the region seen so
             // far is still small.
@@ -422,7 +415,7 @@ void GroupTracker::BensonSolver::PopulateAdjacentRegions(
     for (const auto& loc : empty_locs) {
       // check that set of groups this is adjacent to match vital_groups.
       // Any group in vital_groups that is not found is removed.
-      for (const auto& nloc : Adjacent(loc, group_tracker_->length_)) {
+      for (const auto& nloc : Adjacent(loc)) {
         groupid gid = group_tracker_->GroupAt(nloc);
         if (!MapContains(group_map, gid)) {
           continue;
@@ -448,7 +441,7 @@ void GroupTracker::BensonSolver::PopulateVitalRegions(GroupMap& group_map,
     }
 
     // find vital groups
-    for (const auto& loc : Adjacent(empty_locs[0], group_tracker_->length_)) {
+    for (const auto& loc : Adjacent(empty_locs[0])) {
       if (MapContains(group_map, group_tracker_->GroupAt(loc))) {
         region_info.vital_groups.insert(group_tracker_->GroupAt(loc));
       }
@@ -458,7 +451,7 @@ void GroupTracker::BensonSolver::PopulateVitalRegions(GroupMap& group_map,
       // check that set of groups this is adjacent to match vital_groups.
       // Any group in vital_groups that is not found is removed.
       absl::InlinedVector<groupid, 4> loc_adj_groups;
-      for (const auto& nloc : Adjacent(loc, group_tracker_->length_)) {
+      for (const auto& nloc : Adjacent(loc)) {
         if (!MapContains(group_map, group_tracker_->GroupAt(nloc))) {
           continue;
         }
@@ -520,20 +513,17 @@ void GroupTracker::BensonSolver::RunBenson(GroupMap& group_map,
   }
 }
 
-Board::Board() : Board::Board(BOARD_LEN) {}
-
-Board::Board(int length)
+Board::Board()
     : zobrist_(Zobrist::get()),
-      length_(length),
       board_(),
       move_count_(0),
       consecutive_passes_(0),
       passes_(0),
       komi_(7.5),
-      group_tracker_(length) {
+      group_tracker_() {
   Zobrist::Hash hash = 0;
-  for (auto i = 0; i < length_; i++) {
-    for (auto j = 0; j < length_; j++) {
+  for (auto i = 0; i < BOARD_LEN; i++) {
+    for (auto j = 0; j < BOARD_LEN; j++) {
       hash ^= zobrist_.hash_at(i, j, ZobristState(EMPTY));
     }
   }
@@ -542,8 +532,7 @@ Board::Board(int length)
   seen_states_.insert(hash_);
 }
 
-int Board::length() const { return length_; }
-int Board::at(int i, int j) const { return board_[i * length_ + j]; }
+int Board::at(int i, int j) const { return board_[i * BOARD_LEN + j]; }
 float Board::komi() const { return komi_; }
 Zobrist::Hash Board::hash() const { return hash_; }
 int Board::move_count() const { return move_count_; }
@@ -618,7 +607,8 @@ MoveResult Board::PlayMoveDry(Loc loc, Color color) const {
                                MoveInfo::Transitions(), hash_}};
   } else if (color != BLACK && color != WHITE) {
     return MoveResult{MoveStatus::kUnknownColor, std::nullopt};
-  } else if (loc.i < 0 || loc.i >= length_ || loc.j < 0 || loc.j >= length_) {
+  } else if (loc.i < 0 || loc.i >= BOARD_LEN || loc.j < 0 ||
+             loc.j >= BOARD_LEN) {
     return MoveResult{MoveStatus::kOutOfBounds, std::nullopt};
   } else if (AtLoc(loc) != EMPTY) {
     return MoveResult{MoveStatus::kLocNotEmpty, std::nullopt};
@@ -627,7 +617,7 @@ MoveResult Board::PlayMoveDry(Loc loc, Color color) const {
   }
 
   // check for captures.
-  std::vector<groupid> captured_groups =
+  absl::InlinedVector<groupid, 4> captured_groups =
       GetCapturedGroups(loc, OppositeColor(color));
 
   // if no captures, check for self-atari.
@@ -661,6 +651,10 @@ MoveResult Board::PlayMoveDry(Loc loc, Color color) const {
                     MoveInfo{move_transition, capture_transitions, hash}};
 }
 
+void Board::CalculatePassAliveRegions() {
+  group_tracker_.CalculatePassAliveRegions(hash_);
+}
+
 Scores Board::GetScores() {
   // (re) calculate PA regions for score accuracy.
   group_tracker_.CalculatePassAliveRegions(hash_);
@@ -670,9 +664,9 @@ Scores Board::GetScores() {
       ScoreAndOwnership(WHITE);
 
   std::array<Color, BOARD_LEN * BOARD_LEN> ownership;
-  for (int i = 0; i < length_; ++i) {
-    for (int j = 0; j < length_; ++j) {
-      int idx = i * length_ + j;
+  for (int i = 0; i < BOARD_LEN; ++i) {
+    for (int j = 0; j < BOARD_LEN; ++j) {
+      int idx = i * BOARD_LEN + j;
       if (bscore_ownership.second[idx] == BLACK) {
         ownership[idx] = BLACK;
       } else if (wscore_ownership.second[idx] == WHITE) {
@@ -692,11 +686,9 @@ std::string Board::ToString() const {
   return ss.str();
 }
 
-int Board::AtLoc(Loc loc) const { return board_[loc.as_index(length_)]; }
+int Board::AtLoc(Loc loc) const { return board_[loc]; }
 
-void Board::SetLoc(Loc loc, Color color) {
-  board_[loc.as_index(length_)] = color;
-}
+void Board::SetLoc(Loc loc, Color color) { board_[loc] = color; }
 
 bool Board::IsSelfCapture(Loc loc, Color color) const {
   bool adjacent_in_atari = true;
@@ -723,8 +715,8 @@ Board::ScoreAndOwnership(Color color) const {
   bool counted[BOARD_LEN][BOARD_LEN]{};
   std::array<Color, BOARD_LEN * BOARD_LEN> ownership{};
   int score = 0;
-  for (auto i = 0; i < length_; ++i) {
-    for (auto j = 0; j < length_; ++j) {
+  for (auto i = 0; i < BOARD_LEN; ++i) {
+    for (auto j = 0; j < BOARD_LEN; ++j) {
       if (counted[i][j]) {
         continue;
       } else if (at(i, j) == color) {
@@ -732,7 +724,7 @@ Board::ScoreAndOwnership(Color color) const {
             group_tracker_.IsPassAliveForColor(Loc{i, j}, OppositeColor(color));
         if (!stone_is_dead) {
           ++score;
-          ownership[i * length_ + j] = color;
+          ownership[i * BOARD_LEN + j] = color;
         }
 
         counted[i][j] = true;
@@ -772,7 +764,7 @@ Board::ScoreAndOwnership(Color color) const {
         }
 
         counted[loc.i][loc.j] = true;
-        for (const auto& nloc : Adjacent(loc, length_)) {
+        for (const auto& nloc : Adjacent(loc)) {
           visitor.Visit(nloc);
         }
       }
@@ -781,7 +773,7 @@ Board::ScoreAndOwnership(Color color) const {
       if (count_region) {
         score += region_score;
         for (const auto& loc : region) {
-          ownership[loc.i * length_ + loc.j] = color;
+          ownership[loc.i * BOARD_LEN + loc.j] = color;
         }
       }
     }
@@ -791,14 +783,14 @@ Board::ScoreAndOwnership(Color color) const {
       static_cast<float>(score) + (color == WHITE ? komi_ : 0), ownership);
 }
 
-std::vector<groupid> Board::GetCapturedGroups(Loc loc,
-                                              int captured_color) const {
-  std::vector<groupid> captured_groups;
+absl::InlinedVector<groupid, 4> Board::GetCapturedGroups(
+    Loc loc, int captured_color) const {
+  absl::InlinedVector<groupid, 4> captured_groups;
 
-  for (Loc& nloc : Adjacent(loc, length_)) {
+  for (Loc& nloc : Adjacent(loc)) {
     groupid id = group_tracker_.GroupAt(nloc);
     if (AtLoc(nloc) == captured_color && IsInAtari(nloc) &&
-        !VecContains(captured_groups, id)) {
+        !InlinedVecContains(captured_groups, id)) {
       // this group is in atari, and we have filled the last liberty.
       captured_groups.emplace_back(group_tracker_.GroupAt(nloc));
     }
@@ -821,12 +813,12 @@ absl::InlinedVector<Loc, 4> Board::AdjacentOfColor(Loc loc, Color color) const {
   }
 
   Loc right = Loc{loc.i + 1, loc.j};
-  if (loc.i < length_ - 1 && AtLoc(right) == color) {
+  if (loc.i < BOARD_LEN - 1 && AtLoc(right) == color) {
     adjacent_points.emplace_back(right);
   }
 
   Loc bottom = Loc{loc.i, loc.j + 1};
-  if (loc.j < length_ - 1 && AtLoc(bottom) == color) {
+  if (loc.j < BOARD_LEN - 1 && AtLoc(bottom) == color) {
     adjacent_points.emplace_back(bottom);
   }
 

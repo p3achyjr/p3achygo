@@ -42,7 +42,9 @@ inline RandResult pcg32(uint64_t state) {
 }  // namespace
 
 PRng::PRng() {
-  uint64_t seed = static_cast<uint64_t>(std::time(nullptr));
+  uint64_t seed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                      std::chrono::steady_clock::now().time_since_epoch())
+                      .count();
   state_[0] = seed + PCG_ADD;
   state_[1] = seed + PCG_ADD + 1;
   state_[2] = seed + PCG_ADD + 2;

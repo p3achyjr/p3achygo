@@ -4,6 +4,7 @@ cc_library(
     name = "core",
     deps = [
         ":cache",
+        ":elo",
         ":file_log_sink",
         ":filepath",
         ":probability",
@@ -18,6 +19,11 @@ cc_library(
     deps = [
         "@com_google_absl//absl/hash",
     ],
+)
+
+cc_library(
+    name = "elo",
+    hdrs = ["elo.h"],
 )
 
 cc_library(

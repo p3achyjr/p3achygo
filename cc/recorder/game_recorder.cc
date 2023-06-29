@@ -38,6 +38,7 @@ class GameRecorderImpl final : public GameRecorder {
  private:
   void IoThread();
   void Flush() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
+  bool ShouldFlush();
 
   const std::unique_ptr<SgfRecorder> sgf_recorder_;
   const std::unique_ptr<TfRecorder> tf_recorder_;
@@ -58,7 +59,7 @@ GameRecorderImpl::GameRecorderImpl(std::string path, int num_threads,
                                    int flush_interval, int gen)
     : sgf_recorder_(SgfRecorder::Create(FilePath(path) / recorder::kSgfDir,
                                         num_threads, gen)),
-      tf_recorder_(TfRecorder::Create(FilePath(path) / recorder::kTfDir,
+      tf_recorder_(TfRecorder::Create(FilePath(path) / recorder::kChunkDir,
                                       num_threads, gen)),
       running_(true),
       games_buffered_(0),
@@ -70,14 +71,13 @@ GameRecorderImpl::GameRecorderImpl(std::string path, int num_threads,
 }
 
 GameRecorderImpl::~GameRecorderImpl() {
+  mu_.Lock();
   running_.store(false, std::memory_order_release);
+  mu_.Unlock();
 
   if (io_thread_.joinable()) {
     io_thread_.join();
   }
-
-  absl::MutexLock l(&mu_);
-  Flush();
 }
 
 void GameRecorderImpl::RecordGame(int thread_id, const game::Game& game,
@@ -91,12 +91,12 @@ void GameRecorderImpl::RecordGame(int thread_id, const game::Game& game,
   ++games_buffered_;
   should_flush_ = games_buffered_ >= flush_interval_;
 
-  LOG_EVERY_N_SEC(INFO, 5) << games_buffered_ << " games buffered.";
+  DLOG_EVERY_N_SEC(INFO, 5) << games_buffered_ << " games buffered.";
 }
 
 void GameRecorderImpl::IoThread() {
   while (running_.load(std::memory_order_acquire)) {
-    mu_.LockWhen(absl::Condition(&should_flush_));
+    mu_.LockWhen(absl::Condition(this, &GameRecorderImpl::ShouldFlush));
     LOG(INFO) << "Flushing...";
 
     auto begin = std::chrono::high_resolution_clock::now();
@@ -129,6 +129,10 @@ void GameRecorderImpl::Flush() {
   for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
     thread_mus_[thread_id].Unlock();
   }
+}
+
+bool GameRecorderImpl::ShouldFlush() {
+  return should_flush_ || !running_.load(std::memory_order_acquire);
 }
 }  // namespace
 

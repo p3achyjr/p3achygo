@@ -8,6 +8,7 @@
 #include "absl/log/log.h"
 #include "absl/strings/str_format.h"
 #include "absl/time/time.h"
+#include "cc/shuffler/chunk_info.h"
 #include "cc/shuffler/constants.h"
 #include "tensorflow/core/lib/io/compression.h"
 #include "tensorflow/core/lib/io/record_reader.h"
@@ -48,24 +49,15 @@ void WriteChunkToDisk(std::string filename, const std::vector<tstring>& chunk) {
 }
 }  // namespace
 
-ChunkManager::ChunkManager(std::string dir, int gen, float p)
-    : ChunkManager(dir, gen, p, {} /* exclude_gens */) {}
-
-ChunkManager::ChunkManager(std::string dir, int gen, float p,
+ChunkManager::ChunkManager(std::string dir, int gen, float p, int games_per_gen,
                            std::vector<int> exclude_gens)
-    : ChunkManager(dir, gen, p, exclude_gens, kDefaultChunkSize,
-                   kDefaultPollIntervalS) {}
-
-ChunkManager::ChunkManager(std::string dir, int gen, float p,
-                           std::vector<int> exclude_gens, size_t chunk_size,
-                           int poll_interval_s)
     : dir_(dir),
       gen_(gen),
       p_(p),
-      chunk_size_(chunk_size),
-      poll_interval_s_(poll_interval_s),
+      chunk_size_(kDefaultChunkSize),
+      poll_interval_s_(kDefaultPollIntervalS),
+      games_per_gen_(games_per_gen),
       exclude_gens_(exclude_gens),
-      probability_(static_cast<uint64_t>(std::time(nullptr))),
       watcher_(dir_, exclude_gens_),
       fbuffer_(watcher_.GetFiles()),
       running_(true) {
@@ -74,7 +66,7 @@ ChunkManager::ChunkManager(std::string dir, int gen, float p,
 
 ChunkManager::~ChunkManager() {
   mu_.Lock();
-  running_ = false;
+  running_.store(false, std::memory_order_release);
   cv_.SignalAll();
   mu_.Unlock();
   if (fs_thread_.joinable()) {
@@ -87,28 +79,12 @@ void ChunkManager::CreateChunk() {
 
   int num_scanned = 0;
   auto start = std::chrono::steady_clock::now();
-  while (true) {
+  while (running_.load(std::memory_order_acquire)) {
     // Pop file to read, if one exists.
-    std::optional<std::string> f;
-    {
-      absl::MutexLock l(&mu_);
-      if (!running_) {
-        break;
-      }
-
-      LOG_EVERY_N_SEC(INFO, 30) << fbuffer_.size() << " files in buffer.";
-      f = fbuffer_.PopFile();
-    }
-
+    std::optional<std::string> f = PopFile();
     if (f == std::nullopt) {
-      LOG(INFO) << "No files remaining. Sleeping for " << poll_interval_s_
-                << "s.";
-
       absl::MutexLock l(&mu_);
       cv_.WaitWithTimeout(&mu_, absl::Seconds(poll_interval_s_));
-      if (!running_) {
-        break;
-      }
       continue;
     }
 
@@ -130,13 +106,6 @@ void ChunkManager::CreateChunk() {
       }
 
       ++num_scanned;
-      LOG_IF(INFO, num_scanned % kLoggingInterval == 0)
-          << "Time so far: "
-          << std::chrono::duration<float>(std::chrono::steady_clock::now() -
-                                          start)
-                 .count()
-          << "s. Num scanned so far: " << num_scanned
-          << ". Chunk size: " << chunk_.size() << ".";
     }
   }
   auto end = std::chrono::steady_clock::now();
@@ -167,8 +136,13 @@ void ChunkManager::ShuffleAndFlush() {
 
 void ChunkManager::SignalStop() {
   absl::MutexLock l(&mu_);
-  running_ = false;
+  running_.store(false, std::memory_order_acquire);
   cv_.SignalAll();
+}
+
+std::optional<std::string> ChunkManager::PopFile() {
+  absl::MutexLock l(&mu_);
+  return fbuffer_.PopFile();
 }
 
 void ChunkManager::AppendToChunk(tstring&& proto) {
@@ -182,12 +156,21 @@ void ChunkManager::FsThread() {
   while (true) {
     absl::MutexLock l(&mu_);
     cv_.WaitWithTimeout(&mu_, absl::Seconds(poll_interval_s_));
-    if (!running_) {
+    if (!running_.load(std::memory_order_acquire)) {
       break;
     }
 
     std::vector<std::string> new_files = watcher_.UpdateAndGetNew();
-    LOG(INFO) << "Found " << new_files.size() << " new files.";
+    LOG_IF(INFO, new_files.size() > 0)
+        << "Found " << new_files.size() << " new files. "
+        << watcher_.NumGamesSinceInit() << " new games played since init.";
+
+    // If we have received enough new files, flush.
+    if (watcher_.NumGamesSinceInit() >= games_per_gen_) {
+      running_.store(false, std::memory_order_release);
+      break;
+    }
+
     fbuffer_.AddNewFiles(new_files);
   }
 }

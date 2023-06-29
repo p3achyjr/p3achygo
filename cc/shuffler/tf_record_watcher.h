@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
+#include "cc/shuffler/chunk_info.h"
 
 namespace shuffler {
 
@@ -15,8 +16,8 @@ namespace shuffler {
  * The file structure will look like this:
  *
  * `dir`/:
- *   batch_b0_g{G}_n{N}.tfrecord.zz
- *   batch_b1_g{G}_n{N}.tfrecord.zz
+ *   gen{g}_b0_g{G}_n{N}.tfrecord.zz
+ *   gen{g}_b1_g{G}_n{N}.tfrecord.zz
  *   goldens/
  *
  * where each batch contains `G` games and `N` examples.
@@ -32,12 +33,14 @@ class TfRecordWatcher final {
 
   const absl::flat_hash_set<std::string>& GetFiles();
   std::vector<std::string> UpdateAndGetNew();
+  int NumGamesSinceInit();
 
  private:
   absl::flat_hash_set<std::string> GlobFiles();
   std::string dir_;
   std::vector<int> exclude_gens_;
   absl::flat_hash_set<std::string> files_;
+  int num_new_games_;
 };
 }  // namespace shuffler
 

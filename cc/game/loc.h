@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "absl/hash/hash.h"
+#include "cc/constants/constants.h"
 
 namespace game {
 
@@ -16,11 +17,17 @@ struct Loc {
   int j;
 
   // Index into a 1D representation of a 2D grid of length `len`.
-  int16_t as_index(int len) const { return i * len + j; }
+  operator int16_t() const { return i * BOARD_LEN + j; }
 };
+
+inline int AsIndex(Loc loc, int grid_len) { return loc.i * grid_len + loc.j; }
 
 inline Loc AsLoc(int encoding, int grid_len) {
   return Loc{encoding / grid_len, encoding % grid_len};
+}
+
+inline Loc AsLoc(int encoding) {
+  return Loc{encoding / BOARD_LEN, encoding % BOARD_LEN};
 }
 
 template <typename H>

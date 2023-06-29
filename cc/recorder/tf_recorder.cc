@@ -25,6 +25,9 @@ using ::tensorflow::io::RecordWriterOptions;
 
 using ::core::FilePath;
 
+// Keep in sync with //cc/shuffler/chunk_info.h
+static constexpr char kChunkFormat[] = "gen%d_b%d_g%d_n%d.tfrecord.zz";
+
 template <typename T, size_t N>
 tensorflow::Feature MakeBytesFeature(const std::array<T, N>& data) {
   tensorflow::Feature feature;
@@ -125,8 +128,8 @@ void TfRecorderImpl::Flush() {
 
   // Create File.
   std::string path =
-      FilePath(path_) / absl::StrFormat("gen%d_b%d_g%d_n%d.tfrecord.zz", gen_,
-                                        batch_num_, num_games, num_records);
+      FilePath(path_) /
+      absl::StrFormat(kChunkFormat, gen_, batch_num_, num_games, num_records);
   std::unique_ptr<tensorflow::WritableFile> file;
   TF_CHECK_OK(tensorflow::Env::Default()->NewWritableFile(path, &file));
 
@@ -154,7 +157,7 @@ void TfRecorderImpl::Flush() {
         std::array<int16_t, constants::kNumLastMoves> last_moves;
         for (int off = 0; off < constants::kNumLastMoves; ++off) {
           Loc last_move = game.moves()[move_num + off].loc;
-          last_moves[off] = last_move.as_index(game.board_len());
+          last_moves[off] = last_move;
         }
 
         Move move = game.move(move_num);
@@ -164,7 +167,7 @@ void TfRecorderImpl::Flush() {
         // Coerce into example and write result.
         tensorflow::Example example =
             MakeTfExample(board.position(), last_moves, pi, game.result(),
-                          move.color, game.komi(), game.board_len());
+                          move.color, game.komi(), BOARD_LEN);
         std::string data;
         example.SerializeToString(&data);
         TF_CHECK_OK(writer.WriteRecord(data));

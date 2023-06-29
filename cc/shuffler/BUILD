@@ -3,11 +3,13 @@
 cc_library(
     name = "shuffler",
     srcs = [
+        "chunk_info.cc",
         "chunk_manager.cc",
         "filename_buffer.cc",
         "tf_record_watcher.cc",
     ],
     hdrs = [
+        "chunk_info.h",
         "chunk_manager.h",
         "constants.h",
         "filename_buffer.h",

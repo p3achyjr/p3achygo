@@ -161,9 +161,9 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
             infer_result.move_probs.begin() + constants::kMaxNumBoardLocs,
             grid_probs_sym.begin());
   std::array<float, constants::kMaxNumBoardLocs> grid_logits =
-      ApplyInverse(sym, grid_logits_sym, game.board_len());
+      ApplyInverse(sym, grid_logits_sym, BOARD_LEN);
   std::array<float, constants::kMaxNumBoardLocs> grid_probs =
-      ApplyInverse(sym, grid_probs_sym, game.board_len());
+      ApplyInverse(sym, grid_probs_sym, BOARD_LEN);
   std::copy(grid_logits.begin(), grid_logits.end(),
             infer_result.move_logits.begin());
   std::copy(grid_probs.begin(), grid_probs.end(),
@@ -240,7 +240,7 @@ void NNInterface::Infer() {
   TF_CHECK_OK(model_bundle_.GetSession()->Run(nn_input, kOutputNames, {},
                                               &nn_output_buf_));
 
-  // reset input buffers
+  // reset input buffers.
   nn_input_buf_[0].flat<float>().setZero();
   nn_input_buf_[1].flat<float>().setZero();
 

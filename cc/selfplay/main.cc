@@ -31,6 +31,14 @@ ABSL_FLAG(int, flush_interval, 128, "Number of games to buffer before flush.");
 ABSL_FLAG(int, max_moves, 600, "Maximum number of moves per game.");
 ABSL_FLAG(int, gen, 0, "Model generation we are generating games from.");
 
+void WaitForSignal() {
+  // any line from stdin is a shutdown signal.
+  std::string signal;
+  std::getline(std::cin, signal);
+
+  selfplay::SignalStop();
+}
+
 int main(int argc, char** argv) {
   absl::ParseCommandLine(argc, argv);
   absl::InitializeLog();
@@ -52,7 +60,7 @@ int main(int argc, char** argv) {
   int perms =
       S_IRUSR | S_IWUSR | S_IXUSR | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH;
   mkdir((recorder_path / recorder::kSgfDir).c_str(), perms);
-  mkdir((recorder_path / recorder::kTfDir).c_str(), perms);
+  mkdir((recorder_path / recorder::kChunkDir).c_str(), perms);
 
   int num_threads = absl::GetFlag(FLAGS_num_threads);
   if (num_threads > constants::kMaxNumThreads) {
@@ -81,16 +89,23 @@ int main(int argc, char** argv) {
                                      absl::GetFlag(FLAGS_flush_interval),
                                      absl::GetFlag(FLAGS_gen));
 
+  size_t seed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch())
+                    .count();
   std::vector<std::thread> threads;
   for (int thread_id = 0; thread_id < num_threads; ++thread_id) {
-    LOG(INFO) << "Spawning Thread " << thread_id << ".";
     std::thread thread(
-        ExecuteSelfPlay, thread_id, nn_interface.get(), game_recorder.get(),
+        selfplay::Run, seed, thread_id, nn_interface.get(), game_recorder.get(),
         absl::StrFormat("/tmp/thread%d_log.txt", thread_id),
         absl::GetFlag(FLAGS_gumbel_n), absl::GetFlag(FLAGS_gumbel_k),
         absl::GetFlag(FLAGS_max_moves));
     threads.emplace_back(std::move(thread));
   }
+
+  LOG(INFO) << "Spawned " << num_threads << " threads.";
+
+  // Block until we receive signal from stdin.
+  WaitForSignal();
 
   for (auto& thread : threads) {
     thread.join();
