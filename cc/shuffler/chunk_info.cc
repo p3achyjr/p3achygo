@@ -9,7 +9,7 @@ namespace shuffler {
 namespace {
 // Keep in sync with //cc/recorder/tf_recorder.cc
 static constexpr char kChunkRegex[] =
-    "gen(\\d+)_b(\\d+)_g(\\d+)_n(\\d+).tfrecord.zz";
+    "gen(\\d+)_b(\\d+)_g(\\d+)_n(\\d+)_(.*)\\.tfrecord\\.zz";
 }  // namespace
 
 std::optional<ChunkInfo> ParseChunkFilename(std::string chunk_filename) {
@@ -20,7 +20,7 @@ std::optional<ChunkInfo> ParseChunkFilename(std::string chunk_filename) {
     return std::nullopt;
   }
 
-  CHECK(match.size() == 5);
+  CHECK(match.size() == 6);
   return ChunkInfo{
       std::atoi(match[1].str().c_str()),
       std::atoi(match[2].str().c_str()),

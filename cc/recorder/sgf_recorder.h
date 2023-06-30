@@ -31,7 +31,7 @@ class SgfRecorder {
   virtual void Flush() = 0;
 
   std::unique_ptr<SgfRecorder> static Create(std::string path, int num_threads,
-                                             int gen);
+                                             int gen, std::string worker_id);
 
  protected:
   SgfRecorder() = default;

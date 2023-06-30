@@ -19,7 +19,7 @@ using ::core::FilePath;
 class GameRecorderImpl final : public GameRecorder {
  public:
   GameRecorderImpl(std::string path, int num_threads, int flush_interval,
-                   int gen);
+                   int gen, std::string worker_id);
   ~GameRecorderImpl();
 
   // Disable Copy and Move.
@@ -33,7 +33,8 @@ class GameRecorderImpl final : public GameRecorder {
 
   static std::unique_ptr<GameRecorderImpl> Create(std::string path,
                                                   int num_threads,
-                                                  int flush_interval);
+                                                  int flush_interval,
+                                                  std::string worker_id);
 
  private:
   void IoThread();
@@ -56,11 +57,12 @@ class GameRecorderImpl final : public GameRecorder {
 };
 
 GameRecorderImpl::GameRecorderImpl(std::string path, int num_threads,
-                                   int flush_interval, int gen)
+                                   int flush_interval, int gen,
+                                   std::string worker_id)
     : sgf_recorder_(SgfRecorder::Create(FilePath(path) / recorder::kSgfDir,
-                                        num_threads, gen)),
+                                        num_threads, gen, worker_id)),
       tf_recorder_(TfRecorder::Create(FilePath(path) / recorder::kChunkDir,
-                                      num_threads, gen)),
+                                      num_threads, gen, worker_id)),
       running_(true),
       games_buffered_(0),
       games_written_(0),
@@ -97,7 +99,6 @@ void GameRecorderImpl::RecordGame(int thread_id, const game::Game& game,
 void GameRecorderImpl::IoThread() {
   while (running_.load(std::memory_order_acquire)) {
     mu_.LockWhen(absl::Condition(this, &GameRecorderImpl::ShouldFlush));
-    LOG(INFO) << "Flushing...";
 
     auto begin = std::chrono::high_resolution_clock::now();
     Flush();
@@ -137,8 +138,9 @@ bool GameRecorderImpl::ShouldFlush() {
 }  // namespace
 
 /* static */ std::unique_ptr<GameRecorder> GameRecorder::Create(
-    std::string path, int num_threads, int flush_interval, int gen) {
+    std::string path, int num_threads, int flush_interval, int gen,
+    std::string worker_id) {
   return std::make_unique<GameRecorderImpl>(path, num_threads, flush_interval,
-                                            gen);
+                                            gen, worker_id);
 }
 }  // namespace recorder
