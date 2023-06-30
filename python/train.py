@@ -190,6 +190,7 @@ def train(model: P3achyGoModel,
   print(f'Min Train Loss: {losses_train.min_losses["loss"]}')
   print(f'Min Train Policy Loss: {losses_train.min_losses["policy"]}')
   print(f'Min Train Outcome Loss: {losses_train.min_losses["outcome"]}')
+  print(f'Min Train Ownership Loss: {losses_train.min_losses["own"]}')
   print(f'Min Train Score PDF Loss: {losses_train.min_losses["score_pdf"]}')
 
 

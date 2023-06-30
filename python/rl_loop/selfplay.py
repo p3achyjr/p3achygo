@@ -25,7 +25,7 @@ flags.DEFINE_string('local_run_dir', '/tmp/p3achygo',
 
 def main(_):
   if FLAGS.bin_path == '':
-    logging.error('No binary path specified.')
+    logging.error('No --bin_path specified.')
     return
 
   if FLAGS.run_id == '':
@@ -34,7 +34,7 @@ def main(_):
 
   run_config = config.parse(FLAGS.run_id)
   sp.loop(FLAGS.bin_path, FLAGS.run_id, FLAGS.local_run_dir,
-          run_config.shared_volume_path, run_config.num_sp_threads)
+          run_config.num_sp_threads)
 
 
 if __name__ == '__main__':

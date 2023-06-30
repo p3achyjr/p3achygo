@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import gcs_utils as gcs
-import shlex, time
-import rl_loop.config as config
+import secrets, shlex, time
+import rl_loop.fs_utils as fs_utils
 
 from absl import logging
 from pathlib import Path
 from queue import Queue
 from subprocess import Popen, PIPE, STDOUT
 from threading import Thread
+from typing import Tuple
 
 POLL_INTERVAL_S = 10
+TFREC_GLOB = '*.tfrecord.zz'
+SGF_GLOB = '*.sgfs'
+DONE_GLOB = '*.done'
 
 
 def print_stdout(out: Popen.stdout):  # pytype : disable=unbound-type-param
@@ -18,15 +22,45 @@ def print_stdout(out: Popen.stdout):  # pytype : disable=unbound-type-param
     print(line.rstrip())
 
 
+def update_and_upload_sp_files(run_id: str, sp_chunk_dir: str, sgf_dir: str,
+                               sp_chunks: set[str],
+                               sgfs: set[str]) -> Tuple[set[str], set[str]]:
+  sp_chunks, new_sp_chunks = fs_utils.file_diff(sp_chunk_dir, sp_chunks,
+                                                TFREC_GLOB)
+  sgfs, new_sgfs = fs_utils.file_diff(sgf_dir, sgfs, SGF_GLOB)
+  for sp_chunk in new_sp_chunks:
+    # wait for `done` file.
+    while sp_chunk.name.split('.')[0] not in map(lambda x: x.name.split('.')[0],
+                                                 sp_chunk_dir.glob(DONE_GLOB)):
+      time.sleep(.5)
+    gcs.upload_sp_chunk(run_id, sp_chunk)
+
+  for sgf in new_sgfs:
+    # wait for `done` file.
+    while sgf.name.split('.')[0] not in map(lambda x: x.name.split('.')[0],
+                                            sgf_dir.glob(DONE_GLOB)):
+      time.sleep(.5)
+    gcs.upload_sgf(run_id, sgf)
+
+  return sp_chunks, sgfs
+
+
 def loop(bin_path: str,
          run_id: str,
          local_run_dir: str,
-         shared_run_dir: str,
          num_threads: int,
          queue: Queue | None = None):
   '''
-  Starts self-play binary and runs it until told to stop.
+  Starts self-play binary and runs until told to stop.
   '''
+  (local_models_dir, _, local_sp_chunk_dir,
+   local_sgf_dir) = fs_utils.ensure_local_dirs(local_run_dir)
+
+  worker_id = secrets.token_hex(5)
+
+  # keep track of self-play chunks in order to upload.
+  sp_chunks = set(local_sp_chunk_dir.glob(TFREC_GLOB))
+  sgfs = set(local_sgf_dir.glob(SGF_GLOB))
 
   # wait for first model.
   model_gen = gcs.get_most_recent_model(run_id)
@@ -36,18 +70,17 @@ def loop(bin_path: str,
     model_gen = gcs.get_most_recent_model(run_id)
 
   # first model is now uploaded. Get it and start run.
-  model_path = gcs.download_model(run_id, str(local_run_dir), model_gen)
+  model_path = gcs.download_model(run_id, str(local_models_dir), model_gen)
   model_path = str(Path(model_path, '_trt'))
 
   # most recent chunk tells us which generation we are making self-play data for.
   gen = gcs.get_most_recent_chunk(run_id)
   while True:
-    cmd = shlex.split(
-        f'{bin_path} --num_threads={num_threads}' +
-        f' --model_path={str(model_path)}' +
-        f' --recorder_path={shared_run_dir}' +
-        f' --flush_interval={num_threads} --gen={gen}' +
-        f' --gumbel_n=36 --gumbel_k=4')
+    cmd = shlex.split(f'{bin_path} --num_threads={num_threads}' +
+                      f' --model_path={str(model_path)}' +
+                      f' --recorder_path={local_run_dir}' +
+                      f' --flush_interval={num_threads} --gen={gen}' +
+                      f' --id={worker_id} --gumbel_n=32 --gumbel_k=4')
     selfplay_proc = Popen(cmd,
                           stdin=PIPE,
                           stdout=PIPE,
@@ -59,6 +92,11 @@ def loop(bin_path: str,
     is_done = False
     while True:
       time.sleep(POLL_INTERVAL_S)
+
+      # Check for new chunks on local disk, and upload them.
+      sp_chunks, sgfs = update_and_upload_sp_files(run_id, local_sp_chunk_dir,
+                                                   local_sgf_dir, sp_chunks,
+                                                   sgfs)
 
       # Shut down loop if run is finished.
       if gcs.is_done(run_id):
@@ -83,6 +121,11 @@ def loop(bin_path: str,
         break
 
     selfplay_proc.communicate('\n')
+    selfplay_proc.wait()
+
+    # Upload any files that were flush on shutdown.
+    _, _ = update_and_upload_sp_files(run_id, local_sp_chunk_dir, local_sgf_dir,
+                                      sp_chunks, sgfs)
 
     if is_done:
       break

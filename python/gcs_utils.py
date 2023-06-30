@@ -8,9 +8,10 @@ from pathlib import Path
 GCS_CLIENT = storage.Client()
 GCS_BUCKET = 'p3achygo'
 
-# keep in sync with cc/shuffler/chunk_manager.cc
+# keep in sync with cc/shuffler/chunk_manager.cc, and GCS file tree structure.
 MODELS_DIR = 'models'
 GOLDEN_CHUNK_DIR = 'goldens'
+SP_CHUNK_DIR = 'chunks'
 SGF_DIR = 'sgf'
 
 CHUNK_PREFIX = 'chunk'
@@ -93,6 +94,13 @@ def _download_chunk(run_id: str, local_chunk_dir: str,
   return _download(str(local_chunk_path), str(gcs_chunk_path))
 
 
+def list_sp_chunks(run_id: str) -> list[str]:
+  gcs_dir = gcs_sp_chunk_dir(run_id) + '/'
+
+  blobs = GCS_CLIENT.list_blobs(GCS_BUCKET, prefix=gcs_dir)
+  return [f.name for f in filter(lambda f: f.name != gcs_dir, blobs)]
+
+
 def local_models_dir(model_dir: str) -> str:
   return str(Path(model_dir, MODELS_DIR))
 
@@ -107,6 +115,10 @@ def gcs_models_dir(run_id: str) -> str:
 
 def gcs_chunk_dir(run_id: str) -> str:
   return str(Path(run_id, GOLDEN_CHUNK_DIR))
+
+
+def gcs_sp_chunk_dir(run_id: str) -> str:
+  return str(Path(run_id, SP_CHUNK_DIR))
 
 
 def gcs_sgf_dir(run_id: str) -> str:
@@ -139,10 +151,24 @@ def upload_model(run_id: str, local_models_dir: str, gen: int):
   _upload_model(run_id, local_models_dir, MODEL_FORMAT.format(gen))
 
 
-def upload_sgfs(run_id: str, local_dir: str):
-  glob_pat = "{}/*.sgf".format(str(Path(local_dir, 'sgf')))
-  cmd = f'gsutil -m cp {glob_pat} gs://{GCS_BUCKET}/{str(run_id)}/sgf'
-  subprocess.run(shlex.split(cmd), check=True)
+def upload_sp_chunk(run_id: str, local_path: Path):
+  if not local_path.exists():
+    raise Exception(f'Self-Play Chunk not found: {str(local_path)}')
+
+  gcs_path = Path(gcs_sp_chunk_dir(run_id), local_path.name)
+  bucket = GCS_CLIENT.bucket(GCS_BUCKET)
+  blob = bucket.blob(str(gcs_path))
+  blob.upload_from_filename(str(local_path))
+
+
+def upload_sgf(run_id: str, local_path: Path):
+  if not local_path.exists():
+    raise Exception(f'SGF not found: {str(local_path)}')
+
+  gcs_path = Path(gcs_sgf_dir(run_id), local_path.name)
+  bucket = GCS_CLIENT.bucket(GCS_BUCKET)
+  blob = bucket.blob(str(gcs_path))
+  blob.upload_from_filename(str(local_path))
 
 
 def download_golden_chunk(run_id: str, local_chunk_dir: str, gen: int) -> str:
