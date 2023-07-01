@@ -22,7 +22,7 @@ using namespace ::nn;
 using namespace ::recorder;
 
 static constexpr int kShouldLogShard = 8;
-static constexpr int kComputePAMoveNums[] = {250, 300, 350, 400};
+static constexpr int kComputePAMoveNums[] = {175, 200, 250, 300, 350, 400};
 
 static std::atomic<bool> running = true;
 
