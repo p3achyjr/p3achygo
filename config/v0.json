@@ -1,0 +1,5 @@
+{
+  "num_generations": 100,
+  "games_per_gen": 5000,
+  "num_sp_threads": 48
+}

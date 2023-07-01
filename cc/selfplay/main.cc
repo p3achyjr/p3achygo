@@ -6,6 +6,7 @@
 
 #include <thread>
 
+#include "absl/hash/hash.h"
 #include "absl/flags/flag.h"
 #include "absl/flags/parse.h"
 #include "absl/log/check.h"
@@ -30,6 +31,7 @@ ABSL_FLAG(std::string, recorder_path, "",
 ABSL_FLAG(int, flush_interval, 128, "Number of games to buffer before flush.");
 ABSL_FLAG(int, max_moves, 600, "Maximum number of moves per game.");
 ABSL_FLAG(int, gen, 0, "Model generation we are generating games from.");
+ABSL_FLAG(std::string, id, "", "Worker ID.");
 
 void WaitForSignal() {
   // any line from stdin is a shutdown signal.
@@ -46,7 +48,7 @@ int main(int argc, char** argv) {
 
   std::string model_path = absl::GetFlag(FLAGS_model_path);
   if (model_path == "") {
-    LOG(ERROR) << "No Model Path Specified.";
+    LOG(ERROR) << "No Model Path (--model_path) specified.";
     return 1;
   }
 
@@ -55,6 +57,12 @@ int main(int argc, char** argv) {
     LOG(WARNING) << "No Recorder Path Specified. SGF and TF files will be "
                     "written to /tmp/";
     recorder_path = "/tmp/";
+  }
+
+  std::string worker_id = absl::GetFlag(FLAGS_id);
+  if (worker_id == "") {
+    LOG(ERROR) << "No Worker ID (--id) specified.";
+    return 1;
   }
 
   int perms =
@@ -87,13 +95,11 @@ int main(int argc, char** argv) {
   std::unique_ptr<recorder::GameRecorder> game_recorder =
       recorder::GameRecorder::Create(recorder_path, num_threads,
                                      absl::GetFlag(FLAGS_flush_interval),
-                                     absl::GetFlag(FLAGS_gen));
+                                     absl::GetFlag(FLAGS_gen), worker_id);
 
-  size_t seed = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now().time_since_epoch())
-                    .count();
   std::vector<std::thread> threads;
   for (int thread_id = 0; thread_id < num_threads; ++thread_id) {
+    size_t seed = absl::HashOf(worker_id, thread_id);
     std::thread thread(
         selfplay::Run, seed, thread_id, nn_interface.get(), game_recorder.get(),
         absl::StrFormat("/tmp/thread%d_log.txt", thread_id),

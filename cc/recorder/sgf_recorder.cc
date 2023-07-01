@@ -22,10 +22,13 @@ using ::game::Move;
 
 static constexpr int kMaxNumProperties = 32;
 static constexpr char kP3achyGoName[] = "p3achygo";
+static constexpr char kSgfFormat[] = "gen%d_b%d_g%d_%s.sgfs";
+static constexpr char kSgfDoneFormat[] = "gen%d_b%d_g%d_%s.done";
 
 class SgfRecorderImpl final : public SgfRecorder {
  public:
-  SgfRecorderImpl(std::string path, int num_threads, int gen);
+  SgfRecorderImpl(std::string path, int num_threads, int gen,
+                  std::string worker_id);
   ~SgfRecorderImpl() override = default;
 
   // Disable Copy and Move.
@@ -45,11 +48,17 @@ class SgfRecorderImpl final : public SgfRecorder {
   std::array<std::vector<Game>, constants::kMaxNumThreads> games_;
   const int num_threads_;
   const int gen_;
+  const std::string worker_id_;
   int batch_num_;
 };
 
-SgfRecorderImpl::SgfRecorderImpl(std::string path, int num_threads, int gen)
-    : path_(path), num_threads_(num_threads), gen_(gen), batch_num_(0) {}
+SgfRecorderImpl::SgfRecorderImpl(std::string path, int num_threads, int gen,
+                                 std::string worker_id)
+    : path_(path),
+      num_threads_(num_threads),
+      gen_(gen),
+      worker_id_(worker_id),
+      batch_num_(0) {}
 
 void SgfRecorderImpl::RecordGame(int thread_id, const Game& game) {
   CHECK(game.has_result());
@@ -111,18 +120,25 @@ void SgfRecorderImpl::Flush() {
 
   std::string path =
       FilePath(path_) /
-      absl::StrFormat("gen%d_b%d_g%d.sgfs", gen_, batch_num_, games_in_batch);
+      absl::StrFormat(kSgfFormat, gen_, batch_num_, games_in_batch, worker_id_);
   FILE* const sgf_file = fopen(path.c_str(), "w");
   absl::FPrintF(sgf_file, "%s", sgfs);
   fclose(sgf_file);
+
+  // Write .done file to indicate that we are done writing.
+  std::string done_filename =
+      FilePath(path_) / absl::StrFormat(kSgfDoneFormat, gen_, batch_num_,
+                                        games_in_batch, worker_id_);
+  FILE* const lock_file = fopen(done_filename.c_str(), "w");
+  absl::FPrintF(lock_file, "");
+  fclose(lock_file);
 
   ++batch_num_;
 }
 }  // namespace
 
-/* static */ std::unique_ptr<SgfRecorder> SgfRecorder::Create(std::string path,
-                                                              int num_threads,
-                                                              int gen) {
-  return std::make_unique<SgfRecorderImpl>(path, num_threads, gen);
+/* static */ std::unique_ptr<SgfRecorder> SgfRecorder::Create(
+    std::string path, int num_threads, int gen, std::string worker_id) {
+  return std::make_unique<SgfRecorderImpl>(path, num_threads, gen, worker_id);
 }
 }  // namespace recorder

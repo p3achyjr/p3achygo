@@ -12,7 +12,6 @@ class RunConfig(object):
   num_generations: int
   games_per_gen: int
   num_sp_threads: int
-  shared_volume_path: int
 
 
 def parse(run_id: str) -> RunConfig:
@@ -22,4 +21,4 @@ def parse(run_id: str) -> RunConfig:
   with open(config_path) as f:
     obj = json.loads(f.read())
     return RunConfig(obj['num_generations'], obj['games_per_gen'],
-                     obj['num_sp_threads'], obj['shared_volume_path'])
+                     obj['num_sp_threads'])

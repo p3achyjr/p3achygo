@@ -11,7 +11,7 @@ from constants import *
 from model import P3achyGoModel
 
 BATCH_SIZE = 256
-LR = 3e-3
+LR = 1e-2
 EPOCHS_PER_GEN = 1
 MOMENTUM = .9
 
@@ -47,6 +47,6 @@ def train_one_gen(model: P3achyGoModel,
 
   new_weights = model_utils.avg_weights(prev_weights, model.get_weights())
   model.set_weights(new_weights)
-  
+
   logging.info(f'Running validation for new model...')
   train.val(model, mode=train.Mode.RL, val_ds=val_ds)

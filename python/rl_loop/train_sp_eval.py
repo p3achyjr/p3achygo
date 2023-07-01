@@ -6,13 +6,10 @@ from __future__ import annotations
 
 import gcs_utils as gcs
 import shlex, sys, time
-import train
-import tensorflow as tf
-import transforms
 import rl_loop.config as config
 import rl_loop.model_utils as model_utils
 import rl_loop.sp_loop as sp
-import rl_loop.train
+import rl_loop.fs_utils as fs_utils
 
 from absl import app, flags, logging
 from constants import *
@@ -79,9 +76,8 @@ def eval(eval_bin_path: str, eval_res_path: str, cur_model_path: str,
     return EvalResult(winner, cand_rel_elo)
 
 
-def loop(run_id: str, config: config.RunConfig, models_dir: str, model_gen: int,
-         sp_bin_path: str, eval_bin_path: str, val_ds_path: str,
-         local_run_dir: str):
+def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
+         eval_bin_path: str, val_ds_path: str, local_run_dir: str):
   '''
   Does the following:
 
@@ -92,6 +88,25 @@ def loop(run_id: str, config: config.RunConfig, models_dir: str, model_gen: int,
   4. Runs evaluation on the new model, and uploads the new model if it is better.
   5. Repeat from (1).
   '''
+
+  # populate local dirs
+  (local_models_dir, local_golden_chunk_dir, _,
+   _) = fs_utils.ensure_local_dirs(local_run_dir)
+
+  # fetch or create first model
+  model_gen = gcs.get_most_recent_model(FLAGS.run_id)
+  if model_gen < 0:
+    model_gen = 0
+    model = model_utils.new_model(name=f'p3achygo_{FLAGS.run_id}')
+    # upload for self-play to pick up.
+    model_utils.save_trt_and_upload(model,
+                                    val_ds_path,
+                                    local_models_dir,
+                                    gen=0,
+                                    run_id=FLAGS.run_id)
+  else:
+    gcs.download_model(FLAGS.run_id, local_models_dir, model_gen)
+
   eval_res_path = str(Path(local_run_dir, 'eval_res.txt'))
   while model_gen < config.num_generations:
     # Start self-play.
@@ -99,8 +114,7 @@ def loop(run_id: str, config: config.RunConfig, models_dir: str, model_gen: int,
     sp_queue = Queue()
     sp_thread = Thread(target=sp.loop,
                        args=(sp_bin_path, run_id, local_run_dir,
-                             config.shared_volume_path, config.num_sp_threads,
-                             sp_queue))
+                             config.num_sp_threads, sp_queue))
     sp_thread.start()
 
     # Poll GCS to check for the availability of a new golden chunk.
@@ -115,13 +129,14 @@ def loop(run_id: str, config: config.RunConfig, models_dir: str, model_gen: int,
     sp_queue.put(())  # Send any message to trigger shutdown.
     sp_thread.join()
 
-    chunk_path = gcs.download_golden_chunk(run_id, local_run_dir,
+    chunk_path = gcs.download_golden_chunk(run_id, local_golden_chunk_dir,
                                            latest_chunk_gen)
 
     # Train for one generation.
     logging.info(f'Training model {model_gen}...')
     cmd = shlex.split(f'python -m python.rl_loop.train_one_gen' +
-                      f' --models_dir={models_dir}' + f' --gen={model_gen}' +
+                      f' --models_dir={local_models_dir}' +
+                      f' --gen={model_gen}' +
                       f' --next_gen={latest_chunk_gen}' +
                       f' --chunk_path={chunk_path}' +
                       f' --val_ds_path={val_ds_path}')
@@ -134,9 +149,10 @@ def loop(run_id: str, config: config.RunConfig, models_dir: str, model_gen: int,
     t.start()
     train_proc.wait()
 
-    cur_model_path = str(Path(models_dir, gcs.MODEL_FORMAT.format(model_gen)))
+    cur_model_path = str(
+        Path(local_models_dir, gcs.MODEL_FORMAT.format(model_gen)))
     cand_model_path = str(
-        Path(models_dir, gcs.MODEL_FORMAT.format(latest_chunk_gen)))
+        Path(local_models_dir, gcs.MODEL_FORMAT.format(latest_chunk_gen)))
 
     # Run eval.
     eval_result = eval(eval_bin_path, eval_res_path, cur_model_path,
@@ -144,7 +160,7 @@ def loop(run_id: str, config: config.RunConfig, models_dir: str, model_gen: int,
     if eval_result.winner == EvalResult.CAND:
       # The cand model is stronger. Upload it as new golden.
       logging.info(f'Uploading model {cand_model_path} as new golden')
-      gcs.upload_model(run_id, models_dir, latest_chunk_gen)
+      gcs.upload_model(run_id, local_models_dir, latest_chunk_gen)
     model_gen = latest_chunk_gen
 
     logging.info('Eval finished. Restarting self-play -> train -> eval loop.')
@@ -167,22 +183,8 @@ def main(_):
   val_ds_path = gcs.download_val_ds(FLAGS.local_run_dir)
   run_config = config.parse(FLAGS.run_id)
 
-  models_dir = str(Path(run_config.shared_volume_path, gcs.MODELS_DIR))
-  model_gen = gcs.get_most_recent_model(FLAGS.run_id)
-  if model_gen < 0:
-    model_gen = 0
-    model = model_utils.new_model(name=f'p3achygo_{FLAGS.run_id}')
-    # upload for self-play to pick up.
-    model_utils.save_trt_and_upload(model,
-                                    FLAGS.val_ds_path,
-                                    models_dir,
-                                    gen=0,
-                                    run_id=FLAGS.run_id)
-  else:
-    gcs.download_model(FLAGS.run_id, models_dir, model_gen)
-
-  loop(FLAGS.run_id, run_config, models_dir, model_gen, FLAGS.sp_bin_path,
-       FLAGS.eval_bin_path, val_ds_path, FLAGS.local_run_dir)
+  loop(FLAGS.run_id, run_config, FLAGS.sp_bin_path, FLAGS.eval_bin_path,
+       val_ds_path, FLAGS.local_run_dir)
 
 
 if __name__ == '__main__':

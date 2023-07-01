@@ -22,7 +22,7 @@ using namespace ::nn;
 using namespace ::recorder;
 
 static constexpr int kShouldLogShard = 8;
-static constexpr int kComputePAMoveNums[] = {250, 300, 350, 400};
+static constexpr int kComputePAMoveNums[] = {175, 200, 250, 300, 350, 400};
 
 static std::atomic<bool> running = true;
 
@@ -32,7 +32,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
          GameRecorder* game_recorder, std::string logfile, int gumbel_n,
          int gumbel_k, int max_moves) {
   FileSink sink(logfile.c_str());
-  Probability probability(seed + thread_id);
+  Probability probability(seed);
   auto search_dur_ema = 0;
 
   // Main loop.

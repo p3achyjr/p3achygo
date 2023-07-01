@@ -33,7 +33,7 @@ class TfRecorder {
   virtual void Flush() = 0;
 
   static std::unique_ptr<TfRecorder> Create(std::string path, int num_threads,
-                                            int gen);
+                                            int gen, std::string worker_id);
 
  protected:
   TfRecorder() = default;

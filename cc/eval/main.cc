@@ -10,6 +10,7 @@
 
 #include "absl/flags/flag.h"
 #include "absl/flags/parse.h"
+#include "absl/hash/hash.h"
 #include "absl/log/check.h"
 #include "absl/log/globals.h"
 #include "absl/log/initialize.h"
@@ -29,10 +30,6 @@ ABSL_FLAG(int, cache_size, constants::kDefaultNNCacheSize / 2,
 
 static constexpr int kNumEvalGames = 48;
 static constexpr int64_t kTimeoutUs = 4000;
-
-std::string ToString(const Winner& winner) {
-  return winner == Winner::kCur ? "CUR" : "CAND";
-}
 
 int main(int argc, char** argv) {
   absl::ParseCommandLine(argc, argv);
@@ -57,10 +54,6 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  size_t seed = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now().time_since_epoch())
-                    .count();
-
   // Initialize NN evaluators.
   int cache_size = absl::GetFlag(FLAGS_cache_size);
   std::unique_ptr<nn::NNInterface> cur_nn_interface =
@@ -70,18 +63,25 @@ int main(int argc, char** argv) {
   CHECK_OK(cur_nn_interface->Initialize(std::move(cur_model_path)));
   CHECK_OK(cand_nn_interface->Initialize(std::move(cand_model_path)));
 
+  size_t time = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch())
+                    .count();
+
   std::vector<std::thread> threads;
   std::vector<std::future<Winner>> winners;
   for (int thread_id = 0; thread_id < kNumEvalGames; ++thread_id) {
-    LOG(INFO) << "Spawning Thread " << thread_id << ".";
     std::promise<Winner> p;
     winners.emplace_back(p.get_future());
+
+    size_t seed = absl::HashOf(time, thread_id);
     std::thread thread(PlayEvalGame, seed, thread_id, cur_nn_interface.get(),
                        cand_nn_interface.get(),
                        absl::StrFormat("/tmp/eval%d_log.txt", thread_id),
                        std::move(p));
     threads.emplace_back(std::move(thread));
   }
+
+  LOG(INFO) << "Playing " << kNumEvalGames << " eval games.";
 
   for (auto& thread : threads) {
     thread.join();
@@ -91,7 +91,6 @@ int main(int argc, char** argv) {
   for (auto& winner : winners) {
     Winner res = winner.get();
     num_cand_won += res == Winner::kCand ? 1 : 0;
-    LOG(INFO) << "Winner: " << ToString(res);
   }
 
   float winrate =
@@ -104,5 +103,6 @@ int main(int argc, char** argv) {
 
   FILE* const file = fopen(res_write_path.c_str(), "w");
   absl::FPrintF(file, "%f", rel_elo);
+  fclose(file);
   return 0;
 }

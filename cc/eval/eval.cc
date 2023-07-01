@@ -14,7 +14,7 @@ using namespace ::game;
 using namespace ::mcts;
 using namespace ::nn;
 
-static constexpr int kGumbelN = 240;  // 30, 60 visits. Enough for ladders.
+static constexpr int kGumbelN = 160;  // 20, 40 visits.
 static constexpr int kGumbelK = 4;
 
 std::string ToString(const Color& color) {
@@ -30,13 +30,17 @@ std::string ToString(const Color& color) {
   }
 }
 
+std::string ToString(const Winner& winner) {
+  return winner == Winner::kCur ? "CUR" : "CAND";
+}
+
 }  // namespace
 
 void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
                   NNInterface* cand_nn, std::string logfile,
                   std::promise<Winner> result) {
   FileSink sink(logfile.c_str());
-  Probability probability(seed + thread_id);
+  Probability probability(seed);
   bool cur_is_black = thread_id % 2 == 0;
   NNInterface* black_nn = cur_is_black ? cur_nn : cand_nn;
   NNInterface* white_nn = cur_is_black ? cand_nn : cur_nn;
@@ -100,14 +104,13 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
   cand_nn->UnregisterThread(thread_id);
   game.WriteResult();
 
-  LOG(INFO) << "Thread " << thread_id << ", Cand is "
-            << (cur_is_black ? "W" : "B")
-            << ", Black Score: " << game.result().bscore
-            << ", White Score: " << game.result().wscore;
-
   Winner winner =
       cur_is_black
           ? (game.result().winner == BLACK ? Winner::kCur : Winner::kCand)
           : (game.result().winner == WHITE ? Winner::kCur : Winner::kCand);
+  LOG(INFO) << "Winner: " << ToString(winner) << ". Cand is "
+            << (cur_is_black ? "W" : "B")
+            << ", Black Score: " << game.result().bscore
+            << ", White Score: " << game.result().wscore;
   result.set_value(winner);
 }
