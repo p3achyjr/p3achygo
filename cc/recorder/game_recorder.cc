@@ -28,9 +28,9 @@ class GameRecorderImpl final : public GameRecorder {
   GameRecorderImpl(GameRecorderImpl&&) = delete;
   GameRecorderImpl& operator=(GameRecorderImpl&&) = delete;
 
-  void RecordGame(int thread_id, const game::Game& game,
-                  const ImprovedPolicies& mcts_pis,
-                  const std::vector<uint8_t>& is_move_trainable) override;
+  void RecordGame(int thread_id, const game::Board& init_board,
+                  const game::Game& game, const ImprovedPolicies& mcts_pis,
+                  const std::vector<uint8_t>& move_trainables) override;
 
   static std::unique_ptr<GameRecorderImpl> Create(std::string path,
                                                   int num_threads,
@@ -84,11 +84,13 @@ GameRecorderImpl::~GameRecorderImpl() {
 }
 
 void GameRecorderImpl::RecordGame(
-    int thread_id, const game::Game& game, const ImprovedPolicies& mcts_pis,
+    int thread_id, const game::Board& init_board, const game::Game& game,
+    const ImprovedPolicies& mcts_pis,
     const std::vector<uint8_t>& is_move_trainable) {
   thread_mus_[thread_id].Lock();
   sgf_recorder_->RecordGame(thread_id, game);
-  tf_recorder_->RecordGame(thread_id, game, mcts_pis, is_move_trainable);
+  tf_recorder_->RecordGame(thread_id, init_board, game, mcts_pis,
+                           is_move_trainable);
   thread_mus_[thread_id].Unlock();
 
   absl::MutexLock lock(&mu_);

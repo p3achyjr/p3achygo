@@ -5,6 +5,10 @@
 
 namespace game {
 
+Game::Game(const Board& board,
+           const absl::InlinedVector<Move, constants::kMaxGameLen> last_moves)
+    : board_(board), moves_(last_moves), result_(Result{EMPTY, 0, 0, {}}) {}
+
 Game::Game()
     : moves_({kNoopMove, kNoopMove, kNoopMove, kNoopMove, kNoopMove}),
       result_(Result{EMPTY, 0, 0, {}}) {}
@@ -53,9 +57,7 @@ bool Game::Pass(Color color) {
   return ok;
 }
 
-void Game::CalculatePassAliveRegions() {
-  board_.CalculatePassAliveRegions();
-}
+void Game::CalculatePassAliveRegions() { board_.CalculatePassAliveRegions(); }
 
 Scores Game::GetScores() { return board_.GetScores(); }
 

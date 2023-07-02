@@ -9,6 +9,7 @@ cc_library(
         ":filepath",
         ":probability",
         ":rand",
+        ":ring_buffer",
         ":util",
     ],
 )
@@ -81,6 +82,11 @@ cc_test(
         ":doctest",
         ":rand",
     ],
+)
+
+cc_library(
+    name = "ring_buffer",
+    hdrs = ["ring_buffer.h"],
 )
 
 cc_library(

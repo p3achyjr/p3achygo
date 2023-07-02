@@ -23,8 +23,10 @@ class Game final {
     std::array<Color, BOARD_LEN * BOARD_LEN> ownership;
   };
 
+  explicit Game(
+      const Board& board,
+      const absl::InlinedVector<Move, constants::kMaxGameLen> last_moves);
   Game();
-  Game(float komi);
   ~Game() = default;
 
   const Board& board() const;
