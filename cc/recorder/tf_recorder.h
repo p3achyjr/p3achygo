@@ -27,7 +27,8 @@ class TfRecorder {
 
   // Recorder Impl.
   virtual void RecordGame(int thread_id, const game::Game& game,
-                          const ImprovedPolicies& mcts_pis) = 0;
+                          const ImprovedPolicies& mcts_pis,
+                          const std::vector<uint8_t>& is_move_trainable) = 0;
 
   // Flushes all pending writes. Not thread safe.
   virtual void Flush() = 0;

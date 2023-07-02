@@ -133,7 +133,7 @@ GumbelEvaluator::GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id)
 GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
                                          Game& game, TreeNode* const root,
                                          Color color_to_move, int n, int k) {
-  CHECK(root);
+  DCHECK(root);
   int num_rounds = std::max(log2(k), 1);
   int visits_per_action = n / (k * num_rounds);
 
@@ -163,6 +163,10 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
 
   // reverse sort
   std::sort(gmove_info, gmove_info + num_moves, GumbelMoveInfoGreater);
+  if (n == 1) {
+    return GumbelResult{game::AsLoc(Argmax(root->move_logits)),
+                        gmove_info[0].move_loc};
+  }
 
   // For each round:
   // - Select k top nodes to search.

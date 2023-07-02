@@ -75,13 +75,15 @@ class TfRecorderImpl final : public TfRecorder {
   TfRecorderImpl& operator=(TfRecorderImpl&&) = delete;
 
   void RecordGame(int thread_id, const Game& game,
-                  const ImprovedPolicies& mcts_pis) override;
+                  const ImprovedPolicies& mcts_pis,
+                  const std::vector<uint8_t>& is_move_trainable) override;
   void Flush() override;
 
  private:
   struct Record {
     Game game;
     ImprovedPolicies mcts_pis;
+    std::vector<uint8_t> is_move_trainable;
   };
 
   const std::string path_;
@@ -104,10 +106,12 @@ TfRecorderImpl::TfRecorderImpl(std::string path, int num_threads, int gen,
       batch_num_(0) {}
 
 void TfRecorderImpl::RecordGame(int thread_id, const Game& game,
-                                const ImprovedPolicies& mcts_pis) {
+                                const ImprovedPolicies& mcts_pis,
+                                const std::vector<uint8_t>& is_move_trainable) {
   CHECK(game.has_result());
   CHECK(game.num_moves() == mcts_pis.size());
-  thread_records_[thread_id].emplace_back(Record{game, mcts_pis});
+  thread_records_[thread_id].emplace_back(
+      Record{game, mcts_pis, is_move_trainable});
   ++thread_game_counts_[thread_id];
 }
 
@@ -156,6 +160,7 @@ void TfRecorderImpl::Flush() {
       // `Game` because MCTS performs many copies of `Game` objects.
       const Game& game = record.game;
       const ImprovedPolicies& mcts_pis = record.mcts_pis;
+      const std::vector<uint8_t>& is_move_trainable = record.is_move_trainable;
       Board board;
       for (int move_num = 0; move_num < game.num_moves(); ++move_num) {
         // Populate last moves as indices.
@@ -168,14 +173,17 @@ void TfRecorderImpl::Flush() {
         Move move = game.move(move_num);
         const std::array<float, constants::kMaxNumMoves>& pi =
             mcts_pis[move_num];
+        bool is_trainable = is_move_trainable[move_num];
 
-        // Coerce into example and write result.
-        tensorflow::Example example =
-            MakeTfExample(board.position(), last_moves, pi, game.result(),
-                          move.color, game.komi(), BOARD_LEN);
-        std::string data;
-        example.SerializeToString(&data);
-        TF_CHECK_OK(writer.WriteRecord(data));
+        if (is_trainable) {
+          // Coerce into example and write result.
+          tensorflow::Example example =
+              MakeTfExample(board.position(), last_moves, pi, game.result(),
+                            move.color, game.komi(), BOARD_LEN);
+          std::string data;
+          example.SerializeToString(&data);
+          TF_CHECK_OK(writer.WriteRecord(data));
+        }
 
         // Play next move.
         board.PlayMove(move.loc, move.color);

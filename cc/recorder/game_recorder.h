@@ -27,7 +27,8 @@ class GameRecorder {
   GameRecorder& operator=(GameRecorder&&) = delete;
 
   virtual void RecordGame(int thread_id, const game::Game& game,
-                          const ImprovedPolicies& mcts_pis) = 0;
+                          const ImprovedPolicies& mcts_pis,
+                          const std::vector<uint8_t>& is_move_trainable) = 0;
 
   static std::unique_ptr<GameRecorder> Create(std::string path, int num_threads,
                                               int flush_interval, int gen,
