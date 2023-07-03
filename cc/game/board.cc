@@ -126,7 +126,7 @@ void GroupTracker::Move(Loc loc, Color color) {
   } else {
     // is part of another group. add to an arbitrary group and coalesce.
     AddToGroup(loc, adjacent_groups[0]);
-    int canonical_gid = CoalesceGroups(loc);
+    groupid canonical_gid = CoalesceGroups(loc);
 
     // mark dissolved groups as invalid.
     for (const auto gid : adjacent_groups) {
