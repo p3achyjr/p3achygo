@@ -74,14 +74,17 @@ class TfRecorderImpl final : public TfRecorder {
   TfRecorderImpl(TfRecorderImpl&&) = delete;
   TfRecorderImpl& operator=(TfRecorderImpl&&) = delete;
 
-  void RecordGame(int thread_id, const Game& game,
-                  const ImprovedPolicies& mcts_pis) override;
+  void RecordGame(int thread_id, const game::Board& init_board,
+                  const Game& game, const ImprovedPolicies& mcts_pis,
+                  const std::vector<uint8_t>& move_trainables) override;
   void Flush() override;
 
  private:
   struct Record {
+    Board init_board;
     Game game;
     ImprovedPolicies mcts_pis;
+    std::vector<uint8_t> move_trainables;
   };
 
   const std::string path_;
@@ -103,11 +106,14 @@ TfRecorderImpl::TfRecorderImpl(std::string path, int num_threads, int gen,
       thread_game_counts_{},
       batch_num_(0) {}
 
-void TfRecorderImpl::RecordGame(int thread_id, const Game& game,
-                                const ImprovedPolicies& mcts_pis) {
+void TfRecorderImpl::RecordGame(int thread_id, const Board& init_board,
+                                const Game& game,
+                                const ImprovedPolicies& mcts_pis,
+                                const std::vector<uint8_t>& move_trainables) {
   CHECK(game.has_result());
   CHECK(game.num_moves() == mcts_pis.size());
-  thread_records_[thread_id].emplace_back(Record{game, mcts_pis});
+  thread_records_[thread_id].emplace_back(
+      Record{init_board, game, mcts_pis, move_trainables});
   ++thread_game_counts_[thread_id];
 }
 
@@ -156,7 +162,8 @@ void TfRecorderImpl::Flush() {
       // `Game` because MCTS performs many copies of `Game` objects.
       const Game& game = record.game;
       const ImprovedPolicies& mcts_pis = record.mcts_pis;
-      Board board;
+      const std::vector<uint8_t>& move_trainables = record.move_trainables;
+      Board board = record.init_board;
       for (int move_num = 0; move_num < game.num_moves(); ++move_num) {
         // Populate last moves as indices.
         std::array<int16_t, constants::kNumLastMoves> last_moves;
@@ -168,14 +175,17 @@ void TfRecorderImpl::Flush() {
         Move move = game.move(move_num);
         const std::array<float, constants::kMaxNumMoves>& pi =
             mcts_pis[move_num];
+        bool is_trainable = move_trainables[move_num];
 
-        // Coerce into example and write result.
-        tensorflow::Example example =
-            MakeTfExample(board.position(), last_moves, pi, game.result(),
-                          move.color, game.komi(), BOARD_LEN);
-        std::string data;
-        example.SerializeToString(&data);
-        TF_CHECK_OK(writer.WriteRecord(data));
+        if (is_trainable) {
+          // Coerce into example and write result.
+          tensorflow::Example example =
+              MakeTfExample(board.position(), last_moves, pi, game.result(),
+                            move.color, game.komi(), BOARD_LEN);
+          std::string data;
+          example.SerializeToString(&data);
+          TF_CHECK_OK(writer.WriteRecord(data));
+        }
 
         // Play next move.
         board.PlayMove(move.loc, move.color);

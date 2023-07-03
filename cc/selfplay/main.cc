@@ -6,9 +6,9 @@
 
 #include <thread>
 
-#include "absl/hash/hash.h"
 #include "absl/flags/flag.h"
 #include "absl/flags/parse.h"
+#include "absl/hash/hash.h"
 #include "absl/log/check.h"
 #include "absl/log/globals.h"
 #include "absl/log/initialize.h"
@@ -23,8 +23,10 @@
 
 ABSL_FLAG(std::string, model_path, "", "Path to model.");
 ABSL_FLAG(int, num_threads, 1, "Number of threads to use.");
-ABSL_FLAG(int, gumbel_n, 64, "Number of visits from root of Gumbel MCTS");
-ABSL_FLAG(int, gumbel_k, 8, "Number of top moves to consider in Gumbel MCTS.");
+// ABSL_FLAG(int, gumbel_n, -1,
+//           "Override for number of visits from root of Gumbel MCTS");
+// ABSL_FLAG(int, gumbel_k, -1,
+//           "Override for number of top moves to consider in Gumbel MCTS.");
 ABSL_FLAG(std::string, recorder_path, "",
           "Path to write SGF files and TF examples. 'sgf' and 'tf' are "
           "appended to the path.");
@@ -81,11 +83,6 @@ int main(int argc, char** argv) {
             << std::thread::hardware_concurrency() << ". Using " << num_threads
             << " threads.";
 
-  int gumbel_n = absl::GetFlag(FLAGS_gumbel_n);
-  int gumbel_k = absl::GetFlag(FLAGS_gumbel_k);
-  LOG(INFO) << "Using " << gumbel_n << " visits and " << gumbel_k
-            << " top moves for Gumbel MCTS.";
-
   // initialize NN evaluator.
   std::unique_ptr<nn::NNInterface> nn_interface =
       std::make_unique<nn::NNInterface>(num_threads);
@@ -100,11 +97,10 @@ int main(int argc, char** argv) {
   std::vector<std::thread> threads;
   for (int thread_id = 0; thread_id < num_threads; ++thread_id) {
     size_t seed = absl::HashOf(worker_id, thread_id);
-    std::thread thread(
-        selfplay::Run, seed, thread_id, nn_interface.get(), game_recorder.get(),
-        absl::StrFormat("/tmp/thread%d_log.txt", thread_id),
-        absl::GetFlag(FLAGS_gumbel_n), absl::GetFlag(FLAGS_gumbel_k),
-        absl::GetFlag(FLAGS_max_moves));
+    std::thread thread(selfplay::Run, seed, thread_id, nn_interface.get(),
+                       game_recorder.get(),
+                       absl::StrFormat("/tmp/thread%d_log.txt", thread_id),
+                       absl::GetFlag(FLAGS_max_moves));
     threads.emplace_back(std::move(thread));
   }
 

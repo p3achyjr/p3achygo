@@ -171,6 +171,7 @@ def expand_rl(tf_example):
   board = sym.apply_grid_symmetry(symmetry, board)
   last_moves = tf.map_fn(lambda mv: apply_loc_symmetry(symmetry, mv, bsize),
                          last_moves)
+  own = sym.apply_grid_symmetry(symmetry, own)
   board_policy = policy[0:bsize * bsize]
   board_policy = tf.reshape(board_policy, shape=(bsize, bsize))
   board_policy = sym.apply_grid_symmetry(symmetry, board_policy)
