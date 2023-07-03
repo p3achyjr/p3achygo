@@ -131,7 +131,7 @@ void GroupTracker::Move(Loc loc, Color color) {
     // mark dissolved groups as invalid.
     for (const auto gid : adjacent_groups) {
       if (gid != canonical_gid) {
-        group_info_map_[gid].is_valid = false;
+        SetGroupInvalid(gid);
       }
     }
   }
