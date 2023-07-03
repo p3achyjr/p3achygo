@@ -211,11 +211,6 @@ class GroupTracker final {
   ~GroupTracker() = default;
 
   inline groupid GroupAt(Loc loc) const { return groups_[loc]; }
-  groupid NewGroup(Loc loc, Color color);
-  void AddToGroup(Loc loc, groupid id);
-
-  void Move(Loc loc, Color color);
-  int LibertiesAt(Loc loc) const;  // returns number of empty neighboring spots.
   inline int LibertiesForGroup(groupid gid) const {
     return group_info_map_[gid].liberties;
   }
@@ -223,6 +218,12 @@ class GroupTracker final {
   inline int LibertiesForGroupAt(Loc loc) const {
     return LibertiesForGroup(GroupAt(loc));
   }
+
+  groupid NewGroup(Loc loc, Color color);
+  void AddToGroup(Loc loc, groupid id);
+
+  void Move(Loc loc, Color color);
+  int LibertiesAt(Loc loc) const;  // returns number of empty neighboring spots.
 
   LocVec ExpandGroup(groupid gid) const;
   void RemoveCaptures(const LocVec& captures);
@@ -235,16 +236,19 @@ class GroupTracker final {
   void CalculatePassAliveRegions(Zobrist::Hash hash);
   void CalculatePassAliveRegionForColor(Color color);
 
-  bool IsPassAlive(Loc loc) const;
-  bool IsPassAliveForColor(Loc loc, Color color) const;
+  inline bool IsPassAlive(Loc loc) const { return pass_alive_[loc] != EMPTY; }
+  inline bool IsPassAliveForColor(Loc loc, Color color) const {
+    return pass_alive_[loc] == color;
+  }
 
   friend std::ostream& operator<<(std::ostream& os,
                                   const GroupTracker& group_tracker);
 
  private:
-  void SetLoc(Loc loc, groupid id);
-  groupid EmplaceGroup(GroupInfo group_info);
-  void SetGroupInvalid(groupid id);
+  inline void SetLoc(Loc loc, groupid id) { groups_[loc] = id; }
+  inline void SetGroupInvalid(groupid id) {
+    group_info_map_[id].is_valid = false;
+  }
 
   inline bool LocIsEmpty(Loc loc) { return GroupAt(loc) == kInvalidGroupId; }
 
@@ -252,11 +256,11 @@ class GroupTracker final {
     return LocIsEmpty(loc) ? EMPTY : group_info_map_[GroupAt(loc)].color;
   }
 
+  groupid EmplaceGroup(Loc root_loc, GroupInfo group_info);
+
   std::array<groupid, BOARD_LEN * BOARD_LEN> groups_;
+  std::array<GroupInfo, BOARD_LEN * BOARD_LEN> group_info_map_;
   std::array<Color, BOARD_LEN * BOARD_LEN> pass_alive_;
-  absl::InlinedVector<GroupInfo, BOARD_LEN * BOARD_LEN> group_info_map_;
-  int next_group_id_ = 0;
-  absl::InlinedVector<groupid, BOARD_LEN * BOARD_LEN> available_group_ids_;
 };
 
 /*
@@ -286,8 +290,6 @@ class Board final {
   void CalculatePassAliveRegions();
 
   Scores GetScores();
-
-  std::string ToString() const;
 
   friend std::ostream& operator<<(std::ostream& os, const Board& board);
 

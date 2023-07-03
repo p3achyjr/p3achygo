@@ -52,9 +52,7 @@ inline absl::InlinedVector<Loc, 4> Adjacent(Loc loc) {
 
 }  // namespace
 
-GroupTracker::GroupTracker() : pass_alive_(), next_group_id_(0) {
-  groups_.fill(kInvalidGroupId);
-}
+GroupTracker::GroupTracker() : pass_alive_() { groups_.fill(kInvalidGroupId); }
 
 groupid GroupTracker::NewGroup(Loc loc, Color color) {
   // precondition: loc is not connected to any other group.
@@ -72,7 +70,7 @@ groupid GroupTracker::NewGroup(Loc loc, Color color) {
     }
   }
 
-  groupid gid = EmplaceGroup(GroupInfo{liberties, loc, color, true});
+  groupid gid = EmplaceGroup(loc, GroupInfo{liberties, loc, color, true});
   SetLoc(loc, gid);
 
   return gid;
@@ -205,8 +203,6 @@ groupid GroupTracker::CoalesceGroups(Loc loc) {
     if (ColorAt(loc) == EMPTY) {
       ++liberties;
     } else {
-      DCHECK(ColorAt(loc) == color);
-
       groups_[loc] = canonical_group_id;
       for (const Loc& nloc : Adjacent(loc)) {
         // add all liberties and stones of color.
@@ -240,38 +236,10 @@ void GroupTracker::CalculatePassAliveRegionForColor(Color color) {
   benson_solver.CalculatePassAliveRegionForColor(color);
 }
 
-bool GroupTracker::IsPassAlive(Loc loc) const {
-  return pass_alive_[loc] != EMPTY;
-}
+groupid GroupTracker::EmplaceGroup(Loc root_loc, GroupInfo group_info) {
+  group_info_map_[root_loc] = group_info;
 
-bool GroupTracker::IsPassAliveForColor(Loc loc, Color color) const {
-  return pass_alive_[loc] == color;
-}
-
-void GroupTracker::SetLoc(Loc loc, groupid id) { groups_[loc] = id; }
-
-groupid GroupTracker::EmplaceGroup(GroupInfo group_info) {
-  groupid gid;
-  if (!available_group_ids_.empty()) {
-    gid = available_group_ids_.back();
-    available_group_ids_.pop_back();
-
-    group_info_map_[gid] = group_info;
-  } else {
-    gid = next_group_id_;
-    next_group_id_++;
-
-    group_info_map_.emplace_back(group_info);
-  }
-
-  return gid;
-}
-
-void GroupTracker::SetGroupInvalid(groupid id) {
-  if (group_info_map_[id].is_valid) {
-    group_info_map_[id].is_valid = false;
-    available_group_ids_.emplace_back(id);
-  }
+  return static_cast<int>(root_loc);
 }
 
 GroupTracker::BensonSolver::BensonSolver(GroupTracker* group_tracker)
@@ -659,13 +627,6 @@ Scores Board::GetScores() {
     }
   }
   return Scores{bscore_ownership.first, wscore_ownership.first, ownership};
-}
-
-std::string Board::ToString() const {
-  std::stringstream ss;
-  ss << *this;
-
-  return ss.str();
 }
 
 bool Board::IsSelfCapture(Loc loc, Color color) const {
