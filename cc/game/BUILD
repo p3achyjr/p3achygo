@@ -40,6 +40,15 @@ cc_library(
     ],
 )
 
+cc_binary(
+    name = "board_benchmark",
+    srcs = ["board_benchmark.cc"],
+    deps = [
+        ":board",
+        "@com_github_google_benchmark//:benchmark_main",
+    ],
+)
+
 cc_library(
     name = "hdrs",
     hdrs = [

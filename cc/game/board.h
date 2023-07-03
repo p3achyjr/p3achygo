@@ -210,14 +210,20 @@ class GroupTracker final {
   GroupTracker();
   ~GroupTracker() = default;
 
-  groupid GroupAt(Loc loc) const;
+  inline groupid GroupAt(Loc loc) const { return groups_[loc]; }
   groupid NewGroup(Loc loc, Color color);
   void AddToGroup(Loc loc, groupid id);
 
   void Move(Loc loc, Color color);
   int LibertiesAt(Loc loc) const;  // returns number of empty neighboring spots.
-  int LibertiesForGroup(groupid gid) const;
-  int LibertiesForGroupAt(Loc loc) const;
+  inline int LibertiesForGroup(groupid gid) const {
+    return group_info_map_[gid].liberties;
+  }
+
+  inline int LibertiesForGroupAt(Loc loc) const {
+    return LibertiesForGroup(GroupAt(loc));
+  }
+
   LocVec ExpandGroup(groupid gid) const;
   void RemoveCaptures(const LocVec& captures);
 
@@ -239,8 +245,12 @@ class GroupTracker final {
   void SetLoc(Loc loc, groupid id);
   groupid EmplaceGroup(GroupInfo group_info);
   void SetGroupInvalid(groupid id);
-  bool LocIsEmpty(Loc loc);
-  int ColorAt(Loc loc);
+
+  inline bool LocIsEmpty(Loc loc) { return GroupAt(loc) == kInvalidGroupId; }
+
+  inline int ColorAt(Loc loc) {
+    return LocIsEmpty(loc) ? EMPTY : group_info_map_[GroupAt(loc)].color;
+  }
 
   std::array<groupid, BOARD_LEN * BOARD_LEN> groups_;
   std::array<Color, BOARD_LEN * BOARD_LEN> pass_alive_;
@@ -258,11 +268,11 @@ class Board final {
   Board();
   ~Board() = default;
 
-  int at(int i, int j) const;
-  float komi() const;
-  Zobrist::Hash hash() const;
-  int move_count() const;
-  const BoardData& position() const;
+  inline int at(int i, int j) const { return board_[i * BOARD_LEN + j]; }
+  inline float komi() const { return komi_; }
+  inline Zobrist::Hash hash() const { return hash_; }
+  inline int move_count() const { return move_count_; }
+  inline const BoardData& position() const { return board_; }
 
   bool IsValidMove(Loc loc, Color color) const;
   bool IsGameOver() const;
@@ -282,11 +292,13 @@ class Board final {
   friend std::ostream& operator<<(std::ostream& os, const Board& board);
 
  private:
-  int AtLoc(Loc loc) const;
-  void SetLoc(Loc loc, Color color);
+  inline int AtLoc(Loc loc) const { return board_[loc]; }
+  inline void SetLoc(Loc loc, Color color) { board_[loc] = color; }
 
   bool IsSelfCapture(Loc loc, Color color) const;
-  bool IsInAtari(Loc loc) const;
+  inline bool IsInAtari(Loc loc) const {
+    return group_tracker_.LibertiesForGroupAt(loc) == 1;
+  }
 
   std::pair<float, std::array<Color, BOARD_LEN * BOARD_LEN>> ScoreAndOwnership(
       Color color) const;
