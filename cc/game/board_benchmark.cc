@@ -8,9 +8,29 @@
 #define DEFINE_BENCHMARK(name, sequence)           \
   static void BM_##name(benchmark::State& state) { \
     for (auto _ : state) {                         \
-      PlayGame(sequence);                          \
+      state.PauseTiming();                         \
+      Board board;                                 \
+      state.ResumeTiming();                        \
+      for (const Move& move : sequence) {          \
+        board.PlayMove(move.loc, move.color);      \
+      }                                            \
     }                                              \
-  }
+  }                                                \
+  BENCHMARK(BM_##name);
+
+#define DEFINE_CHECKED_BENCHMARK(name, sequence)             \
+  static void BM_Checked##name(benchmark::State& state) {    \
+    for (auto _ : state) {                                   \
+      state.PauseTiming();                                   \
+      Board board;                                           \
+      state.ResumeTiming();                                  \
+      for (const Move& move : sequence) {                    \
+        if (!board.IsValidMove(move.loc, move.color)) break; \
+        board.PlayMove(move.loc, move.color);                \
+      }                                                      \
+    }                                                        \
+  }                                                          \
+  BENCHMARK(BM_Checked##name);
 
 namespace {
 
@@ -73,25 +93,17 @@ static constexpr Move kLadderSequence[] = {
     {BLACK, {1, 5}}, {WHITE, {0, 4}}, {BLACK, {0, 3}}, {WHITE, {0, 5}},
     {BLACK, {0, 6}}};
 
-template <size_t N>
-static inline void PlayGame(const Move (&moves)[N]) {
-  Board board;
-  for (const Move& move : moves) {
-    board.PlayMove(move.loc, move.color);
-  }
-}
-
 DEFINE_BENCHMARK(BasicSequence, kBasicSequence);
 DEFINE_BENCHMARK(PonnukiSequence, kPonnukiSequence);
 DEFINE_BENCHMARK(SanSanSequence, kSanSanSequence);
 DEFINE_BENCHMARK(BigChainJoinsSequence, kBigChainJoinsSequence);
 DEFINE_BENCHMARK(LadderSequence, kLadderSequence);
 
-BENCHMARK(BM_BasicSequence);
-BENCHMARK(BM_PonnukiSequence);
-BENCHMARK(BM_SanSanSequence);
-BENCHMARK(BM_BigChainJoinsSequence);
-BENCHMARK(BM_LadderSequence);
+DEFINE_CHECKED_BENCHMARK(BasicSequence, kBasicSequence);
+DEFINE_CHECKED_BENCHMARK(PonnukiSequence, kPonnukiSequence);
+DEFINE_CHECKED_BENCHMARK(SanSanSequence, kSanSanSequence);
+DEFINE_CHECKED_BENCHMARK(BigChainJoinsSequence, kBigChainJoinsSequence);
+DEFINE_CHECKED_BENCHMARK(LadderSequence, kLadderSequence);
 
 }  // namespace
 

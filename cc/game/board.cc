@@ -761,7 +761,7 @@ absl::InlinedVector<groupid, 4> Board::GetCapturedGroups(
     Loc loc, int captured_color) const {
   absl::InlinedVector<groupid, 4> captured_groups;
 
-  for (Loc& nloc : Adjacent(loc)) {
+  for (const Loc& nloc : Adjacent(loc)) {
     groupid id = group_tracker_.GroupAt(nloc);
     if (AtLoc(nloc) == captured_color && IsInAtari(nloc) &&
         !InlinedVecContains(captured_groups, id)) {

@@ -292,7 +292,7 @@ class Board final {
   friend std::ostream& operator<<(std::ostream& os, const Board& board);
 
  private:
-  inline int AtLoc(Loc loc) const { return board_[loc]; }
+  inline Color AtLoc(Loc loc) const { return board_[loc]; }
   inline void SetLoc(Loc loc, Color color) { board_[loc] = color; }
 
   bool IsSelfCapture(Loc loc, Color color) const;
