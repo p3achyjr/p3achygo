@@ -121,16 +121,17 @@ void GroupTracker::Move(Loc loc, Color color) {
   if (adjacent_groups.empty()) {
     // is a single stone. create new group.
     NewGroup(loc, color);
-  } else {
-    // is part of another group. add to an arbitrary group and coalesce.
-    AddToGroup(loc, adjacent_groups[0]);
-    groupid canonical_gid = CoalesceGroups(loc);
+    return;
+  }
 
-    // mark dissolved groups as invalid.
-    for (const auto gid : adjacent_groups) {
-      if (gid != canonical_gid) {
-        SetGroupInvalid(gid);
-      }
+  // is part of another group. add to an arbitrary group and coalesce.
+  AddToGroup(loc, adjacent_groups[0]);
+  groupid canonical_gid = CoalesceGroups(loc);
+
+  // mark dissolved groups as invalid.
+  for (const auto gid : adjacent_groups) {
+    if (gid != canonical_gid) {
+      SetGroupInvalid(gid);
     }
   }
 }
