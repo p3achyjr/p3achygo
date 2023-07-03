@@ -41,7 +41,7 @@ static constexpr int kShouldLogShard = 8;
 static constexpr int kGoExploitBufferSize = 64;
 
 // Probability to add any state to the seen buffer.
-static constexpr float kAddSeenStateProb = .01f;
+static constexpr float kAddSeenStateProb = .02f;
 
 // Probability of drawing a state from the visited buffer.
 static constexpr float kUseSeenStateProb = .5f;
@@ -97,6 +97,7 @@ InitState GetInitState(Probability& probability,
       return s_0;
     }
 
+    LOG(INFO) << "Fetching Initial State from Buffer!";
     return seen_state.value();
   }
 
