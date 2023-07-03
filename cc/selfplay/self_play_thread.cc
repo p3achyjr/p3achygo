@@ -97,7 +97,6 @@ InitState GetInitState(Probability& probability,
       return s_0;
     }
 
-    LOG(INFO) << "Fetching Initial State from Buffer!";
     return seen_state.value();
   }
 
