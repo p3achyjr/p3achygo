@@ -99,3 +99,26 @@ BM_PonnukiSequence             2889 ns         2889 ns       247328
 BM_SanSanSequence              6419 ns         6418 ns       111772
 BM_BigChainJoinsSequence       7137 ns         7104 ns       105828
 BM_LadderSequence              6404 ns         6403 ns       109197
+
+## Auto-Assign Group IDs (i.e. no group ID tracking), + inline zobrist fetch
+
+Run on (4 X 2200 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x2)
+  L1 Instruction 32 KiB (x2)
+  L2 Unified 256 KiB (x2)
+  L3 Unified 56320 KiB (x1)
+Load Average: 14.06, 12.05, 11.07
+--------------------------------------------------------------------------
+Benchmark                                Time             CPU   Iterations
+--------------------------------------------------------------------------
+BM_BasicSequence                      2199 ns         2199 ns       321622
+BM_PonnukiSequence                    2356 ns         2380 ns       282200
+BM_SanSanSequence                     5740 ns         5743 ns       122289
+BM_BigChainJoinsSequence              6057 ns         6063 ns       119989
+BM_LadderSequence                     5858 ns         5883 ns       119941
+BM_CheckedBasicSequence               2632 ns         2632 ns       274151
+BM_CheckedPonnukiSequence             2772 ns         2792 ns       240890
+BM_CheckedSanSanSequence              4511 ns         4514 ns       156983
+BM_CheckedBigChainJoinsSequence       7196 ns         7201 ns       100541
+BM_CheckedLadderSequence              7224 ns         7246 ns        99225

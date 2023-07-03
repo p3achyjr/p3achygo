@@ -147,7 +147,6 @@ int GroupTracker::LibertiesAt(Loc loc) const {
 }
 
 LocVec GroupTracker::ExpandGroup(groupid gid) const {
-  DCHECK(group_info_map_[gid].is_valid);
   LocVec group;
 
   LocVisitor visitor(group_info_map_[gid].root);
@@ -155,7 +154,6 @@ LocVec GroupTracker::ExpandGroup(groupid gid) const {
     Loc loc = visitor.Next();
     group.emplace_back(loc);
 
-    DCHECK(GroupAt(loc) == gid);
     for (const Loc& nloc : Adjacent(loc)) {
       if (GroupAt(nloc) == gid) {
         // visitor ensures each node is only visited once, so we do not need to
