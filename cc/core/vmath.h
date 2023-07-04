@@ -3,17 +3,16 @@
 
 #include <immintrin.h>
 
-#include <algorithm>
 #include <array>
 #include <cmath>
-#include <limits>
-#include <numeric>
+#include <cfloat>
 
 #define MM_ALIGN 16
 
 namespace core {
 
 static constexpr int kMmSize = 4;
+static constexpr float kMinFloat = -FLT_MAX;
 
 // Vectorized Max.
 // Treat array as MM_SIZE-way sliced array. Calculate max of each slice and
@@ -22,7 +21,7 @@ static constexpr int kMmSize = 4;
 template <size_t N>
 float MaxV(const std::array<float, N> floats) {
   if (N < kMmSize) {
-    float max = std::numeric_limits<float>::min();
+    float max = kMinFloat;
     for (int i = 0; i < N; ++i) {
       if (floats[i] > max) max = floats[i];
     }
@@ -42,7 +41,7 @@ float MaxV(const std::array<float, N> floats) {
   }
 
   // Get max of stragglers.
-  float max = std::numeric_limits<float>::min();
+  float max = kMinFloat;
   for (int i = mm_size; i < N; ++i) {
     if (data[i] > max) max = data[i];
   }
