@@ -21,7 +21,7 @@ class NNBoardUtils;
 
 namespace game {
 
-using groupid = int;
+using groupid = int16_t;
 using LocVec = absl::InlinedVector<Loc, constants::kMaxNumBoardLocs>;
 using BensonCache =
     core::Cache<Zobrist::Hash, std::array<Color, BOARD_LEN * BOARD_LEN>>;
@@ -174,7 +174,7 @@ class GroupTracker final {
    */
   class BensonSolver final {
    public:
-    using regionid = int;
+    using regionid = int16_t;
     struct BensonGroupInfo {
       groupid id;
       Loc root;
