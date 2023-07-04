@@ -220,8 +220,7 @@ GumbelEvaluator::SearchNonRoot(Game& game, TreeNode* root, TreeNode* node,
     return path;
   }
 
-  // internal node. Trace a single path until we hit a leaf, using a
-  // deterministic paradigm.
+  // internal node. Trace a single path until we hit a leaf.
   while (path.back()->state != TreeNodeState::kNew &&
          !(path.back()->is_terminal) && !game.IsGameOver()) {
     auto node = path.back();

@@ -110,7 +110,9 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
 
   // Not cached. Load for inference.
   DCHECK(game.moves().size() >= constants::kNumLastMoves);
+  mu_.Lock();
   Symmetry sym = GetRandomSymmetry(prng_);
+  mu_.Unlock();
   board_utils::FillNNInput(thread_id, num_threads_, nn_input_buf_[0],
                            nn_input_buf_[1], game, color_to_move, sym);
 
