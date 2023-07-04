@@ -8,6 +8,7 @@
 #include "absl/status/statusor.h"
 #include "cc/constants/constants.h"
 #include "cc/core/util.h"
+#include "cc/core/vmath.h"
 #include "cc/game/game.h"
 #include "cc/game/loc.h"
 #include "cc/mcts/tree.h"
@@ -19,7 +20,9 @@ using ::game::Color;
 using ::game::Game;
 using ::game::Loc;
 
-static constexpr float kSmallLogit = -100000;
+static constexpr float kSmallLogit =
+    -1000;  // Not sure how extreme values impact std::exp, so keeping it
+            // relatively small.
 static constexpr float kMinNonRootDisparity = -100000;
 static constexpr int kVisit = 50;
 static constexpr float kValueScale = 1.0;
@@ -75,24 +78,6 @@ float VMixed(TreeNode* node) {
   return interpolated_q / (1 + SumChildrenN(node));
 }
 
-std::array<float, constants::kMaxNumMoves> Softmax(
-    const std::array<float, constants::kMaxNumMoves>& logits) {
-  double max = *std::max_element(logits.begin(), logits.end());
-
-  std::array<double, constants::kMaxNumMoves> norm_logits;
-  std::transform(logits.begin(), logits.end(), norm_logits.begin(),
-                 [&](float x) { return x - max; });
-  std::array<double, constants::kMaxNumMoves> exps;
-  std::transform(norm_logits.begin(), norm_logits.end(), exps.begin(),
-                 [&](double x) { return std::exp(x); });
-  double total = std::accumulate(exps.begin(), exps.end(), 0.0);
-
-  std::array<float, constants::kMaxNumMoves> softmax;
-  std::transform(exps.begin(), exps.end(), softmax.begin(),
-                 [&](double x) { return x / total; });
-  return softmax;
-}
-
 int Argmax(std::array<float, constants::kMaxNumMoves>& logits) {
   int arg_max = 0;
   float max_logit = kSmallLogit;
@@ -110,7 +95,7 @@ std::array<float, constants::kMaxNumMoves> ComputeImprovedPolicy(
     TreeNode* node) {
   float v_mix = VMixed(node);
   int max_n = MaxN(node);
-  std::array<float, constants::kMaxNumMoves> logits_improved;
+  alignas(MM_ALIGN) std::array<float, constants::kMaxNumMoves> logits_improved;
   for (int action = 0; action < constants::kMaxNumMoves; ++action) {
     logits_improved[action] =
         node->move_logits[action] +
@@ -118,7 +103,7 @@ std::array<float, constants::kMaxNumMoves> ComputeImprovedPolicy(
                    max_n);
   }
 
-  return Softmax(logits_improved);
+  return core::SoftmaxV(logits_improved);
 }
 
 }  // namespace

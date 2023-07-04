@@ -27,6 +27,16 @@ cc_test(
     ],
 )
 
+cc_test(
+    name = "gumbel_benchmark",
+    srcs = ["gumbel_benchmark.cc"],
+    deps = [
+        ":gumbel",
+        "//cc/core",
+        "@com_github_google_benchmark//:benchmark_main",
+    ],
+)
+
 cc_library(
     name = "leaf_evaluator",
     srcs = select({
