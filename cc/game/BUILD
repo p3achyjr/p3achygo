@@ -1,3 +1,5 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
+
 package(default_visibility = ["//visibility:public"])
 
 cc_library(
@@ -37,6 +39,15 @@ cc_library(
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/container:inlined_vector",
         "@com_google_absl//absl/log:check",
+    ],
+)
+
+cc_binary(
+    name = "board_benchmark",
+    srcs = ["board_benchmark.cc"],
+    deps = [
+        ":board",
+        "@com_github_google_benchmark//:benchmark_main",
     ],
 )
 

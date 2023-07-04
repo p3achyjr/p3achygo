@@ -29,7 +29,20 @@ RUN cp bazelisk-linux-amd64 /usr/bin/bazel
 RUN cp bazelisk-linux-amd64 /usr/local/bin/bazel
 RUN rm bazelisk-linux-amd64
 
+# Install mimalloc
+RUN git clone https://github.com/microsoft/mimalloc.git
+RUN cd mimalloc
+RUN mkdir -p out/release
+RUN cd out/release
+RUN cmake ../..
+RUN make
+RUN make install
+RUN cd ../../..
+RUN rm -rf mimalloc
+
+# Setup and get p3achygo
 ENV PYTHONPATH=/app/python
+ENV LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
 
 WORKDIR /app
 

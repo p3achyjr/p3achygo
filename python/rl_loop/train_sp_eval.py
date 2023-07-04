@@ -5,7 +5,7 @@ Starts Self-Play, then Trains when a chunk is ready, then runs Eval.
 from __future__ import annotations
 
 import gcs_utils as gcs
-import shlex, sys, time
+import os, shlex, sys, time
 import rl_loop.config as config
 import rl_loop.model_utils as model_utils
 import rl_loop.sp_loop as sp
@@ -54,8 +54,9 @@ def eval(eval_bin_path: str, eval_res_path: str, cur_model_path: str,
   cur_model_path_trt = str(Path(cur_model_path, '_trt'))
   cand_model_path_trt = str(Path(cand_model_path, '_trt'))
 
-  cmd = shlex.split(f'{eval_bin_path}' +
-                    f' --cur_model_path={cur_model_path_trt}' +
+  env = os.environ.copy()
+  env['LD_PRELOAD'] = '/usr/local/lib/libmimalloc.so'
+  cmd = shlex.split(f'{eval_bin_path} --cur_model_path={cur_model_path_trt}' +
                     f' --cand_model_path={cand_model_path_trt}' +
                     f' --res_write_path={eval_res_path}' +
                     f' --cache_size={EVAL_CACHE_SIZE}')
@@ -63,7 +64,8 @@ def eval(eval_bin_path: str, eval_res_path: str, cur_model_path: str,
                     stdin=PIPE,
                     stdout=PIPE,
                     stderr=STDOUT,
-                    universal_newlines=True)
+                    universal_newlines=True,
+                    env=env)
   t = Thread(target=print_stdout, args=(eval_proc.stdout,), daemon=True)
   t.start()
   eval_proc.wait()

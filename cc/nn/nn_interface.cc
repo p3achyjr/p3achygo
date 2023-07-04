@@ -21,7 +21,7 @@ using namespace ::core;
 using namespace ::game;
 using namespace ::tensorflow;
 
-// 2 ** 20. Assuming ~3kb per inference result, this will be about ~3GB of RAM.
+// 2 ** 20. Inference Result is 6kb, so this will be about ~6GB of RAM.
 static constexpr char kSavedModelTagServe[] = "serve";
 
 }  // namespace
@@ -110,7 +110,9 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
 
   // Not cached. Load for inference.
   DCHECK(game.moves().size() >= constants::kNumLastMoves);
+  mu_.Lock();
   Symmetry sym = GetRandomSymmetry(prng_);
+  mu_.Unlock();
   board_utils::FillNNInput(thread_id, num_threads_, nn_input_buf_[0],
                            nn_input_buf_[1], game, color_to_move, sym);
 

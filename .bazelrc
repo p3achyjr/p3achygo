@@ -31,6 +31,9 @@ build:dbg --copt -g
 build:dbg --compilation_mode=dbg
 build:dbg --per_file_copt=+tensorflow/core/kernels.*@-g0
 
+build:mimalloc --linkopt=-L/usr/local/lib
+build:mimalloc --linkopt=-lmimalloc
+
 build:optcommon --copt=-march=native
 build:optcommon --host_copt=-march=native
 build:optcommon --copt=-Wno-sign-compare

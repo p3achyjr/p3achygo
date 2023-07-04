@@ -21,7 +21,10 @@ class Zobrist final {
   Zobrist(Zobrist const &) = delete;
   Zobrist &operator=(Zobrist const &) = delete;
 
-  Hash hash_at(unsigned i, unsigned j, unsigned state) const;
+  inline Hash hash_at(unsigned i, unsigned j, unsigned state) const {
+    return table_[i][j][state];
+  }
+
   static const Zobrist &get();
 
  private:

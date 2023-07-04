@@ -8,7 +8,14 @@
 
 namespace game {
 
-int Inv(int i, size_t grid_len) { return grid_len - i - 1; }
+inline int Inv(int i, size_t grid_len) { return grid_len - i - 1; }
+
+inline int Flip(int index, size_t grid_len) {
+  int i = index / grid_len;
+  int j = index % grid_len;
+
+  return i * grid_len + Inv(j, grid_len);
+}
 
 int Rotate(int index, size_t grid_len, Rotation rot) {
   int i = index / grid_len;
@@ -24,13 +31,6 @@ int Rotate(int index, size_t grid_len, Rotation rot) {
   }
 
   return index;
-}
-
-int Flip(int index, size_t grid_len) {
-  int i = index / grid_len;
-  int j = index % grid_len;
-
-  return i * grid_len + Inv(j, grid_len);
 }
 
 int TransformIndex(Symmetry sym, int index, size_t grid_len) {
@@ -77,15 +77,6 @@ int TransformInv(Symmetry sym, int index, size_t grid_len) {
   }
 
   return index;
-}
-
-Symmetry GetRandomSymmetry(core::PRng& prng) {
-  return static_cast<Symmetry>(core::RandRange(prng, 0, kSymUpperBound));
-}
-
-Loc ApplySymmetry(Symmetry sym, Loc loc, size_t grid_len) {
-  auto sym_index = TransformIndex(sym, AsIndex(loc, grid_len), grid_len);
-  return AsLoc(sym_index, grid_len);
 }
 
 }  // namespace game

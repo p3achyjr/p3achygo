@@ -3,8 +3,8 @@ ARG RUN_ID
 
 WORKDIR /app
 
-RUN bazel build --config=opt --config=trt //cc/selfplay:main
-RUN bazel build --config=opt --config=trt //cc/eval:main
+RUN ./sh/build_sp_container.sh
+RUN ./sh/build_eval_container.sh
 ENTRYPOINT ["sh", "-c", "python", "-m", "python.rl_loop.train_sp_eval", \
   "--sp_bin_path=/app/bazel-bin/cc/selfplay/main", \
   "--eval_bin_path=/app/bazel-bin/cc/eval/main", "--run_id=$RUN_ID"]

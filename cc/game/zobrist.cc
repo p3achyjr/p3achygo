@@ -18,10 +18,6 @@ Zobrist::Zobrist() {
   }
 }
 
-Zobrist::Hash Zobrist::hash_at(unsigned i, unsigned j, unsigned state) const {
-  return table_[i][j][state];
-}
-
 /* static */ const Zobrist& Zobrist::get() {
   static Zobrist zobrist;
   return zobrist;

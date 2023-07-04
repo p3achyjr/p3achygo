@@ -1,3 +1,5 @@
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+
 package(default_visibility = ["//visibility:public"])
 
 cc_library(
@@ -24,6 +26,16 @@ cc_test(
         ":gumbel",
         "//cc/core",
         "//cc/core:doctest",
+    ],
+)
+
+cc_test(
+    name = "gumbel_benchmark",
+    srcs = ["gumbel_benchmark.cc"],
+    deps = [
+        ":gumbel",
+        "//cc/core",
+        "@com_github_google_benchmark//:benchmark_main",
     ],
 )
 

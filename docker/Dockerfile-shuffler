@@ -3,6 +3,6 @@ ARG RUN_ID
 
 WORKDIR /app
 
-RUN bazel build --config=opt //cc/shuffler:main
+RUN ./sh/build_shuf_container.sh
 ENTRYPOINT ["sh", "-c", "python", "-m", "python.rl_loop.shuffle", \
   "--bin_path=/app/bazel-bin/cc/shuffler/main", "--run_id=$RUN_ID"]

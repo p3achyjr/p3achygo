@@ -1,3 +1,5 @@
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+
 package(default_visibility = ["//visibility:public"])
 
 cc_library(
@@ -11,6 +13,7 @@ cc_library(
         ":rand",
         ":ring_buffer",
         ":util",
+        ":vmath",
     ],
 )
 
@@ -95,4 +98,18 @@ cc_library(
         "doctest_include.h",
     ],
     deps = ["@doctest//doctest"],
+)
+
+cc_library(
+    name = "vmath",
+    hdrs = ["vmath.h"],
+)
+
+cc_test(
+    name = "vmath_test",
+    srcs = ["vmath_test.cc"],
+    deps = [
+        ":doctest",
+        ":vmath",
+    ],
 )

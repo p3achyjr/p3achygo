@@ -21,7 +21,7 @@ class NNBoardUtils;
 
 namespace game {
 
-using groupid = int;
+using groupid = int16_t;
 using LocVec = absl::InlinedVector<Loc, constants::kMaxNumBoardLocs>;
 using BensonCache =
     core::Cache<Zobrist::Hash, std::array<Color, BOARD_LEN * BOARD_LEN>>;
@@ -174,7 +174,7 @@ class GroupTracker final {
    */
   class BensonSolver final {
    public:
-    using regionid = int;
+    using regionid = int16_t;
     struct BensonGroupInfo {
       groupid id;
       Loc root;
@@ -210,14 +210,21 @@ class GroupTracker final {
   GroupTracker();
   ~GroupTracker() = default;
 
-  groupid GroupAt(Loc loc) const;
+  inline groupid GroupAt(Loc loc) const { return groups_[loc]; }
+  inline int LibertiesForGroup(groupid gid) const {
+    return group_info_map_[gid].liberties;
+  }
+
+  inline int LibertiesForGroupAt(Loc loc) const {
+    return LibertiesForGroup(GroupAt(loc));
+  }
+
   groupid NewGroup(Loc loc, Color color);
   void AddToGroup(Loc loc, groupid id);
 
   void Move(Loc loc, Color color);
   int LibertiesAt(Loc loc) const;  // returns number of empty neighboring spots.
-  int LibertiesForGroup(groupid gid) const;
-  int LibertiesForGroupAt(Loc loc) const;
+
   LocVec ExpandGroup(groupid gid) const;
   void RemoveCaptures(const LocVec& captures);
 
@@ -229,24 +236,31 @@ class GroupTracker final {
   void CalculatePassAliveRegions(Zobrist::Hash hash);
   void CalculatePassAliveRegionForColor(Color color);
 
-  bool IsPassAlive(Loc loc) const;
-  bool IsPassAliveForColor(Loc loc, Color color) const;
+  inline bool IsPassAlive(Loc loc) const { return pass_alive_[loc] != EMPTY; }
+  inline bool IsPassAliveForColor(Loc loc, Color color) const {
+    return pass_alive_[loc] == color;
+  }
 
   friend std::ostream& operator<<(std::ostream& os,
                                   const GroupTracker& group_tracker);
 
  private:
-  void SetLoc(Loc loc, groupid id);
-  groupid EmplaceGroup(GroupInfo group_info);
-  void SetGroupInvalid(groupid id);
-  bool LocIsEmpty(Loc loc);
-  int ColorAt(Loc loc);
+  inline void SetLoc(Loc loc, groupid id) { groups_[loc] = id; }
+  inline void SetGroupInvalid(groupid id) {
+    group_info_map_[id].is_valid = false;
+  }
+
+  inline bool LocIsEmpty(Loc loc) { return GroupAt(loc) == kInvalidGroupId; }
+
+  inline int ColorAt(Loc loc) {
+    return LocIsEmpty(loc) ? EMPTY : group_info_map_[GroupAt(loc)].color;
+  }
+
+  groupid EmplaceGroup(Loc root_loc, GroupInfo group_info);
 
   std::array<groupid, BOARD_LEN * BOARD_LEN> groups_;
+  std::array<GroupInfo, BOARD_LEN * BOARD_LEN> group_info_map_;
   std::array<Color, BOARD_LEN * BOARD_LEN> pass_alive_;
-  absl::InlinedVector<GroupInfo, BOARD_LEN * BOARD_LEN> group_info_map_;
-  int next_group_id_ = 0;
-  absl::InlinedVector<groupid, BOARD_LEN * BOARD_LEN> available_group_ids_;
 };
 
 /*
@@ -258,11 +272,11 @@ class Board final {
   Board();
   ~Board() = default;
 
-  int at(int i, int j) const;
-  float komi() const;
-  Zobrist::Hash hash() const;
-  int move_count() const;
-  const BoardData& position() const;
+  inline int at(int i, int j) const { return board_[i * BOARD_LEN + j]; }
+  inline float komi() const { return komi_; }
+  inline Zobrist::Hash hash() const { return hash_; }
+  inline int move_count() const { return move_count_; }
+  inline const BoardData& position() const { return board_; }
 
   bool IsValidMove(Loc loc, Color color) const;
   bool IsGameOver() const;
@@ -277,16 +291,16 @@ class Board final {
 
   Scores GetScores();
 
-  std::string ToString() const;
-
   friend std::ostream& operator<<(std::ostream& os, const Board& board);
 
  private:
-  int AtLoc(Loc loc) const;
-  void SetLoc(Loc loc, Color color);
+  inline Color AtLoc(Loc loc) const { return board_[loc]; }
+  inline void SetLoc(Loc loc, Color color) { board_[loc] = color; }
 
   bool IsSelfCapture(Loc loc, Color color) const;
-  bool IsInAtari(Loc loc) const;
+  inline bool IsInAtari(Loc loc) const {
+    return group_tracker_.LibertiesForGroupAt(loc) == 1;
+  }
 
   std::pair<float, std::array<Color, BOARD_LEN * BOARD_LEN>> ScoreAndOwnership(
       Color color) const;

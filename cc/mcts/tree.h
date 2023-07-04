@@ -40,15 +40,35 @@ struct TreeNode final {
   float init_util_est = 0;  // mix value estimate and score estimate.
 };
 
-void AdvanceState(TreeNode* node);
-float N(TreeNode* node);
-float NAction(TreeNode* node, int action);
-float Q(TreeNode* node);
-float QAction(TreeNode* node, int action);
-float MaxN(TreeNode* node);
-float SumChildrenN(TreeNode* node);
+inline float N(TreeNode* node) { return node == nullptr ? 0 : node->n; }
+inline float NAction(TreeNode* node, int action) {
+  return N(node->children[action].get());
+}
 
-// void IncrementChildN(TreeNode* node, int child);
+inline float Q(TreeNode* node) {
+  // return minimum value if node is null (init-to-loss).
+  return node == nullptr ? -1.5 : node->q;
+}
+
+inline float QAction(TreeNode* node, int action) {
+  // remember to flip sign. In bare MCTS, this will also cause MCTS to make deep
+  // reads.
+  return !node->children[action] ? -1.5 : -node->children[action]->q;
+}
+
+inline float MaxN(TreeNode* node) {
+  if (node == nullptr) return 0;
+
+  return node->max_child_n;
+}
+
+// Each node is visited once when expanded, and once per search path. Thus, the
+// total visit count of its children should be N(node) - 1
+inline float SumChildrenN(TreeNode* node) {
+  return node == nullptr ? 0 : node->n - 1;
+}
+
+void AdvanceState(TreeNode* node);
 
 }  // namespace mcts
 

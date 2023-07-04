@@ -1,3 +1,8 @@
+# Workspace Config.
+# We do not pull tensorflow as an external repo--rather, before build time, we
+# copy tensorflow shared libraries and includes in //cc/tensorflow, and link them
+# into our binary. This reduces build times significantly (from 3+ hours to a few minutes).
+
 load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
@@ -18,11 +23,24 @@ git_repository(
     remote = "https://github.com/doctest/doctest.git",
 )
 
+# Abseil-CPP
+# https://github.com/abseil/abseil-cpp
 http_archive(
     name = "com_google_absl",
     sha256 = "3e0b4a1b8edc78026cd3dc4ecfe793ec5794ae692081db459e1b7bb6d9844375",
     strip_prefix = "abseil-cpp-a0f9b465212aea24d3264b82d315b8ee59e8d7a0",
     urls = ["https://github.com/abseil/abseil-cpp/archive/a0f9b465212aea24d3264b82d315b8ee59e8d7a0.zip"],
+)
+
+# Google Benchmark
+# https://github.com/google/benchmark
+http_archive(
+    name = "com_github_google_benchmark",
+    sha256 = "5f98b44165f3250f1d749b728018318d654f763ea0f4d7ea156e10e6e0cc678a",
+    strip_prefix = "benchmark-5e78bedfb07c615edb2b646d1e354980268c1728",
+    urls = [
+        "https://github.com/google/benchmark/archive/5e78bedfb07c615edb2b646d1e354980268c1728.zip",
+    ],
 )
 
 # Hedron's Compile Commands Extractor for Bazel

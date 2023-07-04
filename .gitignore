@@ -14,3 +14,4 @@ data/**
 
 cc/tensorflow/**
 !cc/tensorflow/BUILD
+.trunk

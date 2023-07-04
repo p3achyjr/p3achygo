@@ -30,9 +30,14 @@ int Rotate(int index, size_t grid_len, Rotation rot);
 int TransformIndex(Symmetry sym, int index, size_t grid_len);
 int TransformInv(Symmetry sym, int index, size_t grid_len);
 
-Symmetry GetRandomSymmetry(core::PRng& prng);
+inline Symmetry GetRandomSymmetry(core::PRng& prng) {
+  return static_cast<Symmetry>(core::RandRange(prng, 0, kSymUpperBound));
+}
 
-Loc ApplySymmetry(Symmetry sym, Loc loc, size_t grid_len);
+inline Loc ApplySymmetry(Symmetry sym, Loc loc, size_t grid_len) {
+  auto sym_index = TransformIndex(sym, AsIndex(loc, grid_len), grid_len);
+  return AsLoc(sym_index, grid_len);
+}
 
 template <typename T, size_t N>
 std::array<T, N> ApplySymmetry(Symmetry sym, const std::array<T, N>& grid,
