@@ -42,6 +42,7 @@ RUN rm -rf mimalloc
 
 # Setup and get p3achygo
 ENV PYTHONPATH=/app/python
+ENV LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
 
 WORKDIR /app
 

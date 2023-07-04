@@ -24,6 +24,7 @@ BM_SanSanSequence              7468 ns         7456 ns       100861
 BM_BigChainJoinsSequence       7401 ns         7400 ns        96796
 BM_LadderSequence              7287 ns         7286 ns        97501
 ```
+
 ```
 Load Average: 12.63, 10.21, 9.56
 -------------------------------------------------------------------
@@ -49,6 +50,7 @@ BM_SanSanSequence              7373 ns         7371 ns        97588
 BM_BigChainJoinsSequence       7628 ns         7627 ns        82411
 BM_LadderSequence              7277 ns         7276 ns        93660
 ```
+
 ```
 Load Average: 10.88, 10.85, 9.98
 -------------------------------------------------------------------

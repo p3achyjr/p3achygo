@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import gcs_utils as gcs
-import secrets, shlex, time
+import os, secrets, shlex, time
 import rl_loop.fs_utils as fs_utils
 
 from absl import logging
@@ -76,16 +76,19 @@ def loop(bin_path: str,
   # most recent chunk tells us which generation we are making self-play data for.
   gen = gcs.get_most_recent_chunk(run_id)
   while True:
+    env = os.environ.copy()
+    env['LD_PRELOAD'] = '/usr/local/lib/libmimalloc.so'
     cmd = shlex.split(f'{bin_path} --num_threads={num_threads}' +
                       f' --model_path={str(model_path)}' +
                       f' --recorder_path={local_run_dir}' +
                       f' --flush_interval={num_threads} --gen={gen}' +
-                      f' --id={worker_id} --gumbel_n=32 --gumbel_k=4')
+                      f' --id={worker_id.upper()}')
     selfplay_proc = Popen(cmd,
                           stdin=PIPE,
                           stdout=PIPE,
                           stderr=STDOUT,
-                          universal_newlines=True)
+                          universal_newlines=True,
+                          env=env)
     t = Thread(target=print_stdout, args=(selfplay_proc.stdout,), daemon=True)
     t.start()
 

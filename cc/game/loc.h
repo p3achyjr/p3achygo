@@ -16,7 +16,7 @@ struct Loc {
   int i;
   int j;
 
-  // Index into a 1D representation of a 2D grid of length `len`.
+  // Index into a 1D representation of a 2D grid of length `BOARD_LEN`.
   operator int16_t() const { return i * BOARD_LEN + j; }
 };
 

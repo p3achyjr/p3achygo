@@ -21,7 +21,7 @@ using namespace ::core;
 using namespace ::game;
 using namespace ::tensorflow;
 
-// 2 ** 20. Assuming ~3kb per inference result, this will be about ~3GB of RAM.
+// 2 ** 20. Inference Result is 6kb, so this will be about ~6GB of RAM.
 static constexpr char kSavedModelTagServe[] = "serve";
 
 }  // namespace

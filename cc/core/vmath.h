@@ -4,8 +4,8 @@
 #include <immintrin.h>
 
 #include <array>
-#include <cmath>
 #include <cfloat>
+#include <cmath>
 
 #define MM_ALIGN 16
 

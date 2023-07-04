@@ -6,7 +6,7 @@ Invokes a C++ binary and waits until a new model is uploaded, before stopping.
 
 from __future__ import annotations
 
-import shlex, signal, sys, time
+import os, shlex, signal, sys, time
 import gcs_utils as gcs
 import rl_loop.config as config
 import rl_loop.fs_utils as fs_utils
@@ -59,6 +59,8 @@ def loop(bin_path: str, run_id: str, local_run_dir: str,
 
   chunk_gen = gcs.get_most_recent_chunk(run_id) + 1
   while chunk_gen <= config.num_generations:
+    env = os.environ.copy()
+    env['LD_PRELOAD'] = '/usr/local/lib/libmimalloc.so'
     cmd = shlex.split(f'{bin_path} --data_path={local_sp_chunk_dir}' +
                       f' --gen={chunk_gen}' +
                       f' --games_per_gen={config.games_per_gen}')
@@ -66,7 +68,8 @@ def loop(bin_path: str, run_id: str, local_run_dir: str,
                       stdin=PIPE,
                       stdout=PIPE,
                       stderr=STDOUT,
-                      universal_newlines=True)
+                      universal_newlines=True,
+                      env=env)
     t = Thread(target=print_stdout, args=(shuf_proc.stdout,), daemon=True)
     t.start()
 
