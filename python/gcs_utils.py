@@ -4,12 +4,14 @@ import shlex, subprocess, re
 
 from google.cloud import storage
 from pathlib import Path
+from typing import Callable
 
 GCS_CLIENT = storage.Client()
 GCS_BUCKET = 'p3achygo'
 
 # keep in sync with cc/shuffler/chunk_manager.cc, and GCS file tree structure.
 MODELS_DIR = 'models'
+MODEL_CANDS_DIR = 'model_cands'
 GOLDEN_CHUNK_DIR = 'goldens'
 SP_CHUNK_DIR = 'chunks'
 SGF_DIR = 'sgf'
@@ -47,6 +49,16 @@ def _get_chunk_num(blob_path: str) -> int:
   return _get_num(blob_path, CHUNK_RE)
 
 
+def _get_most_recent(prefix: str, num_fn: Callable[[str], int],
+                     sentinel: int) -> int:
+  blobs = GCS_CLIENT.list_blobs(GCS_BUCKET, prefix=prefix)
+  most_recent = sentinel
+  for blob in blobs:
+    most_recent = max(num_fn(blob.name), most_recent)
+
+  return most_recent
+
+
 def _upload_chunk(run_id: str, local_chunk_dir: str, chunk_filename: str):
   local_chunk_path = Path(local_chunk_dir, chunk_filename)
   gcs_chunk_path = Path(gcs_chunk_dir(run_id), chunk_filename)
@@ -68,6 +80,16 @@ def _upload_model(run_id: str, local_models_dir: str, model_dir: str):
   subprocess.run(shlex.split(cmd), check=True)
 
 
+def _upload_model_cand(run_id: str, local_models_dir: str, model_dir: str):
+  local_dir = Path(local_models_dir, model_dir)
+  gcs_dir = Path(gcs_model_cands_dir(run_id), model_dir)
+  if not local_dir.exists():
+    raise Exception(f'Model not found: {str(local_dir)}')
+
+  cmd = f'gsutil -m cp -r {str(local_dir)} gs://{GCS_BUCKET}/{str(gcs_dir)}'
+  subprocess.run(shlex.split(cmd), check=True)
+
+
 def _download(local_path: str, gcs_path: str):
   bucket = GCS_CLIENT.bucket(GCS_BUCKET)
   blob = bucket.blob(gcs_path)
@@ -79,6 +101,17 @@ def _download(local_path: str, gcs_path: str):
 def _download_model(run_id: str, local_models_dir: str, model_dir: str) -> str:
   local_dir = Path(local_models_dir, model_dir)
   gcs_dir = Path(gcs_models_dir(run_id), model_dir)
+
+  cmd = f'gsutil -m cp -r gs://{GCS_BUCKET}/{str(gcs_dir)} {str(local_models_dir)}'
+  subprocess.run(shlex.split(cmd), check=True)
+
+  return str(local_dir)
+
+
+def _download_model_cand(run_id: str, local_models_dir: str,
+                         model_dir: str) -> str:
+  local_dir = Path(local_models_dir, model_dir)
+  gcs_dir = Path(gcs_model_cands_dir(run_id), model_dir)
 
   cmd = f'gsutil -m cp -r gs://{GCS_BUCKET}/{str(gcs_dir)} {str(local_models_dir)}'
   subprocess.run(shlex.split(cmd), check=True)
@@ -113,6 +146,10 @@ def gcs_models_dir(run_id: str) -> str:
   return str(Path(run_id, MODELS_DIR))
 
 
+def gcs_model_cands_dir(run_id: str) -> str:
+  return str(Path(run_id, MODEL_CANDS_DIR))
+
+
 def gcs_chunk_dir(run_id: str) -> str:
   return str(Path(run_id, GOLDEN_CHUNK_DIR))
 
@@ -126,21 +163,15 @@ def gcs_sgf_dir(run_id: str) -> str:
 
 
 def get_most_recent_model(run_id: str) -> int:
-  model_blobs = GCS_CLIENT.list_blobs(GCS_BUCKET, prefix=gcs_models_dir(run_id))
-  most_recent = -1
-  for blob in model_blobs:
-    most_recent = max(_get_model_num(blob.name), most_recent)
+  return _get_most_recent(gcs_models_dir(run_id), _get_model_num, -1)
 
-  return most_recent
+
+def get_most_recent_model_cand(run_id: str) -> int:
+  return _get_most_recent(gcs_model_cands_dir(run_id), _get_model_num, -1)
 
 
 def get_most_recent_chunk(run_id: str) -> int:
-  chunk_blobs = GCS_CLIENT.list_blobs(GCS_BUCKET, prefix=gcs_chunk_dir(run_id))
-  most_recent = 0
-  for blob in chunk_blobs:
-    most_recent = max(_get_chunk_num(blob.name), most_recent)
-
-  return most_recent
+  return _get_most_recent(gcs_chunk_dir(run_id), _get_chunk_num, 0)
 
 
 def upload_chunk(run_id: str, local_chunk_dir: str, gen: int):
@@ -149,6 +180,10 @@ def upload_chunk(run_id: str, local_chunk_dir: str, gen: int):
 
 def upload_model(run_id: str, local_models_dir: str, gen: int):
   _upload_model(run_id, local_models_dir, MODEL_FORMAT.format(gen))
+
+
+def upload_model_cand(run_id: str, local_models_dir: str, gen: int):
+  _upload_model_cand(run_id, local_models_dir, MODEL_FORMAT.format(gen))
 
 
 def upload_sp_chunk(run_id: str, local_path: Path):
@@ -177,6 +212,11 @@ def download_golden_chunk(run_id: str, local_chunk_dir: str, gen: int) -> str:
 
 def download_model(run_id: str, local_models_dir: str, gen: int) -> str:
   return _download_model(run_id, local_models_dir, MODEL_FORMAT.format(gen))
+
+
+def download_model_cand(run_id: str, local_models_dir: str, gen: int) -> str:
+  return _download_model_cand(run_id, local_models_dir,
+                              MODEL_FORMAT.format(gen))
 
 
 def download_val_ds(local_dir: str) -> str:

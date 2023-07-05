@@ -24,7 +24,6 @@ from threading import Thread
 FLAGS = flags.FLAGS
 
 POLL_INTERVAL_S = 10
-BATCH_SIZE = 256
 EVAL_CACHE_SIZE = 32768
 
 flags.DEFINE_string('sp_bin_path', '', 'Local path to self-play binary.')
@@ -96,7 +95,7 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
    _) = fs_utils.ensure_local_dirs(local_run_dir)
 
   # fetch or create first model
-  model_gen = gcs.get_most_recent_model(FLAGS.run_id)
+  model_gen = gcs.get_most_recent_model_cand(FLAGS.run_id)
   if model_gen < 0:
     model_gen = 0
     model = model_utils.new_model(name=f'p3achygo_{FLAGS.run_id}')
@@ -107,7 +106,7 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
                                     gen=0,
                                     run_id=FLAGS.run_id)
   else:
-    gcs.download_model(FLAGS.run_id, local_models_dir, model_gen)
+    gcs.download_model_cand(FLAGS.run_id, local_models_dir, model_gen)
 
   eval_res_path = str(Path(local_run_dir, 'eval_res.txt'))
   while model_gen < config.num_generations:
@@ -115,8 +114,7 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
     logging.info(f'Model Generation: {model_gen}')
     sp_queue = Queue()
     sp_thread = Thread(target=sp.loop,
-                       args=(sp_bin_path, run_id, local_run_dir,
-                             config.num_sp_threads, sp_queue))
+                       args=(sp_bin_path, run_id, local_run_dir, sp_queue))
     sp_thread.start()
 
     # Poll GCS to check for the availability of a new golden chunk.
@@ -137,6 +135,7 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
     # Train for one generation.
     logging.info(f'Training model {model_gen}...')
     cmd = shlex.split(f'python -m python.rl_loop.train_one_gen' +
+                      f' --run_id={run_id}' +
                       f' --models_dir={local_models_dir}' +
                       f' --gen={model_gen}' +
                       f' --next_gen={latest_chunk_gen}' +
@@ -155,6 +154,10 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
         Path(local_models_dir, gcs.MODEL_FORMAT.format(model_gen)))
     cand_model_path = str(
         Path(local_models_dir, gcs.MODEL_FORMAT.format(latest_chunk_gen)))
+
+    # Upload as new model candidate, in case we are pre-empted.
+    logging.info(f'Uploading model candidate {cand_model_path}.')
+    gcs.upload_model_cand(run_id, local_models_dir, latest_chunk_gen)
 
     # Run eval.
     eval_result = eval(eval_bin_path, eval_res_path, cur_model_path,

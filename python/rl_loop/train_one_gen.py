@@ -9,6 +9,7 @@ import tensorflow as tf
 import transforms
 import rl_loop.model_utils as model_utils
 import rl_loop.train
+import rl_loop.config
 
 from absl import app, flags, logging
 from model import P3achyGoModel
@@ -19,6 +20,7 @@ BATCH_SIZE = 256
 
 FLAGS = flags.FLAGS
 
+flags.DEFINE_string('run_id', '', 'ID corresponding to the current run.')
 flags.DEFINE_string('models_dir', '', 'Directory to find model.')
 flags.DEFINE_integer('gen', -1, 'Generation, or -1 for most recent')
 flags.DEFINE_integer('next_gen', -1, 'Next generation.')
@@ -40,6 +42,9 @@ def get_model_path(models_dir: str, gen: int) -> Tuple[str, int]:
 
 
 def main(_):
+  if FLAGS.run_id == '':
+    logging.error('No --run_id specified.')
+    return
   if FLAGS.models_dir == '':
     logging.error('No --models_dir specified.')
     return
@@ -60,16 +65,22 @@ def main(_):
   else:
     logging.warning('No GPU detected.')
 
+  config = rl_loop.config.parse(FLAGS.run_id)
   val_ds = tf.data.TFRecordDataset(FLAGS.val_ds_path, compression_type='ZLIB')
   val_ds = val_ds.map(transforms.expand_rl, num_parallel_calls=tf.data.AUTOTUNE)
-  val_ds = val_ds.batch(BATCH_SIZE)
+  val_ds = val_ds.batch(config.batch_size)
   val_ds = val_ds.prefetch(tf.data.AUTOTUNE)
 
   model_path, _ = get_model_path(FLAGS.models_dir, FLAGS.gen)
   model = tf.keras.models.load_model(
       model_path, custom_objects=P3achyGoModel.custom_objects())
 
-  rl_loop.train.train_one_gen(model, FLAGS.chunk_path, val_ds, is_gpu=is_gpu)
+  rl_loop.train.train_one_gen(model,
+                              FLAGS.chunk_path,
+                              val_ds,
+                              batch_size=config.batch_size,
+                              lr=config.lr,
+                              is_gpu=is_gpu)
   model_utils.save_trt(model, FLAGS.val_ds_path, FLAGS.models_dir,
                        FLAGS.next_gen)
 
