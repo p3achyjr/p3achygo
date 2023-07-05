@@ -25,10 +25,10 @@
 ABSL_FLAG(std::string, cur_model_path, "", "Path to current best model.");
 ABSL_FLAG(std::string, cand_model_path, "", "Path to candidate model.");
 ABSL_FLAG(std::string, res_write_path, "", "Path to write result to.");
+ABSL_FLAG(int, num_games, 0, "Number of eval games");
 ABSL_FLAG(int, cache_size, constants::kDefaultNNCacheSize / 2,
           "Default size of cache.");
 
-static constexpr int kNumEvalGames = 48;
 static constexpr int64_t kTimeoutUs = 4000;
 
 int main(int argc, char** argv) {
@@ -54,12 +54,18 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  int num_games = absl::GetFlag(FLAGS_num_games);
+  if (num_games == 0) {
+    LOG(ERROR) << "--num_games Not Specified.";
+    return 1;
+  }
+
   // Initialize NN evaluators.
   int cache_size = absl::GetFlag(FLAGS_cache_size);
   std::unique_ptr<nn::NNInterface> cur_nn_interface =
-      std::make_unique<nn::NNInterface>(kNumEvalGames, kTimeoutUs, cache_size);
+      std::make_unique<nn::NNInterface>(num_games, kTimeoutUs, cache_size);
   std::unique_ptr<nn::NNInterface> cand_nn_interface =
-      std::make_unique<nn::NNInterface>(kNumEvalGames, kTimeoutUs, cache_size);
+      std::make_unique<nn::NNInterface>(num_games, kTimeoutUs, cache_size);
   CHECK_OK(cur_nn_interface->Initialize(std::move(cur_model_path)));
   CHECK_OK(cand_nn_interface->Initialize(std::move(cand_model_path)));
 
@@ -69,7 +75,7 @@ int main(int argc, char** argv) {
 
   std::vector<std::thread> threads;
   std::vector<std::future<Winner>> winners;
-  for (int thread_id = 0; thread_id < kNumEvalGames; ++thread_id) {
+  for (int thread_id = 0; thread_id < num_games; ++thread_id) {
     std::promise<Winner> p;
     winners.emplace_back(p.get_future());
 
@@ -81,7 +87,7 @@ int main(int argc, char** argv) {
     threads.emplace_back(std::move(thread));
   }
 
-  LOG(INFO) << "Playing " << kNumEvalGames << " eval games.";
+  LOG(INFO) << "Playing " << num_games << " eval games.";
 
   for (auto& thread : threads) {
     thread.join();
@@ -94,10 +100,10 @@ int main(int argc, char** argv) {
   }
 
   float winrate =
-      (static_cast<float>(num_cand_won) / static_cast<float>(kNumEvalGames));
+      (static_cast<float>(num_cand_won) / static_cast<float>(num_games));
   float rel_elo = core::RelativeElo(winrate);
 
-  LOG(INFO) << "Cand won " << num_cand_won << " games of " << kNumEvalGames
+  LOG(INFO) << "Cand won " << num_cand_won << " games of " << num_games
             << " for " << winrate << " winrate and " << rel_elo
             << " relative Elo.";
 

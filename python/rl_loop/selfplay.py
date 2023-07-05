@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import sys
 import rl_loop.sp_loop as sp
-import rl_loop.config as config
 
 from absl import app, flags, logging
+from rl_loop.trt_batch_size import trt_batch_size
 
 FLAGS = flags.FLAGS
 
@@ -30,8 +30,10 @@ def main(_):
     logging.error('No --run_id specified.')
     return
 
-  run_config = config.parse(FLAGS.run_id)
-  sp.loop(FLAGS.bin_path, FLAGS.run_id, FLAGS.local_run_dir)
+  sp.loop(FLAGS.bin_path,
+          FLAGS.run_id,
+          FLAGS.local_run_dir,
+          num_threads=trt_batch_size())
 
 
 if __name__ == '__main__':

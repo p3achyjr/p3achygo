@@ -5,7 +5,7 @@ Starts Self-Play, then Trains when a chunk is ready, then runs Eval.
 from __future__ import annotations
 
 import gcs_utils as gcs
-import os, shlex, sys, time
+import multiprocessing, os, shlex, sys, time
 import rl_loop.config as config
 import rl_loop.model_utils as model_utils
 import rl_loop.sp_loop as sp
@@ -15,9 +15,8 @@ from absl import app, flags, logging
 from constants import *
 from dataclasses import dataclass
 from pathlib import Path
-from model import P3achyGoModel
-from multiprocessing import Process
 from queue import Queue
+from rl_loop.trt_batch_size import trt_batch_size
 from subprocess import Popen, PIPE, STDOUT
 from threading import Thread
 
@@ -58,7 +57,8 @@ def eval(eval_bin_path: str, eval_res_path: str, cur_model_path: str,
   cmd = shlex.split(f'{eval_bin_path} --cur_model_path={cur_model_path_trt}' +
                     f' --cand_model_path={cand_model_path_trt}' +
                     f' --res_write_path={eval_res_path}' +
-                    f' --cache_size={EVAL_CACHE_SIZE}')
+                    f' --cache_size={EVAL_CACHE_SIZE}' +
+                    f' --num_games={trt_batch_size()}')
   eval_proc = Popen(cmd,
                     stdin=PIPE,
                     stdout=PIPE,
@@ -104,7 +104,8 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
                                     val_ds_path,
                                     local_models_dir,
                                     gen=0,
-                                    run_id=FLAGS.run_id)
+                                    run_id=FLAGS.run_id,
+                                    batch_size=trt_batch_size())
   else:
     gcs.download_model_cand(FLAGS.run_id, local_models_dir, model_gen)
 
@@ -114,7 +115,8 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
     logging.info(f'Model Generation: {model_gen}')
     sp_queue = Queue()
     sp_thread = Thread(target=sp.loop,
-                       args=(sp_bin_path, run_id, local_run_dir, sp_queue))
+                       args=(sp_bin_path, run_id, local_run_dir,
+                             trt_batch_size(), sp_queue))
     sp_thread.start()
 
     # Poll GCS to check for the availability of a new golden chunk.

@@ -2,15 +2,14 @@ import tensorflow as tf
 import transforms
 from tensorflow.python.compiler.tensorrt import trt_convert as trt
 
-# Use the same batch size when running self-play.
-BATCH_SIZE = 48
 NUM_CALIB_BATCHES = 10
 
 
-def get_converter(model_path: str, chunk_path: str) -> trt.TrtGraphConverterV2:
+def get_converter(model_path: str, chunk_path: str,
+                  batch_size: int) -> trt.TrtGraphConverterV2:
   calib_ds = tf.data.TFRecordDataset(chunk_path, compression_type='ZLIB')
   calib_ds = calib_ds.map(transforms.expand_rl)
-  calib_ds = calib_ds.batch(BATCH_SIZE)
+  calib_ds = calib_ds.batch(batch_size)
   calib_ds = calib_ds.take(NUM_CALIB_BATCHES)
 
   def calibration_input_fn():

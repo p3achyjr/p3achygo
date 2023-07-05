@@ -1,0 +1,8 @@
+FROM gcr.io/p3achygo/p3achygo_base:latest
+
+RUN mkdir -p /tmp/p3achygo
+WORKDIR /app
+
+RUN ./sh/build_sp_container.sh
+ENTRYPOINT ["sh", "-c", "python -m python.rl_loop.selfplay \
+  --bin_path=/app/bazel-bin/cc/selfplay/main --run_id=$RUN_ID"]

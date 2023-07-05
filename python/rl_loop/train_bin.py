@@ -17,6 +17,7 @@ import rl_loop.train
 from absl import app, flags, logging
 from constants import *
 from pathlib import Path
+from rl_loop.trt_batch_size import trt_batch_size
 from model import P3achyGoModel
 
 sys.stdout.reconfigure(line_buffering=True)  # pytype: disable=attribute-error
@@ -79,7 +80,8 @@ def main(_):
                                     FLAGS.val_ds_path,
                                     str(model_dir),
                                     0,
-                                    run_id=FLAGS.run_id)
+                                    run_id=FLAGS.run_id,
+                                    batch_size=trt_batch_size())
   else:
     model_path = gcs.download_model(FLAGS.run_id, str(model_dir), model_gen)
     model = tf.keras.models.load_model(
@@ -112,7 +114,8 @@ def main(_):
                                     FLAGS.val_ds_path,
                                     str(model_dir),
                                     next_model_gen,
-                                    run_id=FLAGS.run_id)
+                                    run_id=FLAGS.run_id,
+                                    batch_size=trt_batch_size())
     model_gen += 1
 
   logging.info(f'Model gen: {model_gen}. Shutting down.')

@@ -14,6 +14,7 @@ import rl_loop.config
 from absl import app, flags, logging
 from model import P3achyGoModel
 from pathlib import Path
+from rl_loop.trt_batch_size import trt_batch_size
 from typing import Tuple
 
 BATCH_SIZE = 256
@@ -81,8 +82,11 @@ def main(_):
                               batch_size=config.batch_size,
                               lr=config.lr,
                               is_gpu=is_gpu)
-  model_utils.save_trt(model, FLAGS.val_ds_path, FLAGS.models_dir,
-                       FLAGS.next_gen)
+  model_utils.save_trt(model,
+                       FLAGS.val_ds_path,
+                       FLAGS.models_dir,
+                       FLAGS.next_gen,
+                       batch_size=trt_batch_size())
 
 
 if __name__ == '__main__':

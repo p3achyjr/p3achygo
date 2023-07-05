@@ -113,7 +113,9 @@ def main(_):
   model_path = str(Path(FLAGS.model_save_path, 'p3achygo_sl'))
   model.save(model_path)
 
-  converter = trt_convert.get_converter(model_path, FLAGS.calib_ds)
+  converter = trt_convert.get_converter(model_path,
+                                        FLAGS.calib_ds,
+                                        batch_size=64)
   converter.summary()
   converter.save(output_saved_model_dir=str(Path(model_path, '_trt')))
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import gcs_utils as gcs
-import multiprocessing, os, secrets, shlex, time
+import os, secrets, shlex, time
 import rl_loop.fs_utils as fs_utils
 
 from absl import logging
@@ -12,7 +12,6 @@ from threading import Thread
 from typing import Tuple
 
 POLL_INTERVAL_S = 10
-THREAD_CPU_RATIO = 6
 TFREC_GLOB = '*.tfrecord.zz'
 SGF_GLOB = '*.sgfs'
 DONE_GLOB = '*.done'
@@ -49,6 +48,7 @@ def update_and_upload_sp_files(run_id: str, sp_chunk_dir: str, sgf_dir: str,
 def loop(bin_path: str,
          run_id: str,
          local_run_dir: str,
+         num_threads: int,
          queue: Queue | None = None):
   '''
   Starts self-play binary and runs until told to stop.
@@ -72,9 +72,6 @@ def loop(bin_path: str,
   # first model is now uploaded. Get it and start run.
   model_path = gcs.download_model(run_id, str(local_models_dir), model_gen)
   model_path = str(Path(model_path, '_trt'))
-
-  # calculate number of threads based on number of vCPUs.
-  num_threads = multiprocessing.cpu_count() * THREAD_CPU_RATIO
 
   # most recent chunk tells us which generation we are making self-play data for.
   gen = gcs.get_most_recent_chunk(run_id)

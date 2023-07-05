@@ -1,9 +1,8 @@
 FROM gcr.io/p3achygo/p3achygo_base:latest
-ARG RUN_ID
 
 RUN mkdir -p /tmp/p3achygo
 WORKDIR /app
 
 RUN ./sh/build_shuf_container.sh
-ENTRYPOINT ["sh", "-c", "python", "-m", "python.rl_loop.shuffle", \
-  "--bin_path=/app/bazel-bin/cc/shuffler/main", "--run_id=$RUN_ID"]
+ENTRYPOINT ["sh", "-c", "python -m python.rl_loop.shuffle \
+  --bin_path=/app/bazel-bin/cc/shuffler/main --run_id=$RUN_ID"]
