@@ -160,3 +160,26 @@ I feel like I am constantly so, so close to kicking off the whole thing, but I'v
 - Read EfficientZero [paper](https://arxiv.org/pdf/2111.00210.pdf) and see if there's anything there that might be useful.
 
 At this point the most important thing to do is just to get this thing off the ground--so close :)
+
+## 7-04-2023
+
+I have a working local loop now. It _should_ work while distributed as well. I still haven't written my .yaml files, but I have a goal to get it up and running by the end of this week.
+
+I implemented everything listed in the last checkpoint, except for reading EfficientZero. I am using GCS as a shared filestore. A friend of mine mentioned that I end up doing tons of disk IO, which is true. Somehow I had never considered setting up gRPC endpoints and just doing it that way instead.
+
+I re-read the Gumbel paper and realized the key insight is that the PUCT formula in the original AlphaZero search does not actually treat the NN policy as a probability distribution--rather, it treats it as a prior mass, and (I think) will deterministically select the actions with the highest priors to look at first. In Gumbel, we do treat the priors as a distribution, and sample actions to evaluate, bumping the probability of actions we find to be good. Another misunderstanding I had was that Gumbel does not guarantee a policy improvement for each sample, it simply guarantees a policy improvement _in expectation_. It is totally possible for Gumbel to recommend a trash move on individual searches, but will statistically guarantee policy improvement.
+
+Since we are sampling from our policy, I also realized that there isn't much of a reason to use high values of `k`. We can rely on sampling to give us a diverse set of actions to try, and use our visit budget to make deeper reads. In practice, it seems like using larger `k` values does produce more exploration, but we should remember that we are continuing training from a bootstrapped model. Since we already know the policy is good, using small values of `k` is akin to doing PPO/TRPO, iteratively refining our policy. If we were training from scratch, we could consider using higher `k`s. This might not hold once our model encounters off-policy data--we'll have to see how it fares there :)
+
+I have implemented Gumbel bucketing, but have not observed how it affects training. It's possible that doing so may produce inconsistent policy updates, but maybe the diversity in positions and in value/policy training makes up for it.
+
+I also spent some time doing performance improvements, the results of which are in cc/game/board_bench.md and cc/mcts/gumbel_bench.md. One surprise to me was that any code split between .h and .cc files cannot be inlined. The reason is because one translation unit is a cc file with all its #includes expanded, and header files usually do not contain any code, leaving nothing for the compiler to actually inline. Moving small functions into .h files produces a massive CPU speedup (~2x) for MCTS.
+
+Other performance improvements are:
+
+- Auto-assign group IDs. Instead of maintaining a stack of available group IDs, we can simply assign a new group the index at which its first stone was placed. After all, no two stones can share the same board location :). This saves ~15% CPU and 1kb of stack size per board.
+- Pre-compute adjacent locations for each board point.
+- Use int16_t for group_id/region_id types. This saves 724 bytes.
+- SSE Softmax implementation. This saves about ~25% CPU for MCTS.
+
+I _still_ need to get my stuff running on Kubernetes. Honestly I've been pushing this off since it just seems like the least interesting part. But by the end of this week, it should be there :)
