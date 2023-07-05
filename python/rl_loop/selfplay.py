@@ -15,8 +15,6 @@ from absl import app, flags, logging
 
 FLAGS = flags.FLAGS
 
-flags.DEFINE_integer('num_generations', 10,
-                     'Number of generations of self-play.')
 flags.DEFINE_string('bin_path', '', 'Local path to self-play binary.')
 flags.DEFINE_string('run_id', '', 'ID corresponding to the current run.')
 flags.DEFINE_string('local_run_dir', '/tmp/p3achygo',
@@ -33,8 +31,7 @@ def main(_):
     return
 
   run_config = config.parse(FLAGS.run_id)
-  sp.loop(FLAGS.bin_path, FLAGS.run_id, FLAGS.local_run_dir,
-          run_config.num_sp_threads)
+  sp.loop(FLAGS.bin_path, FLAGS.run_id, FLAGS.local_run_dir)
 
 
 if __name__ == '__main__':

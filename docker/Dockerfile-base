@@ -16,29 +16,29 @@ RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] http://packages.c
 
 
 # Install LLVM.
-RUN wget https://apt.llvm.org/llvm.sh
-RUN chmod +x llvm.sh
-RUN ./llvm.sh 12
-RUN rm llvm.sh
+RUN wget https://apt.llvm.org/llvm.sh && \
+  chmod +x llvm.sh && \
+  ./llvm.sh 12 && \
+  rm llvm.sh
 
 # Install Bazel.
-RUN wget https://github.com/bazelbuild/bazelisk/releases/download/v1.16.0/bazelisk-linux-amd64
-RUN chmod +x bazelisk-linux-amd64
-RUN cp bazelisk-linux-amd64 /usr/local/lib/bazel/bin/bazel
-RUN cp bazelisk-linux-amd64 /usr/bin/bazel
-RUN cp bazelisk-linux-amd64 /usr/local/bin/bazel
-RUN rm bazelisk-linux-amd64
+RUN wget https://github.com/bazelbuild/bazelisk/releases/download/v1.16.0/bazelisk-linux-amd64 && \
+  chmod +x bazelisk-linux-amd64 && \
+  cp bazelisk-linux-amd64 /usr/local/lib/bazel/bin/bazel && \
+  cp bazelisk-linux-amd64 /usr/bin/bazel && \
+  cp bazelisk-linux-amd64 /usr/local/bin/bazel && \
+  rm bazelisk-linux-amd64
 
 # Install mimalloc
-RUN git clone https://github.com/microsoft/mimalloc.git
-RUN cd mimalloc
-RUN mkdir -p out/release
-RUN cd out/release
-RUN cmake ../..
-RUN make
-RUN make install
-RUN cd ../../..
-RUN rm -rf mimalloc
+RUN git clone https://github.com/microsoft/mimalloc.git && \
+  cd mimalloc && \
+  mkdir -p out/release && \
+  cd out/release && \
+  cmake ../.. && \
+  make && \
+  make install && \
+  cd ../../.. && \
+  rm -rf mimalloc
 
 # Setup and get p3achygo
 ENV PYTHONPATH=/app/python
@@ -48,9 +48,8 @@ WORKDIR /app
 
 RUN git clone https://github.com/p3achyjr/p3achygo.git .
 
-RUN pip install --upgrade pip
-RUN pip install -r requirements.txt
+RUN pip install --upgrade pip && pip install -r requirements.txt
 
-RUN cp /usr/local/lib/python3.8/dist-packages/tensorflow/libtensorflow_cc.so.2 /app/cc/tensorflow/
-RUN cp /usr/local/lib/python3.8/dist-packages/tensorflow/libtensorflow_framework.so.2 /app/cc/tensorflow/
-RUN cp -r /usr/local/lib/python3.8/dist-packages/tensorflow/include /app/cc/tensorflow/
+RUN cp /usr/local/lib/python3.8/dist-packages/tensorflow/libtensorflow_cc.so.2 /app/cc/tensorflow/ && \
+  cp /usr/local/lib/python3.8/dist-packages/tensorflow/libtensorflow_framework.so.2 /app/cc/tensorflow/ && \
+  cp -r /usr/local/lib/python3.8/dist-packages/tensorflow/include /app/cc/tensorflow/

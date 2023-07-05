@@ -16,28 +16,40 @@ RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] http://packages.c
 
 
 # Install LLVM.
-RUN wget https://apt.llvm.org/llvm.sh
-RUN chmod +x llvm.sh
-RUN ./llvm.sh 12
-RUN rm llvm.sh
+RUN wget https://apt.llvm.org/llvm.sh && \
+  chmod +x llvm.sh && \
+  ./llvm.sh 12 && \
+  rm llvm.sh
 
+# Install Bazel.
+RUN wget https://github.com/bazelbuild/bazelisk/releases/download/v1.16.0/bazelisk-linux-amd64 && \
+  chmod +x bazelisk-linux-amd64 && \
+  cp bazelisk-linux-amd64 /usr/local/lib/bazel/bin/bazel && \
+  cp bazelisk-linux-amd64 /usr/bin/bazel && \
+  cp bazelisk-linux-amd64 /usr/local/bin/bazel && \
+  rm bazelisk-linux-amd64
+
+# Install mimalloc
+RUN git clone https://github.com/microsoft/mimalloc.git && \
+  cd mimalloc && \
+  mkdir -p out/release && \
+  cd out/release && \
+  cmake ../.. && \
+  make && \
+  make install && \
+  cd ../../.. && \
+  rm -rf mimalloc
+
+# Setup and get p3achygo
 ENV PYTHONPATH=/app/python
+ENV LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
 ENV PATH=/usr/lib/llvm-12/bin:$PATH
 
 WORKDIR /app
 
 COPY requirements.txt /app
 
-RUN pip install --upgrade pip
-RUN pip install -r /app/requirements.txt
-
-# Install Bazel.
-RUN wget https://github.com/bazelbuild/bazelisk/releases/download/v1.16.0/bazelisk-linux-amd64
-RUN chmod +x bazelisk-linux-amd64
-RUN cp bazelisk-linux-amd64 /usr/local/lib/bazel/bin/bazel
-RUN cp bazelisk-linux-amd64 /usr/bin/bazel
-RUN cp bazelisk-linux-amd64 /usr/local/bin/bazel
-RUN rm bazelisk-linux-amd64
+RUN pip install --upgrade pip && pip install -r /app/requirements.txt
 
 COPY . /app
 

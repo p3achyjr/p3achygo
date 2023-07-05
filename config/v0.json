@@ -1,5 +1,6 @@
 {
   "num_generations": 100,
   "games_per_gen": 5000,
-  "num_sp_threads": 48
+  "batch_size": 256,
+  "lr": 3e-3
 }
