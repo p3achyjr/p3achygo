@@ -63,6 +63,8 @@ def loop(bin_path: str,
   sgfs = set(local_sgf_dir.glob(SGF_GLOB))
 
   # wait for first model.
+  # !! We do not do TRT conversion here. This assumes that all GPUs in the cluster
+  # are running the same compute capability.
   model_gen = gcs.get_most_recent_model(run_id)
   while model_gen < 0:
     logging.warning(f'No model found. Sleeping for {POLL_INTERVAL_S}s')

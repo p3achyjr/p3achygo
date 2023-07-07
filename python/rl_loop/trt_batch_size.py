@@ -1,4 +1,4 @@
-import functools, multiprocessing
+import multiprocessing
 
 THREAD_CPU_RATIO = 6
 
