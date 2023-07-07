@@ -17,6 +17,9 @@ using namespace ::nn;
 static constexpr int kGumbelN = 160;  // 20, 40 visits.
 static constexpr int kGumbelK = 4;
 
+// Threshold under which to immediately resign.
+static constexpr float kResignThreshold = -.98;
+
 std::string ToString(const Color& color) {
   switch (color) {
     case BLACK:
@@ -48,6 +51,7 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
   Game game;
   std::unique_ptr<TreeNode> btree = std::make_unique<TreeNode>();
   std::unique_ptr<TreeNode> wtree = std::make_unique<TreeNode>();
+  bool did_resign = false;
 
   GumbelEvaluator gumbel_b(black_nn, thread_id);
   GumbelEvaluator gumbel_w(white_nn, thread_id);
@@ -61,6 +65,11 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
     GumbelResult gumbel_res =
         gumbel.SearchRoot(probability, game, player_tree.get(), color_to_move,
                           kGumbelN, kGumbelK);
+    if (QOutcome(player_tree.get()) < kResignThreshold) {
+      did_resign = true;
+      break;
+    }
+
     Loc move = gumbel_res.mcts_move;
     float move_q = QAction(player_tree.get(), move);
     game.PlayMove(move, color_to_move);
@@ -104,13 +113,23 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
   cand_nn->UnregisterThread(thread_id);
   game.WriteResult();
 
+  if (did_resign) {
+    game.SetWinner(OppositeColor(color_to_move));
+  }
+
+  auto game_result = game.result();
   Winner winner =
       cur_is_black
-          ? (game.result().winner == BLACK ? Winner::kCur : Winner::kCand)
-          : (game.result().winner == WHITE ? Winner::kCur : Winner::kCand);
+          ? (game_result.winner == BLACK ? Winner::kCur : Winner::kCand)
+          : (game_result.winner == WHITE ? Winner::kCur : Winner::kCand);
+  float score_diff = game_result.winner == BLACK
+                         ? game_result.bscore - game_result.wscore
+                         : game_result.wscore - game_result.bscore;
   LOG(INFO) << "Winner: " << ToString(winner) << ". Cand is "
             << (cur_is_black ? "W" : "B")
-            << ", Black Score: " << game.result().bscore
-            << ", White Score: " << game.result().wscore;
+            << ", Result: " << (game_result.winner == BLACK ? "B" : "W") << "+"
+            << (did_resign ? "R" : absl::StrFormat("%f", score_diff))
+            << ", Black Score: " << game_result.bscore
+            << ", White Score: " << game_result.wscore;
   result.set_value(winner);
 }

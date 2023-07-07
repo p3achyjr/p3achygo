@@ -274,9 +274,11 @@ GumbelEvaluator::SearchNonRoot(Game& game, TreeNode* root, TreeNode* node,
 
     // TODO: Experiment with this.
     float empirical_q = player_score > opp_score ? 1.5 : -1.5;
+    float empirical_outcome = player_score > opp_score ? 1.0 : -1.0;
 
     leaf_node->is_terminal = true;
     leaf_node->q = empirical_q;
+    leaf_node->q_outcome = empirical_outcome;
   }
 
   return path;
@@ -294,19 +296,24 @@ void GumbelEvaluator::EvaluateLeaf(const Game& game, TreeNode* node,
 
 void GumbelEvaluator::Backward(
     absl::InlinedVector<TreeNode*, kMaxPathLenEst>& path) {
-  float leaf_util = path[path.size() - 1]->q;
+  TreeNode* leaf = path.back();
+  float leaf_q = leaf->q;
+  float leaf_q_outcome = leaf->q_outcome;
 
   for (int i = path.size() - 2; i >= 0; --i) {
     TreeNode* parent = path[i];
     TreeNode* child = path[i + 1];
     parent->n += 1;
-    parent->w += -leaf_util;
+    parent->w += -leaf_q;
+    parent->w_outcome += -leaf_q_outcome;
     parent->q = parent->w / parent->n;
+    parent->q_outcome = parent->w_outcome / parent->n;
     if (child->n > parent->max_child_n) {
       parent->max_child_n = child->n;
     }
 
-    leaf_util *= -1;
+    leaf_q *= -1;
+    leaf_q_outcome *= -1;
   }
 }
 

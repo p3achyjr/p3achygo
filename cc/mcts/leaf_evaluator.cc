@@ -23,10 +23,7 @@ void LeafEvaluator::EvaluateRoot(const Game& game, TreeNode* node,
                                  Color color_to_move) {
   // Call for any not-yet-evaluated root nodes.
   InitTreeNode(node, game, color_to_move);
-  node->n = 1;
-  node->w = node->value_est;
-  node->q = node->w;
-  node->init_util_est = node->w;
+  InitFields(node, 0);
 }
 
 void LeafEvaluator::EvaluateLeaf(const Game& game, TreeNode* node,
@@ -34,10 +31,7 @@ void LeafEvaluator::EvaluateLeaf(const Game& game, TreeNode* node,
   InitTreeNode(node, game, color_to_move);
   float score_utility = ScoreTransform(node->score_est, root_score_est);
 
-  node->n = 1;
-  node->w = node->value_est + score_utility;
-  node->q = node->w;
-  node->init_util_est = node->w;
+  InitFields(node, score_utility);
 }
 
 void LeafEvaluator::InitTreeNode(TreeNode* node, const Game& game,
@@ -60,9 +54,18 @@ void LeafEvaluator::InitTreeNode(TreeNode* node, const Game& game,
   }
 
   node->color_to_move = color_to_move;
-  node->value_est = value_est;
+  node->outcome_est = value_est;
   node->score_est = score_est;
 
   AdvanceState(node);
+}
+
+inline void LeafEvaluator::InitFields(TreeNode* node, float score_utility) {
+  node->n = 1;
+  node->w = node->outcome_est + score_utility;
+  node->w_outcome = node->outcome_est;
+  node->q = node->w;
+  node->q_outcome = node->w_outcome;
+  node->init_util_est = node->w;
 }
 }  // namespace mcts

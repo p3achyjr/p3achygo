@@ -28,6 +28,9 @@ struct TreeNode final {
   float w = 0;
   float q = 0;
 
+  float w_outcome = 0;
+  float q_outcome = 0;
+
   int max_child_n = 0;
 
   std::array<std::unique_ptr<TreeNode>, constants::kMaxNumMoves> children{};
@@ -35,7 +38,7 @@ struct TreeNode final {
   // write-once
   std::array<float, constants::kMaxNumMoves> move_logits{};
   std::array<float, constants::kMaxNumMoves> move_probs{};
-  float value_est = 0;
+  float outcome_est = 0;
   float score_est = 0;
   float init_util_est = 0;  // mix value estimate and score estimate.
 };
@@ -50,10 +53,21 @@ inline float Q(TreeNode* node) {
   return node == nullptr ? -1.5 : node->q;
 }
 
+inline float QOutcome(TreeNode* node) {
+  // return minimum value if node is null (init-to-loss).
+  return node == nullptr ? -1.0 : node->q_outcome;
+}
+
 inline float QAction(TreeNode* node, int action) {
   // remember to flip sign. In bare MCTS, this will also cause MCTS to make deep
   // reads.
   return !node->children[action] ? -1.5 : -node->children[action]->q;
+}
+
+inline float QOutcomeAction(TreeNode* node, int action) {
+  // remember to flip sign. In bare MCTS, this will also cause MCTS to make deep
+  // reads.
+  return !node->children[action] ? -1.0 : -node->children[action]->q_outcome;
 }
 
 inline float MaxN(TreeNode* node) {

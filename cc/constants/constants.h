@@ -62,7 +62,7 @@ static constexpr int kNoopMoveEncoding = -1;
 static constexpr int kNumPassesBeforeBensons = 3;
 
 /* Maximum number of threads. */
-static constexpr int kMaxNumThreads = 64;
+static constexpr int kMaxNumThreads = 256;
 
 /* Default Max NN Cache Size */
 static constexpr size_t kDefaultNNCacheSize = 1048576;

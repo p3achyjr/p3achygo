@@ -54,6 +54,7 @@ class Game final {
 
   Scores GetScores();
   void WriteResult();
+  void SetWinner(Color winner);
 
  private:
   Board board_;

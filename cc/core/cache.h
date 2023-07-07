@@ -14,6 +14,9 @@ namespace core {
 
 /*
  * A simple cache implementation. Only holds one element per cache key.
+ *
+ * !! All operations are unchecked! Calling into a cache created from the
+ * !! default constructor will likely lead to segfaults.
  */
 template <typename K, typename V>
 class Cache final {

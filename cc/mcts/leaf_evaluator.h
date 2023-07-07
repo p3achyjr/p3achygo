@@ -35,6 +35,9 @@ class LeafEvaluator final {
                     game::Color color_to_move);
 
  private:
+  // Populates initial fields _after_ a call to InitTreeNode.
+  void InitFields(TreeNode* node, float score_utility);
+
   nn::NNInterface* nn_interface_;
   int thread_id_;
 };

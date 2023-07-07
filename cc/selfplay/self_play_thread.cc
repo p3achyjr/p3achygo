@@ -54,16 +54,25 @@ static constexpr int kComputePAMoveNums[] = {175, 200, 250, 300, 350, 400};
 
 // Possible values of N, K for gumbel search.
 static const GumbelParams kGumbelParamChoices[] = {
-    GumbelParams{8, 2},   GumbelParams{16, 2},  GumbelParams{16, 4},
-    GumbelParams{32, 4},  GumbelParams{32, 4},  GumbelParams{32, 4},
-    GumbelParams{48, 8},  GumbelParams{48, 8},  GumbelParams{48, 8},
-    GumbelParams{64, 4},  GumbelParams{64, 16}, GumbelParams{96, 8},
-    GumbelParams{128, 2}, GumbelParams{128, 4},
+    // GumbelParams{8, 2},   GumbelParams{16, 2},  GumbelParams{16, 4},
+    GumbelParams{32, 4}, GumbelParams{32, 4}, GumbelParams{32, 4},
+    // GumbelParams{48, 8},  GumbelParams{48, 8},  GumbelParams{48, 8},
+    // GumbelParams{64, 4},  GumbelParams{64, 16}, GumbelParams{96, 8},
+    // GumbelParams{128, 2}, GumbelParams{128, 4},
 };
 
 // Size of `kGumbelParamsChoices`.
 static const size_t kNumGumbelChoices =
     sizeof(kGumbelParamChoices) / sizeof(GumbelParams);
+
+// Threshold beneath which loss is guaranteed.
+static constexpr float kDownBadThreshold = -.95;
+
+// Number of moves at down bad threshold before decreasing visit count.
+static constexpr float kNumDownBadMovesThreshold = 5;
+
+// Minimal visit count for guaranteed lost games.
+static constexpr GumbelParams kDownBadParams = GumbelParams{4, 2};
 
 // Whether the thread should continue running.
 static std::atomic<bool> running = true;
@@ -71,18 +80,19 @@ static std::atomic<bool> running = true;
 void AddNewInitState(RingBuffer<InitState, kGoExploitBufferSize>& buffer,
                      const Game& game, Color color_to_move) {
   Board board = game.board();
-  absl::InlinedVector<Move, constants::kMaxGameLen> last_moves;
-  for (int off = constants::kNumLastMoves; off > 0; --off) {
-    Move last_move = game.moves()[game.moves().size() - off];
-    last_moves.emplace_back(last_move);
-  }
+  absl::InlinedVector<Move, constants::kMaxGameLen> last_moves = game.moves();
 
   CHECK(last_moves.size() == constants::kNumLastMoves);
-  CHECK(last_moves[0] == game.moves()[game.moves().size() - 5]);
-  CHECK(last_moves[1] == game.moves()[game.moves().size() - 4]);
-  CHECK(last_moves[2] == game.moves()[game.moves().size() - 3]);
-  CHECK(last_moves[3] == game.moves()[game.moves().size() - 2]);
-  CHECK(last_moves[4] == game.moves()[game.moves().size() - 1]);
+  CHECK(last_moves[last_moves.size() - 5] ==
+        game.moves()[game.moves().size() - 5]);
+  CHECK(last_moves[last_moves.size() - 4] ==
+        game.moves()[game.moves().size() - 4]);
+  CHECK(last_moves[last_moves.size() - 3] ==
+        game.moves()[game.moves().size() - 3]);
+  CHECK(last_moves[last_moves.size() - 2] ==
+        game.moves()[game.moves().size() - 2]);
+  CHECK(last_moves[last_moves.size() - 1] ==
+        game.moves()[game.moves().size() - 1]);
 
   buffer.Append(InitState{board, last_moves, color_to_move});
 }
@@ -117,29 +127,49 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     // Populate initial state either from seen states or s_0.
     InitState init_state = GetInitState(probability, go_exploit_buffer);
 
-    // Initialize game related objects.
+    // Game state.
     Game game(init_state.board, init_state.last_moves);
     Color color_to_move = init_state.color_to_move;
-    std::unique_ptr<TreeNode> root_node = std::make_unique<TreeNode>();
-    std::vector<std::array<float, constants::kMaxNumMoves>>
-        mcts_pis;  // Completed Q-values for each timestep.
-    std::vector<uint8_t>
-        move_trainables;  // Whether the i'th move is trainable.
-    auto num_moves_raw_policy =
-        RandRange(probability.prng(), 0,
-                  kMaxNumRawPolicyMoves);  // Number of moves for which to
-                                           // sample directly from the policy.
-    GumbelParams gumbel_params = kGumbelParamChoices[RandRange(
-        probability.prng(), 0,
-        kNumGumbelChoices)];  // Gumbel N, K for this game.
 
+    // Search Tree.
+    std::unique_ptr<TreeNode> root_node = std::make_unique<TreeNode>();
+
+    // Completed Q-values for each timestep.
+    std::vector<std::array<float, constants::kMaxNumMoves>> mcts_pis;
+
+    // Whether the i'th move is trainable.
+    std::vector<uint8_t> move_trainables;
+
+    // Number of consecutive moves at which we are beneath kDownBadThreshold.
+    int num_consecutive_down_bad_moves_b = 0;
+    int num_consecutive_down_bad_moves_w = 0;
+
+    // Number of moves for which to sample directly from the policy.
+    auto num_moves_raw_policy =
+        RandRange(probability.prng(), 0, kMaxNumRawPolicyMoves);
+
+    // Gumbel N, K for this game.
+    GumbelParams gumbel_params = kGumbelParamChoices[RandRange(
+        probability.prng(), 0, kNumGumbelChoices)];
+
+    // Begin Search.
     GumbelEvaluator gumbel_evaluator(nn_interface, thread_id);
     while (IsRunning() && !game.IsGameOver() && game.num_moves() < max_moves) {
       // Choose n, k = 1 if we have not reached `num_moves_raw_policy` number of
       // moves.
+      // Choose n, k = kDownBadParams if we are down bad.
+      int num_consecutive_down_bad_moves =
+          color_to_move == BLACK ? num_consecutive_down_bad_moves_b
+                                 : num_consecutive_down_bad_moves_w;
       bool sampling_raw_policy = game.num_moves() <= num_moves_raw_policy;
-      int gumbel_n = sampling_raw_policy ? 1 : gumbel_params.n;
-      int gumbel_k = sampling_raw_policy ? 1 : gumbel_params.k;
+      bool is_down_bad =
+          num_consecutive_down_bad_moves >= kNumDownBadMovesThreshold;
+      int gumbel_n = sampling_raw_policy
+                         ? 1
+                         : (is_down_bad ? kDownBadParams.n : gumbel_params.n);
+      int gumbel_k = sampling_raw_policy
+                         ? 1
+                         : (is_down_bad ? kDownBadParams.k : gumbel_params.k);
 
       // Run and Profile Search.
       auto begin = std::chrono::high_resolution_clock::now();
@@ -151,10 +181,18 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       // Gather statistics.
       Loc nn_move = gumbel_res.nn_move;
       Loc move = gumbel_res.mcts_move;
+      int nn_move_n = NAction(root_node.get(), nn_move);
       float nn_move_q = QAction(root_node.get(), nn_move);
+      int move_n = NAction(root_node.get(), move);
       float move_q = QAction(root_node.get(), move);
+      float root_q_outcome = Q(root_node.get());
+      bool is_move_trainable = !sampling_raw_policy && !is_down_bad;
+
+      // Update tracking data structures.
       mcts_pis.push_back(gumbel_res.pi_improved);
-      move_trainables.push_back(!sampling_raw_policy);
+      move_trainables.push_back(is_move_trainable);
+      num_consecutive_down_bad_moves +=
+          (root_q_outcome < kDownBadThreshold ? 1 : 0);
 
       // Play move, and calculate PA regions if we hit a checkpoint.
       game.PlayMove(move, color_to_move);
@@ -186,9 +224,10 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       if (thread_id % kShouldLogShard == 0) {
         LOG_TO_SINK(INFO, sink) << "-------------------";
         LOG_TO_SINK(INFO, sink) << "N: " << gumbel_n << ", K: " << gumbel_k;
-        LOG_TO_SINK(INFO, sink)
-            << "Raw NN Move: " << nn_move << ", q: " << nn_move_q;
-        LOG_TO_SINK(INFO, sink) << "Gumbel Move: " << move << ", q: " << move_q;
+        LOG_TO_SINK(INFO, sink) << "Raw NN Move: " << nn_move
+                                << ", q: " << nn_move_q << ", n: " << nn_move_n;
+        LOG_TO_SINK(INFO, sink) << "Gumbel Move: " << move << ", q: " << move_q
+                                << ", n: " << move_n;
         LOG_TO_SINK(INFO, sink) << "Move Num: " << game.num_moves();
         LOG_TO_SINK(INFO, sink)
             << "Last 5 Moves: " << game.move(game.num_moves() - 5) << ", "
@@ -199,7 +238,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         LOG_TO_SINK(INFO, sink)
             << "Tree Visit Count: " << root_node->n
             << " Player to Move: " << root_node->color_to_move
-            << " Value: " << root_node->q;
+            << " Value: " << root_node->q
+            << " Outcome: " << root_node->q_outcome;
         LOG_TO_SINK(INFO, sink) << "Board:\n" << game.board();
         LOG_TO_SINK(INFO, sink)
             << "Search Took " << search_dur
