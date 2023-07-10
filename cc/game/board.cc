@@ -628,6 +628,28 @@ Scores Board::GetScores() {
   return Scores{bscore_ownership.first, wscore_ownership.first, ownership};
 }
 
+Board::BoardData Board::GetStonesWithLiberties(const int liberties) const {
+  BoardData data = {};
+  bool seen[BOARD_LEN][BOARD_LEN] = {};
+  for (int i = 0; i < BOARD_LEN; ++i) {
+    for (int j = 0; j < BOARD_LEN; ++j) {
+      if (seen[i][j]) continue;
+
+      Loc loc = Loc{i, j};
+      groupid gid = group_tracker_.GroupAt(loc);
+      if (!(group_tracker_.LibertiesForGroup(gid) == liberties)) continue;
+
+      LocVec group_locs = group_tracker_.ExpandGroup(gid);
+      for (const auto& loc : group_locs) {
+        seen[loc.i][loc.j] = true;
+        data[loc] = board_[loc];
+      }
+    }
+  }
+
+  return data;
+}
+
 bool Board::IsSelfCapture(Loc loc, Color color) const {
   bool adjacent_in_atari = true;
   for (Loc& loc : AdjacentOfColor(loc, color)) {

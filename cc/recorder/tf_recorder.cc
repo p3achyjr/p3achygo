@@ -8,17 +8,14 @@
 #include "cc/core/filepath.h"
 #include "cc/game/board.h"
 #include "cc/game/color.h"
+#include "cc/recorder/make_tf_example.h"
 #include "tensorflow/core/example/example.pb.h"
 #include "tensorflow/core/lib/io/record_writer.h"
 
 namespace recorder {
 namespace {
 
-using ::game::Board;
-using ::game::Color;
-using ::game::Game;
-using ::game::Loc;
-using ::game::Move;
+using namespace ::game;
 
 using ::tensorflow::io::RecordWriter;
 using ::tensorflow::io::RecordWriterOptions;
@@ -28,39 +25,6 @@ using ::core::FilePath;
 // Keep in sync with //cc/shuffler/chunk_info.h
 static constexpr char kChunkFormat[] = "gen%d_b%d_g%d_n%d_%s.tfrecord.zz";
 static constexpr char kChunkDoneFormat[] = "gen%d_b%d_g%d_n%d_%s.done";
-
-template <typename T, size_t N>
-tensorflow::Feature MakeBytesFeature(const std::array<T, N>& data) {
-  tensorflow::Feature feature;
-  feature.mutable_bytes_list()->add_value(
-      reinterpret_cast<const void*>(data.data()), sizeof(T) * N);
-  return feature;
-}
-
-tensorflow::Example MakeTfExample(
-    const std::array<Color, BOARD_LEN * BOARD_LEN>& board,
-    const std::array<int16_t, constants::kNumLastMoves>& last_moves,
-    const std::array<float, constants::kMaxNumMoves>& pi_improved,
-    const Game::Result result, Color color, float komi, uint8_t bsize) {
-  tensorflow::Example example;
-  auto& features = *example.mutable_features()->mutable_feature();
-
-  features["bsize"].mutable_bytes_list()->add_value(
-      reinterpret_cast<const void*>(&bsize), sizeof(uint8_t));
-  features["board"] = MakeBytesFeature(board);
-  features["last_moves"] = MakeBytesFeature(last_moves);
-  features["color"].mutable_bytes_list()->add_value(
-      reinterpret_cast<const void*>(&color), sizeof(Color));
-  features["komi"].mutable_float_list()->add_value(komi);
-  features["own"] = MakeBytesFeature(result.ownership);
-  features["pi"] = MakeBytesFeature(pi_improved);
-
-  float margin = color == BLACK ? result.bscore - result.wscore
-                                : result.wscore - result.bscore;
-  features["result"].mutable_float_list()->add_value(margin);
-
-  return example;
-}
 
 class TfRecorderImpl final : public TfRecorder {
  public:
@@ -76,7 +40,8 @@ class TfRecorderImpl final : public TfRecorder {
 
   void RecordGame(int thread_id, const game::Board& init_board,
                   const Game& game, const ImprovedPolicies& mcts_pis,
-                  const std::vector<uint8_t>& move_trainables) override;
+                  const std::vector<uint8_t>& move_trainables,
+                  const std::vector<float>& root_qs) override;
   void Flush() override;
 
  private:
@@ -85,6 +50,7 @@ class TfRecorderImpl final : public TfRecorder {
     Game game;
     ImprovedPolicies mcts_pis;
     std::vector<uint8_t> move_trainables;
+    std::vector<float> root_qs;
   };
 
   const std::string path_;
@@ -109,11 +75,12 @@ TfRecorderImpl::TfRecorderImpl(std::string path, int num_threads, int gen,
 void TfRecorderImpl::RecordGame(int thread_id, const Board& init_board,
                                 const Game& game,
                                 const ImprovedPolicies& mcts_pis,
-                                const std::vector<uint8_t>& move_trainables) {
+                                const std::vector<uint8_t>& move_trainables,
+                                const std::vector<float>& root_qs) {
   CHECK(game.has_result());
   CHECK(game.num_moves() == mcts_pis.size());
   thread_records_[thread_id].emplace_back(
-      Record{init_board, game, mcts_pis, move_trainables});
+      Record{init_board, game, mcts_pis, move_trainables, root_qs});
   ++thread_game_counts_[thread_id];
 }
 
@@ -163,6 +130,7 @@ void TfRecorderImpl::Flush() {
       const Game& game = record.game;
       const ImprovedPolicies& mcts_pis = record.mcts_pis;
       const std::vector<uint8_t>& move_trainables = record.move_trainables;
+      const std::vector<float>& root_qs = record.root_qs;
       Board board = record.init_board;
       for (int move_num = 0; move_num < game.num_moves(); ++move_num) {
         // Populate last moves as indices.
@@ -173,15 +141,28 @@ void TfRecorderImpl::Flush() {
         }
 
         Move move = game.move(move_num);
-        const std::array<float, constants::kMaxNumMoves>& pi =
-            mcts_pis[move_num];
-        bool is_trainable = move_trainables[move_num];
 
+        bool is_trainable = move_trainables[move_num];
         if (is_trainable) {
           // Coerce into example and write result.
-          tensorflow::Example example =
-              MakeTfExample(board.position(), last_moves, pi, game.result(),
-                            move.color, game.komi(), BOARD_LEN);
+          Move next_move = move_num < game.num_moves() - 1
+                               ? game.move(move_num + 1)
+                               : Move{OppositeColor(move.color), kPassLoc};
+          const std::array<float, constants::kMaxNumMoves>& pi =
+              mcts_pis[move_num];
+          Color color = move.color;
+          float z = game.result().winner == color ? 1.0 : -1.0;
+          float q30 =
+              move_num + 30 < game.num_moves() ? root_qs[move_num + 30] : z;
+          float q100 =
+              move_num + 100 < game.num_moves() ? root_qs[move_num + 30] : z;
+          float q200 =
+              move_num + 200 < game.num_moves() ? root_qs[move_num + 30] : z;
+          tensorflow::Example example = MakeTfExample(
+              board.position(), last_moves, board.GetStonesInAtari(),
+              board.GetStonesWithLiberties(2), board.GetStonesWithLiberties(3),
+              pi, next_move.loc, game.result(), q30, q100, q200, move.color,
+              game.komi(), BOARD_LEN);
           std::string data;
           example.SerializeToString(&data);
           TF_CHECK_OK(writer.WriteRecord(data));

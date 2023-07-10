@@ -1,5 +1,5 @@
-#ifndef __CC_GAME_SYMMETRY_H_
-#define __CC_GAME_SYMMETRY_H_
+#ifndef __GAME_SYMMETRY_H_
+#define __GAME_SYMMETRY_H_
 
 #include <array>
 #include <cstdint>

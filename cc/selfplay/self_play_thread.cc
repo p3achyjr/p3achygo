@@ -71,8 +71,8 @@ static constexpr float kDownBadThreshold = -.95;
 // Number of moves at down bad threshold before decreasing visit count.
 static constexpr float kNumDownBadMovesThreshold = 5;
 
-// Minimal visit count for guaranteed lost games.
-static constexpr GumbelParams kDownBadParams = GumbelParams{4, 2};
+// Minimal visit count for almost-guaranteed lost games.
+static constexpr GumbelParams kDownBadParams = GumbelParams{12, 2};
 
 // Whether the thread should continue running.
 static std::atomic<bool> running = true;
@@ -137,6 +137,9 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     // Completed Q-values for each timestep.
     std::vector<std::array<float, constants::kMaxNumMoves>> mcts_pis;
 
+    // Root Q values for each timestep (outcome only).
+    std::vector<float> root_q_outcomes;
+
     // Whether the i'th move is trainable.
     std::vector<uint8_t> move_trainables;
 
@@ -158,12 +161,10 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       // Choose n, k = 1 if we have not reached `num_moves_raw_policy` number of
       // moves.
       // Choose n, k = kDownBadParams if we are down bad.
-      int num_consecutive_down_bad_moves =
-          color_to_move == BLACK ? num_consecutive_down_bad_moves_b
-                                 : num_consecutive_down_bad_moves_w;
       bool sampling_raw_policy = game.num_moves() <= num_moves_raw_policy;
       bool is_down_bad =
-          num_consecutive_down_bad_moves >= kNumDownBadMovesThreshold;
+          num_consecutive_down_bad_moves_b >= kNumDownBadMovesThreshold ||
+          num_consecutive_down_bad_moves_w >= kNumDownBadMovesThreshold;
       int gumbel_n = sampling_raw_policy
                          ? 1
                          : (is_down_bad ? kDownBadParams.n : gumbel_params.n);
@@ -185,14 +186,21 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       float nn_move_q = QAction(root_node.get(), nn_move);
       int move_n = NAction(root_node.get(), move);
       float move_q = QAction(root_node.get(), move);
-      float root_q_outcome = Q(root_node.get());
+      float root_q_outcome = QOutcome(root_node.get());
       bool is_move_trainable = !sampling_raw_policy && !is_down_bad;
 
       // Update tracking data structures.
       mcts_pis.push_back(gumbel_res.pi_improved);
       move_trainables.push_back(is_move_trainable);
-      num_consecutive_down_bad_moves +=
-          (root_q_outcome < kDownBadThreshold ? 1 : 0);
+      root_q_outcomes.push_back(root_q_outcome);
+      int& consecutive_db_moves = color_to_move == BLACK
+                                      ? num_consecutive_down_bad_moves_b
+                                      : num_consecutive_down_bad_moves_w;
+      if (root_q_outcome < kDownBadThreshold) {
+        ++consecutive_db_moves;
+      } else {
+        consecutive_db_moves = 0;
+      }
 
       // Play move, and calculate PA regions if we hit a checkpoint.
       game.PlayMove(move, color_to_move);

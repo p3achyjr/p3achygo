@@ -1,21 +1,24 @@
-#include "cc/recorder/sgf_serializer.h"
+#include "cc/sgf/sgf_serializer.h"
 
 #include "absl/strings/str_format.h"
 #include "cc/game/game.h"
 
-namespace recorder {
+namespace sgf {
 namespace {
-using ::game::Game;
-using ::game::Loc;
+using namespace ::game;
 
 static constexpr char kCoords[] = "abcdefghijklmnopqrst";
 
 std::string SgfString(const Game::Result& result) {
   switch (result.winner) {
     case BLACK:
-      return absl::StrFormat("B+%g", result.bscore - result.wscore);
+      return result.by_resign
+                 ? "B+R"
+                 : absl::StrFormat("B+%g", result.bscore - result.wscore);
     case WHITE:
-      return absl::StrFormat("W+%g", result.wscore - result.bscore);
+      return result.by_resign
+                 ? "W+R"
+                 : absl::StrFormat("W+%g", result.wscore - result.bscore);
     default:
       return "?";
   }
@@ -37,12 +40,20 @@ std::string SgfSerializer::Serialize(const SgfNode* node) {
   return sgf_;
 }
 
+void SgfSerializer::Visit(const SgfSizeProp* prop) {
+  sgf_ += prop->tag() + "[" + absl::StrFormat("%d", prop->size()) + "]";
+}
+
 void SgfSerializer::Visit(const SgfKomiProp* prop) {
   sgf_ += prop->tag() + "[" + absl::StrFormat("%g", prop->komi()) + "]";
 }
 
 void SgfSerializer::Visit(const SgfResultProp* prop) {
   sgf_ += prop->tag() + "[" + SgfString(prop->result()) + "]";
+}
+
+void SgfSerializer::Visit(const SgfHandicapProp* prop) {
+  sgf_ += prop->tag() + "[" + absl::StrFormat("%d", prop->handicap()) + "]";
 }
 
 void SgfSerializer::Visit(const SgfBPlayerProp* prop) {
@@ -79,4 +90,4 @@ void SgfSerializer::VisitNode(const SgfNode* node, bool is_root) {
     }
   }
 }
-}  // namespace recorder
+}  // namespace sgf

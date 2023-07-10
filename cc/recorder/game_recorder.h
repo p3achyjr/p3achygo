@@ -29,7 +29,8 @@ class GameRecorder {
   virtual void RecordGame(int thread_id, const game::Board& init_board,
                           const game::Game& game,
                           const ImprovedPolicies& mcts_pis,
-                          const std::vector<uint8_t>& move_trainables) = 0;
+                          const std::vector<uint8_t>& move_trainables,
+                          const std::vector<float>& root_qs) = 0;
 
   static std::unique_ptr<GameRecorder> Create(std::string path, int num_threads,
                                               int flush_interval, int gen,

@@ -1,5 +1,5 @@
-#ifndef __CC_CORE_CACHE_H_
-#define __CC_CORE_CACHE_H_
+#ifndef __CORE_CACHE_H_
+#define __CORE_CACHE_H_
 
 #include <array>
 #include <cstdlib>

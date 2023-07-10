@@ -1,5 +1,5 @@
-#ifndef __CC_LEAF_EVALUATOR_H_
-#define __CC_LEAF_EVALUATOR_H_
+#ifndef __LEAF_EVALUATOR_H_
+#define __LEAF_EVALUATOR_H_
 
 #include "cc/game/color.h"
 #include "cc/game/game.h"

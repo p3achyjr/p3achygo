@@ -167,6 +167,184 @@ TEST_CASE("BoardTest") {
     CHECK_FALSE(MoveOk(board.PlayBlack(0, 0)));
     CHECK_FALSE(MoveOk(board.PlayBlack(0, 2)));
   }
+
+  // o o .
+  // x x .
+  // . . .
+  SUBCASE("GroupsInAtariCornerBlack") {
+    game::Board board;
+    board.PlayBlack(0, 0);
+    board.PlayWhite(1, 0);
+    board.PlayBlack(0, 1);
+    board.PlayWhite(1, 1);
+
+    Board::BoardData in_atari = board.GetStonesInAtari();
+    CHECK(in_atari[Loc{0, 0}] == BLACK);
+    CHECK(in_atari[Loc{0, 1}] == BLACK);
+    CHECK(in_atari[Loc{1, 0}] == EMPTY);
+    CHECK(in_atari[Loc{1, 1}] == EMPTY);
+  }
+
+  // x x .
+  // o o .
+  // . . .
+  SUBCASE("GroupsInAtariCornerWhite") {
+    game::Board board;
+    board.PlayWhite(0, 0);
+    board.PlayBlack(1, 0);
+    board.PlayWhite(0, 1);
+    board.PlayBlack(1, 1);
+
+    Board::BoardData in_atari = board.GetStonesInAtari();
+    CHECK(in_atari[Loc{0, 0}] == WHITE);
+    CHECK(in_atari[Loc{0, 1}] == WHITE);
+    CHECK(in_atari[Loc{1, 0}] == EMPTY);
+    CHECK(in_atari[Loc{1, 1}] == EMPTY);
+  }
+
+  // . o o x . x o
+  // . x x . . o .
+  // . . . x o . .
+  // . o x o x . .
+  // . o x o o x .
+  // . . o x o x .
+  // . . o x o x .
+  SUBCASE("GroupsInAtariSidesCenterMixed") {
+    game::Board board;
+    board.PlayBlack(0, 1);
+    board.PlayWhite(1, 1);
+    board.PlayBlack(0, 2);
+    board.PlayWhite(1, 2);
+    board.PlayWhite(0, 3);
+
+    board.PlayBlack(0, 6);
+    board.PlayWhite(0, 5);
+    board.PlayBlack(1, 5);
+
+    board.PlayWhite(2, 3);
+    board.PlayWhite(3, 2);
+    board.PlayWhite(3, 4);
+    board.PlayWhite(4, 2);
+    board.PlayWhite(4, 5);
+    board.PlayWhite(5, 3);
+    board.PlayWhite(5, 5);
+    board.PlayWhite(6, 3);
+    board.PlayWhite(6, 5);
+
+    board.PlayBlack(2, 4);
+    board.PlayBlack(3, 1);
+    board.PlayBlack(3, 3);
+    board.PlayBlack(4, 1);
+    board.PlayBlack(4, 3);
+    board.PlayBlack(4, 4);
+    board.PlayBlack(5, 2);
+    board.PlayBlack(5, 4);
+    board.PlayBlack(6, 2);
+    board.PlayBlack(6, 4);
+
+    Board::BoardData in_atari = board.GetStonesInAtari();
+    CHECK(in_atari[Loc{0, 1}] == BLACK);
+    CHECK(in_atari[Loc{0, 2}] == BLACK);
+    CHECK(in_atari[Loc{0, 3}] == EMPTY);
+    CHECK(in_atari[Loc{0, 5}] == WHITE);
+    CHECK(in_atari[Loc{0, 6}] == EMPTY);
+    CHECK(in_atari[Loc{1, 1}] == EMPTY);
+    CHECK(in_atari[Loc{1, 2}] == EMPTY);
+    CHECK(in_atari[Loc{1, 5}] == EMPTY);
+    CHECK(in_atari[Loc{2, 3}] == EMPTY);
+    CHECK(in_atari[Loc{2, 4}] == EMPTY);
+    CHECK(in_atari[Loc{3, 1}] == EMPTY);
+    CHECK(in_atari[Loc{3, 2}] == WHITE);
+    CHECK(in_atari[Loc{3, 3}] == BLACK);
+    CHECK(in_atari[Loc{3, 4}] == WHITE);
+    CHECK(in_atari[Loc{4, 1}] == EMPTY);
+    CHECK(in_atari[Loc{4, 2}] == WHITE);
+    CHECK(in_atari[Loc{4, 3}] == BLACK);
+    CHECK(in_atari[Loc{4, 4}] == BLACK);
+    CHECK(in_atari[Loc{4, 5}] == EMPTY);
+    CHECK(in_atari[Loc{5, 2}] == EMPTY);
+    CHECK(in_atari[Loc{5, 3}] == WHITE);
+    CHECK(in_atari[Loc{5, 4}] == BLACK);
+    CHECK(in_atari[Loc{5, 5}] == EMPTY);
+    CHECK(in_atari[Loc{6, 2}] == EMPTY);
+    CHECK(in_atari[Loc{6, 3}] == WHITE);
+    CHECK(in_atari[Loc{6, 4}] == BLACK);
+    CHECK(in_atari[Loc{6, 5}] == EMPTY);
+  }
+
+  // . x x o . .
+  // . . o . . .
+  // . . . . . .
+  // . . . x o .
+  // . o x x o .
+  // . . o o . .
+  SUBCASE("GroupsWith2Liberties") {
+    game::Board board;
+    board.PlayBlack(0, 3);
+    board.PlayBlack(1, 2);
+    board.PlayWhite(0, 1);
+    board.PlayWhite(0, 2);
+
+    board.PlayBlack(3, 4);
+    board.PlayBlack(4, 4);
+    board.PlayBlack(5, 3);
+    board.PlayBlack(5, 2);
+    board.PlayBlack(4, 1);
+
+    board.PlayWhite(3, 3);
+    board.PlayWhite(4, 3);
+    board.PlayWhite(4, 2);
+
+    Board::BoardData two_liberties = board.GetStonesWithLiberties(2);
+    CHECK(two_liberties[Loc{0, 1}] == WHITE);
+    CHECK(two_liberties[Loc{0, 2}] == WHITE);
+    CHECK(two_liberties[Loc{0, 3}] == BLACK);
+    CHECK(two_liberties[Loc{1, 2}] == EMPTY);
+
+    CHECK(two_liberties[Loc{3, 3}] == WHITE);
+    CHECK(two_liberties[Loc{3, 4}] == EMPTY);
+    CHECK(two_liberties[Loc{4, 1}] == EMPTY);
+    CHECK(two_liberties[Loc{4, 2}] == WHITE);
+    CHECK(two_liberties[Loc{4, 3}] == WHITE);
+    CHECK(two_liberties[Loc{4, 4}] == EMPTY);
+    CHECK(two_liberties[Loc{5, 2}] == EMPTY);
+    CHECK(two_liberties[Loc{5, 3}] == EMPTY);
+  }
+
+  // . o o x . .
+  // . . . . . .
+  // . . . . o .
+  // . . o o x .
+  // . . x x o .
+  // . . . . . .
+  SUBCASE("GroupsWith3Liberties") {
+    game::Board board;
+    board.PlayBlack(0, 1);
+    board.PlayBlack(0, 2);
+    board.PlayWhite(0, 3);
+
+    board.PlayBlack(2, 4);
+    board.PlayBlack(3, 2);
+    board.PlayBlack(3, 3);
+    board.PlayBlack(4, 4);
+
+    board.PlayWhite(3, 4);
+    board.PlayWhite(4, 3);
+    board.PlayWhite(4, 2);
+
+    Board::BoardData three_liberties = board.GetStonesWithLiberties(3);
+    CHECK(three_liberties[Loc{0, 1}] == BLACK);
+    CHECK(three_liberties[Loc{0, 2}] == BLACK);
+    CHECK(three_liberties[Loc{0, 3}] == EMPTY);
+
+    CHECK(three_liberties[Loc{2, 4}] == BLACK);
+    CHECK(three_liberties[Loc{3, 2}] == BLACK);
+    CHECK(three_liberties[Loc{3, 3}] == BLACK);
+    CHECK(three_liberties[Loc{4, 4}] == EMPTY);
+    CHECK(three_liberties[Loc{3, 4}] == EMPTY);
+    CHECK(three_liberties[Loc{4, 3}] == WHITE);
+    CHECK(three_liberties[Loc{4, 2}] == WHITE);
+  }
 }
 
 TEST_CASE("GroupTrackerTest") {

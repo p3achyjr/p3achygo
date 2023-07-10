@@ -19,6 +19,7 @@ class Game final {
     Color winner;
     float bscore;
     float wscore;
+    bool by_resign;
 
     std::array<Color, BOARD_LEN * BOARD_LEN> ownership;
   };

@@ -277,6 +277,9 @@ class Board final {
   inline Zobrist::Hash hash() const { return hash_; }
   inline int move_count() const { return move_count_; }
   inline const BoardData& position() const { return board_; }
+  inline BoardData GetStonesInAtari() const {
+    return GetStonesWithLiberties(1);
+  }
 
   bool IsValidMove(Loc loc, Color color) const;
   bool IsGameOver() const;
@@ -290,6 +293,9 @@ class Board final {
   void CalculatePassAliveRegions();
 
   Scores GetScores();
+
+  // Retrieve stones with `liberties` number of liberties.
+  BoardData GetStonesWithLiberties(const int liberties) const;
 
   friend std::ostream& operator<<(std::ostream& os, const Board& board);
 

@@ -1,5 +1,5 @@
-#ifndef __CC_CORE_CIRCULAR_BUFFER_H_
-#define __CC_CORE_CIRCULAR_BUFFER_H_
+#ifndef __CORE_CIRCULAR_BUFFER_H_
+#define __CORE_CIRCULAR_BUFFER_H_
 
 #include <array>
 #include <cstddef>

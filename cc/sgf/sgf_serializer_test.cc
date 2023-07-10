@@ -1,11 +1,11 @@
-#include "cc/recorder/sgf_serializer.h"
+#include "cc/sgf/sgf_serializer.h"
 
 #include "cc/core/doctest_include.h"
 #include "cc/game/game.h"
 #include "cc/game/loc.h"
 #include "cc/game/move.h"
 
-namespace recorder {
+namespace sgf {
 using ::game::Game;
 using ::game::Loc;
 using ::game::Move;
@@ -135,4 +135,4 @@ TEST_CASE("SgfSerializer") {
              "(;FF[4]GM[1](;B[aa])(;B[ab](;W[ac])(;W[ad])))\n");
   }
 }
-}  // namespace recorder
+}  // namespace sgf

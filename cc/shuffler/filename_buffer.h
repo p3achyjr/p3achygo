@@ -16,7 +16,8 @@ namespace shuffler {
  */
 class FilenameBuffer final {
  public:
-  FilenameBuffer(const absl::flat_hash_set<std::string>& files);
+  explicit FilenameBuffer(const absl::flat_hash_set<std::string>& files);
+  FilenameBuffer() = default;
   ~FilenameBuffer() = default;
 
   // Disable Copy

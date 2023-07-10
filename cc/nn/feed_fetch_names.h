@@ -1,5 +1,5 @@
-#ifndef __CC_NN_FEED_FETCH_NAMES_H_
-#define __CC_NN_FEED_FETCH_NAMES_H_
+#ifndef __NN_FEED_FETCH_NAMES_H_
+#define __NN_FEED_FETCH_NAMES_H_
 
 #include <string>
 #include <vector>

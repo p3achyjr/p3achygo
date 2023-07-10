@@ -16,6 +16,15 @@ cc_library(
 )
 
 cc_library(
+    name = "make_tf_example",
+    hdrs = ["make_tf_example.h"],
+    deps = [
+        "//cc/game",
+        "//cc/tensorflow",
+    ],
+)
+
+cc_library(
     name = "game_recorder",
     srcs = ["game_recorder.cc"],
     hdrs = ["game_recorder.h"],
@@ -34,49 +43,14 @@ cc_library(
     srcs = ["sgf_recorder.cc"],
     hdrs = ["sgf_recorder.h"],
     deps = [
-        ":sgf_serializer",
-        ":sgf_tree",
         "//cc/constants",
         "//cc/core:filepath",
         "//cc/game",
+        "//cc/mcts",
+        "//cc/sgf:sgf_serializer",
+        "//cc/sgf:sgf_tree",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/strings",
-    ],
-)
-
-cc_library(
-    name = "sgf_tree",
-    hdrs = ["sgf_tree.h"],
-    deps = [
-        "//cc/game",
-    ],
-)
-
-cc_library(
-    name = "sgf_visitor",
-    hdrs = ["sgf_visitor.h"],
-)
-
-cc_library(
-    name = "sgf_serializer",
-    srcs = ["sgf_serializer.cc"],
-    hdrs = ["sgf_serializer.h"],
-    deps = [
-        ":sgf_tree",
-        ":sgf_visitor",
-        "//cc/constants",
-        "//cc/game",
-        "@com_google_absl//absl/strings",
-    ],
-)
-
-cc_test(
-    name = "sgf_serializer_test",
-    srcs = ["sgf_serializer_test.cc"],
-    linkopts = ["-lm"],
-    deps = [
-        ":sgf_serializer",
-        "//cc/core:doctest",
     ],
 )
 
@@ -85,6 +59,7 @@ cc_library(
     srcs = ["tf_recorder.cc"],
     hdrs = ["tf_recorder.h"],
     deps = [
+        ":make_tf_example",
         "//cc/constants",
         "//cc/core:filepath",
         "//cc/game",

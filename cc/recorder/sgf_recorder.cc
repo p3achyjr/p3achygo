@@ -10,15 +10,19 @@
 #include "cc/game/game.h"
 #include "cc/game/loc.h"
 #include "cc/game/move.h"
-#include "cc/recorder/sgf_serializer.h"
-#include "cc/recorder/sgf_tree.h"
+#include "cc/mcts/tree.h"
+#include "cc/sgf/sgf_serializer.h"
+#include "cc/sgf/sgf_tree.h"
 
 namespace recorder {
 namespace {
 
+using namespace ::sgf;
+
 using ::core::FilePath;
 using ::game::Game;
 using ::game::Move;
+using ::mcts::TreeNode;
 
 static constexpr int kMaxNumProperties = 32;
 static constexpr char kP3achyGoName[] = "p3achygo";
@@ -42,10 +46,19 @@ class SgfRecorderImpl final : public SgfRecorder {
   void Flush() override;
 
  private:
+  struct Record {
+    Game game;
+    int first_move;
+
+    // Root node for each move of the game.
+    // The child actually played at each root should be moved from.
+    std::vector<std::unique_ptr<TreeNode>> roots;
+  };
   std::unique_ptr<SgfNode> ToSgfNode(const Game& game);
 
   const std::string path_;
-  std::array<std::vector<Game>, constants::kMaxNumThreads> games_;
+  std::array<std::vector<std::unique_ptr<Record>>, constants::kMaxNumThreads>
+      records_;
   const int num_threads_;
   const int gen_;
   const std::string worker_id_;
@@ -63,8 +76,10 @@ SgfRecorderImpl::SgfRecorderImpl(std::string path, int num_threads, int gen,
 void SgfRecorderImpl::RecordGame(int thread_id, const Game& game) {
   CHECK(game.has_result());
 
-  std::vector<Game>& thread_games = games_[thread_id];
-  thread_games.emplace_back(game);
+  std::vector<std::unique_ptr<Record>>& thread_records = records_[thread_id];
+  std::unique_ptr<Record> record =
+      std::make_unique<Record>(Record{game, 0, {}});
+  thread_records.push_back(std::move(record));
 }
 
 std::unique_ptr<SgfNode> SgfRecorderImpl::ToSgfNode(const Game& game) {
@@ -100,18 +115,18 @@ void SgfRecorderImpl::Flush() {
   std::string sgfs = "";
   SgfSerializer serializer;
   for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
-    std::vector<Game>& thread_games = games_[thread_id];
-    if (thread_games.empty()) {
+    std::vector<std::unique_ptr<Record>>& thread_records = records_[thread_id];
+    if (thread_records.empty()) {
       continue;
     }
 
-    for (const auto& game : thread_games) {
-      sgfs += serializer.Serialize(ToSgfNode(game).get());
+    for (const auto& record : thread_records) {
+      sgfs += serializer.Serialize(ToSgfNode(record->game).get());
       sgfs += "\n";
 
       ++games_in_batch;
     }
-    thread_games.clear();
+    thread_records.clear();
   }
 
   if (sgfs == "") {
