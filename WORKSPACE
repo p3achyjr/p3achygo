@@ -17,6 +17,8 @@ load("@bazel_skylib//:workspace.bzl", "bazel_skylib_workspace")
 
 bazel_skylib_workspace()
 
+# Doctest
+# https://github.com/doctest/doctest.git
 git_repository(
     name = "doctest",
     commit = "f25235f4c2f8a5fcf8e888114a90864ef5e4bf56",
@@ -58,3 +60,20 @@ http_archive(
 load("@hedron_compile_commands//:workspace_setup.bzl", "hedron_compile_commands_setup")
 
 hedron_compile_commands_setup()
+
+# Indicators
+# https://github.com/p-ranav/indicators
+http_archive(
+    name = "indicators",
+    build_file_content = """
+cc_library(
+    name = "indicators",
+    hdrs = glob(["include/**/*.hpp"]),
+    includes = ["include"],
+    visibility = ["//visibility:public"],
+)
+""",
+    sha256 = "70da7a693ff7a6a283850ab6d62acf628eea17d386488af8918576d0760aef7b",
+    strip_prefix = "indicators-2.3",
+    urls = ["https://github.com/p-ranav/indicators/archive/refs/tags/v2.3.tar.gz"],
+)
