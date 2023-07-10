@@ -89,7 +89,7 @@ def main(_):
 
   model.summary(batch_size=BATCH_SIZE)
   val_ds = tf.data.TFRecordDataset(FLAGS.val_ds_path, compression_type='ZLIB')
-  val_ds = val_ds.map(transforms.expand_rl, num_parallel_calls=tf.data.AUTOTUNE)
+  val_ds = val_ds.map(transforms.expand, num_parallel_calls=tf.data.AUTOTUNE)
   val_ds = val_ds.batch(BATCH_SIZE)
   val_ds = val_ds.prefetch(tf.data.AUTOTUNE)
 

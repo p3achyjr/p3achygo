@@ -362,13 +362,13 @@ class PolicyHead(tf.keras.layers.Layer):
                                                          epsilon=1e-3,
                                                          name='policy_bn')
     self.flatten = tf.keras.layers.Flatten()
-    self.output_moves = tf.keras.layers.Conv2D(1,
+    self.output_moves = tf.keras.layers.Conv2D(2,
                                                1,
                                                padding='same',
                                                kernel_regularizer=L2(C_L2),
                                                name='policy_output_moves')
     self.output_pass = tf.keras.layers.Dense(
-        1,
+        2,
         name='policy_output_pass',
         kernel_regularizer=L2(C_L2),
     )
@@ -389,11 +389,15 @@ class PolicyHead(tf.keras.layers.Layer):
 
     # Hacky, but forces model to learn when to pass, rather than to learn when
     # not to.
-    pass_logit = self.output_pass(g_pooled) - 5
+    pass_logits = self.output_pass(g_pooled) - 3
+    pass_logit = tf.expand_dims(pass_logits[:, 0], axis=1)
+    pass_logit_aux = tf.expand_dims(pass_logits[:, 1], axis=1)
 
-    p = self.flatten(tf.squeeze(p, axis=3))
+    pi, pi_aux = p[:, :, :, 0], p[:, :, :, 1]
+    pi, pi_aux = self.flatten(pi), self.flatten(pi_aux)
 
-    return tf.concat([p, pass_logit], axis=1)
+    return (tf.concat([pi, pass_logit],
+                      axis=1), tf.concat([pi_aux, pass_logit_aux], axis=1))
 
   def get_config(self):
     return {
@@ -413,6 +417,9 @@ class ValueHead(tf.keras.layers.Layer):
   - (2, ) logits for {win, loss}
   - (b x b) ownership matrix
   - (800, ) logits representing score difference
+  - () q30 ~ [-1, 1] representing q at 30 move horizon.
+  - () q100 ~ [-1, 1] representing q at 100 move horizon.
+  - () q200 ~ [-1, 1] representing q at 200 move horizon.
   '''
 
   def __init__(self,
@@ -431,13 +438,13 @@ class ValueHead(tf.keras.layers.Layer):
                                        name='value_conv')
     self.gpool = GlobalPool(channels, board_len, board_len, name='value_gpool')
 
-    # Game Outcome Subhead
-    self.outcome_biases = tf.keras.layers.Dense(c_val,
-                                                kernel_regularizer=L2(C_L2),
-                                                name='value_outcome_biases')
-    self.outcome_output = tf.keras.layers.Dense(2,
-                                                kernel_regularizer=L2(C_L2),
-                                                name='value_outcome_output')
+    # Game Outcome/Q Subhead
+    self.outcome_q_biases = tf.keras.layers.Dense(c_val,
+                                                  kernel_regularizer=L2(C_L2),
+                                                  name='value_outcome_q_biases')
+    self.outcome_q_output = tf.keras.layers.Dense(5,
+                                                  kernel_regularizer=L2(C_L2),
+                                                  name='value_outcome_q_output')
 
     # Ownership Subhead
     self.conv_ownership = tf.keras.layers.Conv2D(1,
@@ -477,10 +484,15 @@ class ValueHead(tf.keras.layers.Layer):
     v = self.conv(x)
     v_pooled = self.gpool(v)
 
-    # Compute Game Output
-    game_outcome = self.outcome_biases(v_pooled)
+    # Compute Game Outcome Values (Outcome Logits + Q-values).
+    game_outcome = self.outcome_q_biases(v_pooled)
     game_outcome = tf.keras.activations.relu(game_outcome)
-    game_outcome = self.outcome_output(game_outcome)
+    game_outcome = self.outcome_q_output(game_outcome)
+
+    outcome_logits = game_outcome[:, 0:2]
+    q30 = tf.keras.activations.tanh(game_outcome[:, 2])
+    q100 = tf.keras.activations.tanh(game_outcome[:, 3])
+    q200 = tf.keras.activations.tanh(game_outcome[:, 4])
 
     # Compute Game Ownership
     game_ownership = self.conv_ownership(v)
@@ -518,7 +530,8 @@ class ValueHead(tf.keras.layers.Layer):
     score_logits = tf.squeeze(score_logits, axis=2)  # (n, 800)
     score_logits = tf.nn.softplus(gamma) * score_logits
 
-    return (game_outcome, game_ownership, score_logits, gamma)
+    return (outcome_logits, q30, q100, q200, game_ownership, score_logits,
+            gamma)
 
   def get_config(self):
     return {
@@ -534,7 +547,7 @@ class P3achyGoModel(tf.keras.Model):
   '''
   Input:
 
-  At move k, pass in 7 19 x 19 binary feature planes containing:
+  At move k, pass in 13 19 x 19 binary feature planes containing:
 
   1. Location has own stone
   2. Location has opponent stone
@@ -543,14 +556,37 @@ class P3achyGoModel(tf.keras.Model):
   5. {k - 3}rd move
   6. {k - 2}nd move
   7. {k - 1}st move
+  8. Own stones in atari
+  9. Opp Stones in atari
+  10. Own stones with 2 liberties
+  11. Opp stones with 2 liberties
+  12. Own stones with 3 liberties
+  13. Opp stones with 3 liberties
 
-  as well as a (1, ) feature vector consisting of
+  as well as a (7, ) feature vector consisting of
 
-  (komi / 15.0)
+  1. Player is B
+  2. Player is W
+  3. {k - 5}th move was pass
+  4. {k - 4}th move was pass
+  5. {k - 3}rd move was pass
+  6. {k - 2}nd move was pass
+  7. {k - 1}st move was pass
 
   Output:
 
-  One (19, 19) feature plane of logits, where softmax(logits) = policy
+  0: Move Logits
+  1: Move Probabilities
+  2: Outcome Logits
+  3: Outcome probabilities
+  4: Ownership
+  5: Score Logits
+  6: Score Probabilities
+  7: Gamma
+  8: Aux Policy
+  9: Q-value in 30 moves
+  10: Q-value in 100 moves
+  11: Q-value in 200 moves
   '''
 
   def __init__(self,
@@ -635,9 +671,10 @@ class P3achyGoModel(tf.keras.Model):
     for block in self.blocks:
       x = block(x, training=training)
 
-    pi_logits = self.policy_head(x, training=training)
+    pi_logits, pi_logits_aux = self.policy_head(x, training=training)
     pi = tf.keras.activations.softmax(pi_logits)
-    outcome_logits, ownership, score_logits, gamma = self.value_head(x)
+    (outcome_logits, q30, q100, q200, ownership, score_logits,
+     gamma) = self.value_head(x)
     outcome_probs = tf.keras.activations.softmax(outcome_logits)
     score_probs = tf.keras.activations.softmax(score_logits)
 
@@ -649,22 +686,28 @@ class P3achyGoModel(tf.keras.Model):
             tf.cast(ownership, tf.float32),
             tf.cast(score_logits, tf.float32),
             tf.cast(score_probs, tf.float32),
-            tf.cast(gamma, tf.float32))
+            tf.cast(gamma, tf.float32),
+            tf.cast(pi_logits_aux, tf.float32),
+            tf.cast(q30, tf.float32),
+            tf.cast(q100, tf.float32),
+            tf.cast(q200, tf.float32))
     # yapf: enable
 
-  def loss(self, pi_logits, game_outcome, score_logits, own_pred, gamma, policy,
-           score, score_one_hot, own, w_pi, w_val, w_outcome, w_score, w_own,
-           w_gamma, use_kl_policy_loss):
-    policy_loss = tf.reduce_mean(
-        tf.keras.metrics.kl_divergence(
-            tf.cast(policy, tf.float32),
-            tf.keras.activations.softmax(tf.cast(
-                pi_logits,
-                tf.float32)))) if use_kl_policy_loss else self.scce_logits(
-                    policy, pi_logits)
+  def loss(self, pi_logits, pi_logits_aux, game_outcome, score_logits, own_pred,
+           q30_pred, q100_pred, q200_pred, gamma, policy, policy_aux, score,
+           score_one_hot, own, q30, q100, q200, w_pi, w_pi_aux, w_val,
+           w_outcome, w_score, w_own, w_q30, w_q100, w_q200, w_gamma):
+    pi_probs = tf.keras.activations.softmax(tf.cast(pi_logits, tf.float32))
+    policy_loss = tf.keras.metrics.kl_divergence(tf.cast(policy, tf.float32),
+                                                 pi_probs)
+    policy_loss = tf.reduce_mean(policy_loss)
+    policy_aux_loss = self.scce_logits(policy_aux, pi_logits_aux)
 
     did_win = score >= 0
     outcome_loss = self.scce_logits(did_win, game_outcome)
+    q30_loss = self.mse(q30, q30_pred)
+    q100_loss = self.mse(q100, q100_pred)
+    q200_loss = self.mse(q200, q200_pred)
 
     score_index = score + SCORE_RANGE_MIDPOINT
     score_distribution = tf.keras.activations.softmax(score_logits)
@@ -682,14 +725,18 @@ class P3achyGoModel(tf.keras.Model):
     gamma_loss = tf.math.reduce_mean(gamma * gamma * w_gamma)
 
     woutcome_loss = w_outcome * outcome_loss
+    wq30_loss = w_q30 * q30_loss
+    wq100_loss = w_q100 * q100_loss
+    wq200_loss = w_q200 * q200_loss
     wscore_pdf_loss = w_score * score_pdf_loss
     wscore_cdf_loss = w_score * score_cdf_loss
     wown_loss = w_own * own_loss
-    val_loss = w_val * (woutcome_loss + wscore_pdf_loss +
-                        wown_loss) + wscore_cdf_loss
+    val_loss = w_val * (woutcome_loss + wq30_loss + wq100_loss + wq200_loss +
+                        wscore_pdf_loss + wown_loss) + wscore_cdf_loss
 
-    loss = w_pi * tf.cast(policy_loss, tf.float32) + tf.cast(
-        val_loss, tf.float32) + tf.cast(gamma_loss, tf.float32)
+    loss = (w_pi * tf.cast(policy_loss, tf.float32) +
+            w_pi_aux * tf.cast(policy_aux_loss, tf.float32) +
+            tf.cast(val_loss, tf.float32) + tf.cast(gamma_loss, tf.float32))
 
     # yapf: disable
     # tf.print('Loss:', loss,
@@ -705,7 +752,8 @@ class P3achyGoModel(tf.keras.Model):
     #          '\nWeighted Own Loss:', wown_loss,
     #          '\nGamma Loss:', gamma_loss)
     # yapf: enable
-    return loss, policy_loss, outcome_loss, score_pdf_loss, own_loss
+    return (loss, policy_loss, policy_aux_loss, outcome_loss, q30_loss,
+            q100_loss, q200_loss, score_pdf_loss, own_loss)
 
   def get_config(self):
     return {

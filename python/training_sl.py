@@ -7,7 +7,6 @@ We will train our model on samples generated from professional games.
 from __future__ import annotations
 
 import tensorflow as tf
-import tensorflow_datasets as tfds
 
 import sys
 import transforms
@@ -44,12 +43,12 @@ flags.DEFINE_integer(
     'Interval at which to log training information (in mini-batches)')
 flags.DEFINE_integer('model_save_interval', 5000,
                      'Interval at which to save a new model/model checkpoint')
-flags.DEFINE_string('dataset', '', 'Which dataset to use.')
+flags.DEFINE_string('dataset_dir', '', 'Directory to datasets.')
 
 
 def main(_):
-  if FLAGS.dataset == '':
-    logging.warning('Please provide --dataset from ~/tensorflow_datasets')
+  if FLAGS.dataset_dir == '':
+    logging.warning('Please provide --dataset_dir where dataset lives.')
     return
 
   if FLAGS.calib_ds == '':
@@ -60,23 +59,28 @@ def main(_):
     logging.warning('Please provide --model_save_path.')
     return
 
-  train_ds, val_ds = tfds.load(FLAGS.dataset,
-                               split=['train[:-25600]', 'train[-25600:]'],
-                               shuffle_files=True)
-
-  # setup training dataset
   batch_size = FLAGS.batch_size
-  train_ds = train_ds.map(transforms.expand_sl,
-                          num_parallel_calls=tf.data.AUTOTUNE)
+  shards = [str(path) for path in Path(FLAGS.dataset_dir).glob("*.tfrecord.zz")]
+  train_shards, val_shard = shards[0:-1], shards[-1]
+  with open(Path(FLAGS.dataset_dir, 'LENGTH.txt')) as f:
+    ds_len = int(f.read()) // batch_size
+
+  # setup train ds.
+  train_ds = tf.data.Dataset.from_tensor_slices(train_shards)
+  train_ds = train_ds.interleave(lambda x: tf.data.TFRecordDataset(
+      x, compression_type='ZLIB').map(transforms.expand),
+                                 cycle_length=64,
+                                 block_length=16,
+                                 num_parallel_calls=tf.data.AUTOTUNE)
   train_ds = train_ds.shuffle(FLAGS.shuf_buf_size)
   train_ds = train_ds.batch(batch_size)
-  train_ds = train_ds.take(100000)
   train_ds = train_ds.prefetch(tf.data.AUTOTUNE)
 
-  # setup test dataset
-  val_ds = val_ds.map(transforms.expand_sl, num_parallel_calls=tf.data.AUTOTUNE)
+  # setup validation dataset
+  val_ds = tf.data.TFRecordDataset(val_shard, compression_type='ZLIB')
+  val_ds = val_ds.map(transforms.expand)
+  val_ds = val_ds.shuffle(FLAGS.shuf_buf_size)
   val_ds = val_ds.batch(batch_size)
-  val_ds = val_ds.prefetch(tf.data.AUTOTUNE)
 
   lr, momentum, epochs = FLAGS.learning_rate, FLAGS.momentum, FLAGS.epochs
   model = P3achyGoModel.create(config=ModelConfig.small(),
@@ -84,7 +88,7 @@ def main(_):
                                num_input_planes=NUM_INPUT_PLANES,
                                num_input_features=NUM_INPUT_FEATURES,
                                name='p3achygo_sl')
-  lr_schedule = CyclicLRDecaySchedule(lr, lr * 10, len(train_ds) * epochs)
+  lr_schedule = CyclicLRDecaySchedule(lr, lr * 10, ds_len * epochs)
   print(lr_schedule.info())
   print(model.summary(batch_size=batch_size))
 

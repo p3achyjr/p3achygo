@@ -31,7 +31,7 @@ def train_one_gen(model: P3achyGoModel,
   train.val(model, mode=train.Mode.RL, val_ds=val_ds)
 
   ds = tf.data.TFRecordDataset(chunk_path, compression_type='ZLIB')
-  ds = ds.map(transforms.expand_rl, num_parallel_calls=tf.data.AUTOTUNE)
+  ds = ds.map(transforms.expand, num_parallel_calls=tf.data.AUTOTUNE)
   ds = ds.batch(batch_size)
   ds = ds.prefetch(tf.data.AUTOTUNE)
 

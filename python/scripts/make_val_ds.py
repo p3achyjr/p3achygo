@@ -31,7 +31,7 @@ def _float_feature(value: tf.Tensor):
 def serialize(board, komi, _, score, last_moves, policy):
   assert (last_moves.shape == (5, 2))
   black, white = transforms.get_black(board), transforms.get_white(board)
-  board = black * BLACK_RL + white * WHITE_RL
+  board = black * BLACK + white * WHITE
 
   own = tf.zeros((BOARD_LEN, BOARD_LEN), dtype=tf.int8)
   # tf.map_fn error spams.
@@ -44,7 +44,7 @@ def serialize(board, komi, _, score, last_moves, policy):
       [last_move_0, last_move_1, last_move_2, last_move_3, last_move_4])
   policy = transforms.as_pi_vec(tf.cast(policy, dtype=tf.int32))
   score = tf.cast(score, tf.float32) + .5
-  color = tf.cast(BLACK_RL,
+  color = tf.cast(BLACK,
                   tf.int8)  # every position in the SL dataset is black to move.
 
   feature = {

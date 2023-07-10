@@ -68,7 +68,7 @@ def main(_):
 
   config = rl_loop.config.parse(FLAGS.run_id)
   val_ds = tf.data.TFRecordDataset(FLAGS.val_ds_path, compression_type='ZLIB')
-  val_ds = val_ds.map(transforms.expand_rl, num_parallel_calls=tf.data.AUTOTUNE)
+  val_ds = val_ds.map(transforms.expand, num_parallel_calls=tf.data.AUTOTUNE)
   val_ds = val_ds.batch(config.batch_size)
   val_ds = val_ds.prefetch(tf.data.AUTOTUNE)
 
