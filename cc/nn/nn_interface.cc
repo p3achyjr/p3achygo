@@ -45,7 +45,9 @@ NNInterface::NNInterface(int num_threads, int64_t timeout, size_t cache_size)
       Tensor(DataType::DT_FLOAT,
              CreateTensorShape({num_threads_, BOARD_LEN, BOARD_LEN,
                                 constants::kNumInputFeaturePlanes})),
-      Tensor(DataType::DT_FLOAT, CreateTensorShape({num_threads_, 1}))};
+      Tensor(DataType::DT_FLOAT,
+             CreateTensorShape(
+                 {num_threads_, constants::kNumInputFeatureScalars}))};
 
   nn_input_buf_[0].flat<float>().setZero();
   nn_input_buf_[1].flat<float>().setZero();
@@ -54,20 +56,35 @@ NNInterface::NNInterface(int num_threads, int64_t timeout, size_t cache_size)
       // move logits
       Tensor(DataType::DT_FLOAT,
              CreateTensorShape({num_threads_, constants::kMaxNumMoves})),
+      // q30
+      Tensor(DataType::DT_FLOAT, CreateTensorShape({num_threads_, 1})),
+      // q100
+      Tensor(DataType::DT_FLOAT, CreateTensorShape({num_threads_, 1})),
+      // q200
+      Tensor(DataType::DT_FLOAT, CreateTensorShape({num_threads_, 1})),
       // move softmax
       Tensor(DataType::DT_FLOAT,
              CreateTensorShape({num_threads_, constants::kMaxNumMoves})),
+      // win logits
+      Tensor(DataType::DT_FLOAT,
+             CreateTensorShape({num_threads_, constants::kNumValueLogits})),
       // win percent
       Tensor(DataType::DT_FLOAT,
              CreateTensorShape({num_threads_, constants::kNumValueLogits})),
       // ownership
       Tensor(DataType::DT_FLOAT,
              CreateTensorShape({num_threads_, BOARD_LEN, BOARD_LEN, 1})),
-      // score prediction
+      // score logits
+      Tensor(DataType::DT_FLOAT,
+             CreateTensorShape({num_threads_, constants::kNumScoreLogits})),
+      // score probabilities
       Tensor(DataType::DT_FLOAT,
              CreateTensorShape({num_threads_, constants::kNumScoreLogits})),
       // gamma, just ignore
-      Tensor(DataType::DT_FLOAT, CreateTensorShape({num_threads_, 1}))};
+      Tensor(DataType::DT_FLOAT, CreateTensorShape({num_threads_, 1})),
+      // auxiliary move logits
+      Tensor(DataType::DT_FLOAT,
+             CreateTensorShape({num_threads_, constants::kMaxNumMoves}))};
 }
 
 NNInterface::~NNInterface() {

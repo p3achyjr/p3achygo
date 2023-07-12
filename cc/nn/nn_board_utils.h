@@ -16,11 +16,6 @@
 namespace nn {
 namespace board_utils {
 
-// Data translations from board to nn input.
-::tensorflow::Tensor GetBlack(const game::Board& board);
-::tensorflow::Tensor GetWhite(const game::Board& board);
-::tensorflow::Tensor AsOneHot(game::Loc loc);
-
 // Fills `input_features` and `input_state` at batch `batch_id`.
 // Assumes tensors are float tensors.
 void FillNNInput(int batch_id, int batch_size,
