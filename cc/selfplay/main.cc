@@ -19,6 +19,7 @@
 #include "cc/nn/nn_interface.h"
 #include "cc/recorder/dir.h"
 #include "cc/recorder/game_recorder.h"
+#include "cc/selfplay/go_exploit_buffer.h"
 #include "cc/selfplay/self_play_thread.h"
 
 ABSL_FLAG(std::string, model_path, "", "Path to model.");
@@ -94,11 +95,15 @@ int main(int argc, char** argv) {
                                      absl::GetFlag(FLAGS_flush_interval),
                                      absl::GetFlag(FLAGS_gen), worker_id);
 
+  // initialize Go-Exploit buffer.
+  std::unique_ptr<selfplay::GoExploitBuffer> go_exploit_buffer =
+      std::make_unique<selfplay::GoExploitBuffer>();
+
   std::vector<std::thread> threads;
   for (int thread_id = 0; thread_id < num_threads; ++thread_id) {
     size_t seed = absl::HashOf(worker_id, thread_id);
     std::thread thread(selfplay::Run, seed, thread_id, nn_interface.get(),
-                       game_recorder.get(),
+                       game_recorder.get(), go_exploit_buffer.get(),
                        absl::StrFormat("/tmp/thread%d_log.txt", thread_id),
                        absl::GetFlag(FLAGS_max_moves));
     threads.emplace_back(std::move(thread));

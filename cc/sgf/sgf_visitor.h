@@ -6,6 +6,7 @@ class SgfSizeProp;
 class SgfKomiProp;
 class SgfResultProp;
 class SgfHandicapProp;
+class SgfCommentProp;
 class SgfBPlayerProp;
 class SgfWPlayerProp;
 class SgfBMoveProp;
@@ -21,6 +22,7 @@ class SgfVisitor {
   virtual void Visit(const SgfKomiProp* prop) = 0;
   virtual void Visit(const SgfResultProp* prop) = 0;
   virtual void Visit(const SgfHandicapProp* prop) = 0;
+  virtual void Visit(const SgfCommentProp* prop) = 0;
   virtual void Visit(const SgfBPlayerProp* prop) = 0;
   virtual void Visit(const SgfWPlayerProp* prop) = 0;
   virtual void Visit(const SgfBMoveProp* prop) = 0;

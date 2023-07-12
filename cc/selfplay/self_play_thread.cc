@@ -11,6 +11,7 @@
 #include "cc/game/game.h"
 #include "cc/mcts/gumbel.h"
 #include "cc/recorder/game_recorder.h"
+#include "cc/selfplay/go_exploit_buffer.h"
 
 #define LOG_TO_SINK(severity, sink) LOG(severity).ToSinkOnly(&sink)
 
@@ -27,18 +28,8 @@ struct GumbelParams {
   int k;
 };
 
-struct InitState {
-  Board board;
-  absl::InlinedVector<Move, constants::kMaxGameLen> last_moves;
-  Color color_to_move;
-};
-
 // Whether the current thread should log.
 static constexpr int kShouldLogShard = 8;
-
-// Max size of seen state buffer, as described in
-// https://arxiv.org/pdf/2302.12359.pdf.
-static constexpr int kGoExploitBufferSize = 64;
 
 // Probability to add any state to the seen buffer.
 static constexpr float kAddSeenStateProb = .02f;
@@ -52,18 +43,34 @@ static constexpr int kMaxNumRawPolicyMoves = 30;
 // Thresholds at which to compute pass-alive regions.
 static constexpr int kComputePAMoveNums[] = {175, 200, 250, 300, 350, 400};
 
+// Threshold below which all positions should be trained on.
+static constexpr int kTrainableMoveLb = 250;
+
+// Threshold above which all positions are trained on with minimum probability.
+static constexpr int kTrainableMoveUb = 400;
+
+// Low train probability.
+static constexpr float kLowTrainProbability = .25;
+
+// Probability that game is selected for full tree logging.
+static constexpr float kLogFullTreeProbability = .002;
+
 // Possible values of N, K for gumbel search.
 static const GumbelParams kGumbelParamChoices[] = {
-    // GumbelParams{8, 2},   GumbelParams{16, 2},  GumbelParams{16, 4},
-    GumbelParams{32, 4}, GumbelParams{32, 4}, GumbelParams{32, 4},
-    // GumbelParams{48, 8},  GumbelParams{48, 8},  GumbelParams{48, 8},
-    // GumbelParams{64, 4},  GumbelParams{64, 16}, GumbelParams{96, 8},
-    // GumbelParams{128, 2}, GumbelParams{128, 4},
+    GumbelParams{16, 2},
+    GumbelParams{32, 4},
+    GumbelParams{48, 8},
 };
 
 // Size of `kGumbelParamsChoices`.
 static const size_t kNumGumbelChoices =
     sizeof(kGumbelParamChoices) / sizeof(GumbelParams);
+
+// Values of N, K for moves to store for training (playout cap randomization).
+static constexpr GumbelParams kSelectedForTrainingParams = {128, 4};
+
+// Probability that we pick a move for training.
+static constexpr float kMoveSelectedForTrainingProb = .25;
 
 // Threshold beneath which loss is guaranteed.
 static constexpr float kDownBadThreshold = -.95;
@@ -77,10 +84,14 @@ static constexpr GumbelParams kDownBadParams = GumbelParams{12, 2};
 // Whether the thread should continue running.
 static std::atomic<bool> running = true;
 
-void AddNewInitState(RingBuffer<InitState, kGoExploitBufferSize>& buffer,
-                     const Game& game, Color color_to_move) {
+void AddNewInitState(GoExploitBuffer* buffer, const Game& game,
+                     Color color_to_move) {
   Board board = game.board();
-  absl::InlinedVector<Move, constants::kMaxGameLen> last_moves = game.moves();
+  absl::InlinedVector<Move, constants::kMaxGameLen> last_moves;
+  for (int off = constants::kNumLastMoves; off > 0; --off) {
+    Move last_move = game.moves()[game.moves().size() - off];
+    last_moves.emplace_back(last_move);
+  }
 
   CHECK(last_moves.size() == constants::kNumLastMoves);
   CHECK(last_moves[last_moves.size() - 5] ==
@@ -94,15 +105,14 @@ void AddNewInitState(RingBuffer<InitState, kGoExploitBufferSize>& buffer,
   CHECK(last_moves[last_moves.size() - 1] ==
         game.moves()[game.moves().size() - 1]);
 
-  buffer.Append(InitState{board, last_moves, color_to_move});
+  buffer->Add(InitState{board, last_moves, color_to_move, game.num_moves()});
 }
 
-InitState GetInitState(Probability& probability,
-                       RingBuffer<InitState, kGoExploitBufferSize>& buffer) {
+InitState GetInitState(Probability& probability, GoExploitBuffer* buffer) {
   InitState s_0 = InitState{
       Board(), {kNoopMove, kNoopMove, kNoopMove, kNoopMove, kNoopMove}, BLACK};
   if (probability.Uniform() <= kUseSeenStateProb) {
-    std::optional<InitState> seen_state = buffer.Pop();
+    std::optional<InitState> seen_state = buffer->Get();
     if (!seen_state) {
       return s_0;
     }
@@ -116,10 +126,10 @@ InitState GetInitState(Probability& probability,
 }  // namespace
 
 void Run(size_t seed, int thread_id, NNInterface* nn_interface,
-         GameRecorder* game_recorder, std::string logfile, int max_moves) {
+         GameRecorder* game_recorder, GoExploitBuffer* go_exploit_buffer,
+         std::string logfile, int max_moves) {
   FileSink sink(logfile.c_str());
   Probability probability(seed);
-  RingBuffer<InitState, kGoExploitBufferSize> go_exploit_buffer;
   auto search_dur_ema = 0;
 
   // Main loop.
@@ -147,12 +157,18 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     int num_consecutive_down_bad_moves_b = 0;
     int num_consecutive_down_bad_moves_w = 0;
 
+    // Whether to log full MCTS search trees.
+    bool log_mcts_trees = probability.Uniform() < kLogFullTreeProbability;
+
+    // Tree roots throughout game (if logging full trees).
+    std::vector<std::unique_ptr<TreeNode>> search_roots;
+
     // Number of moves for which to sample directly from the policy.
     auto num_moves_raw_policy =
         RandRange(probability.prng(), 0, kMaxNumRawPolicyMoves);
 
-    // Gumbel N, K for this game.
-    GumbelParams gumbel_params = kGumbelParamChoices[RandRange(
+    // Gumbel N, K for this game (for non-trainable moves).
+    GumbelParams default_gumbel_params = kGumbelParamChoices[RandRange(
         probability.prng(), 0, kNumGumbelChoices)];
 
     // Begin Search.
@@ -162,15 +178,27 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       // moves.
       // Choose n, k = kDownBadParams if we are down bad.
       bool sampling_raw_policy = game.num_moves() <= num_moves_raw_policy;
-      bool is_down_bad =
+      bool is_either_down_bad =
           num_consecutive_down_bad_moves_b >= kNumDownBadMovesThreshold ||
           num_consecutive_down_bad_moves_w >= kNumDownBadMovesThreshold;
-      int gumbel_n = sampling_raw_policy
-                         ? 1
-                         : (is_down_bad ? kDownBadParams.n : gumbel_params.n);
-      int gumbel_k = sampling_raw_policy
-                         ? 1
-                         : (is_down_bad ? kDownBadParams.k : gumbel_params.k);
+      bool is_move_selected_for_training =
+          sampling_raw_policy
+              ? false
+              : probability.Uniform() < kMoveSelectedForTrainingProb;
+      int gumbel_n, gumbel_k;
+      if (sampling_raw_policy) {
+        gumbel_n = 1;
+        gumbel_k = 1;
+      } else if (is_move_selected_for_training) {
+        gumbel_n = kSelectedForTrainingParams.n;
+        gumbel_k = kSelectedForTrainingParams.k;
+      } else if (is_either_down_bad) {
+        gumbel_n = kDownBadParams.n;
+        gumbel_k = kDownBadParams.k;
+      } else {
+        gumbel_n = default_gumbel_params.n;
+        gumbel_k = default_gumbel_params.k;
+      }
 
       // Run and Profile Search.
       auto begin = std::chrono::high_resolution_clock::now();
@@ -187,7 +215,23 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       int move_n = NAction(root_node.get(), move);
       float move_q = QAction(root_node.get(), move);
       float root_q_outcome = QOutcome(root_node.get());
-      bool is_move_trainable = !sampling_raw_policy && !is_down_bad;
+      bool is_move_trainable = [&probability, &init_state,
+                                &is_move_selected_for_training, &game]() {
+        if (!is_move_selected_for_training) {
+          return false;
+        }
+
+        int move_num = game.num_moves() + init_state.move_num;
+        if (move_num < kTrainableMoveLb) {
+          return true;
+        };
+
+        float bound = kTrainableMoveUb - kTrainableMoveLb;
+        float offset = move_num - kTrainableMoveLb;
+        float prob = 1.0 - (offset / bound);
+
+        return probability.Uniform() < prob;
+      }();
 
       // Update tracking data structures.
       mcts_pis.push_back(gumbel_res.pi_improved);
@@ -202,6 +246,14 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         consecutive_db_moves = 0;
       }
 
+      // Need to store this temporarily so we do not accidentally invoke the
+      // destructor.
+      std::unique_ptr<TreeNode> next_root =
+          std::move(root_node->children[move]);
+      if (log_mcts_trees) {
+        search_roots.emplace_back(std::move(root_node));
+      }
+
       // Play move, and calculate PA regions if we hit a checkpoint.
       game.PlayMove(move, color_to_move);
       if (std::find(std::begin(kComputePAMoveNums),
@@ -210,7 +262,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       }
       color_to_move = OppositeColor(color_to_move);
 
-      root_node = std::move(root_node->children[move]);
+      root_node = std::move(next_root);
       if (!root_node) {
         // this is possible if we draw directly from policy, or if pass is the
         // only legal move found in search.
@@ -231,7 +283,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
       if (thread_id % kShouldLogShard == 0) {
         LOG_TO_SINK(INFO, sink) << "-------------------";
-        LOG_TO_SINK(INFO, sink) << "N: " << gumbel_n << ", K: " << gumbel_k;
+        LOG_TO_SINK(INFO, sink) << "N: " << gumbel_n << ", K: " << gumbel_k
+                                << ", Trainable: " << is_move_trainable;
         LOG_TO_SINK(INFO, sink) << "Raw NN Move: " << nn_move
                                 << ", q: " << nn_move_q << ", n: " << nn_move_n;
         LOG_TO_SINK(INFO, sink) << "Gumbel Move: " << move << ", q: " << move_q
@@ -244,7 +297,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
             << game.move(game.num_moves() - 2) << ", "
             << game.move(game.num_moves() - 1);
         LOG_TO_SINK(INFO, sink)
-            << "Tree Visit Count: " << root_node->n
+            << "Tree Visits: " << root_node->n
             << " Player to Move: " << root_node->color_to_move
             << " Value: " << root_node->q
             << " Outcome: " << root_node->q_outcome;
@@ -265,7 +318,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
     auto begin = std::chrono::high_resolution_clock::now();
     game_recorder->RecordGame(thread_id, init_state.board, game, mcts_pis,
-                              move_trainables);
+                              move_trainables, root_q_outcomes,
+                              std::move(search_roots));
     auto end = std::chrono::high_resolution_clock::now();
 
     LOG_TO_SINK(INFO, sink)

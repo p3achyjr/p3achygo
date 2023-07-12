@@ -23,8 +23,9 @@ using ::tensorflow::io::RecordWriterOptions;
 using ::core::FilePath;
 
 // Keep in sync with //cc/shuffler/chunk_info.h
-static constexpr char kChunkFormat[] = "gen%d_b%d_g%d_n%d_%s.tfrecord.zz";
-static constexpr char kChunkDoneFormat[] = "gen%d_b%d_g%d_n%d_%s.done";
+static constexpr char kChunkFormat[] =
+    "gen%03d_b%03d_g%03d_n%05d_%s.tfrecord.zz";
+static constexpr char kChunkDoneFormat[] = "gen%03d_b%03d_g%03d_n%05d_%s.done";
 
 class TfRecorderImpl final : public TfRecorder {
  public:

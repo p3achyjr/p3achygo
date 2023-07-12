@@ -78,6 +78,19 @@ class SgfHandicapProp final : public SgfProp {
   int handicap_;
 };
 
+class SgfCommentProp final : public SgfProp {
+ public:
+  SgfCommentProp(std::string comment) : comment_(comment) {}
+  void Accept(SgfVisitor* visitor) const override { visitor->Visit(this); }
+  std::string tag() const { return kTag; }
+  std::string comment() const { return comment_; }
+
+  static constexpr char kTag[] = "C";
+
+ private:
+  std::string comment_;
+};
+
 class SgfBPlayerProp final : public SgfProp {
  public:
   SgfBPlayerProp(std::string player) : player_(player) {}

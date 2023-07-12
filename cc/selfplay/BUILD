@@ -24,7 +24,10 @@ cc_binary(
 cc_library(
     name = "self_play",
     srcs = ["self_play_thread.cc"],
-    hdrs = ["self_play_thread.h"],
+    hdrs = [
+        "go_exploit_buffer.h",
+        "self_play_thread.h",
+    ],
     deps = [
         "//cc/constants",
         "//cc/core",

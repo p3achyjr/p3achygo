@@ -60,6 +60,8 @@ class GameInfoExtractor : public SgfVisitor {
     game_info_.handicap = property->handicap();
   }
 
+  void Visit(const sgf::SgfCommentProp* property) override {}
+
   void Visit(const sgf::SgfBPlayerProp* property) override {
     game_info_.b_player_name = property->player();
   }

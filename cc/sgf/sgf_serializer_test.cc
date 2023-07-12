@@ -28,7 +28,7 @@ std::unique_ptr<SgfNode> ToSgfNode(const Game& game) {
   root_node->AddProperty(std::make_unique<SgfBPlayerProp>(kTestPB));
   root_node->AddProperty(std::make_unique<SgfWPlayerProp>(kTestPW));
 
-  int num_moves = game.move_num();
+  int num_moves = game.num_moves();
   SgfNode* current_node = root_node.get();
   for (int i = 0; i < num_moves; ++i) {
     const Move& move = game.move(i);

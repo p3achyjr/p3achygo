@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 
 #include "absl/log/log.h"
 #include "cc/core/filepath.h"
@@ -28,10 +29,12 @@ class GameRecorderImpl final : public GameRecorder {
   GameRecorderImpl(GameRecorderImpl&&) = delete;
   GameRecorderImpl& operator=(GameRecorderImpl&&) = delete;
 
-  void RecordGame(int thread_id, const game::Board& init_board,
-                  const game::Game& game, const ImprovedPolicies& mcts_pis,
-                  const std::vector<uint8_t>& move_trainables,
-                  const std::vector<float>& root_qs) override;
+  void RecordGame(
+      int thread_id, const game::Board& init_board, const game::Game& game,
+      const ImprovedPolicies& mcts_pis,
+      const std::vector<uint8_t>& move_trainables,
+      const std::vector<float>& root_qs,
+      std::vector<std::unique_ptr<mcts::TreeNode>>&& roots) override;
 
   static std::unique_ptr<GameRecorderImpl> Create(std::string path,
                                                   int num_threads,
@@ -84,13 +87,16 @@ GameRecorderImpl::~GameRecorderImpl() {
   }
 }
 
-void GameRecorderImpl::RecordGame(int thread_id, const game::Board& init_board,
-                                  const game::Game& game,
-                                  const ImprovedPolicies& mcts_pis,
-                                  const std::vector<uint8_t>& is_move_trainable,
-                                  const std::vector<float>& root_qs) {
+void GameRecorderImpl::RecordGame(
+    int thread_id, const game::Board& init_board, const game::Game& game,
+    const ImprovedPolicies& mcts_pis,
+    const std::vector<uint8_t>& is_move_trainable,
+    const std::vector<float>& root_qs,
+    std::vector<std::unique_ptr<mcts::TreeNode>>&& roots) {
   thread_mus_[thread_id].Lock();
-  sgf_recorder_->RecordGame(thread_id, game);
+  sgf_recorder_->RecordGame(
+      thread_id, game,
+      std::forward<std::vector<std::unique_ptr<mcts::TreeNode>>>(roots));
   tf_recorder_->RecordGame(thread_id, init_board, game, mcts_pis,
                            is_move_trainable, root_qs);
   thread_mus_[thread_id].Unlock();

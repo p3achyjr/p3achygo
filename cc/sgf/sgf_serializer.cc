@@ -56,6 +56,10 @@ void SgfSerializer::Visit(const SgfHandicapProp* prop) {
   sgf_ += prop->tag() + "[" + absl::StrFormat("%d", prop->handicap()) + "]";
 }
 
+void SgfSerializer::Visit(const SgfCommentProp* prop) {
+  sgf_ += prop->tag() + "[" + prop->comment() + "]";
+}
+
 void SgfSerializer::Visit(const SgfBPlayerProp* prop) {
   sgf_ += prop->tag() + "[" + prop->player() + "]";
 }

@@ -90,6 +90,7 @@ cc_test(
 cc_library(
     name = "ring_buffer",
     hdrs = ["ring_buffer.h"],
+    deps = [":rand"],
 )
 
 cc_library(
