@@ -36,7 +36,7 @@ int main(int argc, char** argv) {
   std::string out_dir = fs::path(absl::GetFlag(FLAGS_out_dir));
   LOG(INFO) << "Out Dir: " << out_dir;
 
-  int num_workers = std::thread::hardware_concurrency();
+  int num_workers = 4;
   LOG(INFO) << "Using " << num_workers << " workers.";
 
   data::Coordinator coordinator(num_workers, sgf_dir, out_dir,

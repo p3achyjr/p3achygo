@@ -69,7 +69,7 @@ void FlushShard(const int shard_num, std::vector<tensorflow::Example>& examples,
 
   // Create File.
   std::string filename =
-      fs::path(out_dir) / absl::StrFormat("shard%d.tfrecord.zz", shard_num);
+      fs::path(out_dir) / absl::StrFormat("shard%04d.tfrecord.zz", shard_num);
   std::unique_ptr<tensorflow::WritableFile> file;
   TF_CHECK_OK(tensorflow::Env::Default()->NewWritableFile(filename, &file));
 

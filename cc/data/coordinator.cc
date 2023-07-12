@@ -59,7 +59,7 @@ void Coordinator::Run() {
 
   std::string length_file = fs::path(out_dir_) / "LENGTH.txt";
   FILE* const file = fopen(length_file.c_str(), "w");
-  absl::FPrintF(file, "%f", num_examples_);
+  absl::FPrintF(file, "%d", num_examples_);
   fclose(file);
 }
 
