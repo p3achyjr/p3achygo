@@ -17,10 +17,10 @@ SP_CHUNK_DIR = 'chunks'
 SGF_DIR = 'sgf'
 
 CHUNK_PREFIX = 'chunk'
-CHUNK_FORMAT = CHUNK_PREFIX + '_{}.tfrecord.zz'
+CHUNK_FORMAT = CHUNK_PREFIX + '_{:04d}.tfrecord.zz'
 CHUNK_RE = re.compile(CHUNK_PREFIX + '_([0-9]+)\.tfrecord\.zz')
 MODEL_PREFIX = 'model'
-MODEL_FORMAT = MODEL_PREFIX + '_{}'
+MODEL_FORMAT = MODEL_PREFIX + '_{:04d}'
 MODEL_RE = re.compile(MODEL_PREFIX + '_([0-9]+)')
 
 DONE_PREFIX = 'DONE'
@@ -76,7 +76,7 @@ def _upload_model(run_id: str, local_models_dir: str, model_dir: str):
   if not local_dir.exists():
     raise Exception(f'Model not found: {str(local_dir)}')
 
-  cmd = f'gsutil -m cp -r {str(local_dir)} gs://{GCS_BUCKET}/{str(gcs_dir)}'
+  cmd = f'gsutil -m rsync -r {str(local_dir)} gs://{GCS_BUCKET}/{str(gcs_dir)}'
   subprocess.run(shlex.split(cmd), check=True)
 
 
@@ -86,7 +86,7 @@ def _upload_model_cand(run_id: str, local_models_dir: str, model_dir: str):
   if not local_dir.exists():
     raise Exception(f'Model not found: {str(local_dir)}')
 
-  cmd = f'gsutil -m cp -r {str(local_dir)} gs://{GCS_BUCKET}/{str(gcs_dir)}'
+  cmd = f'gsutil -m rsync -r {str(local_dir)} gs://{GCS_BUCKET}/{str(gcs_dir)}'
   subprocess.run(shlex.split(cmd), check=True)
 
 
@@ -102,7 +102,7 @@ def _download_model(run_id: str, local_models_dir: str, model_dir: str) -> str:
   local_dir = Path(local_models_dir, model_dir)
   gcs_dir = Path(gcs_models_dir(run_id), model_dir)
 
-  cmd = f'gsutil -m cp -r gs://{GCS_BUCKET}/{str(gcs_dir)} {str(local_models_dir)}'
+  cmd = f'gsutil -m rsync -r gs://{GCS_BUCKET}/{str(gcs_dir)} {str(local_models_dir)}'
   subprocess.run(shlex.split(cmd), check=True)
 
   return str(local_dir)
@@ -113,7 +113,7 @@ def _download_model_cand(run_id: str, local_models_dir: str,
   local_dir = Path(local_models_dir, model_dir)
   gcs_dir = Path(gcs_model_cands_dir(run_id), model_dir)
 
-  cmd = f'gsutil -m cp -r gs://{GCS_BUCKET}/{str(gcs_dir)} {str(local_models_dir)}'
+  cmd = f'gsutil -m rsync -r gs://{GCS_BUCKET}/{str(gcs_dir)} {str(local_models_dir)}'
   subprocess.run(shlex.split(cmd), check=True)
 
   return str(local_dir)
