@@ -50,7 +50,8 @@ void LeafEvaluator::InitTreeNode(TreeNode* node, const Game& game,
 
   float score_est = 0.0;
   for (auto i = 0; i < constants::kNumScoreLogits; ++i) {
-    score_est += (infer_result.score_probs[i] * i);
+    float score_normalized = i - constants::kScoreInflectionPoint + .5;
+    score_est += (infer_result.score_probs[i] * score_normalized);
   }
 
   node->color_to_move = color_to_move;
