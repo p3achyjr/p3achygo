@@ -18,7 +18,7 @@ static constexpr int kGumbelN = 160;  // 20, 40 visits.
 static constexpr int kGumbelK = 4;
 
 // Threshold under which to immediately resign.
-static constexpr float kResignThreshold = -.98;
+static constexpr float kResignThreshold = -.99;
 
 std::string ToString(const Color& color) {
   switch (color) {
@@ -99,9 +99,15 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
     LOG_TO_SINK(INFO, sink)
         << "Cur Tree Q: " << (cur_is_black ? btree->q : wtree->q);
     LOG_TO_SINK(INFO, sink)
+        << "Cur Tree Outcome: "
+        << (cur_is_black ? btree->q_outcome : wtree->q_outcome);
+    LOG_TO_SINK(INFO, sink)
         << "Cand Tree N: " << (cur_is_black ? wtree->n : btree->n);
     LOG_TO_SINK(INFO, sink)
         << "Cand Tree Q: " << (cur_is_black ? wtree->q : btree->q);
+    LOG_TO_SINK(INFO, sink)
+        << "Cand Tree Outcome: "
+        << (cur_is_black ? wtree->q_outcome : btree->q_outcome);
     LOG_TO_SINK(INFO, sink)
         << "Color to Move: " << ToString(player_tree->color_to_move) << ", "
         << (color_to_move == BLACK ? (cur_is_black ? "CUR" : "CAND")
@@ -128,8 +134,9 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
   LOG(INFO) << "Winner: " << ToString(winner) << ". Cand is "
             << (cur_is_black ? "W" : "B")
             << ", Result: " << (game_result.winner == BLACK ? "B" : "W") << "+"
-            << (did_resign ? "R" : absl::StrFormat("%f", score_diff))
+            << (did_resign ? "R" : absl::StrFormat("%1f", score_diff))
             << ", Black Score: " << game_result.bscore
-            << ", White Score: " << game_result.wscore;
+            << ", White Score: " << game_result.wscore << ", (" << thread_id
+            << ")";
   result.set_value(winner);
 }
