@@ -223,7 +223,8 @@ def expand(tf_example):
   input = tf.transpose(input, perm=(1, 2, 0))  # CHW -> HWC
 
   # wrangle score.
-  score_index = tf.cast(score + SCORE_RANGE_MIDPOINT - .5, dtype=tf.int32)
+  score = tf.floor(score)
+  score_index = tf.cast(score + SCORE_RANGE_MIDPOINT, dtype=tf.int32)
   if score_index < 0:
     score_index = 0
   elif score_index >= SCORE_RANGE:
@@ -233,7 +234,6 @@ def expand(tf_example):
   score_one_hot = tf.cast(tf.scatter_nd(score_index, [1.0],
                                         shape=(SCORE_RANGE,)),
                           dtype=tf.float32)
-  score -= .5
 
   # gather passes.
   last_move_was_pass = tf.cast(

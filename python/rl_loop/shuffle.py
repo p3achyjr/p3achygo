@@ -63,7 +63,7 @@ def loop(bin_path: str, run_id: str, local_run_dir: str,
     env['LD_PRELOAD'] = '/usr/local/lib/libmimalloc.so'
     cmd = shlex.split(f'{bin_path} --data_path={local_sp_chunk_dir}' +
                       f' --gen={chunk_gen}' +
-                      f' --games_per_gen={config.games_per_gen}')
+                      f' --games_per_gen={config.games_per_gen}' + f' --p=.04')
     shuf_proc = Popen(cmd,
                       stdin=PIPE,
                       stdout=PIPE,

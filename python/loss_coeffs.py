@@ -18,7 +18,7 @@ class LossCoeffs:
 
   @staticmethod
   def SLCoeffs():
-    return LossCoeffs(1.0, .15, 0.01, 1.0, 0.02, 0, 0, 0, 0, 0.0005)
+    return LossCoeffs(1.0, .15, 0.02, 1.0, 0.02, 0, 0, 0, 0, 0.0005)
 
   @staticmethod
   def RLCoeffs():

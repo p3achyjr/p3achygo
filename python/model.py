@@ -697,18 +697,21 @@ class P3achyGoModel(tf.keras.Model):
            q30_pred, q100_pred, q200_pred, gamma, policy, policy_aux, score,
            score_one_hot, own, q30, q100, q200, w_pi, w_pi_aux, w_val,
            w_outcome, w_score, w_own, w_q30, w_q100, w_q200, w_gamma):
+    # Policy Loss
     pi_probs = tf.keras.activations.softmax(tf.cast(pi_logits, tf.float32))
     policy_loss = tf.keras.metrics.kl_divergence(tf.cast(policy, tf.float32),
                                                  pi_probs)
     policy_loss = tf.reduce_mean(policy_loss)
     policy_aux_loss = self.scce_logits(policy_aux, pi_logits_aux)
 
+    # Outcome Loss
     did_win = score >= 0
     outcome_loss = self.scce_logits(did_win, game_outcome)
     q30_loss = self.mse(q30, q30_pred)
     q100_loss = self.mse(q100, q100_pred)
     q200_loss = self.mse(q200, q200_pred)
 
+    # Score Loss
     score_index = score + SCORE_RANGE_MIDPOINT
     score_distribution = tf.keras.activations.softmax(score_logits)
     score_pdf_loss = self.scce(score_index, score_distribution)
@@ -718,12 +721,14 @@ class P3achyGoModel(tf.keras.Model):
             tf.math.cumsum(score_distribution, axis=1)),
                            axis=1))
 
+    # Ownership Loss
     own_pred = tf.squeeze(own_pred, -1)  # tailing 1 dim.
     own_loss = self.mse(own, own_pred)
 
     gamma = tf.squeeze(gamma, axis=-1)
     gamma_loss = tf.math.reduce_mean(gamma * gamma * w_gamma)
 
+    # Weight everything
     woutcome_loss = w_outcome * outcome_loss
     wq30_loss = w_q30 * q30_loss
     wq100_loss = w_q100 * q100_loss

@@ -13,12 +13,13 @@ def get_converter(model_path: str, chunk_path: str,
   calib_ds = calib_ds.take(NUM_CALIB_BATCHES)
 
   def calibration_input_fn():
-    for input, komi, _, _, _, _ in calib_ds:
-      yield input, komi
+    for input, input_global_state, _, _, _, _, _, _, _, _, _, _ in calib_ds:
+      yield input, input_global_state
 
   def input_fn():
-    input, komi, _, _, _, _ = next(iter(calib_ds))
-    yield input, komi
+    input, input_global_state, _, _, _, _, _, _, _, _, _, _ = next(
+        iter(calib_ds))
+    yield input, input_global_state
 
   # Instantiate the TF-TRT converter
   converter = trt.TrtGraphConverterV2(

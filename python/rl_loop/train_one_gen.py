@@ -77,6 +77,7 @@ def main(_):
       model_path, custom_objects=P3achyGoModel.custom_objects())
 
   rl_loop.train.train_one_gen(model,
+                              FLAGS.gen,
                               FLAGS.chunk_path,
                               val_ds,
                               batch_size=config.batch_size,

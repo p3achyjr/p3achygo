@@ -84,7 +84,7 @@ def train_step_gpu(w_pi, w_pi_aux, w_val, w_outcome, w_score, w_own, w_q30,
 @tf.function
 def val_step(w_pi, w_pi_aux, w_val, w_outcome, w_score, w_own, w_q30, w_q100,
              w_q200, w_gamma, input, input_global_state, score, score_one_hot,
-             policy, policy_aux, own, q30, q100, q200, model, _):
+             policy, policy_aux, own, q30, q100, q200, model):
   (pi_logits, _, outcome_logits, _, own_pred, score_logits, _, gamma,
    pi_logits_aux, q30_pred, q100_pred, q200_pred) = model(input,
                                                           input_global_state,
@@ -159,6 +159,7 @@ def train(model: P3achyGoModel,
           mode: Mode,
           save_interval=1000,
           save_path='/tmp',
+          tensorboard_log_dir='/tmp/logs',
           lr: Optional[float] = None,
           lr_schedule: Optional[
               tf.keras.optimizers.schedules.LearningRateSchedule] = None,
@@ -172,6 +173,7 @@ def train(model: P3achyGoModel,
   if lr and lr_schedule:
     logging.error('Exactly one of `lr` and `lr_schedule` must be set.')
 
+  summary_writer = tf.summary.create_file_writer(tensorboard_log_dir)
   learning_rate = lr if lr else lr_schedule
   coeffs = LossCoeffs.SLCoeffs() if mode == Mode.SL else LossCoeffs.RLCoeffs()
 
@@ -211,10 +213,11 @@ def train(model: P3achyGoModel,
                                  q30_loss, q100_loss, q200_loss)
 
       if batch_num % log_interval == 0:
-        log_train(batch_num, input, pi_logits, pi_logits_aux, score_logits,
-                  outcome_logits, own_pred, q30_pred, q100_pred, q200_pred,
-                  policy, policy_aux, score, q30, q100, q200,
-                  optimizer.learning_rate.numpy(), losses_train, own)
+        with summary_writer.as_default():
+          log_train(batch_num, input, pi_logits, pi_logits_aux, score_logits,
+                    outcome_logits, own_pred, q30_pred, q100_pred, q200_pred,
+                    policy, policy_aux, score, q30, q100, q200,
+                    optimizer.learning_rate.numpy(), losses_train, own, mode)
 
       if save_path and save_interval and batch_num % save_interval == 0:
         save_model(model, batch_num, save_path)
@@ -236,10 +239,10 @@ def log_train(batch_num: int, model_input: tf.Tensor, pi_logits: tf.Tensor,
               q30_pred: tf.Tensor, q100_pred: tf.Tensor, q200_pred: tf.Tensor,
               pi: tf.Tensor, pi_aux: tf.Tensor, score: tf.Tensor,
               q30: tf.Tensor, q100: tf.Tensor, q200: tf.Tensor, lr: tf.Tensor,
-              losses: LossTracker, own: tf.Tensor):
+              losses: LossTracker, own: tf.Tensor, mode: Mode):
 
   def move(x):
-    return 'ABCDEFGHIJKLMNOPQRS'[x % 19], x // 19
+    return 'ABCDEFGHIJKLMNOPQRS'[x % 19], (x // 19).numpy()
 
   def char_at(own_pred, i, j):
     x = own_pred[i, j]
@@ -260,6 +263,10 @@ def log_train(batch_num: int, model_input: tf.Tensor, pi_logits: tf.Tensor,
     s.append('   ' + ' '.join(list('ABCDEFGHIJKLMNOPQRS')))
     return '\n'.join(s)
 
+  def log(metric_name: str, value):
+    print(f'{metric_name}: {value}')
+    tf.summary.scalar(metric_name, value, step=batch_num)
+
   top_policy_indices = tf.math.top_k(pi_logits[0], k=5).indices
   top_policy_values = tf.math.top_k(pi_logits[0], k=5).values
   top_policy_aux_indices = tf.math.top_k(pi_logits_aux[0], k=5).indices
@@ -278,58 +285,63 @@ def log_train(batch_num: int, model_input: tf.Tensor, pi_logits: tf.Tensor,
       pi_aux[0])
 
   print(f'---------- Batch {batch_num} -----------')
-  print(f'Learning Rate: {lr}')
-  print(f'Loss: {losses.losses[-1]["loss"]}')
-  print(f'Min Loss: {losses.min_losses["loss"]}')
+  log('Learning Rate', lr)
+  log('Loss', losses.losses[-1]["loss"])
+  log('Min Loss', losses.min_losses["loss"])
 
-  print(f'\n===== POLICY LOSSES =====')
-  print(f'Policy Loss: {losses.losses[-1]["policy"]}')
-  print(f'Min Policy Loss: {losses.min_losses["policy"]}')
-  print(f'Policy Aux Loss: {losses.losses[-1]["policy_aux"]}')
-  print(f'Min Policy Aux Loss: {losses.min_losses["policy_aux"]}')
+  print(f'===== POLICY LOSSES =====')
+  log('Policy Loss', losses.losses[-1]["policy"])
+  log('Min Policy Loss', losses.min_losses["policy"])
+  log('Policy Aux Loss', losses.losses[-1]["policy_aux"])
+  log('Min Policy Aux Loss', losses.min_losses["policy_aux"])
 
-  print(f'\n===== Q/Z LOSSES =====')
-  print(f'Outcome Loss: {losses.losses[-1]["outcome"]}')
-  print(f'Min Outcome Loss: {losses.min_losses["outcome"]}')
-  print(f'q30 Loss: {losses.losses[-1]["q30"]}')
-  print(f'Min q30 Loss: {losses.min_losses["q30"]}')
-  print(f'q100 Loss: {losses.losses[-1]["q100"]}')
-  print(f'Min q100 Loss: {losses.min_losses["q100"]}')
-  print(f'q200 Loss: {losses.losses[-1]["q200"]}')
-  print(f'Min q200 Loss: {losses.min_losses["q200"]}')
+  print(f'===== Q/Z LOSSES =====')
+  log('Outcome Loss', losses.losses[-1]["outcome"])
+  log('Min Outcome Loss', losses.min_losses["outcome"])
+  log('q30 Loss', losses.losses[-1]["q30"])
+  log('Min q30 Loss', losses.min_losses["q30"])
+  log('q100 Loss', losses.losses[-1]["q100"])
+  log('Min q100 Loss', losses.min_losses["q100"])
+  log('q200 Loss', losses.losses[-1]["q200"])
+  log('Min q200 Loss', losses.min_losses["q200"])
 
-  print(f'\n===== SCORE LOSSES =====')
-  print(f'Score PDF Loss: {losses.losses[-1]["score_pdf"]}')
-  print(f'Min Score PDF Loss: {losses.min_losses["score_pdf"]}')
+  print(f'===== SCORE LOSSES =====')
+  log('Score PDF Loss', losses.losses[-1]["score_pdf"])
+  log('Min Score PDF Loss', losses.min_losses["score_pdf"])
 
-  print(f'\n===== OWNERSHIP LOSSES =====')
-  print(f'Own Loss: {losses.losses[-1]["own"]}')
-  print(f'Min Own Loss: {losses.min_losses["own"]}')
+  print(f'===== OWNERSHIP LOSSES =====')
+  log('Own Loss', losses.losses[-1]["own"])
+  log('Min Own Loss', losses.min_losses["own"])
 
-  print(f'\n===== POLICY INFO =====')
-  print(f'Predicted Top 5 Moves: {top_policy_indices}')
+  print(f'===== POLICY INFO =====')
+  print(f'Predicted Top 5 Moves:', f'{[move(mv) for mv in top_policy_indices]}',
+        f'{top_policy_indices}')
   print(f'Predicted Top 5 Move Logits: {top_policy_values}')
-  print(f'Actual Policy: {actual_policy}')
-  print(f'Predicted Top 5 Aux Moves: {top_policy_aux_indices}')
+  print(f'Actual Policy: {actual_policy}, {move(actual_policy)}')
+  print(f'Predicted Top 5 Aux Moves:',
+        f'{[move(mv) for mv in top_policy_aux_indices]}',
+        f'{top_policy_aux_indices}')
   print(f'Predicted Top 5 Aux Move Logits: {top_policy_aux_values}')
-  print(f'Actual Aux Policy: {actual_policy_aux}')
+  print(f'Actual Aux Policy: {actual_policy_aux}, {move(actual_policy_aux)}')
 
-  print(f'\n===== Q/Z INFO =====')
-  print(f'Predicted Outcome: {tf.nn.softmax(outcome_logits[0])}, Actual Outcome: {1.0 if score[0] >= 0 else 0.0}')
+  print(f'===== Q/Z INFO =====')
+  print(f'Predicted Outcome: {tf.nn.softmax(outcome_logits[0])},',
+        f'Actual Outcome: {1.0 if score[0] >= 0 else 0.0}')
   print(f'q30 Pred: {q30_pred[0]}, Actual: {q30[0]}')
   print(f'q100 Pred: {q100_pred[0]}, Actual: {q100[0]}')
   print(f'q200 Pred: {q200_pred[0]}, Actual: {q200[0]}')
 
-  print(f'\n===== SCORE INFO =====')
+  print(f'===== SCORE INFO =====')
   print(f'Predicted Scores: {top_score_indices}')
   print(f'Predicted Score Values: {top_score_values}')
   print(f'Actual Score: {score[0]}')
 
-  print(f'\n===== GRIDS =====')
-  print(f'Own Pred:')
-  print(own_pred_to_string(own_pred[0].numpy()))
-  print(f'Own:')
-  print(GoBoard.to_string(own.numpy()))
+  print(f'===== GRIDS =====')
+  if mode == Mode.RL:
+    print(f'Own Pred:')
+    print(own_pred_to_string(own_pred[0].numpy()))
+    print(f'Own:')
+    print(GoBoard.to_string(own.numpy()))
   print(f'Board:')
   print(GoBoard.to_string(board.numpy()))
 
@@ -339,7 +351,11 @@ def save_model(model: P3achyGoModel, batch_num: int, save_path: str):
   model.save(str(local_path))
 
 
-def val(model: P3achyGoModel, mode: Mode, val_ds: tf.data.Dataset):
+def val(model: P3achyGoModel,
+        mode: Mode,
+        val_ds: tf.data.Dataset,
+        val_batch_num=0,
+        tensorboard_log_dir='/tmp/logs'):
   coeffs = LossCoeffs.SLCoeffs() if mode == Mode.SL else LossCoeffs.RLCoeffs()
   # yapf: disable
   val_fn = functools.partial(val_step,
@@ -355,12 +371,14 @@ def val(model: P3achyGoModel, mode: Mode, val_ds: tf.data.Dataset):
                              coeffs.w_gamma)
   # yapf: enable
 
-  losses_val, val_metrics, val_batch_num = (LossTracker(), ValMetrics(), 0)
-  for (input, komi, score, score_one_hot, policy, own) in val_ds:
+  losses_val, val_metrics = LossTracker(), ValMetrics()
+  for (input, input_global_state, color, komi, score, score_one_hot, policy,
+       policy_aux, own, q30, q100, q200) in val_ds:
     (pi_logits, pi_logits_aux, outcome_logits, own_pred, q30_pred, q100_pred,
      q200_pred, score_logits, loss, policy_loss, policy_aux_loss, outcome_loss,
      q30_loss, q100_loss, q200_loss, score_pdf_loss,
-     own_loss) = val_fn(input, komi, score, score_one_hot, policy, own, model)
+     own_loss) = val_fn(input, input_global_state, score, score_one_hot, policy,
+                        policy_aux, own, q30, q100, q200, model)
     losses_val.update_losses(loss, policy_loss, policy_aux_loss, outcome_loss,
                              score_pdf_loss, own_loss, q30_loss, q100_loss,
                              q200_loss)
@@ -385,28 +403,33 @@ def val(model: P3achyGoModel, mode: Mode, val_ds: tf.data.Dataset):
         tf.reduce_sum(correct_move).numpy(),
         tf.reduce_sum(correct_outcome).numpy())
 
-    val_batch_num += 1
-
-  log_val(val_batch_num, losses_val, val_metrics)
+  summary_writer = tf.summary.create_file_writer(tensorboard_log_dir)
+  with summary_writer.as_default():
+    log_val(val_batch_num, losses_val, val_metrics)
 
 
 def log_val(batch_num: int, losses: LossTracker, metrics: ValMetrics):
+
+  def log(metric_name: str, value):
+    print(f'{metric_name}: {value}')
+    tf.summary.scalar(metric_name, value, step=batch_num)
+
   print(f"---------- Val Batch {batch_num} ----------")
-  print(f'Loss: {losses.losses[-1]["loss"]}')
-  print(f'Min Loss: {losses.min_losses["loss"]}')
-  print(f'Min Val Policy Loss: {losses.min_losses["policy"]}')
-  print(f'Min Val Policy Aux Loss: {losses.min_losses["policy_aux"]}')
-  print(f'Min Val Outcome Loss: {losses.min_losses["outcome"]}')
-  print(f'Min Val Score PDF Loss: {losses.min_losses["score_pdf"]}')
-  print(f'Min Val Own Loss: {losses.min_losses["own"]}')
-  print(f'Min Val q30 Loss: {losses.min_losses["q30"]}')
-  print(f'Min Val q100 Loss: {losses.min_losses["q100"]}')
-  print(f'Min Val q200 Loss: {losses.min_losses["q200"]}')
+  log('Val Loss', losses.losses[-1]["loss"])
+  log('Min Val Loss', losses.min_losses["loss"])
+  log('Min Val Policy Loss', losses.min_losses["policy"])
+  log('Min Val Policy Aux Loss', losses.min_losses["policy_aux"])
+  log('Min Val Outcome Loss', losses.min_losses["outcome"])
+  log('Min Val Score PDF Loss', losses.min_losses["score_pdf"])
+  log('Min Val Own Loss', losses.min_losses["own"])
+  log('Min Val q30 Loss', losses.min_losses["q30"])
+  log('Min Val q100 Loss', losses.min_losses["q100"])
+  log('Min Val q200 Loss', losses.min_losses["q200"])
   print("Correct Moves: ", metrics.correct_moves, ", Total Moves: ",
         metrics.num_moves)
   print("Correct Outcomes: ", metrics.correct_outcomes, ", Total Outcomes: ",
         metrics.num_outcomes)
-  print("Prediction Moves Percentage: ",
-        float(metrics.correct_moves) / metrics.num_moves)
-  print("Prediction Outcome Percentage: ",
-        float(metrics.correct_outcomes) / metrics.num_outcomes)
+  log("Prediction Moves Percentage",
+      float(metrics.correct_moves) / metrics.num_moves)
+  log("Prediction Outcome Percentage",
+      float(metrics.correct_outcomes) / metrics.num_outcomes)

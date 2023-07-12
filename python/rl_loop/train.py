@@ -17,6 +17,7 @@ MOMENTUM = .9
 
 
 def train_one_gen(model: P3achyGoModel,
+                  model_gen: int,
                   chunk_path: str,
                   val_ds: tf.data.TFRecordDataset,
                   log_interval=100,
@@ -52,4 +53,4 @@ def train_one_gen(model: P3achyGoModel,
   model.set_weights(new_weights)
 
   logging.info(f'Running validation for new model...')
-  train.val(model, mode=train.Mode.RL, val_ds=val_ds)
+  train.val(model, mode=train.Mode.RL, val_ds=val_ds, val_batch_num=model_gen)

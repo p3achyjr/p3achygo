@@ -30,7 +30,6 @@ flags.DEFINE_boolean('upload_to_gcs', False, 'Whether to upload models to GCS.')
 
 # Flags for local storage
 flags.DEFINE_string('model_save_path', '', 'Folder under which to save models.')
-flags.DEFINE_string('calib_ds', '', 'Dataset to use for TRT calibration.')
 
 # Flags for training configuration
 flags.DEFINE_integer('batch_size', 32, 'Mini-batch size')
@@ -44,6 +43,8 @@ flags.DEFINE_integer(
 flags.DEFINE_integer('model_save_interval', 5000,
                      'Interval at which to save a new model/model checkpoint')
 flags.DEFINE_string('dataset_dir', '', 'Directory to datasets.')
+flags.DEFINE_string('tensorboard_logdir', '/tmp/logs',
+                    'Tensorboard log directory.')
 
 
 def main(_):
@@ -51,19 +52,19 @@ def main(_):
     logging.warning('Please provide --dataset_dir where dataset lives.')
     return
 
-  if FLAGS.calib_ds == '':
-    logging.warning('Please provide --calib_ds file (.tfrecord.zz)')
-    return
-
   if FLAGS.model_save_path == '':
     logging.warning('Please provide --model_save_path.')
     return
 
   batch_size = FLAGS.batch_size
-  shards = [str(path) for path in Path(FLAGS.dataset_dir).glob("*.tfrecord.zz")]
-  train_shards, val_shard = shards[0:-1], shards[-1]
+  train_shards = [
+      str(path) for path in Path(FLAGS.dataset_dir).glob("shard*.tfrecord.zz")
+  ]
+  val_shard = str(Path(FLAGS.dataset_dir, "val.tfrecord.zz"))
   with open(Path(FLAGS.dataset_dir, 'LENGTH.txt')) as f:
     ds_len = int(f.read()) // batch_size
+
+  tensorboard_log_dir = FLAGS.tensorboard_logdir
 
   # setup train ds.
   train_ds = tf.data.Dataset.from_tensor_slices(train_shards)
@@ -79,7 +80,6 @@ def main(_):
   # setup validation dataset
   val_ds = tf.data.TFRecordDataset(val_shard, compression_type='ZLIB')
   val_ds = val_ds.map(transforms.expand)
-  val_ds = val_ds.shuffle(FLAGS.shuf_buf_size)
   val_ds = val_ds.batch(batch_size)
 
   lr, momentum, epochs = FLAGS.learning_rate, FLAGS.momentum, FLAGS.epochs
@@ -101,27 +101,27 @@ def main(_):
                  tf.keras.mixed_precision.global_policy().variable_dtype)
     is_gpu = True
 
+  logging.info(f'Running initial validation...')
+  train.val(model, mode=train.Mode.SL, val_ds=val_ds, val_batch_num=0)
+
   logging.info(f'Starting Training...')
   train.train(model,
               train_ds,
               epochs,
               momentum,
-              lr_schedule=lr_schedule,
               log_interval=FLAGS.log_interval,
               mode=train.Mode.SL,
               save_interval=FLAGS.model_save_interval,
               save_path=FLAGS.model_save_path,
+              tensorboard_log_dir=tensorboard_log_dir,
+              lr_schedule=lr_schedule,
               is_gpu=is_gpu)
-  train.val(model, mode=train.Mode.SL, val_ds=val_ds)
+
+  logging.info(f'Running final validation...')
+  train.val(model, mode=train.Mode.SL, val_ds=val_ds, val_batch_num=1)
 
   model_path = str(Path(FLAGS.model_save_path, 'p3achygo_sl'))
   model.save(model_path)
-
-  converter = trt_convert.get_converter(model_path,
-                                        FLAGS.calib_ds,
-                                        batch_size=64)
-  converter.summary()
-  converter.save(output_saved_model_dir=str(Path(model_path, '_trt')))
 
 
 if __name__ == '__main__':
