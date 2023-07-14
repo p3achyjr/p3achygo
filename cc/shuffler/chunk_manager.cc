@@ -29,7 +29,7 @@ static constexpr int kDefaultPollIntervalS = 30;
 static constexpr int kLoggingInterval = 1000000;
 
 // keep in sync with python/gcs_utils.py
-static constexpr char kChunkFormat[] = "chunk_%03d.tfrecord.zz";
+static constexpr char kChunkFormat[] = "chunk_%04d.tfrecord.zz";
 
 void WriteChunkToDisk(std::string filename, const std::vector<tstring>& chunk) {
   std::unique_ptr<tensorflow::WritableFile> file;

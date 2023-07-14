@@ -24,6 +24,7 @@ FLAGS = flags.FLAGS
 
 POLL_INTERVAL_S = 10
 EVAL_CACHE_SIZE = 32768
+NUM_EVAL_GAMES = 75
 
 flags.DEFINE_string('sp_bin_path', '', 'Local path to self-play binary.')
 flags.DEFINE_string('eval_bin_path', '', 'Local path to eval binary.')
@@ -46,8 +47,9 @@ def print_stdout(out: Popen.stdout):  # pytype : disable=unbound-type-param
     print(line.rstrip())
 
 
-def eval(eval_bin_path: str, eval_res_path: str, cur_model_path: str,
-         cand_model_path: str) -> EvalResult:
+def eval(run_id: str, eval_bin_path: str, eval_res_path: str,
+         cur_model_path: str, cand_model_path: str,
+         local_run_dir: str) -> EvalResult:
   '''`cur_model_path` and `cand_model_path` are the _base_ paths of the models.'''
   cur_model_path_trt = str(Path(cur_model_path, '_trt'))
   cand_model_path_trt = str(Path(cand_model_path, '_trt'))
@@ -57,8 +59,9 @@ def eval(eval_bin_path: str, eval_res_path: str, cur_model_path: str,
   cmd = shlex.split(f'{eval_bin_path} --cur_model_path={cur_model_path_trt}' +
                     f' --cand_model_path={cand_model_path_trt}' +
                     f' --res_write_path={eval_res_path}' +
+                    f' --recorder_path={local_run_dir}' +
                     f' --cache_size={EVAL_CACHE_SIZE}' +
-                    f' --num_games={trt_batch_size()}')
+                    f' --num_games={NUM_EVAL_GAMES}')
   eval_proc = Popen(cmd,
                     stdin=PIPE,
                     stdout=PIPE,
@@ -68,6 +71,12 @@ def eval(eval_bin_path: str, eval_res_path: str, cur_model_path: str,
   t = Thread(target=print_stdout, args=(eval_proc.stdout,), daemon=True)
   t.start()
   eval_proc.wait()
+
+  # Upload Eval SGFs. This is safe because the process has terminated.
+  _, _, _, local_sgf_dir = fs_utils.ensure_local_dirs(local_run_dir)
+  eval_sgfs = local_sgf_dir.glob("*EVAL*.sgfs")
+  for sgf in eval_sgfs:
+    gcs.upload_sgf(run_id, sgf)
 
   with open(eval_res_path) as f:
     cand_rel_elo = float(f.read())
@@ -93,6 +102,12 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
   # populate local dirs
   (local_models_dir, local_golden_chunk_dir, _,
    _) = fs_utils.ensure_local_dirs(local_run_dir)
+
+  eval_history_path = Path(local_run_dir, 'elo_history.txt')
+  batch_num_path = str(Path(local_run_dir, 'batch_num.txt'))
+  if not os.path.exists(batch_num_path):
+    with open(batch_num_path, 'w') as f:
+      f.write('0')
 
   # fetch or create first model
   model_gen = gcs.get_most_recent_model_cand(FLAGS.run_id)
@@ -142,7 +157,8 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
                       f' --gen={model_gen}' +
                       f' --next_gen={latest_chunk_gen}' +
                       f' --chunk_path={chunk_path}' +
-                      f' --val_ds_path={val_ds_path}')
+                      f' --val_ds_path={val_ds_path}' +
+                      f' --batch_num_path={batch_num_path}')
     train_proc = Popen(cmd,
                        stdin=PIPE,
                        stdout=PIPE,
@@ -152,8 +168,10 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
     t.start()
     train_proc.wait()
 
+    # Play against current _best_ model.
+    current_golden_gen = gcs.get_most_recent_model(run_id)
     cur_model_path = str(
-        Path(local_models_dir, gcs.MODEL_FORMAT.format(model_gen)))
+        Path(local_models_dir, gcs.MODEL_FORMAT.format(current_golden_gen)))
     cand_model_path = str(
         Path(local_models_dir, gcs.MODEL_FORMAT.format(latest_chunk_gen)))
 
@@ -162,12 +180,17 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
     gcs.upload_model_cand(run_id, local_models_dir, latest_chunk_gen)
 
     # Run eval.
-    eval_result = eval(eval_bin_path, eval_res_path, cur_model_path,
-                       cand_model_path)
+    eval_result = eval(run_id, eval_bin_path, eval_res_path, cur_model_path,
+                       cand_model_path, local_run_dir)
     if eval_result.winner == EvalResult.CAND:
       # The cand model is stronger. Upload it as new golden.
       logging.info(f'Uploading model {cand_model_path} as new golden')
       gcs.upload_model(run_id, local_models_dir, latest_chunk_gen)
+
+    with open(eval_history_path, 'a') as f:
+      f.write(f'Elo: {eval_result.rel_elo}' +
+              f' Cur: {current_golden_gen}, Cand: {latest_chunk_gen}\n')
+
     model_gen = latest_chunk_gen
 
     logging.info('Eval finished. Restarting self-play -> train -> eval loop.')

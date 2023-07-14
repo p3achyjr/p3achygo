@@ -5,7 +5,9 @@
 #include <sys/stat.h>
 
 #include <chrono>
+#include <filesystem>
 #include <future>
+#include <regex>
 #include <thread>
 
 #include "absl/flags/flag.h"
@@ -21,15 +23,26 @@
 #include "cc/core/filepath.h"
 #include "cc/eval/eval.h"
 #include "cc/nn/nn_interface.h"
+#include "cc/recorder/game_recorder.h"
+
+namespace {
+namespace fs = std::filesystem;
+static constexpr int64_t kTimeoutUs = 4000;
+static constexpr int kDefaultGumbelN = 160;  // 20, 40 visits.
+static constexpr int kDefaultGumbelK = 4;
+}  // namespace
 
 ABSL_FLAG(std::string, cur_model_path, "", "Path to current best model.");
 ABSL_FLAG(std::string, cand_model_path, "", "Path to candidate model.");
 ABSL_FLAG(std::string, res_write_path, "", "Path to write result to.");
+ABSL_FLAG(std::string, recorder_path, "", "Path to write SGF files.");
 ABSL_FLAG(int, num_games, 0, "Number of eval games");
 ABSL_FLAG(int, cache_size, constants::kDefaultNNCacheSize / 2,
           "Default size of cache.");
-
-static constexpr int64_t kTimeoutUs = 4000;
+ABSL_FLAG(int, cur_n, kDefaultGumbelN, "N for current player");
+ABSL_FLAG(int, cur_k, kDefaultGumbelK, "K for current player");
+ABSL_FLAG(int, cand_n, kDefaultGumbelN, "N for candidate player");
+ABSL_FLAG(int, cand_k, kDefaultGumbelK, "K for candidate player");
 
 int main(int argc, char** argv) {
   absl::ParseCommandLine(argc, argv);
@@ -50,8 +63,14 @@ int main(int argc, char** argv) {
 
   std::string res_write_path = absl::GetFlag(FLAGS_res_write_path);
   if (res_write_path == "") {
-    LOG(ERROR) << "--res_write_path Not Specified.";
-    return 1;
+    LOG(WARNING)
+        << "--res_write_path Not Specified. Result will not be written.";
+  }
+
+  core::FilePath recorder_path(absl::GetFlag(FLAGS_recorder_path));
+  if (recorder_path == "") {
+    LOG(WARNING)
+        << "--recorder_path Not Specified. No SGF files will be written";
   }
 
   int num_games = absl::GetFlag(FLAGS_num_games);
@@ -73,17 +92,51 @@ int main(int argc, char** argv) {
                     std::chrono::steady_clock::now().time_since_epoch())
                     .count();
 
+  // N, K
+  int cur_n = absl::GetFlag(FLAGS_cur_n);
+  int cand_n = absl::GetFlag(FLAGS_cand_n);
+  int cur_k = absl::GetFlag(FLAGS_cur_k);
+  int cand_k = absl::GetFlag(FLAGS_cand_k);
+
+  // Game Recorder.
+  auto find_model_name = [](fs::path path) {
+    static constexpr char kModelNameRegex[] = "model_(\\d+)";
+    static const std::regex re(kModelNameRegex);
+
+    std::smatch match;
+    for (const auto& part : path) {
+      std::string part_string = part.filename().string();
+      if (std::regex_match(part_string, match, re)) {
+        return part_string;
+      }
+    }
+
+    return std::string("UNKNOWN");
+  };
+  std::string cur_name = find_model_name(fs::path(cur_model_path)) + "n" +
+                         absl::StrFormat("%d", cur_n) + "k" +
+                         absl::StrFormat("%d", cur_k);
+  std::string cand_name = find_model_name(fs::path(cand_model_path)) + "n" +
+                          absl::StrFormat("%d", cand_n) + "k" +
+                          absl::StrFormat("%d", cand_k);
+  std::unique_ptr<recorder::GameRecorder> game_recorder =
+      recorder::GameRecorder::Create(
+          recorder_path, num_games, 10000, 0,
+          absl::StrFormat("EVAL_%s_%s", cur_name, cand_name));
+
+  // Spawn games.
   std::vector<std::thread> threads;
   std::vector<std::future<Winner>> winners;
   for (int thread_id = 0; thread_id < num_games; ++thread_id) {
-    std::promise<Winner> p;
-    winners.emplace_back(p.get_future());
+    std::promise<Winner> winner;
+    winners.emplace_back(winner.get_future());
 
     size_t seed = absl::HashOf(time, thread_id);
     std::thread thread(PlayEvalGame, seed, thread_id, cur_nn_interface.get(),
                        cand_nn_interface.get(),
                        absl::StrFormat("/tmp/eval%d_log.txt", thread_id),
-                       std::move(p));
+                       std::move(winner), game_recorder.get(), cur_name,
+                       cand_name, cur_n, cur_k, cand_n, cand_k);
     threads.emplace_back(std::move(thread));
   }
 
@@ -107,8 +160,10 @@ int main(int argc, char** argv) {
             << " for " << winrate << " winrate and " << rel_elo
             << " relative Elo.";
 
-  FILE* const file = fopen(res_write_path.c_str(), "w");
-  absl::FPrintF(file, "%f", rel_elo);
-  fclose(file);
+  if (res_write_path != "") {
+    FILE* const file = fopen(res_write_path.c_str(), "w");
+    absl::FPrintF(file, "%f", rel_elo);
+    fclose(file);
+  }
   return 0;
 }

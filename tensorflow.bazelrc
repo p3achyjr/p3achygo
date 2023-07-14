@@ -556,7 +556,7 @@ build:rbe_win --extra_toolchains="//tensorflow/tools/toolchains/win/tf_win_06152
 build:rbe_win --extra_execution_platforms="//tensorflow/tools/toolchains/win:rbe_windows_ltsc2019"
 build:rbe_win --host_platform="//tensorflow/tools/toolchains/win:rbe_windows_ltsc2019"
 build:rbe_win --platforms="//tensorflow/tools/toolchains/win:rbe_windows_ltsc2019"
-build:rbe_win --shell_executable=C:\\tools\\msys64\\usr\\bin\\bash.exe
+build:rbe_win --shell_executable=C:\    ools\\msys64\\usr\\bin\\bash.exe
 build:rbe_win --experimental_strict_action_env=true
 
 # TODO(gunan): Remove once we use MSVC 2019 with latest patches.

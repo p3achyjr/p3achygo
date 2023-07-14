@@ -27,7 +27,8 @@ class SgfRecorder {
 
   // Recorder Impl.
   virtual void RecordGame(
-      int thread_id, const game::Game& game,
+      int thread_id, const game::Game& game, std::string b_name,
+      std::string w_name,
       std::vector<std::unique_ptr<mcts::TreeNode>>&& roots) = 0;
 
   // Flushes all pending writes.

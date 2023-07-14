@@ -29,7 +29,7 @@ ABSL_FLAG(int, num_threads, 1, "Number of threads to use.");
 // ABSL_FLAG(int, gumbel_k, -1,
 //           "Override for number of top moves to consider in Gumbel MCTS.");
 ABSL_FLAG(std::string, recorder_path, "",
-          "Path to write SGF files and TF examples. 'sgf' and 'tf' are "
+          "Path to write SGF files and TF examples. 'sgf' and 'chunks' are "
           "appended to the path.");
 ABSL_FLAG(int, flush_interval, 128, "Number of games to buffer before flush.");
 ABSL_FLAG(int, max_moves, 600, "Maximum number of moves per game.");

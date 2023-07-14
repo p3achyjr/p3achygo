@@ -78,6 +78,10 @@ void TfRecorderImpl::RecordGame(int thread_id, const Board& init_board,
                                 const ImprovedPolicies& mcts_pis,
                                 const std::vector<uint8_t>& move_trainables,
                                 const std::vector<float>& root_qs) {
+  if (path_.empty()) {
+    return;
+  }
+
   CHECK(game.has_result());
   CHECK(game.num_moves() == mcts_pis.size());
   thread_records_[thread_id].emplace_back(
@@ -88,6 +92,10 @@ void TfRecorderImpl::RecordGame(int thread_id, const Board& init_board,
 // Only one thread can call this method. Additionally, no thread can call
 // `RecordGame` while this method is running.
 void TfRecorderImpl::Flush() {
+  if (path_.empty()) {
+    return;
+  }
+
   int num_games =
       std::accumulate(thread_game_counts_.begin(),
                       thread_game_counts_.begin() + num_threads_, 0);
@@ -154,11 +162,11 @@ void TfRecorderImpl::Flush() {
           Color color = move.color;
           float z = game.result().winner == color ? 1.0 : -1.0;
           float q30 =
-              move_num + 30 < game.num_moves() ? root_qs[move_num + 30] : z;
+              move_num + 6 < game.num_moves() ? root_qs[move_num + 6] : z;
           float q100 =
-              move_num + 100 < game.num_moves() ? root_qs[move_num + 30] : z;
+              move_num + 16 < game.num_moves() ? root_qs[move_num + 16] : z;
           float q200 =
-              move_num + 200 < game.num_moves() ? root_qs[move_num + 30] : z;
+              move_num + 50 < game.num_moves() ? root_qs[move_num + 50] : z;
           tensorflow::Example example = MakeTfExample(
               board.position(), last_moves, board.GetStonesInAtari(),
               board.GetStonesWithLiberties(2), board.GetStonesWithLiberties(3),

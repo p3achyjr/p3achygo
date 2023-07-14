@@ -163,7 +163,8 @@ def train(model: P3achyGoModel,
           lr: Optional[float] = None,
           lr_schedule: Optional[
               tf.keras.optimizers.schedules.LearningRateSchedule] = None,
-          is_gpu=False):
+          is_gpu=False,
+          batch_num=0):
   """
   Training through single dataset.
   """
@@ -196,7 +197,6 @@ def train(model: P3achyGoModel,
   if is_gpu:
     optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
 
-  batch_num = 0
   losses_train = LossTracker()
   for _ in range(epochs):
     # train
@@ -231,6 +231,8 @@ def train(model: P3achyGoModel,
   print(f'Min Train Outcome Loss: {losses_train.min_losses["outcome"]}')
   print(f'Min Train Ownership Loss: {losses_train.min_losses["own"]}')
   print(f'Min Train Score PDF Loss: {losses_train.min_losses["score_pdf"]}')
+
+  return batch_num
 
 
 def log_train(batch_num: int, model_input: tf.Tensor, pi_logits: tf.Tensor,
@@ -412,7 +414,8 @@ def log_val(batch_num: int, losses: LossTracker, metrics: ValMetrics):
 
   def log(metric_name: str, value):
     print(f'{metric_name}: {value}')
-    tf.summary.scalar(metric_name, value, step=batch_num)
+    if batch_num >= 0:
+      tf.summary.scalar(metric_name, value, step=batch_num)
 
   print(f"---------- Val Batch {batch_num} ----------")
   log('Val Loss', losses.losses[-1]["loss"])

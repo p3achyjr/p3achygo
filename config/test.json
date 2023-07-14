@@ -1,6 +1,6 @@
 {
   "num_generations": 10,
-  "games_per_gen": 1000,
+  "games_per_gen": 100,
   "batch_size": 256,
   "lr": 3e-3
 }

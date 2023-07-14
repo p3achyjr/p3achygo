@@ -277,6 +277,12 @@ class Board final {
   inline Zobrist::Hash hash() const { return hash_; }
   inline int move_count() const { return move_count_; }
   inline const BoardData& position() const { return board_; }
+
+  inline bool IsEmpty() const {
+    return std::all_of(board_.begin(), board_.end(),
+                       [](Color c) { return c == EMPTY; });
+  }
+
   inline BoardData GetStonesInAtari() const {
     return GetStonesWithLiberties(1);
   }

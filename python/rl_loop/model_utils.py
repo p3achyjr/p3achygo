@@ -41,7 +41,7 @@ def save_trt(model: P3achyGoModel, calib_ds_path: str, local_model_dir: str,
   '''
   Saves model and returns _base_ path of model.
   '''
-  model_path = Path(local_model_dir, f'model_{gen}')
+  model_path = Path(local_model_dir, gcs.MODEL_FORMAT.format(gen))
   model.save(str(model_path))
 
   logging.info('Converting to TensorRT...')

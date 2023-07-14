@@ -18,13 +18,11 @@ build --linkopt=-fuse-ld=gold
 build:linux --cpu=k8
 
 build:asan --strip=never
-build:asan --spawn_strategy=local
 build:asan --copt -fsanitize=address
 build:asan --copt -DADDRESS_SANITIZER
-build:asan --copt -O3
 build:asan --copt -g
+build:asan --copt -O3
 build:asan --copt -fno-omit-frame-pointer
-build:asan --copt -fno-sanitize-blacklist
 build:asan --linkopt -fsanitize=address
 
 build:dbg --copt -g

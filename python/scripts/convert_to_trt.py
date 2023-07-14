@@ -3,8 +3,6 @@ import trt_convert
 from absl import app, flags, logging
 from pathlib import Path
 
-# Use the same batch size when running self-play.
-NUM_CALIB_BATCHES = 10
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string('model_path', '', 'Path to SavedModel.')

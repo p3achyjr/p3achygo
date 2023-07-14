@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import shlex, subprocess, re
+import shlex, subprocess, re, os
 
 from google.cloud import storage
 from pathlib import Path
@@ -102,7 +102,10 @@ def _download_model(run_id: str, local_models_dir: str, model_dir: str) -> str:
   local_dir = Path(local_models_dir, model_dir)
   gcs_dir = Path(gcs_models_dir(run_id), model_dir)
 
-  cmd = f'gsutil -m rsync -r gs://{GCS_BUCKET}/{str(gcs_dir)} {str(local_models_dir)}'
+  if not os.path.exists(local_dir):
+    os.mkdir(local_dir)
+
+  cmd = f'gsutil -m rsync -r gs://{GCS_BUCKET}/{str(gcs_dir)} {str(local_dir)}'
   subprocess.run(shlex.split(cmd), check=True)
 
   return str(local_dir)
@@ -113,7 +116,10 @@ def _download_model_cand(run_id: str, local_models_dir: str,
   local_dir = Path(local_models_dir, model_dir)
   gcs_dir = Path(gcs_model_cands_dir(run_id), model_dir)
 
-  cmd = f'gsutil -m rsync -r gs://{GCS_BUCKET}/{str(gcs_dir)} {str(local_models_dir)}'
+  if not os.path.exists(local_dir):
+    os.mkdir(local_dir)
+
+  cmd = f'gsutil -m rsync -r gs://{GCS_BUCKET}/{str(gcs_dir)} {str(local_dir)}'
   subprocess.run(shlex.split(cmd), check=True)
 
   return str(local_dir)

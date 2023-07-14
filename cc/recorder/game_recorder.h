@@ -34,6 +34,10 @@ class GameRecorder {
       const std::vector<float>& root_qs,
       std::vector<std::unique_ptr<mcts::TreeNode>>&& roots) = 0;
 
+  virtual void RecordEvalGame(int thread_id, const game::Game& game,
+                              const std::string& b_name,
+                              const std::string& w_name) = 0;
+
   static std::unique_ptr<GameRecorder> Create(std::string path, int num_threads,
                                               int flush_interval, int gen,
                                               std::string worker_id);

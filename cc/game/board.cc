@@ -275,7 +275,7 @@ void GroupTracker::BensonSolver::CalculatePassAliveRegionForColor(Color color) {
 GroupMap GroupTracker::BensonSolver::GetGroupMap(Color color) {
   absl::flat_hash_map<groupid, BensonGroupInfo> group_map;
 
-  for (int gid = 0; gid < group_tracker_->group_info_map_.size(); ++gid) {
+  for (groupid gid = 0; gid < group_tracker_->group_info_map_.size(); ++gid) {
     const auto& group_info = group_tracker_->group_info_map_[gid];
     if (!group_info.is_valid) {
       continue;

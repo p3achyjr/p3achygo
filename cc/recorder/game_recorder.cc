@@ -17,6 +17,8 @@ namespace {
 
 using ::core::FilePath;
 
+static constexpr char kP3achyGoName[] = "p3achygo";
+
 class GameRecorderImpl final : public GameRecorder {
  public:
   GameRecorderImpl(std::string path, int num_threads, int flush_interval,
@@ -36,13 +38,17 @@ class GameRecorderImpl final : public GameRecorder {
       const std::vector<float>& root_qs,
       std::vector<std::unique_ptr<mcts::TreeNode>>&& roots) override;
 
+  void RecordEvalGame(int thread_id, const game::Game& game,
+                      const std::string& b_name,
+                      const std::string& w_name) override;
+
   static std::unique_ptr<GameRecorderImpl> Create(std::string path,
                                                   int num_threads,
                                                   int flush_interval,
                                                   std::string worker_id);
 
  private:
-  void IoThread();
+  void IoThread() ABSL_LOCKS_EXCLUDED(mu_);
   void Flush() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
   bool ShouldFlush();
 
@@ -94,9 +100,11 @@ void GameRecorderImpl::RecordGame(
     const std::vector<float>& root_qs,
     std::vector<std::unique_ptr<mcts::TreeNode>>&& roots) {
   thread_mus_[thread_id].Lock();
-  sgf_recorder_->RecordGame(
-      thread_id, game,
-      std::forward<std::vector<std::unique_ptr<mcts::TreeNode>>>(roots));
+  if (init_board.IsEmpty()) {
+    sgf_recorder_->RecordGame(
+        thread_id, game, kP3achyGoName, kP3achyGoName,
+        std::forward<std::vector<std::unique_ptr<mcts::TreeNode>>>(roots));
+  }
   tf_recorder_->RecordGame(thread_id, init_board, game, mcts_pis,
                            is_move_trainable, root_qs);
   thread_mus_[thread_id].Unlock();
@@ -106,6 +114,14 @@ void GameRecorderImpl::RecordGame(
   should_flush_ = games_buffered_ >= flush_interval_;
 
   DLOG_EVERY_N_SEC(INFO, 5) << games_buffered_ << " games buffered.";
+}
+
+void GameRecorderImpl::RecordEvalGame(int thread_id, const game::Game& game,
+                                      const std::string& b_name,
+                                      const std::string& w_name) {
+  // Only log to SGF recorder. We also rely on flush-on-exit to flush SGFs.
+  absl::MutexLock l(&thread_mus_[thread_id]);
+  sgf_recorder_->RecordGame(thread_id, game, b_name, w_name, {});
 }
 
 void GameRecorderImpl::IoThread() {
