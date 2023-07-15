@@ -36,7 +36,7 @@ static constexpr int kShouldLogShard = 8;
 static constexpr float kAddSeenStateProb = .02f;
 
 // Probability of drawing a state from the visited buffer.
-static constexpr float kUseSeenStateProb = .5f;
+static constexpr float kUseSeenStateProb = .25f;
 
 // Max Number of beginning moves to sample directly.
 static constexpr int kMaxNumRawPolicyMoves = 30;
@@ -61,7 +61,7 @@ static constexpr float kLogFullTreeProb = .002;
 
 // Possible values of N, K for gumbel search.
 static const GumbelParams kGumbelParamChoices[] = {
-    GumbelParams{32, 6},
+    GumbelParams{32, 5},
 };
 
 // Size of `kGumbelParamsChoices`.
@@ -69,7 +69,7 @@ static const size_t kNumGumbelChoices =
     sizeof(kGumbelParamChoices) / sizeof(GumbelParams);
 
 // Values of N, K for moves to store for training (playout cap randomization).
-static constexpr GumbelParams kSelectedForTrainingParams = {256, 8};
+static constexpr GumbelParams kSelectedForTrainingParams = {128, 8};
 
 // Probability that we pick a move for training.
 static constexpr float kMoveSelectedForTrainingProb = .25;
@@ -81,7 +81,7 @@ static constexpr float kDownBadThreshold = -.90;
 static constexpr float kNumDownBadMovesThreshold = 5;
 
 // Minimal visit count for almost-guaranteed lost games.
-static constexpr GumbelParams kDownBadParams = GumbelParams{32, 6};
+static constexpr GumbelParams kDownBadParams = GumbelParams{24, 4};
 
 // Whether the thread should continue running.
 static std::atomic<bool> running = true;
@@ -123,6 +123,19 @@ InitState GetInitState(Probability& probability, GoExploitBuffer* buffer) {
   }
 
   return s_0;
+}
+
+std::string ToString(const Color& color) {
+  switch (color) {
+    case BLACK:
+      return "B";
+    case WHITE:
+      return "W";
+    case EMPTY:
+      return "E";
+    default:
+      return "U";
+  }
 }
 
 }  // namespace
@@ -185,31 +198,30 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       bool is_either_down_bad =
           num_consecutive_down_bad_moves_b >= kNumDownBadMovesThreshold ||
           num_consecutive_down_bad_moves_w >= kNumDownBadMovesThreshold;
-      bool is_move_selected_for_training = [sampling_raw_policy, &probability,
-                                            &root_node]() {
+      float select_move_prob = [sampling_raw_policy, &root_node]() {
         if (sampling_raw_policy) {
-          return false;
+          return 0.0f;
         }
 
         // Use win percentage, downweight roots with very low winrate.
         if (!root_node) {
-          // This root is not expanded yet.
-          return probability.Uniform() < kMoveSelectedForTrainingProb;
+          return kMoveSelectedForTrainingProb;
         }
 
         float root_q = QOutcome(root_node.get());
-        if (root_q > kDownBadThreshold) {
+        if (root_q > kDownBadThreshold && root_q < -kDownBadThreshold) {
           // Do not anneal probability.
-          return probability.Uniform() < kMoveSelectedForTrainingProb;
+          return kMoveSelectedForTrainingProb;
         }
 
         // Anneal probability linearly.
-        float penalty =
-            (kDownBadThreshold - root_q) / (kDownBadThreshold + 1.0f);
+        float penalty = 1.0f - std::abs(root_q);
         float p = penalty * kMoveSelectedForTrainingProb;
 
-        return probability.Uniform() < p;
+        return p;
       }();
+      bool is_move_selected_for_training =
+          probability.Uniform() < select_move_prob;
 
       int gumbel_n, gumbel_k;
       if (sampling_raw_policy) {
@@ -226,7 +238,11 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         gumbel_k = default_gumbel_params.k;
       }
 
-      // Pre Search Statistics.
+      // NN Stats.
+      float qz_nn = root_node->outcome_est;
+      float score_nn = root_node->score_est;
+
+      // Pre Search Stats.
       int n_pre = N(root_node.get());
       float q_pre = Q(root_node.get());
       float qz_pre = QOutcome(root_node.get());
@@ -252,7 +268,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
       int move_n = NAction(root_node.get(), move);
       float move_q = QAction(root_node.get(), move);
-      float move_qz = QOutcomeAction(root_node.get(), move_qz);
+      float move_qz = QOutcomeAction(root_node.get(), move);
 
       // Update tracking data structures.
       mcts_pis.push_back(gumbel_res.pi_improved);
@@ -291,27 +307,25 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       }
 
       // Add to seen state buffer.
-      auto should_add_init_state = [&probability](float root_q) {
+      float add_init_state_prob = [](float root_q) {
         // Adds states with sharper Q values with lower probability, with a
-        // penalty of 1 - .75(max(0, |Q| - .5)^2/.5^2)
+        // penalty of 1 - max(0, |Q| - .5)/.5)
         static constexpr float kDecayThreshold = .5;
         static constexpr float kMaxDiff = 1 - kDecayThreshold;
-        static constexpr float kMaxPenalty = .75;
 
         float base_probability = kAddSeenStateProb;
 
         float root_q_normalized = root_q < 0 ? -root_q : root_q;
         float diff = std::max(0.0f, root_q_normalized - kDecayThreshold);
 
-        // squared scaling.
-        float penalty = kMaxPenalty * ((diff * diff) / (kMaxDiff * kMaxDiff));
+        // linear decay.
+        float penalty = diff / kMaxDiff;
         float scaling = 1 - penalty;
         float p = base_probability * scaling;
 
-        return probability.Uniform() <= p;
-      };
-
-      if (should_add_init_state(root_q_outcome) <= kAddSeenStateProb) {
+        return p;
+      }(root_q_outcome);
+      if (probability.Uniform() < add_init_state_prob) {
         AddNewInitState(go_exploit_buffer, game, color_to_move);
       }
 
@@ -323,16 +337,19 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
                            : (search_dur_ema * 0.9 + search_dur * 0.1);
 
       auto log_fn = [&]() {
+        std::string root_color = ToString(OppositeColor(color_to_move));
         std::stringstream s;
         s << "\n----- Move Num: " << game.num_moves() << " -----\n";
         s << "N: " << gumbel_n << ", K: " << gumbel_k
+          << ", Select Move Prob: " << select_move_prob
+          << ", Add Init State Prob: " << add_init_state_prob
           << ", Trainable: " << is_move_selected_for_training << "\n";
-        s << "Pre-Search Stats:"
-          << "\n  N: " << n_pre << "\n  Q: " << q_pre << "\n  Q_z: " << qz_pre
-          << "\n";
-        s << "Post-Search Stats:"
-          << "\n  N: " << n_post << "\n  Q: " << q_post
-          << "\n  Q_z: " << root_q_outcome << "\n";
+        s << "(" << root_color << ") NN Stats :\n  Q_z: " << qz_nn
+          << "\n  Score: " << score_nn << "\n";
+        s << "(" << root_color << ") Pre-Search Stats :\n  N: " << n_pre
+          << "\n  Q: " << q_pre << "\n  Q_z: " << qz_pre << "\n";
+        s << "(" << root_color << ") Post-Search Stats :\n  N: " << n_post
+          << "\n  Q: " << q_post << "\n  Q_z: " << root_q_outcome << "\n";
         s << "Raw NN Move: " << nn_move << "\n  n: " << nn_move_n
           << "\n  q: " << nn_move_q << "\n  qz: " << nn_move_qz << "\n";
         s << "Gumbel Move: " << move << "\n  n: " << move_n
@@ -342,9 +359,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
           << game.move(game.num_moves() - 3) << ", "
           << game.move(game.num_moves() - 2) << ", "
           << game.move(game.num_moves() - 1) << "\n";
-        s << "Root Color: " << OppositeColor(color_to_move)
-          << " Next Root Visits: " << root_node->n
-          << " Player to Move: " << root_node->color_to_move
+        s << "Next Root Visits: " << root_node->n
+          << " Player to Move: " << ToString(root_node->color_to_move)
           << " Value: " << root_node->q << " Outcome: " << root_node->q_outcome
           << "\n";
         s << "Board:\n" << game.board() << "\n";

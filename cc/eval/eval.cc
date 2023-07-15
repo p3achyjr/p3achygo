@@ -41,15 +41,24 @@ std::string ToString(const Winner& winner) {
 
 void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
                   NNInterface* cand_nn, std::string logfile,
-                  std::promise<Winner> result, recorder::GameRecorder* recorder,
-                  std::string cur_name, std::string cand_name, int cur_n,
-                  int cur_k, int cand_n, int cand_k) {
+                  std::promise<EvalResult> result,
+                  recorder::GameRecorder* recorder, EvalConfig config) {
   FileSink sink(logfile.c_str());
   Probability probability(seed);
   auto search_dur_ema = 0;
   bool cur_is_black = thread_id % 2 == 0;
   NNInterface* black_nn = cur_is_black ? cur_nn : cand_nn;
   NNInterface* white_nn = cur_is_black ? cand_nn : cur_nn;
+
+  // Unpack config.
+  std::string cur_name = config.cur_name;
+  std::string cand_name = config.cand_name;
+  int cur_n = config.cur_n;
+  int cur_k = config.cur_k;
+  int cand_n = config.cand_n;
+  int cand_k = config.cand_k;
+
+  // Setup eval game.
   int n_b = cur_is_black ? cur_n : cand_n;
   int k_b = cur_is_black ? cur_k : cand_k;
   int n_w = cur_is_black ? cand_n : cur_n;
@@ -58,7 +67,7 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
   Game game;
   std::unique_ptr<TreeNode> btree = std::make_unique<TreeNode>();
   std::unique_ptr<TreeNode> wtree = std::make_unique<TreeNode>();
-  bool did_resign = false;
+  Color player_resigned = EMPTY;
 
   GumbelEvaluator gumbel_b(black_nn, thread_id);
   GumbelEvaluator gumbel_w(white_nn, thread_id);
@@ -71,6 +80,12 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
     std::unique_ptr<TreeNode>& cur_tree = cur_is_black ? btree : wtree;
     std::unique_ptr<TreeNode>& cand_tree = cur_is_black ? wtree : btree;
     GumbelEvaluator& gumbel = color_to_move == BLACK ? gumbel_b : gumbel_w;
+
+    // NN statistics.
+    float cur_qz_nn = cur_tree->outcome_est;
+    float cur_score_est_nn = cur_tree->score_est;
+    float cand_qz_nn = cand_tree->outcome_est;
+    float cand_score_est_nn = cand_tree->score_est;
 
     // Pre-search statistics.
     float cur_n_pre = N(cur_tree.get());
@@ -91,7 +106,7 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
       LOG_TO_SINK(INFO, sink)
           << "Player " << ToString(color_to_move)
           << " Resigned. Qz: " << QOutcome(player_tree.get());
-      did_resign = true;
+      player_resigned = color_to_move;
       break;
     }
 
@@ -124,6 +139,7 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
 
     // Log.
     [&]() {
+      std::string root_color = ToString(OppositeColor(color_to_move));
       std::stringstream s;
       s << "\n----- Move Num: " << game.num_moves() << " -----\n";
       s << "N: " << n << ", K: " << k << "\n";
@@ -136,21 +152,24 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
       s << "Cur Color: " << (cur_is_black ? ToString(BLACK) : ToString(WHITE))
         << ", Cand Color: "
         << (cur_is_black ? ToString(WHITE) : ToString(BLACK)) << "\n";
-      s << "Cur Tree Statistics, Pre-Search:";
-      s << "\n  N: " << cur_n_pre << "\n  Q: " << cur_q_pre
-        << "\n  Q_z: " << cur_q_outcome_pre << "\n";
-      s << "Cand Tree Statistics, Pre-Search:"
-        << "\n  N: " << cand_n_pre << "\n  Q: " << cand_q_pre
-        << "\n  Q_z: " << cand_q_outcome_pre << "\n";
-      s << "Cur Tree Statistics, Post-Search:";
-      s << "\n  N: " << cur_n_post << "\n  Q: " << cur_q_post
-        << "\n  Q_z: " << cur_q_outcome_post << "\n";
-      s << "Cand Tree Statistics, Post-Search:"
-        << "\n  N: " << cand_n_post << "\n  Q: " << cand_q_post
-        << "\n  Q_z: " << cand_q_outcome_post << "\n";
-      s << "Root Color: " << ToString(OppositeColor(color_to_move))
-        << ", Next Root Color (Player to Move): " << ToString(color_to_move)
-        << ", "
+      s << "(" << root_color << ") Cur Tree NN Stats:\n  Q_z: " << cur_qz_nn
+        << "\n  Score: " << cur_score_est_nn << "\n";
+      s << "(" << root_color
+        << ") Cur Tree Stats, Pre-Search :\n  N: " << cur_n_pre
+        << "\n  Q: " << cur_q_pre << "\n  Q_z: " << cur_q_outcome_pre << "\n";
+      s << "(" << root_color
+        << ") Cur Tree Stats, Post-Search :\n  N: " << cur_n_post
+        << "\n  Q: " << cur_q_post << "\n  Q_z: " << cur_q_outcome_post << "\n";
+      s << "(" << root_color << ") Cand Tree NN Stat:\n  Q_z: " << cand_qz_nn
+        << "\n  Score: " << cand_score_est_nn << "\n";
+      s << "(" << root_color
+        << ") Cand Tree Stats, Pre-Search :\n  N: " << cand_n_pre
+        << "\n  Q: " << cand_q_pre << "\n  Q_z: " << cand_q_outcome_pre << "\n";
+      s << "(" << root_color
+        << ") Cand Tree Stats, Post-Search :\n  N: " << cand_n_post
+        << "\n  Q: " << cand_q_post << "\n  Q_z: " << cand_q_outcome_post
+        << "\n";
+      s << "Player to Move: " << ToString(color_to_move) << ", "
         << (color_to_move == BLACK ? (cur_is_black ? "CUR" : "CAND")
                                    : (cur_is_black ? "CAND" : "CUR"))
         << "\n";
@@ -166,8 +185,9 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
   cand_nn->UnregisterThread(thread_id);
   game.WriteResult();
 
-  if (did_resign) {
-    game.SetWinner(OppositeColor(color_to_move));
+  if (player_resigned != EMPTY) {
+    game.SetWinner(OppositeColor(player_resigned));
+    game.SetDidResign(true);
   }
 
   auto game_result = game.result();
@@ -181,12 +201,14 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
   LOG_TO_SINK(INFO, sink) << "Winner: " << ToString(winner) << ". Cand is "
                           << (cur_is_black ? "W" : "B") << ", Result: "
                           << (game_result.winner == BLACK ? "B" : "W") << "+"
-                          << (did_resign ? "R"
-                                         : absl::StrFormat("%.1f", score_diff));
+                          << (player_resigned != EMPTY
+                                  ? "R"
+                                  : absl::StrFormat("%.1f", score_diff));
   LOG(INFO) << "Winner: " << ToString(winner) << ". Cand is "
             << (cur_is_black ? "W" : "B")
             << ", Result: " << (game_result.winner == BLACK ? "B" : "W") << "+"
-            << (did_resign ? "R" : absl::StrFormat("%.1f", score_diff))
+            << (player_resigned != EMPTY ? "R"
+                                         : absl::StrFormat("%.1f", score_diff))
             << ", Black Score: " << game_result.bscore
             << ", White Score: " << game_result.wscore << " (" << thread_id
             << ")";
@@ -194,5 +216,5 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
   const std::string& b_name = cur_is_black ? cur_name : cand_name;
   const std::string& w_name = cur_is_black ? cand_name : cur_name;
   recorder->RecordEvalGame(thread_id, game, b_name, w_name);
-  result.set_value(winner);
+  result.set_value(EvalResult{winner, game.num_moves()});
 }

@@ -28,8 +28,11 @@
 namespace {
 namespace fs = std::filesystem;
 static constexpr int64_t kTimeoutUs = 4000;
-static constexpr int kDefaultGumbelN = 160;  // 20, 40 visits.
-static constexpr int kDefaultGumbelK = 4;
+static constexpr int kDefaultGumbelN = 128;
+static constexpr int kDefaultGumbelK = 8;
+static constexpr int kPositionCacheSize =
+    67108864;  // 2 ^ 26. The cache holds a single int, so size should be ok.
+static constexpr int kRootsCacheSize = 131072;  // 2 ^ 16.
 }  // namespace
 
 ABSL_FLAG(std::string, cur_model_path, "", "Path to current best model.");
@@ -43,6 +46,10 @@ ABSL_FLAG(int, cur_n, kDefaultGumbelN, "N for current player");
 ABSL_FLAG(int, cur_k, kDefaultGumbelK, "K for current player");
 ABSL_FLAG(int, cand_n, kDefaultGumbelN, "N for candidate player");
 ABSL_FLAG(int, cand_k, kDefaultGumbelK, "K for candidate player");
+
+float ConfidenceDelta(float z_score, float num_sims, float wr) {
+  return z_score * std::sqrt(wr * (1 - wr) / num_sims);
+}
 
 int main(int argc, char** argv) {
   absl::ParseCommandLine(argc, argv);
@@ -125,18 +132,19 @@ int main(int argc, char** argv) {
           absl::StrFormat("EVAL_%s_%s", cur_name, cand_name));
 
   // Spawn games.
+  EvalConfig config =
+      EvalConfig{cur_name, cand_name, cur_n, cur_k, cand_n, cand_k};
   std::vector<std::thread> threads;
-  std::vector<std::future<Winner>> winners;
+  std::vector<std::future<EvalResult>> eval_results;
   for (int thread_id = 0; thread_id < num_games; ++thread_id) {
-    std::promise<Winner> winner;
-    winners.emplace_back(winner.get_future());
+    std::promise<EvalResult> eval_result;
+    eval_results.emplace_back(eval_result.get_future());
 
     size_t seed = absl::HashOf(time, thread_id);
     std::thread thread(PlayEvalGame, seed, thread_id, cur_nn_interface.get(),
                        cand_nn_interface.get(),
                        absl::StrFormat("/tmp/eval%d_log.txt", thread_id),
-                       std::move(winner), game_recorder.get(), cur_name,
-                       cand_name, cur_n, cur_k, cand_n, cand_k);
+                       std::move(eval_result), game_recorder.get(), config);
     threads.emplace_back(std::move(thread));
   }
 
@@ -147,18 +155,27 @@ int main(int argc, char** argv) {
   }
 
   int num_cand_won = 0;
-  for (auto& winner : winners) {
-    Winner res = winner.get();
-    num_cand_won += res == Winner::kCand ? 1 : 0;
+  int total_num_moves = 0;
+  for (auto& eval_result : eval_results) {
+    EvalResult res = eval_result.get();
+    Winner winner = res.winner;
+    num_cand_won += winner == Winner::kCand ? 1 : 0;
+    total_num_moves += res.num_moves;
   }
 
   float winrate =
       (static_cast<float>(num_cand_won) / static_cast<float>(num_games));
   float rel_elo = core::RelativeElo(winrate);
+  float c95 = ConfidenceDelta(1.96f, num_games, winrate);
+  float elo_c95 = core::RelativeElo(.5f + c95);
 
-  LOG(INFO) << "Cand won " << num_cand_won << " games of " << num_games
-            << " for " << winrate << " winrate and " << rel_elo
-            << " relative Elo.";
+  LOG(INFO) << "\n--- N, K ---\nCur N: " << cur_n << ", K: " << cur_k
+            << "\nCand N: " << cand_n << ", K: " << cand_k;
+  LOG(INFO) << "\n--- Elo, Winrate ---\nCand won " << num_cand_won
+            << " games of " << num_games << "\nWin Rate (p95): "
+            << absl::StrFormat("%.3f +- %.3f", winrate, c95)
+            << "\nRelative Elo (p95): "
+            << absl::StrFormat("%.3f +- %.3f", rel_elo, elo_c95);
 
   if (res_write_path != "") {
     FILE* const file = fopen(res_write_path.c_str(), "w");

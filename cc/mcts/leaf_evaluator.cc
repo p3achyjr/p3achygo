@@ -1,6 +1,7 @@
 #include "cc/mcts/leaf_evaluator.h"
 
 #include "absl/log/check.h"
+#include "cc/mcts/constants.h"
 
 namespace mcts {
 namespace {
@@ -8,16 +9,19 @@ using ::game::Color;
 using ::game::Game;
 using ::game::Loc;
 
-static constexpr float kScoreScale = .5;
-
-float ScoreTransform(float score_est, float root_score_est) {
-  return kScoreScale * M_2_PI *
-         std::atan((score_est - root_score_est) / BOARD_LEN);
+float ScoreTransform(float c_score, float score_est, float root_score_est) {
+  return c_score * M_2_PI * std::atan((score_est - root_score_est) / BOARD_LEN);
 }
 }  // namespace
 
 LeafEvaluator::LeafEvaluator(nn::NNInterface* nn_interface, int thread_id)
-    : nn_interface_(nn_interface), thread_id_(thread_id) {}
+    : LeafEvaluator(nn_interface, thread_id, kDefaultScoreWeight) {}
+
+LeafEvaluator::LeafEvaluator(nn::NNInterface* nn_interface, int thread_id,
+                             float score_weight)
+    : nn_interface_(nn_interface),
+      thread_id_(thread_id),
+      score_weight_(score_weight) {}
 
 void LeafEvaluator::EvaluateRoot(const Game& game, TreeNode* node,
                                  Color color_to_move) {
@@ -29,9 +33,33 @@ void LeafEvaluator::EvaluateRoot(const Game& game, TreeNode* node,
 void LeafEvaluator::EvaluateLeaf(const Game& game, TreeNode* node,
                                  Color color_to_move, float root_score_est) {
   InitTreeNode(node, game, color_to_move);
-  float score_utility = ScoreTransform(node->score_est, root_score_est);
+  float score_utility =
+      ScoreTransform(score_weight_, node->score_est, root_score_est);
 
   InitFields(node, score_utility);
+}
+
+void LeafEvaluator::EvaluateTerminal(const game::Scores& scores,
+                                     TreeNode* terminal_node,
+                                     game::Color color_to_move,
+                                     float root_score_estimate) {
+  float player_score =
+      color_to_move == BLACK ? scores.black_score : scores.white_score;
+  float opp_score =
+      color_to_move == BLACK ? scores.white_score : scores.black_score;
+  // float final_score =
+  //     player_score - opp_score + constants::kScoreInflectionPoint;
+  // float empirical_q =
+  //     (player_score > opp_score ? 1.0 : -1.0) +
+  //     ScoreTransform(final_score, root_score_est, BOARD_LEN);
+
+  // TODO: Experiment with this.
+  float empirical_q = player_score > opp_score ? kMaxQ : kMinQ;
+  float empirical_outcome = player_score > opp_score ? 1.0 : -1.0;
+
+  terminal_node->is_terminal = true;
+  terminal_node->q = empirical_q;
+  terminal_node->q_outcome = empirical_outcome;
 }
 
 void LeafEvaluator::InitTreeNode(TreeNode* node, const Game& game,

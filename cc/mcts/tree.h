@@ -6,6 +6,8 @@
 
 #include "cc/constants/constants.h"
 #include "cc/game/board.h"
+#include "cc/game/color.h"
+#include "cc/mcts/constants.h"
 
 namespace mcts {
 
@@ -21,7 +23,7 @@ struct TreeNode final {
 
   TreeNodeState state = TreeNodeState::kNew;
   bool is_terminal = false;
-  int color_to_move;
+  game::Color color_to_move;
 
   // change throughout search
   int n = 0;
@@ -50,7 +52,7 @@ inline float NAction(TreeNode* node, int action) {
 
 inline float Q(TreeNode* node) {
   // return minimum value if node is null (init-to-loss).
-  return node == nullptr ? -1.5 : node->q;
+  return node == nullptr ? kMinQ : node->q;
 }
 
 inline float QOutcome(TreeNode* node) {
@@ -61,7 +63,7 @@ inline float QOutcome(TreeNode* node) {
 inline float QAction(TreeNode* node, int action) {
   // remember to flip sign. In bare MCTS, this will also cause MCTS to make deep
   // reads.
-  return !node->children[action] ? -1.5 : -node->children[action]->q;
+  return !node->children[action] ? kMinQ : -node->children[action]->q;
 }
 
 inline float QOutcomeAction(TreeNode* node, int action) {

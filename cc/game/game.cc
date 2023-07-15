@@ -72,6 +72,4 @@ void Game::WriteResult() {
   }
 }
 
-void Game::SetWinner(Color winner) { result_.winner = winner; }
-
 }  // namespace game

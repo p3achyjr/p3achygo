@@ -39,6 +39,7 @@ def train_one_gen(model: P3achyGoModel,
 
   prev_weights = model.get_weights()
 
+  old_batch_num = batch_num
   batch_num = train.train(model,
                           ds,
                           EPOCHS_PER_GEN,
@@ -51,7 +52,9 @@ def train_one_gen(model: P3achyGoModel,
                           is_gpu=is_gpu,
                           batch_num=batch_num)
 
-  new_weights = model_utils.avg_weights(prev_weights, model.get_weights())
+  num_batches_in_chunk = batch_num - old_batch_num
+  new_weights = model_utils.avg_weights(prev_weights, model.get_weights(),
+                                        num_batches_in_chunk)
   model.set_weights(new_weights)
 
   logging.info(f'Running validation for new model...')

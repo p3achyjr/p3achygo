@@ -183,3 +183,46 @@ Other performance improvements are:
 - SSE Softmax implementation. This saves about ~25% CPU for MCTS.
 
 I _still_ need to get my stuff running on Kubernetes. Honestly I've been pushing this off since it just seems like the least interesting part. But by the end of this week, it should be there :)
+
+## 7-14-2023
+
+I ended up just renting an A100 on Lambda Labs. Dollar for dollar it seems to be a much better use of resources.
+
+I did some early runs and the results seemed to be promising--but it turns out that I was just doing evaluation incorrectly. Instead of playing against the current best model, I was just playing against the last model. Kind of sad, but maybe this is at least signal that the RL feedback loop works? I plan on testing the RL loop feedback loop on 9x9 games.
+
+I am doing some testing on MCTS hyperparameters to see what the best values of N, K are. It seems like my initial hypothesis that keeping K low was wrong :) I will also run some experiments to check the position diversity that low visit counts generate, as well as tests on Elo gain relative to N, given the optimal K value for each N. Maybe there is a rough closed-form formula we can use?
+
+Some other ideas:
+
+- Learning Rate Growth: We know we have a good model to begin with, so we do not want to destroy it. Also, with SWA, we compute an average of $0.75w_{old} + 0.25w_{new}$. However, the beginning chunks that we train on are very small, and probably just serve to introduce noise instead of leading to convergence (these early chunks often will not even span 100 mini-batches). Thus, we can gradually increase the learning rate to its full value, maybe based on the size of the chunk we receive.
+  - Alternatively, we can vary the SWA momentum based on the number of mini-batches. A simple way to do this is to scale it linearly based on the number of mini-batches in the chunk. We know that a full-sized chunk should contain 8000 mini-batches (in our formulation, this depends on the number of samples per game and could be between 6000 - 8000). We can scale the momentum via $m_{SWA_{new}} = 0.25 * max(1, \frac{\text{num\_batches}}{6000})$
+  - (Probably better) write down checkpoints every 1000 batches, instead of after every chunk. We can use the chunk number as a generation counter. Additionally, we can do a "model_0 bootstrap", where model_0 plays a large number of games before the shuffler creates a chunk for it. This prevents us from overdrawing games from the first generation, and will make it so that the first chunk should, in expectation, contain at least 1000 batches.
+    - To make this easier, we would probably have to rewrite the shuffler to output 1000 batches at a time. Maybe keeping it simple for now is fine (i.e. just do the model_0 bootstrap).
+- Entropy-weighted policy selection: instead of using a fixed probability for selecting nodes for training, weight the probability of selecting a node for training based on the entropy of the prior distribution. We could weight samples based on value estimation as well, but this could just lead to overfitting (i.e. the model overfits to give sharp value estimates )
+- Cache `N`, `v_mix` values for evaluated nodes, and use a weighted average of this estimate + the NN estimate for leaf nodes based on the number of visits used to calculate `v_mix`. This is kind of like subtree bias correction in Katago. I still need to flesh out how to accurately update these values throughout self-play. I am not sure if will introduce bias into training.
+- Policy surprise weighting. Same as Katago.
+- Some kind of quiescence search. Maybe better for test time than self-play training.
+- Reset `n` on each search? If we keep `n` values at each search, we already have some pre-defined idea of how good each node is. It will be hard to override this value if `n` is already high (should verify that `v_mix` behaves this way). If we reset `n` values, we keep the `q` values already found for each note, but reset the _weight_ that the existing `q` values give. Thus, we depend solely on the value observations for the _current_ search to find our observed `q` for the current node.
+  - The result of this would be to weight deeper nodes' value estimates higher than shallower nodes. Is this valid? I'm not sure. Deeper nodes lie closer to the end of the game, but may be noisier.
+  - Another way to incorporate this is to have `q` values from previous searches decay by some factor.
+- NN uncertainty estimation (estimate $\mu$, $\sigma$ for value targets). Still not sure how this would help, but it may increase position diversity. We could also have the MCTS planning change based on uncertainty, although this could also be detrimental (or maybe not? would the model just learn to avoid big fights and ladders?). With this, I'm not sure if caching `v_mix` would still work. Maybe we can cache $\mu_{v_{mix}}$, $\sigma_{v_{mix}}$.
+  - I also need to flesh out how to combine these values via MCTS. If we just do a running statistical average, this assumes that all subtree Q estimates are i.i.d, which of course they are not. Granted--the original MCTS algorithm does the same with the regular Q-values, so maybe this would not be an issue in practice.
+- NN Uncertainty Estimation and planning.
+  - If we do not predict $\mu_q$, $\sigma_q$ from the model, we can also have an empirical estimate $\sigma_{q_{MCTS}}$ gathered from the search. We can use Welford's algorithm to calculate this online.
+  - If we do predict $\mu_q$, $\sigma_q$, we can simply treat each value prediction from MCTS as a gaussian. Similar to AlphaZero, we will treat these as i.i.d reward estimates and keep the running average (of course they are not i.i.d but w/e).
+
+Other tests:
+- Check position diversity generated by low visit count MCTS.
+  - Update 7-15: This is essentially negligible, all values give ~2.5% shared root positions across 180 games. These shared root positions are likely at the beginning of games.
+- Check relative Elo for high visit counts, given the optimal K for each.
+  - MCTS starts to go blind above 192 visits. We are probably brushing up against the limits of our value function. Maybe deeper search nodes give noisier estimates, or non-root planning gives compounding errors deeper in the search tree.
+- Compare KL-div of completed Q-values at high visit counts compared to the true distribution (estimated by `Gumbel(10000, 64)`), and find the first-order peak. This is similar to https://github.com/leela-zero/leela-zero/issues/1416
+- Check whether playing according to completed-Q values is stronger than playing according to $A_{n+1}$ from gumbel.
+- Check Elo loss between base model and TRT converted model.
+- Introspect the training data to see, for each training example:
+  - The prior entropy of the position.
+  - The KL Divergence of the MCTS move relative to the prior.
+
+Other implementation
+- GTP Commands
+- Merge game-playing options

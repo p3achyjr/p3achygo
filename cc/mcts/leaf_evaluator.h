@@ -14,6 +14,8 @@ namespace mcts {
 class LeafEvaluator final {
  public:
   LeafEvaluator(nn::NNInterface* nn_interface, int thread_id);
+  LeafEvaluator(nn::NNInterface* nn_interface, int thread_id,
+                float score_weight);
   ~LeafEvaluator() = default;
 
   // Disable Copy and Move.
@@ -30,6 +32,10 @@ class LeafEvaluator final {
   void EvaluateLeaf(const game::Game& game, TreeNode* node,
                     game::Color color_to_move, float root_score_estimate);
 
+  // Populates a terminal node.
+  void EvaluateTerminal(const game::Scores& scores, TreeNode* terminal_node,
+                        game::Color color_to_move, float root_score_estimate);
+
   // Evaluates a leaf node using the neural net.
   void InitTreeNode(TreeNode* node, const game::Game& game,
                     game::Color color_to_move);
@@ -40,6 +46,7 @@ class LeafEvaluator final {
 
   nn::NNInterface* nn_interface_;
   int thread_id_;
+  const float score_weight_;
 };
 }  // namespace mcts
 

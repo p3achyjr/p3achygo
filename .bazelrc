@@ -9,7 +9,7 @@ build --enable_platform_specific_config
 build --verbose_failures=true
 build --genrule_strategy=local
 
-# build --action_env CC="/usr/bin/gcc-9"
+build --action_env CC="/usr/bin/gcc-9"
 
 # Linker toggle.
 # build --linkopt=-fuse-ld=lld

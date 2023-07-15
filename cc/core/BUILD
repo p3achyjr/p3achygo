@@ -9,6 +9,7 @@ cc_library(
         ":elo",
         ":file_log_sink",
         ":filepath",
+        ":lru_cache",
         ":probability",
         ":rand",
         ":ring_buffer",
@@ -99,6 +100,12 @@ cc_library(
         "doctest_include.h",
     ],
     deps = ["@doctest//doctest"],
+)
+
+cc_library(
+    name = "lru_cache",
+    hdrs = ["lru_cache.h"],
+    deps = ["@com_google_absl//absl/container:flat_hash_set"],
 )
 
 cc_library(

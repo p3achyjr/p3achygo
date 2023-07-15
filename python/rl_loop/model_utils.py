@@ -10,6 +10,7 @@ import trt_convert
 from pathlib import Path
 
 SWA_MOMENTUM = .75
+NUM_BATCHES_FULL_CHECKPOINT = 1000
 
 
 def new_model(name: str) -> P3achyGoModel:
@@ -20,9 +21,15 @@ def new_model(name: str) -> P3achyGoModel:
                               name=name)
 
 
-def avg_weights(prev_weights: list, cur_weights: list) -> list:
+def avg_weights(prev_weights: list, cur_weights: list,
+                num_batches_in_chunk: int) -> list:
+  chunk_ratio = min(1.0,
+                    float(num_batches_in_chunk) / NUM_BATCHES_FULL_CHECKPOINT)
+  m_swa_new = (1 - SWA_MOMENTUM) * chunk_ratio
+  swa_momentum = 1 - m_swa_new
+  print('SWA Momentum:', swa_momentum, 'Num Batches:', num_batches_in_chunk)
   return [
-      prev_layer_weights * SWA_MOMENTUM + layer_weights * (1 - SWA_MOMENTUM)
+      prev_layer_weights * swa_momentum + layer_weights * (1 - swa_momentum)
       for prev_layer_weights, layer_weights in zip(prev_weights, cur_weights)
   ]
 

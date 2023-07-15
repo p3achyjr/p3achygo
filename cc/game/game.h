@@ -55,7 +55,8 @@ class Game final {
 
   Scores GetScores();
   void WriteResult();
-  void SetWinner(Color winner);
+  void SetWinner(Color winner) { result_.winner = winner; }
+  void SetDidResign(bool did_resign) { result_.by_resign = true; }
 
  private:
   Board board_;

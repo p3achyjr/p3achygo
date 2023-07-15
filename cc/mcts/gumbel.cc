@@ -296,23 +296,8 @@ GumbelEvaluator::SearchNonRoot(Game& game, TreeNode* root, TreeNode* node,
   if (game.IsGameOver() && !leaf_node->is_terminal) {
     // evaluate score
     game::Scores scores = game.GetScores();
-    float player_score =
-        color_to_move == BLACK ? scores.black_score : scores.white_score;
-    float opp_score =
-        color_to_move == BLACK ? scores.white_score : scores.black_score;
-    // float final_score =
-    //     player_score - opp_score + constants::kScoreInflectionPoint;
-    // float empirical_q =
-    //     (player_score > opp_score ? 1.0 : -1.0) +
-    //     ScoreTransform(final_score, root_score_est, BOARD_LEN);
-
-    // TODO: Experiment with this.
-    float empirical_q = player_score > opp_score ? 1.5 : -1.5;
-    float empirical_outcome = player_score > opp_score ? 1.0 : -1.0;
-
-    leaf_node->is_terminal = true;
-    leaf_node->q = empirical_q;
-    leaf_node->q_outcome = empirical_outcome;
+    leaf_evaluator_.EvaluateTerminal(scores, leaf_node, color_to_move,
+                                     root_score_est);
   }
 
   return path;

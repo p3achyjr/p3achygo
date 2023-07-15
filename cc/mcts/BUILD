@@ -3,6 +3,12 @@ load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 package(default_visibility = ["//visibility:public"])
 
 cc_library(
+    name = "position_cache",
+    hdrs = ["position_cache.h"],
+    deps = ["//cc/core:lru_cache"],
+)
+
+cc_library(
     name = "gumbel",
     srcs = ["gumbel.cc"],
     hdrs = ["gumbel.h"],
@@ -40,6 +46,11 @@ cc_test(
 )
 
 cc_library(
+    name = "mcts_constants",
+    hdrs = ["constants.h"],
+)
+
+cc_library(
     name = "leaf_evaluator",
     srcs = select({
         "//cc:test": ["leaf_evaluator_dummy.cc"],
@@ -47,6 +58,7 @@ cc_library(
     }),
     hdrs = ["leaf_evaluator.h"],
     deps = [
+        ":mcts_constants",
         ":tree",
         "//cc/game",
         "//cc/nn:nn_interface",
@@ -59,6 +71,7 @@ cc_library(
     srcs = ["tree.cc"],
     hdrs = ["tree.h"],
     deps = [
+        ":mcts_constants",
         "//cc/constants",
         "//cc/game",
     ],
