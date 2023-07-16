@@ -1,5 +1,5 @@
-#ifndef __EVAL_EVAL_H_
-#define __EVAL_EVAL_H_
+#ifndef EVAL_EVAL_H_
+#define EVAL_EVAL_H_
 
 #include <future>
 #include <optional>
@@ -35,4 +35,4 @@ void PlayEvalGame(size_t seed, int thread_id, nn::NNInterface* cur_nn,
                   std::promise<EvalResult> result,
                   recorder::GameRecorder* recorder, EvalConfig config);
 
-#endif  // __EVAL_EVAL_H_
+#endif  // EVAL_EVAL_H_

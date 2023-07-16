@@ -1,5 +1,5 @@
-#ifndef __NN_SHAPE_H_
-#define __NN_SHAPE_H_
+#ifndef NN_CREATE_TENSOR_SHAPE_H_
+#define NN_CREATE_TENSOR_SHAPE_H_
 
 #include "tensorflow/core/framework/tensor_shape.h"
 

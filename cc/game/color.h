@@ -1,5 +1,5 @@
-#ifndef __GAME_COLOR_H_
-#define __GAME_COLOR_H_
+#ifndef GAME_COLOR_H_
+#define GAME_COLOR_H_
 
 #include <cstdint>
 #include <iostream>

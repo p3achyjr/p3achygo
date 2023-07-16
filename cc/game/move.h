@@ -1,5 +1,5 @@
-#ifndef __GAME_MOVE_H_
-#define __GAME_MOVE_H_
+#ifndef GAME_MOVE_H_
+#define GAME_MOVE_H_
 
 #include "absl/hash/hash.h"
 #include "cc/constants/constants.h"

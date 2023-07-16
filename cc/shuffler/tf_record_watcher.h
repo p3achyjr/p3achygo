@@ -1,5 +1,5 @@
-#ifndef __SHUFFLER_TF_RECORD_WATCHER_H_
-#define __SHUFFLER_TF_RECORD_WATCHER_H_
+#ifndef SHUFFLER_TF_RECORD_WATCHER_H_
+#define SHUFFLER_TF_RECORD_WATCHER_H_
 
 #include <string>
 #include <vector>

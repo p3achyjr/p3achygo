@@ -89,11 +89,11 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
 
     // Pre-search statistics.
     float cur_n_pre = N(cur_tree.get());
-    float cur_q_pre = Q(cur_tree.get());
-    float cur_q_outcome_pre = QOutcome(cur_tree.get());
+    float cur_q_pre = V(cur_tree.get());
+    float cur_q_outcome_pre = VOutcome(cur_tree.get());
     float cand_n_pre = N(cand_tree.get());
-    float cand_q_pre = Q(cand_tree.get());
-    float cand_q_outcome_pre = QOutcome(cand_tree.get());
+    float cand_q_pre = V(cand_tree.get());
+    float cand_q_outcome_pre = VOutcome(cand_tree.get());
 
     // Search.
     int n = color_to_move == BLACK ? n_b : n_w;
@@ -102,25 +102,25 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
     GumbelResult gumbel_res = gumbel.SearchRoot(
         probability, game, player_tree.get(), color_to_move, n, k);
     auto end = std::chrono::high_resolution_clock::now();
-    if (QOutcome(player_tree.get()) < kResignThreshold) {
+    if (VOutcome(player_tree.get()) < kResignThreshold) {
       LOG_TO_SINK(INFO, sink)
           << "Player " << ToString(color_to_move)
-          << " Resigned. Qz: " << QOutcome(player_tree.get());
+          << " Resigned. Qz: " << VOutcome(player_tree.get());
       player_resigned = color_to_move;
       break;
     }
 
     // Post-search statistics.
     float cur_n_post = N(cur_tree.get());
-    float cur_q_post = Q(cur_tree.get());
-    float cur_q_outcome_post = QOutcome(cur_tree.get());
+    float cur_q_post = V(cur_tree.get());
+    float cur_q_outcome_post = VOutcome(cur_tree.get());
     float cand_n_post = N(cand_tree.get());
-    float cand_q_post = Q(cand_tree.get());
-    float cand_q_outcome_post = QOutcome(cand_tree.get());
+    float cand_q_post = V(cand_tree.get());
+    float cand_q_outcome_post = VOutcome(cand_tree.get());
 
     // Commit move changes.
     Loc move = gumbel_res.mcts_move;
-    float move_q = QAction(player_tree.get(), move);
+    float move_q = Q(player_tree.get(), move);
     game.PlayMove(move, color_to_move);
     color_to_move = OppositeColor(color_to_move);
 

@@ -32,7 +32,7 @@ void BuildMctsTree(TreeNode* node, int child_index, Color color_to_move,
   node->score_est = 0.0;
 
   node->w = q;
-  node->q = node->w;
+  node->v = node->w;
   node->init_util_est = node->w;
 
   for (int i = 0; i < kGumbelK; ++i) {

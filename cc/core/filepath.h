@@ -1,5 +1,5 @@
-#ifndef __CORE_FILEPATH_H_
-#define __CORE_FILEPATH_H_
+#ifndef CORE_FILEPATH_H_
+#define CORE_FILEPATH_H_
 
 #include <string>
 

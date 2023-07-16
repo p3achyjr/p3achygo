@@ -1,5 +1,5 @@
-#ifndef __MCTS_GUMBEL_H_
-#define __MCTS_GUMBEL_H_
+#ifndef MCTS_GUMBEL_H_
+#define MCTS_GUMBEL_H_
 
 #include "cc/core/probability.h"
 #include "cc/game/color.h"

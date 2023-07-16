@@ -1,5 +1,5 @@
-#ifndef __NN_INTERFACE_H_
-#define __NN_INTERFACE_H_
+#ifndef NN_INTERFACE_H_
+#define NN_INTERFACE_H_
 
 #include <atomic>
 #include <chrono>

@@ -1,5 +1,5 @@
-#ifndef __SGF_SGF_TREE_H__
-#define __SGF_SGF_TREE_H__
+#ifndef SGF_SGF_TREE_H__
+#define SGF_SGF_TREE_H__
 
 #include <string>
 

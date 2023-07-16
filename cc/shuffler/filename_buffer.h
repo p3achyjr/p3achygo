@@ -1,5 +1,5 @@
-#ifndef __SHUFFLER_FILENAME_BUFFER_H_
-#define __SHUFFLER_FILENAME_BUFFER_H_
+#ifndef SHUFFLER_FILENAME_BUFFER_H_
+#define SHUFFLER_FILENAME_BUFFER_H_
 
 #include <deque>
 #include <optional>

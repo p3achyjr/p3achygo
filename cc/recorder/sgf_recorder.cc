@@ -55,7 +55,7 @@ void PopulateTree(SgfNode* sgf_node, TreeNode* node, Color color) {
   std::string comment_string = absl::StrFormat(
       "Root Color: %s, N: %d, Q: %f, Q_z: %f, nn_outcome_est: %f, "
       "nn_score_est: %f",
-      color == BLACK ? "B" : "W", node->n, node->q, node->q_outcome,
+      color == BLACK ? "B" : "W", node->n, node->v, node->v_outcome,
       node->outcome_est, node->score_est);
 
   sgf_node->AddProperty(std::make_unique<SgfCommentProp>(comment_string));

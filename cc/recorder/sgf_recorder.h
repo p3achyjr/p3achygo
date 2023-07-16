@@ -1,5 +1,5 @@
-#ifndef __RECORDER_SGF_RECORDER_H_
-#define __RECORDER_SGF_RECORDER_H_
+#ifndef RECORDER_SGF_RECORDER_H_
+#define RECORDER_SGF_RECORDER_H_
 
 #include <memory>
 #include <string>

@@ -203,20 +203,24 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
           return 0.0f;
         }
 
-        // Use win percentage, downweight roots with very low winrate.
         if (!root_node) {
           return kMoveSelectedForTrainingProb;
         }
 
-        float root_q = QOutcome(root_node.get());
+        float root_q = VOutcome(root_node.get());
         if (root_q > kDownBadThreshold && root_q < -kDownBadThreshold) {
           // Do not anneal probability.
           return kMoveSelectedForTrainingProb;
         }
 
-        // Anneal probability linearly.
-        float penalty = 1.0f - std::abs(root_q);
-        float p = penalty * kMoveSelectedForTrainingProb;
+        // max distance to min/max v.
+        float max_delta = 1.0f - std::abs(kDownBadThreshold);
+        // how close we are to min/max v (closer should be penalized more).
+        float delta = 1.0f - std::abs(root_q);
+        // how close we are to min/max v, relative to max_delta.
+        float penalty = delta / max_delta;
+        // Anneal probability quadratically.
+        float p = penalty * penalty * kMoveSelectedForTrainingProb;
 
         return p;
       }();
@@ -244,8 +248,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
       // Pre Search Stats.
       int n_pre = N(root_node.get());
-      float q_pre = Q(root_node.get());
-      float qz_pre = QOutcome(root_node.get());
+      float q_pre = V(root_node.get());
+      float qz_pre = VOutcome(root_node.get());
 
       // Run and Profile Search.
       auto begin = std::chrono::high_resolution_clock::now();
@@ -256,19 +260,19 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
       // Post Search Statstics.
       int n_post = N(root_node.get());
-      float q_post = Q(root_node.get());
-      float root_q_outcome = QOutcome(root_node.get());
+      float q_post = V(root_node.get());
+      float root_q_outcome = VOutcome(root_node.get());
 
       Loc nn_move = gumbel_res.nn_move;
       Loc move = gumbel_res.mcts_move;
 
       int nn_move_n = NAction(root_node.get(), nn_move);
-      float nn_move_q = QAction(root_node.get(), nn_move);
-      float nn_move_qz = QOutcomeAction(root_node.get(), nn_move);
+      float nn_move_q = Q(root_node.get(), nn_move);
+      float nn_move_qz = QOutcome(root_node.get(), nn_move);
 
       int move_n = NAction(root_node.get(), move);
-      float move_q = QAction(root_node.get(), move);
-      float move_qz = QOutcomeAction(root_node.get(), move);
+      float move_q = Q(root_node.get(), move);
+      float move_qz = QOutcome(root_node.get(), move);
 
       // Update tracking data structures.
       mcts_pis.push_back(gumbel_res.pi_improved);
@@ -308,23 +312,25 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
       // Add to seen state buffer.
       float add_init_state_prob = [](float root_q) {
-        // Adds states with sharper Q values with lower probability, with a
-        // penalty of 1 - max(0, |Q| - .5)/.5)
-        static constexpr float kDecayThreshold = .5;
-        static constexpr float kMaxDiff = 1 - kDecayThreshold;
+        // Adds states with sharper V values with lower probability. According
+        // to these rules:
+        // - Any |V| > 0.9 is added with probability 0.
+        // - Any V where 0.5 < |V| <= 0.9 is penalized linearly, according to
+        // the formula
+        //   (0.9 - |V|) / 0.4
+        static constexpr float kMaxVToAdd = 0.9;
+        static constexpr float kMinVToAnneal = 0.5;
 
-        float base_probability = kAddSeenStateProb;
+        if (std::abs(root_q) > kMaxVToAdd) {
+          return 0.0f;
+        }
 
-        float root_q_normalized = root_q < 0 ? -root_q : root_q;
-        float diff = std::max(0.0f, root_q_normalized - kDecayThreshold);
-
-        // linear decay.
-        float penalty = diff / kMaxDiff;
-        float scaling = 1 - penalty;
-        float p = base_probability * scaling;
-
+        float penalty =
+            (kMaxVToAdd - std::abs(root_q)) / (kMaxVToAdd - kMinVToAnneal);
+        float p = penalty * kAddSeenStateProb;
         return p;
       }(root_q_outcome);
+
       if (probability.Uniform() < add_init_state_prob) {
         AddNewInitState(go_exploit_buffer, game, color_to_move);
       }
@@ -361,7 +367,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
           << game.move(game.num_moves() - 1) << "\n";
         s << "Next Root Visits: " << root_node->n
           << " Player to Move: " << ToString(root_node->color_to_move)
-          << " Value: " << root_node->q << " Outcome: " << root_node->q_outcome
+          << " Value: " << root_node->v << " Outcome: " << root_node->v_outcome
           << "\n";
         s << "Board:\n" << game.board() << "\n";
         s << "Search Took " << search_dur

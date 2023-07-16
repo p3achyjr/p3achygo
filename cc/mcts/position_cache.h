@@ -1,5 +1,5 @@
-#ifndef CC_MCTS_GLOBAL_TTABLE_H
-#define CC_MCTS_GLOBAL_TTABLE_H
+#ifndef MCTS_GLOBAL_TTABLE_H
+#define MCTS_GLOBAL_TTABLE_H
 
 #include "absl/synchronization/mutex.h"
 #include "cc/core/lru_cache.h"

@@ -1,5 +1,5 @@
-#ifndef __GAME_BOARD_H_
-#define __GAME_BOARD_H_
+#ifndef GAME_BOARD_H_
+#define GAME_BOARD_H_
 
 #include <iostream>
 #include <optional>
@@ -439,4 +439,4 @@ inline std::ostream& operator<<(std::ostream& os, const Board& board) {
 
 }  // namespace game
 
-#endif  // __GAME_BOARD_H_
+#endif  // GAME_BOARD_H_

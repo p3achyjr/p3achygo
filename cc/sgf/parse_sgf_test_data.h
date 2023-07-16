@@ -1,5 +1,5 @@
-#ifndef __SGF_PARSE_SGF_DATA_H_
-#define __SGF_PARSE_SGF_DATA_H_
+#ifndef SGF_PARSE_SGF_DATA_H_
+#define SGF_PARSE_SGF_DATA_H_
 
 namespace sgf {
 

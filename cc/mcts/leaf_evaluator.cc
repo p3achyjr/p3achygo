@@ -58,8 +58,8 @@ void LeafEvaluator::EvaluateTerminal(const game::Scores& scores,
   float empirical_outcome = player_score > opp_score ? 1.0 : -1.0;
 
   terminal_node->is_terminal = true;
-  terminal_node->q = empirical_q;
-  terminal_node->q_outcome = empirical_outcome;
+  terminal_node->v = empirical_q;
+  terminal_node->v_outcome = empirical_outcome;
 }
 
 void LeafEvaluator::InitTreeNode(TreeNode* node, const Game& game,
@@ -93,8 +93,8 @@ inline void LeafEvaluator::InitFields(TreeNode* node, float score_utility) {
   node->n = 1;
   node->w = node->outcome_est + score_utility;
   node->w_outcome = node->outcome_est;
-  node->q = node->w;
-  node->q_outcome = node->w_outcome;
+  node->v = node->w;
+  node->v_outcome = node->w_outcome;
   node->init_util_est = node->w;
 }
 }  // namespace mcts

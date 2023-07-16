@@ -1,5 +1,5 @@
-#ifndef __NN_BOARD_UTILS_H_
-#define __NN_BOARD_UTILS_H_
+#ifndef NN_BOARD_UTILS_H_
+#define NN_BOARD_UTILS_H_
 
 #include <string>
 #include <vector>
@@ -26,4 +26,4 @@ void FillNNInput(int batch_id, int batch_size,
 }  // namespace board_utils
 }  // namespace nn
 
-#endif  // __NN_BOARD_UTILS_H_
+#endif  // NN_BOARD_UTILS_H_

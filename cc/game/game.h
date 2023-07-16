@@ -1,5 +1,5 @@
-#ifndef __GAME_GAME_H_
-#define __GAME_GAME_H_
+#ifndef GAME_GAME_H_
+#define GAME_GAME_H_
 
 #include "absl/container/inlined_vector.h"
 #include "cc/constants/constants.h"

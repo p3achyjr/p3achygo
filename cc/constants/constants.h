@@ -1,5 +1,5 @@
-#ifndef __CONSTANTS_CONSTANTS_H_
-#define __CONSTANTS_CONSTANTS_H_
+#ifndef CONSTANTS_CONSTANTS_H_
+#define CONSTANTS_CONSTANTS_H_
 
 #include <cstddef>
 
@@ -75,4 +75,4 @@ static constexpr int kGoExploitBufferSize = 8192;
 
 }  // namespace constants
 
-#endif  // __CONSTANTS_CONSTANTS_H_
+#endif  // CONSTANTS_CONSTANTS_H_

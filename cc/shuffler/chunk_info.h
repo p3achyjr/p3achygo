@@ -1,5 +1,5 @@
-#ifndef __SHUFFLER_CHUNK_INFO_H_
-#define __SHUFFLER_CHUNK_INFO_H_
+#ifndef SHUFFLER_CHUNK_INFO_H_
+#define SHUFFLER_CHUNK_INFO_H_
 
 #include <optional>
 #include <string>

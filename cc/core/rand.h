@@ -1,5 +1,5 @@
-#ifndef __CORE_RAND_H_
-#define __CORE_RAND_H_
+#ifndef CORE_RAND_H_
+#define CORE_RAND_H_
 
 #include <cstdint>
 
@@ -53,4 +53,4 @@ int RandRange(PRng& rng, int lo, int hi);
 
 }  // namespace core
 
-#endif  // __CORE_RAND_H_
+#endif  // CORE_RAND_H_

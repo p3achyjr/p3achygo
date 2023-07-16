@@ -1,5 +1,5 @@
-#ifndef __SGF_SGF_SERIALIZER_H_
-#define __SGF_SGF_SERIALIZER_H_
+#ifndef SGF_SGF_SERIALIZER_H_
+#define SGF_SGF_SERIALIZER_H_
 
 #include "cc/sgf/sgf_tree.h"
 #include "cc/sgf/sgf_visitor.h"

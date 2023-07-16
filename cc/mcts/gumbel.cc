@@ -66,7 +66,7 @@ float VMixed(TreeNode* node) {
   double visited_prob = 0;
   for (int action = 0; action < constants::kMaxNumMoves; ++action) {
     if (NAction(node, action) > 0) {
-      weighted_visited_q += (node->move_probs[action] * QAction(node, action));
+      weighted_visited_q += (node->move_probs[action] * Q(node, action));
       visited_prob += node->move_probs[action];
     }
   }
@@ -100,8 +100,7 @@ std::array<float, constants::kMaxNumMoves> ComputeImprovedPolicy(
   for (int action = 0; action < constants::kMaxNumMoves; ++action) {
     logits_improved[action] =
         node->move_logits[action] +
-        QTransform(NAction(node, action) > 0 ? QAction(node, action) : v_mix,
-                   max_n);
+        QTransform(NAction(node, action) > 0 ? Q(node, action) : v_mix, max_n);
   }
 
   return core::SoftmaxV(logits_improved);
@@ -117,7 +116,7 @@ std::array<float, constants::kMaxNumMoves> ComputeRootImprovedPolicy(
   for (int action = 0; action < constants::kMaxNumMoves; ++action) {
     if (core::InlinedVecContains(visited_actions, action)) {
       logits_improved[action] =
-          node->move_logits[action] + QTransform(QAction(node, action), max_n);
+          node->move_logits[action] + QTransform(Q(node, action), max_n);
     } else {
       logits_improved[action] =
           node->move_logits[action] + QTransform(v_mix, max_n);
@@ -217,7 +216,7 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
       }
 
       // update qvalue
-      auto child_q = -Q(child);
+      auto child_q = -V(child);
       move_info.qtransform = QTransform(child_q, MaxN(root));
     }
 
@@ -316,8 +315,8 @@ void GumbelEvaluator::EvaluateLeaf(const Game& game, TreeNode* node,
 void GumbelEvaluator::Backward(
     absl::InlinedVector<TreeNode*, kMaxPathLenEst>& path) {
   TreeNode* leaf = path.back();
-  float leaf_q = leaf->q;
-  float leaf_q_outcome = leaf->q_outcome;
+  float leaf_q = leaf->v;
+  float leaf_q_outcome = leaf->v_outcome;
 
   for (int i = path.size() - 2; i >= 0; --i) {
     TreeNode* parent = path[i];
@@ -325,8 +324,8 @@ void GumbelEvaluator::Backward(
     parent->n += 1;
     parent->w += -leaf_q;
     parent->w_outcome += -leaf_q_outcome;
-    parent->q = parent->w / parent->n;
-    parent->q_outcome = parent->w_outcome / parent->n;
+    parent->v = parent->w / parent->n;
+    parent->v_outcome = parent->w_outcome / parent->n;
     if (child->n > parent->max_child_n) {
       parent->max_child_n = child->n;
     }

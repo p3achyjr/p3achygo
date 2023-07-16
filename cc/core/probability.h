@@ -1,5 +1,5 @@
-#ifndef __CORE_PROBABILITY_H_
-#define __CORE_PROBABILITY_H_
+#ifndef CORE_PROBABILITY_H_
+#define CORE_PROBABILITY_H_
 
 #include "cc/core/rand.h"
 
@@ -33,4 +33,4 @@ class Probability final {
 
 }  // namespace core
 
-#endif  // __CORE_PROBABILITY_H_
+#endif  // CORE_PROBABILITY_H_

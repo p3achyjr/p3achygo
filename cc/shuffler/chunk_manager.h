@@ -1,5 +1,5 @@
-#ifndef __SHUFFLER_CHUNK_MANAGER_H_
-#define __SHUFFLER_CHUNK_MANAGER_H_
+#ifndef SHUFFLER_CHUNK_MANAGER_H_
+#define SHUFFLER_CHUNK_MANAGER_H_
 
 #include <atomic>
 #include <deque>

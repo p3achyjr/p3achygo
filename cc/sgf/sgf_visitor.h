@@ -1,5 +1,5 @@
-#ifndef __SGF_SGF_VISITOR_H_
-#define __SGF_SGF_VISITOR_H_
+#ifndef SGF_SGF_VISITOR_H_
+#define SGF_SGF_VISITOR_H_
 
 namespace sgf {
 class SgfSizeProp;

@@ -1,5 +1,5 @@
-#ifndef __RECORDER_GAME_RECORDER_H_
-#define __RECORDER_GAME_RECORDER_H_
+#ifndef RECORDER_GAME_RECORDER_H_
+#define RECORDER_GAME_RECORDER_H_
 
 #include <string>
 

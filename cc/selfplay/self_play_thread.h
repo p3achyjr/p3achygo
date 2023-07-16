@@ -1,5 +1,5 @@
-#ifndef __SELF_PLAY_THREAD_H_
-#define __SELF_PLAY_THREAD_H_
+#ifndef SELF_PLAY_THREAD_H_
+#define SELF_PLAY_THREAD_H_
 
 #include "cc/nn/nn_interface.h"
 #include "cc/recorder/game_recorder.h"

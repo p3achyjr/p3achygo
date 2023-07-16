@@ -1,5 +1,5 @@
-#ifndef __SHUFFLER_CONSTANTS_H_
-#define __SHUFFLER_CONSTANTS_H_
+#ifndef SHUFFLER_CONSTANTS_H_
+#define SHUFFLER_CONSTANTS_H_
 
 namespace shuffler {
 // keep in sync with python/shuffler/shuffle.py

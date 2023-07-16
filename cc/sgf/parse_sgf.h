@@ -1,5 +1,5 @@
-#ifndef __SGF_PARSE_SGF_H_
-#define __SGF_PARSE_SGF_H_
+#ifndef SGF_PARSE_SGF_H_
+#define SGF_PARSE_SGF_H_
 
 #include <memory>
 #include <string>

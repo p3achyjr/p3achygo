@@ -1,5 +1,5 @@
-#ifndef __MCTS_TREE_H_
-#define __MCTS_TREE_H_
+#ifndef MCTS_TREE_H_
+#define MCTS_TREE_H_
 
 #include <cstddef>
 #include <memory>
@@ -28,10 +28,10 @@ struct TreeNode final {
   // change throughout search
   int n = 0;
   float w = 0;
-  float q = 0;
+  float v = 0;
 
   float w_outcome = 0;
-  float q_outcome = 0;
+  float v_outcome = 0;
 
   int max_child_n = 0;
 
@@ -50,26 +50,26 @@ inline float NAction(TreeNode* node, int action) {
   return N(node->children[action].get());
 }
 
-inline float Q(TreeNode* node) {
+inline float V(TreeNode* node) {
   // return minimum value if node is null (init-to-loss).
-  return node == nullptr ? kMinQ : node->q;
+  return node == nullptr ? kMinQ : node->v;
 }
 
-inline float QOutcome(TreeNode* node) {
+inline float VOutcome(TreeNode* node) {
   // return minimum value if node is null (init-to-loss).
-  return node == nullptr ? -1.0 : node->q_outcome;
+  return node == nullptr ? -1.0 : node->v_outcome;
 }
 
-inline float QAction(TreeNode* node, int action) {
+inline float Q(TreeNode* node, int action) {
   // remember to flip sign. In bare MCTS, this will also cause MCTS to make deep
   // reads.
-  return !node->children[action] ? kMinQ : -node->children[action]->q;
+  return !node->children[action] ? kMinQ : -node->children[action]->v;
 }
 
-inline float QOutcomeAction(TreeNode* node, int action) {
+inline float QOutcome(TreeNode* node, int action) {
   // remember to flip sign. In bare MCTS, this will also cause MCTS to make deep
   // reads.
-  return !node->children[action] ? -1.0 : -node->children[action]->q_outcome;
+  return !node->children[action] ? -1.0 : -node->children[action]->v_outcome;
 }
 
 inline float MaxN(TreeNode* node) {
@@ -88,4 +88,4 @@ void AdvanceState(TreeNode* node);
 
 }  // namespace mcts
 
-#endif  // __MCTS_TREE_H_
+#endif  // MCTS_TREE_H_
