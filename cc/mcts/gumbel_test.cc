@@ -28,7 +28,7 @@ void BuildMctsTree(TreeNode* node, int child_index, Color color_to_move,
 
   float q_mult = color_to_move == BLACK ? 1.0 : -1.0;
   float q = child_index == -1 ? 0 : q_mult * (-0.5 + child_index * (1.0 / 3.0));
-  node->value_est = q;
+  node->outcome_est = q;
   node->score_est = 0.0;
 
   node->w = q;
@@ -100,12 +100,12 @@ TEST_CASE("GumbelTest") {
   float expected_root_q =
       (q0 + q1 + 3 * q2 + 3 * q3) / static_cast<float>(expected_root_n);
 
-  CHECK(root_node->q == doctest::Approx(expected_root_q));
+  CHECK(root_node->v == doctest::Approx(expected_root_q));
 
   // Flip q-values because these are from the perspective of the opponent.
-  CHECK(-root_node->children[0]->q == doctest::Approx(q0));
-  CHECK(-root_node->children[1]->q == doctest::Approx(q1));
-  CHECK(-root_node->children[2]->q == doctest::Approx(q2));
-  CHECK(-root_node->children[3]->q == doctest::Approx(q3));
+  CHECK(-root_node->children[0]->v == doctest::Approx(q0));
+  CHECK(-root_node->children[1]->v == doctest::Approx(q1));
+  CHECK(-root_node->children[2]->v == doctest::Approx(q2));
+  CHECK(-root_node->children[3]->v == doctest::Approx(q3));
 }
 }  // namespace mcts

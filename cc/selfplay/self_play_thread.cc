@@ -169,8 +169,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     std::vector<uint8_t> move_trainables;
 
     // Number of consecutive moves at which we are beneath kDownBadThreshold.
-    int num_consecutive_down_bad_moves_b = 0;
-    int num_consecutive_down_bad_moves_w = 0;
+    int num_consecutive_down_bad_moves = 0;
 
     // Whether to log full MCTS search trees.
     bool log_mcts_trees = probability.Uniform() < kLogFullTreeProb;
@@ -196,8 +195,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       // Choose n, k = kDownBadParams if we are down bad.
       bool sampling_raw_policy = game.num_moves() <= num_moves_raw_policy;
       bool is_either_down_bad =
-          num_consecutive_down_bad_moves_b >= kNumDownBadMovesThreshold ||
-          num_consecutive_down_bad_moves_w >= kNumDownBadMovesThreshold;
+          num_consecutive_down_bad_moves >= kNumDownBadMovesThreshold;
       float select_move_prob = [sampling_raw_policy, &root_node]() {
         if (sampling_raw_policy) {
           return 0.0f;
@@ -278,13 +276,10 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       mcts_pis.push_back(gumbel_res.pi_improved);
       move_trainables.push_back(is_move_selected_for_training);
       root_q_outcomes.push_back(root_q_outcome);
-      int& consecutive_db_moves = color_to_move == BLACK
-                                      ? num_consecutive_down_bad_moves_b
-                                      : num_consecutive_down_bad_moves_w;
-      if (root_q_outcome < kDownBadThreshold) {
-        ++consecutive_db_moves;
+      if (-std::abs(root_q_outcome) < kDownBadThreshold) {
+        ++num_consecutive_down_bad_moves;
       } else {
-        consecutive_db_moves = 0;
+        num_consecutive_down_bad_moves = 0;
       }
 
       // Need to store this temporarily so we do not accidentally invoke the
