@@ -47,12 +47,6 @@ static constexpr float kOpeningExploreProb = .95f;
 // Thresholds at which to compute pass-alive regions.
 static constexpr int kComputePAMoveNums[] = {175, 200, 250, 300, 350, 400};
 
-// Threshold below which all positions should be trained on.
-static constexpr int kTrainableMoveLb = 250;
-
-// Threshold above which all positions are trained on with minimum probability.
-static constexpr int kTrainableMoveUb = 400;
-
 // Low train probability.
 static constexpr float kLowTrainProb = .25;
 
@@ -196,32 +190,72 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       bool sampling_raw_policy = game.num_moves() <= num_moves_raw_policy;
       bool is_either_down_bad =
           num_consecutive_down_bad_moves >= kNumDownBadMovesThreshold;
-      float select_move_prob = [sampling_raw_policy, &root_node]() {
-        if (sampling_raw_policy) {
-          return 0.0f;
-        }
 
+      // How down bad our root q is, from [0, 1]. 0 is max, 1 is min (i.e.)
+      // down_bad_coeff(-1) = 0, down_bad_coeff(|q| < .9) = 0.
+      float down_bad_coeff = [&root_node]() {
         if (!root_node) {
-          return kMoveSelectedForTrainingProb;
+          return 1.0f;
         }
 
-        float root_q = VOutcome(root_node.get());
-        if (root_q > kDownBadThreshold && root_q < -kDownBadThreshold) {
-          // Do not anneal probability.
-          return kMoveSelectedForTrainingProb;
+        float root_v = VOutcome(root_node.get());
+        if (root_v > kDownBadThreshold && root_v < -kDownBadThreshold) {
+          // We are not down bad.
+          return 1.0f;
         }
 
         // max distance to min/max v.
         float max_delta = 1.0f - std::abs(kDownBadThreshold);
         // how close we are to min/max v (closer should be penalized more).
-        float delta = 1.0f - std::abs(root_q);
-        // how close we are to min/max v, relative to max_delta.
-        float penalty = delta / max_delta;
+        float delta = 1.0f - std::abs(root_v);
+        float down_bad_coeff = delta / max_delta;
+
+        return down_bad_coeff;
+      }();
+
+      // Probability of selecting a move for training.
+      // If we are not down bad, this is a base probability of
+      // `kMoveSelectedForTrainingProb`. If we are down bad, then we anneal our
+      // selection probability by down_bad_coeff^2. So if V(root) = -.95,
+      // down_bad_coeff = .5, and our probability is annealed by .5 * .5 = .25.
+      float select_move_prob = [sampling_raw_policy, is_either_down_bad,
+                                down_bad_coeff]() {
+        if (sampling_raw_policy) {
+          return 0.0f;
+        }
+
+        if (!is_either_down_bad) {
+          // Do not anneal probability.
+          return kMoveSelectedForTrainingProb;
+        }
+
         // Anneal probability quadratically.
-        float p = penalty * penalty * kMoveSelectedForTrainingProb;
+        float p =
+            down_bad_coeff * down_bad_coeff * kMoveSelectedForTrainingProb;
 
         return p;
       }();
+
+      // Visit count cap for trainable moves. If we are not down bad, then we
+      // return the default. Otherwise, we anneal according to n =
+      // (1 - down_bad_coeff) * default_n + down_bad_coeff * default_n. We
+      // anneal k linearly according to where n falls on the scale [default_n,
+      // training_n].
+      GumbelParams trainable_gumbel_params =
+          [&default_gumbel_params, is_either_down_bad, down_bad_coeff]() {
+            if (!is_either_down_bad) {
+              // return defaults.
+              return kSelectedForTrainingParams;
+            }
+
+            int n = (1.0f - down_bad_coeff) * default_gumbel_params.n +
+                    down_bad_coeff * kSelectedForTrainingParams.n;
+            int k = std::round((n - default_gumbel_params.n) /
+                               static_cast<float>(kSelectedForTrainingParams.n -
+                                                  default_gumbel_params.n));
+            return GumbelParams{n, k};
+          }();
+
       bool is_move_selected_for_training =
           probability.Uniform() < select_move_prob;
 
@@ -230,8 +264,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         gumbel_n = 1;
         gumbel_k = 1;
       } else if (is_move_selected_for_training) {
-        gumbel_n = kSelectedForTrainingParams.n;
-        gumbel_k = kSelectedForTrainingParams.k;
+        gumbel_n = trainable_gumbel_params.n;
+        gumbel_k = trainable_gumbel_params.k;
       } else if (is_either_down_bad) {
         gumbel_n = kDownBadParams.n;
         gumbel_k = kDownBadParams.k;

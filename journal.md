@@ -184,6 +184,28 @@ Other performance improvements are:
 
 I _still_ need to get my stuff running on Kubernetes. Honestly I've been pushing this off since it just seems like the least interesting part. But by the end of this week, it should be there :)
 
+## 7-06-2023 (Run v0)
+I am currently training on an HPC cluster from Lambda Labs, with 30 vCPUs and 1 A100 GPU. It takes about ~70 minutes to complete one generation, with 5000 games per generation. Gumbel N, K is a flat 32, 4. I am on generation 15 at the moment. The net learns steadily, with each generation improving by 50-100 Elo. I have yet to evaluate against other bots, or to check whether the Elo gain is transitive.
+
+Some observations:
+
+- The model prefers a moyo-based playstyle in early generationos. Maybe this is a result of the net not being able to do good enough reads to justify the tight, fighting-heavy style in professional play, or maybe the N, K parameters are just too low.
+- The model is very bad at detecting atari, especially for larger groups. This might be because it's easy to create an atari circuit for single stones, but hard for chains of arbitrary shape and size. Our model is small, so it might be worth just adding this as a field, even if it means that we will not be able to tell if the model will eventually learn to recognize arbitrary atari. This may also be a result of low visit MCTS, but considering how compute bound I am I can't just simply raise the number of visits.
+- Opening and midgame play looks good for the most part, but late game play is atrocious. For one, the model will pretty much never pass. I think this might be because we set win/loss to 1.5/-1.5, so the losing side will pretty much never pass. It might be better to just have this as 1.0/-1.0 + score_diff.
+- Groups that should not die end up dying. This leads to wild swings in score across the game and huge captures at the end. The model is actually pretty good at predicting these large score differentials, but this could also indicate value overfitting. This might also be a result (again) of low visit counts, as we do not explore the search tree deep enough to see these groups die, or to have the effect of the dying group affect our search tree.
+- The model does steadily improve, but the winrate of the model as white is far, far higher as white than black. Maybe it's because the komi parameter was not normalized (we pass in 7.5 instead of .5). Whoops :) I should start logging the average winrate of each color, overall and per candidate, during evaluation games.
+
+## 7-09-2023 (Run v0)
+
+- The last run seemed like it would not recover, as white was winning practically every game. I restarted the run with 64, 4 and normalized the komi, and so far it looks better. Funnily enough I forgot to update the training code to normalize the komi but oh well.
+- I added support for resignation in eval, and low visits in selfplay after one side is pretty much guaranteed to lose. I only lower to visit count of the losing side, so in one game, the side that wins will actually produce more training examples. This is bad. Playout Cap Randomization should fix this. If I were to implement that, I would also just drop the visit counts of both players.
+- I also realized that in my Go-Exploit buffer, I add many states per game, but pop the earliest state inserted. This could also be bad, since all those states will share the same result. Instead, I should pop a random value. Since buffer ordering does not matter, I can afford to do a swap-and-pop.
+- Minigo implemented resignation in self-play partly to prevent overfitting to a large number of endgame states. I can emulate this by implementing some kind of weighting to moves past a certain move number or certain threshold. Maybe this could be min(first_down_bad, 300) or something.
+
+## 7-10-2023 (Run v0)
+- In a rerun with N=64, K=4, it looks like the model is more willing to fight. I would not be surprised if this is because N=32, K=4 does not give the model enough reading horizon to make accurate predictions, so a moyo-based approach is safer.
+
+
 ## 7-14-2023
 
 I ended up just renting an A100 on Lambda Labs. Dollar for dollar it seems to be a much better use of resources.
@@ -226,3 +248,33 @@ Other tests:
 Other implementation
 - GTP Commands
 - Merge game-playing options
+
+## 7-15-2023
+
+I'm currently doing another run. The model seems to be improving, besting the old goldens every other model. I plan on letting this run to completion, which should take about a week. I did make a few mistakes, so jotting down some notes here:
+
+- Don't add initial states for positions with under 5% winrate for the losing side.
+- Implement the down-bad metric to be 5 consecutive turns across both sides.
+- Implement "soft resign" visit count cap.
+- Lift control knobs for selfplay into configs.
+- Add timestamps to self-play training chunks.
+- Only convert new goldens to TRT. Play eval games with unconverted model.
+- Implement some kind of training window growth.
+- Output score gaussian instead of score logits, to prevent the model from always chasing deterministic high scores in MCTS.
+- Experiment with training configuration.
+  - Try Cyclic LR per chunk.
+  - Play more games in generation 1, to ensure that we have a critical mass of training examples in the first generation (20000, 8000 maybe?).
+  - SWA momentum growth seems to work well. Maybe we can try replacing it with learning rate growth, but this is low-pri.
+  - Only promote models as new goldens if we hit some confidence bound. The original AlphaGo Zero paper picked a 55% winrate across 400 games, which corresponds to a 95% CI. If I play 75 games, the corresponding winrate would be about 62%, but making this strict could end up overfitting to a single policy. Maybe one standard deviation is a good start.
+
+I also went down a whole rabbit hole of model uncertainty. I was considering having the model predict its own error, but a quick glance at some UC Berkeley slides tabled that idea. The issue is that we need to measure our uncertainty about the model, not the model's uncertainty about our state space. In Go, the state space's uncertainty might well be 0, and the model is incentivized to output 0 if it is optimizing against a fixed dataset.
+
+I also had an idea around online uncertainty calculation, which we can easily compute by using Welford's algorithm. This seems to be something that a lot of people have thought about. Pasting some resources here:
+
+- [A Distributional Perspective on Reinforcement Learning](https://arxiv.org/pdf/1707.06887.pdf)
+- [Deep Exploration via Randomized Value Functions](https://arxiv.org/pdf/1703.07608.pdf)
+- [Randomized Prior Functions for DRL](https://arxiv.org/pdf/1806.03335.pdf)
+- [Model Based Value Expansion for Efficient Model-free Reinforcement Learning](https://arxiv.org/pdf/1803.00101.pdf)
+- [Online Robust Reinforcement Learning with Model Uncertainty](https://arxiv.org/pdf/2109.14523.pdf)
+
+In general there seems to be a big parallel between model-based methods (where we are trying to learn and refine a dynamics model), and the way we calculate Q via MCTS. We can view Q as a dynamics function $p(q_{s'} | s, a)$, where instead of modeling a distribution over next states, we are modeling a distribution over our next q-value. I need to refine this line of thinking, but methods to deal with model-based RL should be directly applicable to our case, where we are planning through a noisy q-estimate on every timestep.
