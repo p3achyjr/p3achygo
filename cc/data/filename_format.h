@@ -9,15 +9,15 @@ namespace data {
 
 // Format for selfplay chunk.
 static constexpr char kChunkFormat[] =
-    "t%d_gen%03d_b%03d_g%03d_n%05d_%s.tfrecord.zz";
+    "gen%03d_b%03d_g%03d_n%05d_t%d_%s.tfrecord.zz";
 
 // Format for lock-file, written once selfplay writing is finished.
 static constexpr char kChunkDoneFormat[] =
-    "t%d_gen%03d_b%03d_g%03d_n%05d_%s.done";
+    "gen%03d_b%03d_g%03d_n%05d_t%d_%s.done";
 
 // Regex for parsing selfplay chunk files.
 static constexpr char kChunkRegex[] =
-    "t(\\d+)_gen(\\d+)_b(\\d+)_g(\\d+)_n(\\d+)_(.*)\\.tfrecord\\.zz";
+    "gen(\\d+)_b(\\d+)_g(\\d+)_n(\\d+)_t(\\d+)_(.*)\\.tfrecord\\.zz";
 
 // Format for SGFs
 static constexpr char kSgfFormat[] = "gen%03d_b%03d_g%03d_%s.sgfs";

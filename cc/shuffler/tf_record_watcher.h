@@ -24,7 +24,7 @@ namespace shuffler {
  */
 class TfRecordWatcher final {
  public:
-  TfRecordWatcher(std::string dir, std::vector<int> exclude_gens);
+  TfRecordWatcher(std::string dir, int train_window_size);
   ~TfRecordWatcher() = default;
 
   // Disable Copy
@@ -37,8 +37,9 @@ class TfRecordWatcher final {
 
  private:
   absl::flat_hash_set<std::string> GlobFiles();
+  absl::flat_hash_set<std::string> PopulateInitialTrainingWindow(
+      int train_window_size);
   std::string dir_;
-  std::vector<int> exclude_gens_;
   absl::flat_hash_set<std::string> files_;
   int num_new_games_;
 };

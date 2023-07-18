@@ -282,3 +282,7 @@ In general there seems to be a big parallel between model-based methods (where w
 ## 7-16-2023
 
 - Found a bug where we are not viewing our root score estimate from the perspective of the current player...
+
+## 7-17-2023
+
+- Starting to implement a training sample window, and realized that we should train past the end of self-play. Samples that are drawn through their entire window are used an average of $k$ times (depending on how we pick our sample draw probability), but samples that lie at the end are drawn much less than that (i.e. the last generation is drawn $\frac{k}{gen_{window}}$ times). Therefore we should train past the end of self-play. I think a reasonable starting point is to train $gen_{window} - 10$ generations past the end of self-play.

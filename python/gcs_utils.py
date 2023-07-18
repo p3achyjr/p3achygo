@@ -23,6 +23,10 @@ MODEL_PREFIX = 'model'
 MODEL_FORMAT = MODEL_PREFIX + '_{:04d}'
 MODEL_RE = re.compile(MODEL_PREFIX + '_([0-9]+)')
 
+# Keep in sync with //cc/shuffler/chunk_info.h
+SP_CHUNK_RE = re.compile(
+    'gen(\d+)_b(\d+)_g(\d+)_n(\d+)_t(\d+)_(.*)\.tfrecord\.zz')
+
 DONE_PREFIX = 'DONE'
 DONE_FILENAME = 'DONE'
 
@@ -213,7 +217,8 @@ def upload_sgf(run_id: str, local_path: Path):
 
 
 def download_golden_chunk(run_id: str, local_chunk_dir: str, gen: int) -> str:
-  return _download_chunk(run_id, local_chunk_dir, GOLDEN_CHUNK_FORMAT.format(gen))
+  return _download_chunk(run_id, local_chunk_dir,
+                         GOLDEN_CHUNK_FORMAT.format(gen))
 
 
 def download_model(run_id: str, local_models_dir: str, gen: int) -> str:

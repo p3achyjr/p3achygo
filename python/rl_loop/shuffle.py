@@ -10,6 +10,7 @@ import os, shlex, signal, sys, time
 import gcs_utils as gcs
 import rl_loop.config as config
 import rl_loop.fs_utils as fs_utils
+import rl_loop.shuffle_metadata as shuffle_metadata
 
 from absl import app, flags, logging
 from pathlib import Path
@@ -18,6 +19,13 @@ from threading import Thread
 
 FLAGS = flags.FLAGS
 POLL_INTERVAL_S = 10
+
+# there are ~20mil samples in the SL dataset, so we "pretend" like we've already
+# generated this many self-play samples.
+NUM_SAMPLES_OFFSET = 20000000
+
+# How many times to use each sample, on average.
+AVG_NUM_SYMMETRIES = 3
 
 running = True
 
@@ -45,6 +53,38 @@ def download_chunks(local_sp_chunk_dir: str, sp_chunks: set[str]):
     gcs._download(local_chunk_path, sp_chunk)
 
 
+def num_samples_in_chunks(gcs_sp_chunks: set[str]) -> int:
+  '''
+  Calculates total number of samples in a set of self-play chunks. The number
+  of examples in each chunk is embedded in the filename.
+  '''
+
+  def find_match(path: str):
+    p = Path(path)
+    for part in p.parts:
+      match = gcs.SP_CHUNK_RE.fullmatch(part)
+      if match != None:
+        return match
+
+    return None
+
+  num_samples = 0
+  for sp_chunk in gcs_sp_chunks:
+    match = find_match(sp_chunk)
+    if not match:
+      logging.error(f'No regex match for chunk file: {sp_chunk}')
+      continue
+
+    if len(match.groups()) != 6:
+      logging.error(f'Wrong number of matches for chunk file: {sp_chunk}')
+      continue
+
+    _, _, _, _, num_samples_in_chunk, _ = match.groups()
+    num_samples += int(num_samples_in_chunk)
+
+  return num_samples
+
+
 def loop(bin_path: str, run_id: str, local_run_dir: str,
          config: config.RunConfig):
   '''
@@ -57,14 +97,25 @@ def loop(bin_path: str, run_id: str, local_run_dir: str,
   gcs_sp_chunks = set(gcs.list_sp_chunks(run_id))
   download_chunks(local_sp_chunk_dir, gcs_sp_chunks)
 
+  num_samples_generated = num_samples_in_chunks(gcs_sp_chunks)
+
   chunk_gen = gcs.get_most_recent_chunk(run_id) + 1
   while chunk_gen <= config.num_generations:
+    # calculate metadata.
+    train_window_size = shuffle_metadata.training_window_size(
+        num_samples_generated, NUM_SAMPLES_OFFSET)
+    select_sample_prob = shuffle_metadata.select_sample_probability(
+        train_window_size, config.games_per_gen, AVG_NUM_SYMMETRIES)
+
+    # run shuffler.
     env = os.environ.copy()
     env['LD_PRELOAD'] = '/usr/local/lib/libmimalloc.so'
     num_games_to_play = config.games_per_gen if chunk_gen > 1 else config.games_first_gen
     cmd = shlex.split(f'{bin_path} --data_path={local_sp_chunk_dir}' +
                       f' --gen={chunk_gen}' +
-                      f' --games_per_gen={num_games_to_play}' + f' --p=.04')
+                      f' --games_this_gen={num_games_to_play}' +
+                      f' --train_window_size={train_window_size}' +
+                      f' --p={select_sample_prob}')
     shuf_proc = Popen(cmd,
                       stdin=PIPE,
                       stdout=PIPE,
@@ -83,6 +134,7 @@ def loop(bin_path: str, run_id: str, local_run_dir: str,
           gcs_sp_chunks)
 
       download_chunks(local_sp_chunk_dir, new_sp_chunks)
+      num_samples_generated += num_samples_in_chunks(new_sp_chunks)
 
     if shuf_proc.poll() is None:
       shuf_proc.communicate('\n')  # force a flush just to be safe.

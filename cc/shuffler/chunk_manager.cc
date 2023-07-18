@@ -49,15 +49,14 @@ void WriteChunkToDisk(std::string filename, const std::vector<tstring>& chunk) {
 }  // namespace
 
 ChunkManager::ChunkManager(std::string dir, int gen, float p, int games_per_gen,
-                           std::vector<int> exclude_gens)
+                           int train_window_size)
     : dir_(dir),
       gen_(gen),
       p_(p),
       chunk_size_(kDefaultChunkSize),
       poll_interval_s_(kDefaultPollIntervalS),
       games_per_gen_(games_per_gen),
-      exclude_gens_(exclude_gens),
-      watcher_(dir_, exclude_gens_),
+      watcher_(dir_, train_window_size),
       fbuffer_(watcher_.GetFiles()),
       running_(true) {
   fs_thread_ = std::thread(&ChunkManager::FsThread, this);
@@ -130,7 +129,11 @@ void ChunkManager::ShuffleAndFlush() {
   fs::create_directory(chunk_dir);
 
   // write to disk
+  start = std::chrono::steady_clock::now();
   WriteChunkToDisk(chunk_filename, golden_chunk);
+  end = std::chrono::steady_clock::now();
+  elapsed = end - start;
+  LOG(INFO) << "Writing chunk took " << elapsed.count() << "s.";
 }
 
 void ChunkManager::SignalStop() {

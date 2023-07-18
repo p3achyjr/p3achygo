@@ -23,7 +23,7 @@ using ::tensorflow::io::RecordWriterOptions;
 
 using ::core::FilePath;
 
-int Timestamp() {
+inline int Timestamp() {
   auto now = std::chrono::steady_clock::now();
   auto duration = now.time_since_epoch();
   auto seconds = std::chrono::duration_cast<std::chrono::seconds>(duration);
@@ -119,12 +119,12 @@ void TfRecorderImpl::Flush() {
     return;
   }
 
-  int timestamp = Timestamp();
+  const int timestamp = Timestamp();
 
   // Create File.
   std::string path =
-      FilePath(path_) / absl::StrFormat(data::kChunkFormat, timestamp, gen_,
-                                        batch_num_, num_games, num_records,
+      FilePath(path_) / absl::StrFormat(data::kChunkFormat, gen_, batch_num_,
+                                        num_games, num_records, timestamp,
                                         worker_id_);
   std::unique_ptr<tensorflow::WritableFile> file;
   TF_CHECK_OK(tensorflow::Env::Default()->NewWritableFile(path, &file));
@@ -200,9 +200,9 @@ void TfRecorderImpl::Flush() {
 
   // Write .done file to indicate that we are done writing.
   std::string done_filename =
-      FilePath(path_) / absl::StrFormat(data::kChunkDoneFormat, timestamp, gen_,
+      FilePath(path_) / absl::StrFormat(data::kChunkDoneFormat, gen_,
                                         batch_num_, num_games, num_records,
-                                        worker_id_);
+                                        timestamp, worker_id_);
   FILE* const lock_file = fopen(done_filename.c_str(), "w");
   absl::FPrintF(lock_file, "");
   fclose(lock_file);

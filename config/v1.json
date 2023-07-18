@@ -1,7 +1,7 @@
 {
-  "num_generations": 40,
-  "games_first_gen": 8000,
-  "games_per_gen": 8000,
+  "num_generations": 97,
+  "games_first_gen": 20000,
+  "games_per_gen": 5000,
   "batch_size": 256,
   "lr": 6e-3,
   "min_lr": 1.2e-3,

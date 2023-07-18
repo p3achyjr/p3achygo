@@ -38,7 +38,7 @@ namespace shuffler {
 class ChunkManager final {
  public:
   ChunkManager(std::string dir, int gen, float p, int games_per_gen,
-               std::vector<int> exclude_gens);
+               int train_window_size);
   ~ChunkManager();
 
   // Disable Copy
@@ -60,7 +60,6 @@ class ChunkManager final {
   size_t chunk_size_;
   int poll_interval_s_;
   int games_per_gen_;
-  std::vector<int> exclude_gens_;
 
   core::Probability probability_;
   TfRecordWatcher watcher_ ABSL_GUARDED_BY(mu_);

@@ -5,6 +5,7 @@
 
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "cc/core/util.h"
 #include "cc/shuffler/constants.h"
 
@@ -13,10 +14,9 @@ namespace fs = std::filesystem;
 
 using namespace ::core;
 
-TfRecordWatcher::TfRecordWatcher(std::string dir, std::vector<int> exclude_gens)
+TfRecordWatcher::TfRecordWatcher(std::string dir, int train_window_size)
     : dir_(dir),
-      exclude_gens_(exclude_gens),
-      files_(GlobFiles()),
+      files_(PopulateInitialTrainingWindow(train_window_size)),
       num_new_games_(0) {}
 
 const absl::flat_hash_set<std::string>& TfRecordWatcher::GetFiles() {
@@ -33,7 +33,7 @@ std::vector<std::string> TfRecordWatcher::UpdateAndGetNew() {
       std::optional<ChunkInfo> chunk_info =
           ParseChunkFilename(fs::path(f).filename());
       CHECK(chunk_info);
-      num_new_games_ += chunk_info->games;
+      num_new_games_ += chunk_info->num_games;
     }
   }
 
@@ -53,7 +53,7 @@ absl::flat_hash_set<std::string> TfRecordWatcher::GlobFiles() {
 
     std::optional<ChunkInfo> chunk_info =
         ParseChunkFilename(dir_entry.path().filename());
-    if (!chunk_info || VecContains(exclude_gens_, chunk_info->gen)) {
+    if (!chunk_info) {
       continue;
     }
 
@@ -61,5 +61,46 @@ absl::flat_hash_set<std::string> TfRecordWatcher::GlobFiles() {
   }
 
   return files;
+}
+
+absl::flat_hash_set<std::string> TfRecordWatcher::PopulateInitialTrainingWindow(
+    int train_window_size) {
+  struct ChunkData {
+    std::string filename;
+    ChunkInfo info;
+  };
+  absl::flat_hash_set<std::string> files = GlobFiles();
+  std::vector<ChunkData> file_data;
+  for (const auto& file : files) {
+    std::optional<ChunkInfo> chunk_info =
+        ParseChunkFilename(fs::path(file).filename());
+    CHECK(chunk_info);
+    file_data.emplace_back(ChunkData{file, chunk_info.value()});
+  }
+
+  // reverse sort.
+  std::sort(file_data.begin(), file_data.end(),
+            [](const ChunkData& f0, const ChunkData& f1) {
+              return f0.info.timestamp > f1.info.timestamp;
+            });
+
+  // iterate through all files, adding each file to a buffer until we consume
+  // our `train_window_size`.
+  int window_size = 0;
+  absl::flat_hash_set<std::string> filtered_files;
+  for (const auto& data : file_data) {
+    if (window_size >= train_window_size) {
+      break;
+    }
+
+    filtered_files.insert(data.filename);
+    window_size += data.info.num_examples;
+    std::cerr << data.filename << ", n=" << window_size << "\n";
+  }
+
+  LOG(INFO) << "Total Number of Files: " << files.size()
+            << ". Number of Files in Training Window: "
+            << filtered_files.size();
+  return filtered_files;
 }
 }  // namespace shuffler

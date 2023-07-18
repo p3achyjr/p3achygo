@@ -7,11 +7,11 @@
 namespace shuffler {
 
 struct ChunkInfo {
-  int timestamp;
   int gen;
   int batch;
-  int games;
-  int examples;
+  int num_games;
+  int num_examples;
+  int timestamp;
 };
 
 std::optional<ChunkInfo> ParseChunkFilename(std::string chunk_filename);
