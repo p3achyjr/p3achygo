@@ -21,9 +21,7 @@ namespace shuffler {
  *
  * The chunk manager maintains a list of filenames, from which we interleave
  * reading examples from. Internally, we maintain a parameter `p`, indicating
- * the probability of selecting any element. We also maintain a parameter `B`,
- * the size of the shuffle buffer from which we randomly draw elements from when
- * full.
+ * the probability of selecting any element.
  *
  * `dir`: Top-level data directory.
  * `gen`: Generation this chunk is for (starts from 1).
@@ -38,7 +36,7 @@ namespace shuffler {
 class ChunkManager final {
  public:
   ChunkManager(std::string dir, int gen, float p, int games_per_gen,
-               int train_window_size);
+               int train_window_size, bool is_continuous);
   ~ChunkManager();
 
   // Disable Copy
@@ -54,12 +52,13 @@ class ChunkManager final {
   void AppendToChunk(::tensorflow::tstring&& proto);
   void FsThread();  // runs in `fs_thread_`.
 
-  std::string dir_;
-  int gen_;
-  float p_;
-  size_t chunk_size_;
-  int poll_interval_s_;
-  int games_per_gen_;
+  const std::string dir_;
+  const int gen_;
+  const float p_;
+  const size_t chunk_size_;
+  const int poll_interval_s_;
+  const int games_per_gen_;
+  const bool is_continuous_;
 
   core::Probability probability_;
   TfRecordWatcher watcher_ ABSL_GUARDED_BY(mu_);

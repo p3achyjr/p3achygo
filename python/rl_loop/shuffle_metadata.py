@@ -16,7 +16,6 @@ def training_window_size(num_samples_generated: int,
 
   c * (1 + beta * ((n/c)^a - 1) / a)
   '''
-
   alpha = 0.75
   beta = 0.65
   c = 250000
@@ -46,11 +45,12 @@ def select_sample_probability(training_window_size: int, games_per_gen: int,
   generation_window = training_window_size / samples_per_gen
   p = k / generation_window
 
-  We clamp this probability to .15 to minimize the chance of value overfitting.
+  We clamp this probability to [.01, .15] to minimize the chance of value
+  overfitting, and to prevent very small probabilities for small numbers of
+  games per generation.
   '''
   samples_per_game_est = 75
   samples_per_gen = games_per_gen * samples_per_game_est
   generation_window = training_window_size / samples_per_gen
   p = k / generation_window
-
-  return min(p, .15)
+  return max(.01, min(p, .15))

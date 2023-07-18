@@ -95,7 +95,6 @@ absl::flat_hash_set<std::string> TfRecordWatcher::PopulateInitialTrainingWindow(
 
     filtered_files.insert(data.filename);
     window_size += data.info.num_examples;
-    std::cerr << data.filename << ", n=" << window_size << "\n";
   }
 
   LOG(INFO) << "Total Number of Files: " << files.size()

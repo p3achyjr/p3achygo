@@ -49,13 +49,14 @@ void WriteChunkToDisk(std::string filename, const std::vector<tstring>& chunk) {
 }  // namespace
 
 ChunkManager::ChunkManager(std::string dir, int gen, float p, int games_per_gen,
-                           int train_window_size)
+                           int train_window_size, bool is_continuous)
     : dir_(dir),
       gen_(gen),
       p_(p),
       chunk_size_(kDefaultChunkSize),
       poll_interval_s_(kDefaultPollIntervalS),
       games_per_gen_(games_per_gen),
+      is_continuous_(is_continuous),
       watcher_(dir_, train_window_size),
       fbuffer_(watcher_.GetFiles()),
       running_(true) {
@@ -73,7 +74,11 @@ ChunkManager::~ChunkManager() {
 }
 
 void ChunkManager::CreateChunk() {
-  LOG(INFO) << "Creating Chunk...";
+  if (is_continuous_) {
+    LOG(INFO) << "Creating Chunk (Continuous Mode)...";
+  } else {
+    LOG(INFO) << "Creating Chunk (Finite Task Mode)...";
+  }
 
   int num_scanned = 0;
   auto start = std::chrono::steady_clock::now();
@@ -81,9 +86,13 @@ void ChunkManager::CreateChunk() {
     // Pop file to read, if one exists.
     std::optional<std::string> f = PopFile();
     if (f == std::nullopt) {
-      absl::MutexLock l(&mu_);
-      cv_.WaitWithTimeout(&mu_, absl::Seconds(poll_interval_s_));
-      continue;
+      if (is_continuous_) {
+        absl::MutexLock l(&mu_);
+        cv_.WaitWithTimeout(&mu_, absl::Seconds(poll_interval_s_));
+        continue;
+      } else {
+        break;
+      }
     }
 
     // Read file into memory.
@@ -137,6 +146,10 @@ void ChunkManager::ShuffleAndFlush() {
 }
 
 void ChunkManager::SignalStop() {
+  if (is_continuous_) {
+    return;
+  }
+
   absl::MutexLock l(&mu_);
   running_.store(false, std::memory_order_acquire);
   cv_.SignalAll();
@@ -155,6 +168,10 @@ void ChunkManager::AppendToChunk(tstring&& proto) {
 }
 
 void ChunkManager::FsThread() {
+  if (!is_continuous_) {
+    return;
+  }
+
   while (true) {
     absl::MutexLock l(&mu_);
     cv_.WaitWithTimeout(&mu_, absl::Seconds(poll_interval_s_));

@@ -91,6 +91,56 @@ def loop(bin_path: str, run_id: str, local_run_dir: str,
   Continually produces new training chunks until reaching a specified number of
   generations.
   '''
+
+  def generate_one_chunk(chunk_gen: int,
+                         train_window_size: int,
+                         select_sample_prob: float,
+                         local_sp_chunk_dir: str,
+                         gcs_sp_chunks: set[str],
+                         in_continuous_mode=True):
+    num_new_samples = 0
+    # run shuffler.
+    env = os.environ.copy()
+    env['LD_PRELOAD'] = '/usr/local/lib/libmimalloc.so'
+    num_games_to_play = config.games_per_gen if chunk_gen > 1 else config.games_first_gen
+    cmd = shlex.split(
+        f'{bin_path} --data_path={local_sp_chunk_dir}' + f' --gen={chunk_gen}' +
+        f' --games_this_gen={num_games_to_play}' +
+        f' --train_window_size={train_window_size}' +
+        f' --p={select_sample_prob}' +
+        f' --run_continuously={"true" if in_continuous_mode else "false"}')
+    shuf_proc = Popen(cmd,
+                      stdin=PIPE,
+                      stdout=PIPE,
+                      stderr=STDOUT,
+                      universal_newlines=True,
+                      env=env)
+    t = Thread(target=print_stdout, args=(shuf_proc.stdout,), daemon=True)
+    t.start()
+
+    while running and shuf_proc.poll() is None:
+      time.sleep(POLL_INTERVAL_S)
+
+      if in_continuous_mode:
+        # download new chunks
+        gcs_sp_chunks_now = set(gcs.list_sp_chunks(run_id))
+        gcs_sp_chunks, new_sp_chunks = gcs_sp_chunks_now, gcs_sp_chunks_now.difference(
+            gcs_sp_chunks)
+
+        download_chunks(local_sp_chunk_dir, new_sp_chunks)
+        num_new_samples += num_samples_in_chunks(new_sp_chunks)
+
+    if shuf_proc.poll() is None:
+      shuf_proc.communicate('\n')  # force a flush just to be safe.
+
+    logging.info(f'Shuffler exited with status {shuf_proc.poll()}')
+
+    # Upload chunk.
+    gcs.upload_chunk(run_id, gcs.local_chunk_dir(local_sp_chunk_dir), chunk_gen)
+    logging.info(f'Uploaded chunk gen {chunk_gen} to gs://p3achygo/{run_id}')
+
+    return num_new_samples, gcs_sp_chunks
+
   (_, _, local_sp_chunk_dir, _) = fs_utils.ensure_local_dirs(local_run_dir)
   logging.info(f'Using {local_sp_chunk_dir} to store self-play chunks.')
 
@@ -106,46 +156,56 @@ def loop(bin_path: str, run_id: str, local_run_dir: str,
         num_samples_generated, NUM_SAMPLES_OFFSET)
     select_sample_prob = shuffle_metadata.select_sample_probability(
         train_window_size, config.games_per_gen, AVG_NUM_SYMMETRIES)
-
-    # run shuffler.
-    env = os.environ.copy()
-    env['LD_PRELOAD'] = '/usr/local/lib/libmimalloc.so'
-    num_games_to_play = config.games_per_gen if chunk_gen > 1 else config.games_first_gen
-    cmd = shlex.split(f'{bin_path} --data_path={local_sp_chunk_dir}' +
-                      f' --gen={chunk_gen}' +
-                      f' --games_this_gen={num_games_to_play}' +
-                      f' --train_window_size={train_window_size}' +
-                      f' --p={select_sample_prob}')
-    shuf_proc = Popen(cmd,
-                      stdin=PIPE,
-                      stdout=PIPE,
-                      stderr=STDOUT,
-                      universal_newlines=True,
-                      env=env)
-    t = Thread(target=print_stdout, args=(shuf_proc.stdout,), daemon=True)
-    t.start()
-
-    while running and shuf_proc.poll() is None:
-      time.sleep(POLL_INTERVAL_S)
-
-      # download new chunks
-      gcs_sp_chunks_now = set(gcs.list_sp_chunks(run_id))
-      gcs_sp_chunks, new_sp_chunks = gcs_sp_chunks_now, gcs_sp_chunks_now.difference(
-          gcs_sp_chunks)
-
-      download_chunks(local_sp_chunk_dir, new_sp_chunks)
-      num_samples_generated += num_samples_in_chunks(new_sp_chunks)
-
-    if shuf_proc.poll() is None:
-      shuf_proc.communicate('\n')  # force a flush just to be safe.
-
-    logging.info(f'Shuffler exited with status {shuf_proc.poll()}')
-
-    # Upload chunk.
-    gcs.upload_chunk(run_id, gcs.local_chunk_dir(local_sp_chunk_dir), chunk_gen)
-    logging.info(f'Uploaded chunk gen {chunk_gen} to gs://p3achygo/{run_id}')
+    num_new_samples, gcs_sp_chunks = generate_one_chunk(chunk_gen,
+                                                        train_window_size,
+                                                        select_sample_prob,
+                                                        local_sp_chunk_dir,
+                                                        gcs_sp_chunks,
+                                                        in_continuous_mode=True)
     chunk_gen += 1
+    num_samples_generated += num_new_samples
 
+  # We have now generated `config.num_generations` number of chunks. However, we
+  # still have not consumed our later self-play data as much as we should have.
+  # In the pathological case, for our last batch of self-play, we sample the data
+  # in the batch once, leaving each sample used an average of 1 / `generation_window``
+  # number of times.
+  #
+  # We want to sample each sample `AVG_NUM_SYMMETRIES` number of times, so we
+  # should continue training past the end of self-play. We provide the number
+  # of generations in our config. At each extra generation, we will simulate
+  # as if we have played a new generation, and calculate our training window
+  # accordingly.
+  num_samples_per_gen_est = config.games_per_gen * 75
+  total_gens = config.num_generations + config.extra_train_gens
+  extra_gen = 0
+  while chunk_gen <= total_gens:
+    # pretend as if we have actually played `extra_gen` number of generations, to
+    # calculate sample window. Then subtract `extra_gen * num_samples_per_gen_est` to
+    # get the actual sample window from our training data.
+    num_samples_generated_sim = (num_samples_generated +
+                                 extra_gen * num_samples_per_gen_est)
+    train_window_size = shuffle_metadata.training_window_size(
+        num_samples_generated_sim, NUM_SAMPLES_OFFSET)
+
+    # compute sample probability as if we had played extra generations
+    select_sample_prob = shuffle_metadata.select_sample_probability(
+        train_window_size, config.games_per_gen, AVG_NUM_SYMMETRIES)
+
+    # then normalize training window so that we only look at samples that lie
+    # in our training window, had we continued playing those generations.
+    train_window_size -= (extra_gen * num_samples_per_gen_est)
+    train_window_size = max(100000, train_window_size)
+    _, _ = generate_one_chunk(chunk_gen,
+                              train_window_size,
+                              select_sample_prob,
+                              local_sp_chunk_dir,
+                              gcs_sp_chunks,
+                              in_continuous_mode=False)
+    chunk_gen += 1
+    extra_gen += 1
+
+  gcs.signal_done(run_id)
   logging.info(f'Chunk gen: {chunk_gen}. Shutting down.')
 
 

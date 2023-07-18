@@ -17,6 +17,7 @@ class RunConfig(object):
   lr: float
   min_lr: float
   max_lr: float
+  extra_train_gens: int
 
 
 def parse(run_id: str) -> RunConfig:
@@ -30,6 +31,8 @@ def parse(run_id: str) -> RunConfig:
     min_lr = obj['min_lr'] if 'min_lr' in obj else obj['lr']
     max_lr = obj['max_lr'] if 'max_lr' in obj else obj['lr']
     use_cyclic_lr = True if min_lr != max_lr else False
+    extra_train_gens = obj[
+        'extra_train_gens'] if 'extra_train_gens' in obj else 0
     return RunConfig(obj['num_generations'], games_first_gen,
                      obj['games_per_gen'], obj['batch_size'], use_cyclic_lr,
-                     obj['lr'], min_lr, max_lr)
+                     obj['lr'], min_lr, max_lr, extra_train_gens)

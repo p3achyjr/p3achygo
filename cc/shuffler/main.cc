@@ -20,6 +20,8 @@ ABSL_FLAG(int, train_window_size, -1, "Size of training window to draw from.");
 ABSL_FLAG(float, p, .01f,
           "Probability that any _individual_ sample is selected to include for "
           "training.");
+ABSL_FLAG(bool, run_continuously, true,
+          "Whether to run the shuffler in continuous mode.");
 
 void WaitForSignal(shuffler::ChunkManager* chunk_manager) {
   // any line from stdin is a shutdown signal.
@@ -63,7 +65,8 @@ int main(int argc, char** argv) {
             << " samples and p=" << p << " sample draw probability.";
 
   shuffler::ChunkManager chunk_manager(data_path, gen, p, games_this_gen,
-                                       train_window_size);
+                                       train_window_size,
+                                       absl::GetFlag(FLAGS_run_continuously));
   std::thread wait_thread(WaitForSignal, &chunk_manager);
 
   // CreateChunk blocks until we receive a signal, or play `games_per_gen`
