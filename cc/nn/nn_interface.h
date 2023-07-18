@@ -12,7 +12,7 @@
 #include "absl/status/status.h"
 #include "cc/constants/constants.h"
 #include "cc/core/cache.h"
-#include "cc/core/rand.h"
+#include "cc/core/probability.h"
 #include "cc/game/color.h"
 #include "cc/game/game.h"
 #include "cc/game/symmetry.h"
@@ -56,7 +56,8 @@ class NNInterface final {
 
   // Blocks until result is ready.
   NNInferResult LoadAndGetInference(int thread_id, const game::Game& game,
-                                    game::Color color_to_move)
+                                    game::Color color_to_move,
+                                    core::Probability& probability)
       ABSL_LOCKS_EXCLUDED(mu_);
 
   void RegisterThread(int thread_id) ABSL_LOCKS_EXCLUDED(mu_);
@@ -122,7 +123,6 @@ class NNInterface final {
 
   std::array<core::Cache<NNKey, NNInferResult>, constants::kMaxNumThreads>
       thread_caches_;  // Per-thread cache.
-  core::PRng prng_;
   const int64_t timeout_;
 };
 

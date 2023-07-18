@@ -63,7 +63,7 @@ cc_library(
 cc_library(
     name = "probability",
     srcs = select({
-        "//cc:test": ["probability_dummy.cc"],
+        "//cc:probability_dummy": ["probability_dummy.cc"],
         "//conditions:default": ["probability.cc"],
     }),
     hdrs = ["probability.h"],

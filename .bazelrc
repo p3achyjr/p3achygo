@@ -46,9 +46,12 @@ build:optdbg --compilation_mode=dbg
 build:optdbg --copt -g
 build:optdbg --per_file_copt=+tensorflow/core/kernels.*@-g0
 
-build:test --compilation_mode=dbg
-build:test --strip=never
-build:test --//cc:is_test
+build:leaf_evaluator_test --//cc:is_nn_interface_dummy
+build:leaf_evaluator_test --//cc:is_probability_dummy
+
+build:gumbel_test --//cc:is_nn_interface_dummy
+build:gumbel_test --//cc:is_leaf_evaluator_dummy
+build:gumbel_test --//cc:is_probability_dummy
 
 build:trt --//cc:is_trt
 

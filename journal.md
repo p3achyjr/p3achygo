@@ -278,3 +278,7 @@ I also had an idea around online uncertainty calculation, which we can easily co
 - [Online Robust Reinforcement Learning with Model Uncertainty](https://arxiv.org/pdf/2109.14523.pdf)
 
 In general there seems to be a big parallel between model-based methods (where we are trying to learn and refine a dynamics model), and the way we calculate Q via MCTS. We can view Q as a dynamics function $p(q_{s'} | s, a)$, where instead of modeling a distribution over next states, we are modeling a distribution over our next q-value. I need to refine this line of thinking, but methods to deal with model-based RL should be directly applicable to our case, where we are planning through a noisy q-estimate on every timestep.
+
+## 7-16-2023
+
+- Found a bug where we are not viewing our root score estimate from the perspective of the current player...

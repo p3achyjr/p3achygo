@@ -1,5 +1,5 @@
-#ifndef CC_MCTS_CONSTANTS_H_
-#define CC_MCTS_CONSTANTS_H_
+#ifndef MCTS_CONSTANTS_H_
+#define MCTS_CONSTANTS_H_
 
 namespace mcts {
 

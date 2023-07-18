@@ -30,7 +30,7 @@ cc_library(
 cc_library(
     name = "nn_interface",
     srcs = select({
-        "//cc:test": ["nn_interface_dummy.cc"],
+        "//cc:nn_interface_dummy": ["nn_interface_dummy.cc"],
         "//conditions:default": ["nn_interface.cc"],
     }),
     hdrs = ["nn_interface.h"],
@@ -42,7 +42,7 @@ cc_library(
         "//cc/tensorflow",
         "@com_google_absl//absl/status",
     ] + select({
-        "//cc:test": [],
+        "//cc:nn_interface_dummy": [],
         "//conditions:default": [
             ":create_tensor_shape",
             ":nn_board_utils",

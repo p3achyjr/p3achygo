@@ -109,7 +109,8 @@ absl::Status NNInterface::Initialize(std::string&& model_path) {
 }
 
 NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
-                                               Color color_to_move) {
+                                               Color color_to_move,
+                                               Probability& probability) {
   DCHECK(is_initialized_);
   ThreadInfo& thread_info = thread_info_[thread_id];
   NNKey cache_key = NNKey{
@@ -127,9 +128,7 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
 
   // Not cached. Load for inference.
   DCHECK(game.moves().size() >= constants::kNumLastMoves);
-  mu_.Lock();
-  Symmetry sym = GetRandomSymmetry(prng_);
-  mu_.Unlock();
+  Symmetry sym = GetRandomSymmetry(probability.prng());
   board_utils::FillNNInput(thread_id, num_threads_, nn_input_buf_[0],
                            nn_input_buf_[1], game, color_to_move, sym);
 

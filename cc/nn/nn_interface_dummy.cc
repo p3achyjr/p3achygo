@@ -6,6 +6,7 @@
 namespace nn {
 namespace {
 using namespace ::tensorflow;
+using namespace ::core;
 }  // namespace
 
 NNInterface::NNInterface(int _num_threads) : num_threads_(0), timeout_(0) {}
@@ -18,7 +19,8 @@ absl::Status NNInterface::Initialize(std::string&& _model_path) {
 
 NNInferResult NNInterface::LoadAndGetInference(int _thread_id,
                                                const game::Game& _game,
-                                               game::Color _color_to_move) {
+                                               game::Color _color_to_move,
+                                               Probability& _probability) {
   return NNInferResult{
       .move_logits{},
       .move_probs{},

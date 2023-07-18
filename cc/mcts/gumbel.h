@@ -42,16 +42,9 @@ class GumbelEvaluator final {
   // Runs Gumbel non-root search path until leaf, and returns the search path
   // including root.
   absl::InlinedVector<TreeNode*, kMaxPathLenEst> SearchNonRoot(
-      game::Game& game, TreeNode* root, TreeNode* node,
-      game::Color color_to_move, float root_score_est);
-
-  // Special case of `EvaluateLeaf` where the leaf node is the root.
-  void EvaluateRoot(const game::Game& game, TreeNode* node,
-                    game::Color color_to_move);
-
-  // Evaluates a leaf node.
-  void EvaluateLeaf(const game::Game& game, TreeNode* node,
-                    game::Color color_to_move, float root_score_est);
+      core::Probability& probability, game::Game& game, TreeNode* root,
+      TreeNode* node, game::Color color_to_move, game::Color root_color,
+      float root_score_est);
 
   // Updates all nodes in tree, based on leaf evaluation.
   void Backward(absl::InlinedVector<TreeNode*, kMaxPathLenEst>& path);
