@@ -61,9 +61,10 @@ def loop(bin_path: str, run_id: str, local_run_dir: str,
   while chunk_gen <= config.num_generations:
     env = os.environ.copy()
     env['LD_PRELOAD'] = '/usr/local/lib/libmimalloc.so'
+    num_games_to_play = config.games_per_gen if chunk_gen > 1 else config.games_first_gen
     cmd = shlex.split(f'{bin_path} --data_path={local_sp_chunk_dir}' +
                       f' --gen={chunk_gen}' +
-                      f' --games_per_gen={config.games_per_gen}' + f' --p=.04')
+                      f' --games_per_gen={num_games_to_play}' + f' --p=.04')
     shuf_proc = Popen(cmd,
                       stdin=PIPE,
                       stdout=PIPE,

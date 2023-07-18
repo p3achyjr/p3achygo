@@ -87,8 +87,7 @@ def main(_):
                                           FLAGS.gen,
                                           FLAGS.chunk_path,
                                           val_ds,
-                                          batch_size=config.batch_size,
-                                          lr=config.lr,
+                                          config=config,
                                           is_gpu=is_gpu,
                                           batch_num=batch_num)
   model_utils.save_trt(model,

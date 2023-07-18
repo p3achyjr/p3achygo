@@ -160,7 +160,6 @@ def train(model: P3achyGoModel,
           save_interval=1000,
           save_path='/tmp',
           tensorboard_log_dir='/tmp/logs',
-          lr: Optional[float] = None,
           lr_schedule: Optional[
               tf.keras.optimizers.schedules.LearningRateSchedule] = None,
           is_gpu=False,
@@ -168,14 +167,7 @@ def train(model: P3achyGoModel,
   """
   Training through single dataset.
   """
-  if not lr and not lr_schedule:
-    logging.error('Exactly one of `lr` and `lr_schedule` must be set.')
-
-  if lr and lr_schedule:
-    logging.error('Exactly one of `lr` and `lr_schedule` must be set.')
-
   summary_writer = tf.summary.create_file_writer(tensorboard_log_dir)
-  learning_rate = lr if lr else lr_schedule
   coeffs = LossCoeffs.SLCoeffs() if mode == Mode.SL else LossCoeffs.RLCoeffs()
 
   # yapf: disable
@@ -192,7 +184,7 @@ def train(model: P3achyGoModel,
                                coeffs.w_gamma)
   # yapf: enable
 
-  optimizer = tf.keras.optimizers.experimental.SGD(learning_rate=learning_rate,
+  optimizer = tf.keras.optimizers.experimental.SGD(learning_rate=lr_schedule,
                                                    momentum=momentum)
   if is_gpu:
     optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
