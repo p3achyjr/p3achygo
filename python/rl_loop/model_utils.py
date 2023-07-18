@@ -9,8 +9,8 @@ import trt_convert
 
 from pathlib import Path
 
-SWA_MOMENTUM = .75
-NUM_BATCHES_FULL_CHECKPOINT = 1000
+SWA_MOMENTUM = .5
+NUM_BATCHES_FULL_CHECKPOINT = 4000
 
 
 def new_model(name: str) -> P3achyGoModel:
