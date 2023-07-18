@@ -8,6 +8,7 @@
 #include "absl/log/log.h"
 #include "absl/strings/str_format.h"
 #include "absl/time/time.h"
+#include "cc/data/filename_format.h"
 #include "cc/shuffler/chunk_info.h"
 #include "cc/shuffler/constants.h"
 #include "tensorflow/core/lib/io/compression.h"
@@ -17,6 +18,7 @@
 namespace shuffler {
 namespace {
 namespace fs = std::filesystem;
+using ::data::kGoldenChunkFormat;
 using ::tensorflow::tstring;
 using ::tensorflow::io::RecordReaderOptions;
 using ::tensorflow::io::RecordWriter;
@@ -27,9 +29,6 @@ using ::tensorflow::io::compression::kZlib;
 static constexpr size_t kDefaultChunkSize = 2048000;
 static constexpr int kDefaultPollIntervalS = 30;
 static constexpr int kLoggingInterval = 1000000;
-
-// keep in sync with python/gcs_utils.py
-static constexpr char kChunkFormat[] = "chunk_%04d.tfrecord.zz";
 
 void WriteChunkToDisk(std::string filename, const std::vector<tstring>& chunk) {
   std::unique_ptr<tensorflow::WritableFile> file;
@@ -127,7 +126,7 @@ void ChunkManager::ShuffleAndFlush() {
   // create directory
   std::string chunk_dir = fs::path(dir_) / kGoldenChunkDirname;
   std::string chunk_filename =
-      fs::path(chunk_dir) / absl::StrFormat(kChunkFormat, gen_);
+      fs::path(chunk_dir) / absl::StrFormat(kGoldenChunkFormat, gen_);
   fs::create_directory(chunk_dir);
 
   // write to disk

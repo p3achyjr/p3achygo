@@ -6,6 +6,7 @@
 #include "absl/strings/str_format.h"
 #include "cc/constants/constants.h"
 #include "cc/core/filepath.h"
+#include "cc/data/filename_format.h"
 #include "cc/game/board.h"
 #include "cc/game/color.h"
 #include "cc/recorder/make_tf_example.h"
@@ -22,10 +23,13 @@ using ::tensorflow::io::RecordWriterOptions;
 
 using ::core::FilePath;
 
-// Keep in sync with //cc/shuffler/chunk_info.h
-static constexpr char kChunkFormat[] =
-    "gen%03d_b%03d_g%03d_n%05d_%s.tfrecord.zz";
-static constexpr char kChunkDoneFormat[] = "gen%03d_b%03d_g%03d_n%05d_%s.done";
+int Timestamp() {
+  auto now = std::chrono::steady_clock::now();
+  auto duration = now.time_since_epoch();
+  auto seconds = std::chrono::duration_cast<std::chrono::seconds>(duration);
+
+  return seconds.count();
+}
 
 class TfRecorderImpl final : public TfRecorder {
  public:
@@ -103,7 +107,9 @@ void TfRecorderImpl::Flush() {
       thread_records_.begin(), thread_records_.begin() + num_threads_, 0,
       [](int n, const std::vector<Record>& records) {
         for (const auto& record : records) {
-          n += record.game.num_moves();
+          for (const auto& is_trainable : record.move_trainables) {
+            if (is_trainable) ++n;
+          }
         }
 
         return n;
@@ -113,10 +119,13 @@ void TfRecorderImpl::Flush() {
     return;
   }
 
+  int timestamp = Timestamp();
+
   // Create File.
   std::string path =
-      FilePath(path_) / absl::StrFormat(kChunkFormat, gen_, batch_num_,
-                                        num_games, num_records, worker_id_);
+      FilePath(path_) / absl::StrFormat(data::kChunkFormat, timestamp, gen_,
+                                        batch_num_, num_games, num_records,
+                                        worker_id_);
   std::unique_ptr<tensorflow::WritableFile> file;
   TF_CHECK_OK(tensorflow::Env::Default()->NewWritableFile(path, &file));
 
@@ -191,8 +200,9 @@ void TfRecorderImpl::Flush() {
 
   // Write .done file to indicate that we are done writing.
   std::string done_filename =
-      FilePath(path_) / absl::StrFormat(kChunkDoneFormat, gen_, batch_num_,
-                                        num_games, num_records, worker_id_);
+      FilePath(path_) / absl::StrFormat(data::kChunkDoneFormat, timestamp, gen_,
+                                        batch_num_, num_games, num_records,
+                                        worker_id_);
   FILE* const lock_file = fopen(done_filename.c_str(), "w");
   absl::FPrintF(lock_file, "");
   fclose(lock_file);

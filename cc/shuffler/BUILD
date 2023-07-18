@@ -16,6 +16,7 @@ cc_library(
     deps = [
         ":filename_buffer",
         "//cc/core",
+        "//cc/data:filename_format",
         "//cc/tensorflow",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/log",

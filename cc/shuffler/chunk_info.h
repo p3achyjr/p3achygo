@@ -7,6 +7,7 @@
 namespace shuffler {
 
 struct ChunkInfo {
+  int timestamp;
   int gen;
   int batch;
   int games;

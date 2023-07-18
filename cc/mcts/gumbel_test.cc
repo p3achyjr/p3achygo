@@ -17,11 +17,6 @@ using nn::NNInterface;
 static constexpr int kGumbelN = 8;
 static constexpr int kGumbelK = 4;
 
-float ScoreTransform(float score_est, float root_score_est) {
-  return kDefaultScoreWeight * M_2_PI *
-         std::atan((score_est - root_score_est) / BOARD_LEN);
-}
-
 // The tree will also assign all subchildren under child 0 with q=-.5, child 1
 // with q=-.5 + 1/3, child 2 with q=-.5 + 2/3, and child 3 with q=.5. MCTS
 // should conclude that each subtree has the given qs, and select child `3` as

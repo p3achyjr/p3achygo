@@ -45,6 +45,7 @@ cc_library(
     deps = [
         "//cc/constants",
         "//cc/core:filepath",
+        "//cc/data:filename_format",
         "//cc/game",
         "//cc/mcts",
         "//cc/sgf:sgf_serializer",
@@ -62,6 +63,7 @@ cc_library(
         ":make_tf_example",
         "//cc/constants",
         "//cc/core:filepath",
+        "//cc/data:filename_format",
         "//cc/game",
         "//cc/tensorflow",
         "@com_google_absl//absl/log:check",

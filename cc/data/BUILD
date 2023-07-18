@@ -1,6 +1,11 @@
 package(default_visibility = ["//visibility:public"])
 
 cc_library(
+    name = "filename_format",
+    hdrs = ["filename_format.h"],
+)
+
+cc_library(
     name = "dataset_creator",
     srcs = [
         "coordinator.cc",

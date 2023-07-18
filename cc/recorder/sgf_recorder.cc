@@ -9,6 +9,7 @@
 #include "absl/synchronization/mutex.h"
 #include "cc/constants/constants.h"
 #include "cc/core/filepath.h"
+#include "cc/data/filename_format.h"
 #include "cc/game/game.h"
 #include "cc/game/loc.h"
 #include "cc/game/move.h"
@@ -26,10 +27,6 @@ using ::core::FilePath;
 using ::mcts::TreeNode;
 
 static constexpr int kMaxNumProperties = 32;
-static constexpr char kSgfFormat[] = "gen%03d_b%03d_g%03d_%s.sgfs";
-static constexpr char kSgfDoneFormat[] = "gen%03d_b%03d_g%03d_%s.done";
-static constexpr char kSgfFullFormat[] = "FULL_gen%03d_b%03d_g%03d_%s.sgfs";
-static constexpr char kSgfFullDoneFormat[] = "FULL_gen%03d_b%03d_g%03d_%s.done";
 
 void PopulateHeader(SgfNode* root, float komi, game::Game::Result result,
                     const std::string& b_name, const std::string& w_name) {
@@ -186,23 +183,24 @@ void SgfRecorderImpl::Flush() {
   if (!(sgfs == "")) {
     // Flush regular SGFs.
     std::string path =
-        FilePath(path_) / absl::StrFormat(kSgfFormat, gen_, batch_num_,
+        FilePath(path_) / absl::StrFormat(data::kSgfFormat, gen_, batch_num_,
                                           games_in_batch, worker_id_);
     std::string done_filename =
-        FilePath(path_) / absl::StrFormat(kSgfDoneFormat, gen_, batch_num_,
-                                          games_in_batch, worker_id_);
+        FilePath(path_) / absl::StrFormat(data::kSgfDoneFormat, gen_,
+                                          batch_num_, games_in_batch,
+                                          worker_id_);
     flush(path, done_filename, sgfs);
   }
 
   if (!(sgfs_with_trees == "")) {
     // Flush full SGFs.
     std::string path_fulls =
-        FilePath(path_) / absl::StrFormat(kSgfFullFormat, gen_, batch_num_,
-                                          games_with_trees_in_batch,
+        FilePath(path_) / absl::StrFormat(data::kSgfFullFormat, gen_,
+                                          batch_num_, games_with_trees_in_batch,
                                           worker_id_);
     std::string full_sgfs_done_filename =
-        FilePath(path_) / absl::StrFormat(kSgfFullDoneFormat, gen_, batch_num_,
-                                          games_with_trees_in_batch,
+        FilePath(path_) / absl::StrFormat(data::kSgfFullDoneFormat, gen_,
+                                          batch_num_, games_with_trees_in_batch,
                                           worker_id_);
     flush(path_fulls, full_sgfs_done_filename, sgfs_with_trees);
   }

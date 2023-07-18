@@ -16,9 +16,9 @@ GOLDEN_CHUNK_DIR = 'goldens'
 SP_CHUNK_DIR = 'chunks'
 SGF_DIR = 'sgf'
 
-CHUNK_PREFIX = 'chunk'
-CHUNK_FORMAT = CHUNK_PREFIX + '_{:04d}.tfrecord.zz'
-CHUNK_RE = re.compile(CHUNK_PREFIX + '_([0-9]+)\.tfrecord\.zz')
+GOLDEN_CHUNK_PREFIX = 'chunk'
+GOLDEN_CHUNK_FORMAT = GOLDEN_CHUNK_PREFIX + '_{:04d}.tfrecord.zz'
+GOLDEN_CHUNK_RE = re.compile(GOLDEN_CHUNK_PREFIX + '_([0-9]+)\.tfrecord\.zz')
 MODEL_PREFIX = 'model'
 MODEL_FORMAT = MODEL_PREFIX + '_{:04d}'
 MODEL_RE = re.compile(MODEL_PREFIX + '_([0-9]+)')
@@ -46,7 +46,7 @@ def _get_model_num(blob_path: str) -> int:
 
 
 def _get_chunk_num(blob_path: str) -> int:
-  return _get_num(blob_path, CHUNK_RE)
+  return _get_num(blob_path, GOLDEN_CHUNK_RE)
 
 
 def _get_most_recent(prefix: str, num_fn: Callable[[str], int],
@@ -181,7 +181,7 @@ def get_most_recent_chunk(run_id: str) -> int:
 
 
 def upload_chunk(run_id: str, local_chunk_dir: str, gen: int):
-  _upload_chunk(run_id, local_chunk_dir, CHUNK_FORMAT.format(gen))
+  _upload_chunk(run_id, local_chunk_dir, GOLDEN_CHUNK_FORMAT.format(gen))
 
 
 def upload_model(run_id: str, local_models_dir: str, gen: int):
@@ -213,7 +213,7 @@ def upload_sgf(run_id: str, local_path: Path):
 
 
 def download_golden_chunk(run_id: str, local_chunk_dir: str, gen: int) -> str:
-  return _download_chunk(run_id, local_chunk_dir, CHUNK_FORMAT.format(gen))
+  return _download_chunk(run_id, local_chunk_dir, GOLDEN_CHUNK_FORMAT.format(gen))
 
 
 def download_model(run_id: str, local_models_dir: str, gen: int) -> str:
