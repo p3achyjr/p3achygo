@@ -10,10 +10,22 @@
 
 namespace mcts {
 
+struct ChildStats {
+  game::Loc move;
+  int n;
+  float q;
+  float qz;
+  float score;
+  float logit;
+  float gumbel_noise;
+  float qtransform;
+};
+
 struct GumbelResult {
   game::Loc nn_move;
   game::Loc mcts_move;
   std::array<float, constants::kMaxNumMoves> pi_improved;
+  absl::InlinedVector<ChildStats, 16> child_stats;
 };
 
 /*

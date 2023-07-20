@@ -24,11 +24,6 @@ using namespace ::mcts;
 using namespace ::nn;
 using namespace ::recorder;
 
-struct GumbelParams {
-  int n;
-  int k;
-};
-
 // Whether the current thread should log.
 static constexpr int kShouldLogShard = 8;
 
@@ -52,18 +47,6 @@ static constexpr float kLowTrainProb = .25;
 
 // Probability that game is selected for full tree logging.
 static constexpr float kLogFullTreeProb = .002;
-
-// Possible values of N, K for gumbel search.
-static const GumbelParams kGumbelParamChoices[] = {
-    GumbelParams{32, 5},
-};
-
-// Size of `kGumbelParamsChoices`.
-static const size_t kNumGumbelChoices =
-    sizeof(kGumbelParamChoices) / sizeof(GumbelParams);
-
-// Values of N, K for moves to store for training (playout cap randomization).
-static constexpr GumbelParams kSelectedForTrainingParams = {128, 8};
 
 // Probability that we pick a move for training.
 static constexpr float kMoveSelectedForTrainingProb = .25;
@@ -136,10 +119,9 @@ std::string ToString(const Color& color) {
 
 void Run(size_t seed, int thread_id, NNInterface* nn_interface,
          GameRecorder* game_recorder, GoExploitBuffer* go_exploit_buffer,
-         std::string logfile, int max_moves) {
+         std::string logfile, SPConfig config) {
   FileSink sink(logfile.c_str());
   Probability probability(seed);
-  auto search_dur_ema = 0;
 
   // Main loop.
   while (true) {
@@ -177,17 +159,15 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
             ? RandRange(probability.prng(), 0, kMaxNumRawPolicyMoves)
             : 0;
 
-    // Gumbel N, K for this game (for non-trainable moves).
-    GumbelParams default_gumbel_params = kGumbelParamChoices[RandRange(
-        probability.prng(), 0, kNumGumbelChoices)];
-
     // Begin Search.
+    int search_dur_avg = 0;
     GumbelEvaluator gumbel_evaluator(nn_interface, thread_id);
-    while (IsRunning() && !game.IsGameOver() && game.num_moves() < max_moves) {
+    while (IsRunning() && !game.IsGameOver() &&
+           game.num_moves() < config.max_moves) {
       // Choose n, k = 1 if we have not reached `num_moves_raw_policy` number of
       // moves.
       // Choose n, k = kDownBadParams if we are down bad.
-      bool sampling_raw_policy = game.num_moves() <= num_moves_raw_policy;
+      bool sampling_raw_policy = game.num_moves() < num_moves_raw_policy;
       bool is_either_down_bad =
           num_consecutive_down_bad_moves >= kNumDownBadMovesThreshold;
 
@@ -241,20 +221,20 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       // (1 - down_bad_coeff) * default_n + down_bad_coeff * default_n. We
       // anneal k linearly according to where n falls on the scale [default_n,
       // training_n].
-      GumbelParams trainable_gumbel_params =
-          [&default_gumbel_params, is_either_down_bad, down_bad_coeff]() {
-            if (!is_either_down_bad) {
-              // return defaults.
-              return kSelectedForTrainingParams;
-            }
+      GumbelParams trainable_gumbel_params = [&config, is_either_down_bad,
+                                              down_bad_coeff]() {
+        if (!is_either_down_bad) {
+          // return defaults.
+          return config.selected_params;
+        }
 
-            int n = (1.0f - down_bad_coeff) * default_gumbel_params.n +
-                    down_bad_coeff * kSelectedForTrainingParams.n;
-            int k = std::round((n - default_gumbel_params.n) /
-                               static_cast<float>(kSelectedForTrainingParams.n -
-                                                  default_gumbel_params.n));
-            return GumbelParams{n, k};
-          }();
+        int n = (1.0f - down_bad_coeff) * config.default_params.n +
+                down_bad_coeff * config.selected_params.n;
+        int k = std::round((n - config.default_params.n) /
+                           static_cast<float>(config.selected_params.n -
+                                              config.default_params.n));
+        return GumbelParams{n, k};
+      }();
 
       bool is_move_selected_for_training =
           probability.Uniform() < select_move_prob;
@@ -270,8 +250,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         gumbel_n = kDownBadParams.n;
         gumbel_k = kDownBadParams.k;
       } else {
-        gumbel_n = default_gumbel_params.n;
-        gumbel_k = default_gumbel_params.k;
+        gumbel_n = config.default_params.n;
+        gumbel_k = config.default_params.k;
       }
 
       // NN Stats.
@@ -352,6 +332,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
         if (std::abs(root_q) > kMaxVToAdd) {
           return 0.0f;
+        } else if (std::abs(root_q) <= kMinVToAnneal) {
+          return kAddSeenStateProb;
         }
 
         float penalty =
@@ -367,9 +349,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       auto search_dur =
           std::chrono::duration_cast<std::chrono::microseconds>(end - begin)
               .count();
-      search_dur_ema = search_dur_ema == 0
-                           ? search_dur
-                           : (search_dur_ema * 0.9 + search_dur * 0.1);
+      search_dur_avg = (search_dur_avg * (game.num_moves() - 1) + search_dur) /
+                       game.num_moves();
 
       auto log_fn = [&]() {
         std::string root_color = ToString(OppositeColor(color_to_move));
@@ -379,6 +360,11 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
           << ", Select Move Prob: " << select_move_prob
           << ", Add Init State Prob: " << add_init_state_prob
           << ", Trainable: " << is_move_selected_for_training << "\n";
+        s << "Last 5 Moves: " << game.move(game.num_moves() - 5) << ", "
+          << game.move(game.num_moves() - 4) << ", "
+          << game.move(game.num_moves() - 3) << ", "
+          << game.move(game.num_moves() - 2) << ", "
+          << game.move(game.num_moves() - 1) << "\n";
         s << "(" << root_color << ") NN Stats :\n  Q_z: " << qz_nn
           << "\n  Score: " << score_nn << "\n";
         s << "(" << root_color << ") Pre-Search Stats :\n  N: " << n_pre
@@ -389,18 +375,26 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
           << "\n  q: " << nn_move_q << "\n  qz: " << nn_move_qz << "\n";
         s << "Gumbel Move: " << move << "\n  n: " << move_n
           << "\n  q: " << move_q << "\n  qz: " << move_qz << "\n";
-        s << "Last 5 Moves: " << game.move(game.num_moves() - 5) << ", "
-          << game.move(game.num_moves() - 4) << ", "
-          << game.move(game.num_moves() - 3) << ", "
-          << game.move(game.num_moves() - 2) << ", "
-          << game.move(game.num_moves() - 1) << "\n";
-        s << "Next Root Visits: " << root_node->n
-          << " Player to Move: " << ToString(root_node->color_to_move)
+        if (!gumbel_res.child_stats.empty()) {
+          s << "Considered Moves:\n";
+          for (const ChildStats& mv_stats : gumbel_res.child_stats) {
+            s << "  " << mv_stats.move
+              << ", L: " << absl::StrFormat("%.3f", mv_stats.logit)
+              << ", g: " << absl::StrFormat("%.3f", mv_stats.gumbel_noise)
+              << ", Qc: " << absl::StrFormat("%.3f", mv_stats.qtransform)
+              << ", n: " << absl::StrFormat("%d", mv_stats.n)
+              << ", q: " << absl::StrFormat("%.3f", mv_stats.q)
+              << ", qz: " << absl::StrFormat("%.3f", mv_stats.qz)
+              << ", score: " << absl::StrFormat("%.3f", mv_stats.score) << "\n";
+          }
+        }
+        s << "(" << ToString(root_node->color_to_move)
+          << ") Next Root Visits: " << root_node->n
           << " Value: " << root_node->v << " Outcome: " << root_node->v_outcome
-          << "\n";
+          << " Score: " << root_node->score_est << "\n";
         s << "Board:\n" << game.board() << "\n";
         s << "Search Took " << search_dur
-          << "us. Search EMA: " << search_dur_ema << "us.\n";
+          << "us. Average For Game: " << search_dur_avg << "us.\n";
 
         LOG_TO_SINK(INFO, sink) << s.str();
       };

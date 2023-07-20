@@ -24,10 +24,6 @@
 
 ABSL_FLAG(std::string, model_path, "", "Path to model.");
 ABSL_FLAG(int, num_threads, 1, "Number of threads to use.");
-// ABSL_FLAG(int, gumbel_n, -1,
-//           "Override for number of visits from root of Gumbel MCTS");
-// ABSL_FLAG(int, gumbel_k, -1,
-//           "Override for number of top moves to consider in Gumbel MCTS.");
 ABSL_FLAG(std::string, recorder_path, "",
           "Path to write SGF files and TF examples. 'sgf' and 'chunks' are "
           "appended to the path.");
@@ -35,6 +31,16 @@ ABSL_FLAG(int, flush_interval, 128, "Number of games to buffer before flush.");
 ABSL_FLAG(int, max_moves, 600, "Maximum number of moves per game.");
 ABSL_FLAG(int, gen, 0, "Model generation we are generating games from.");
 ABSL_FLAG(std::string, id, "", "Worker ID.");
+
+// MCTS knobs.
+ABSL_FLAG(int, gumbel_selected_k, 8,
+          "Number of High Playout Cap Randomization moves to sample.");
+ABSL_FLAG(int, gumbel_selected_n, 128,
+          "Number of High Playout Cap Randomization visits.");
+ABSL_FLAG(int, gumbel_default_k, 5,
+          "Number of Low Playout Cap Randomization moves to sample.");
+ABSL_FLAG(int, gumbel_default_n, 32,
+          "Number of Low Playout Cap Randomization visits.");
 
 void WaitForSignal() {
   // any line from stdin is a shutdown signal.
@@ -102,10 +108,16 @@ int main(int argc, char** argv) {
   std::vector<std::thread> threads;
   for (int thread_id = 0; thread_id < num_threads; ++thread_id) {
     size_t seed = absl::HashOf(worker_id, thread_id);
-    std::thread thread(selfplay::Run, seed, thread_id, nn_interface.get(),
-                       game_recorder.get(), go_exploit_buffer.get(),
-                       absl::StrFormat("/tmp/thread%d_log.txt", thread_id),
-                       absl::GetFlag(FLAGS_max_moves));
+    std::thread thread(
+        selfplay::Run, seed, thread_id, nn_interface.get(), game_recorder.get(),
+        go_exploit_buffer.get(),
+        absl::StrFormat("/tmp/thread%d_log.txt", thread_id),
+        selfplay::SPConfig{
+            absl::GetFlag(FLAGS_max_moves),
+            selfplay::GumbelParams{absl::GetFlag(FLAGS_gumbel_selected_n),
+                                   absl::GetFlag(FLAGS_gumbel_selected_k)},
+            selfplay::GumbelParams{absl::GetFlag(FLAGS_gumbel_default_n),
+                                   absl::GetFlag(FLAGS_gumbel_default_k)}});
     threads.emplace_back(std::move(thread));
   }
 

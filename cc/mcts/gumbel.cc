@@ -184,6 +184,7 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
   // - Divide k by 2
   // - Multiply visits_per_action by 2
   int n_remaining = n;
+  int m = k;
   while (k > 1) {
     // Visits for this round: floor(n / (num_rounds * k)). If k ~ {2, 3}, then
     // this is the last round.
@@ -232,6 +233,16 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
   // result.pi_improved = ComputeRootImprovedPolicy(root, top_k_actions);
 
   result.pi_improved[gmove_info[0].move_encoding] = 1.0f;  // one-hot.
+
+  // Populate stats for visited children.
+  for (int i = 0; i < m; ++i) {
+    const GumbelMoveInfo& gmove = gmove_info[i];
+    result.child_stats.emplace_back(ChildStats{
+        gmove.move_loc, static_cast<int>(NAction(root, gmove.move_encoding)),
+        Q(root, gmove.move_encoding), QOutcome(root, gmove.move_encoding),
+        ChildScore(root, gmove.move_encoding), gmove.logit, gmove.gumbel_noise,
+        gmove.qtransform});
+  }
 
   return result;
 }

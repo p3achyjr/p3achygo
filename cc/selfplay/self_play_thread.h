@@ -7,10 +7,21 @@
 
 namespace selfplay {
 
+struct GumbelParams {
+  int n;
+  int k;
+};
+
+struct SPConfig {
+  const int max_moves;
+  const GumbelParams selected_params;
+  const GumbelParams default_params;
+};
+
 void Run(size_t seed, int thread_id, nn::NNInterface* nn_interface,
          recorder::GameRecorder* game_recorder,
          GoExploitBuffer* go_exploit_buffer, std::string logfile,
-         int max_moves);
+         SPConfig config);
 
 void SignalStop();
 bool IsRunning();

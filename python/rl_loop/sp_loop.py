@@ -3,6 +3,7 @@ from __future__ import annotations
 import gcs_utils as gcs
 import os, secrets, shlex, time
 import rl_loop.fs_utils as fs_utils
+import rl_loop.config
 
 from absl import logging
 from pathlib import Path
@@ -62,6 +63,8 @@ def loop(bin_path: str,
   sp_chunks = set(local_sp_chunk_dir.glob(TFREC_GLOB))
   sgfs = set(local_sgf_dir.glob(SGF_GLOB))
 
+  config = rl_loop.config.parse(run_id)
+
   # wait for first model.
   # !! We do not do TRT conversion here. This assumes that all GPUs in the cluster
   # are running the same compute capability.
@@ -78,13 +81,32 @@ def loop(bin_path: str,
   # most recent chunk tells us which generation we are making self-play data for.
   gen = gcs.get_most_recent_chunk(run_id)
   while True:
+
+    def get_gumbel_params():
+      # Linear growth
+      c = gen / config.num_generations
+      selected_n = config.min_train_selected_n + c * (
+          config.max_train_selected_n - config.min_train_selected_n)
+      selected_k = config.min_train_selected_k + c * (
+          config.max_train_selected_k - config.min_train_selected_k)
+      default_n = config.min_train_default_n + c * (config.max_train_default_n -
+                                                    config.min_train_default_n)
+      default_k = config.min_train_default_k + c * (config.max_train_default_k -
+                                                    config.min_train_default_k)
+      return selected_n, selected_k, default_n, default_k
+
+    selected_n, selected_k, default_n, default_k = get_gumbel_params()
     env = os.environ.copy()
     env['LD_PRELOAD'] = '/usr/local/lib/libmimalloc.so'
     cmd = shlex.split(f'{bin_path} --num_threads={num_threads}' +
                       f' --model_path={str(model_path)}' +
                       f' --recorder_path={local_run_dir}' +
                       f' --flush_interval={num_threads} --gen={gen}' +
-                      f' --id={worker_id.upper()}')
+                      f' --id={worker_id.upper()}' +
+                      f' --gumbel_selected_k={selected_k}' +
+                      f' --gumbel_selected_n={selected_n}' +
+                      f' --gumbel_default_k={default_k}' +
+                      f' --gumbel_default_n={default_n}')
     selfplay_proc = Popen(cmd,
                           stdin=PIPE,
                           stdout=PIPE,

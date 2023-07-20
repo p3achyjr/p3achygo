@@ -5,7 +5,7 @@ Starts Self-Play, then Trains when a chunk is ready, then runs Eval.
 from __future__ import annotations
 
 import gcs_utils as gcs
-import multiprocessing, os, shlex, sys, time
+import os, shlex, sys, time
 import rl_loop.config as config
 import rl_loop.model_utils as model_utils
 import rl_loop.sp_loop as sp
@@ -24,7 +24,7 @@ FLAGS = flags.FLAGS
 
 POLL_INTERVAL_S = 10
 EVAL_CACHE_SIZE = 32768
-NUM_EVAL_GAMES = 75
+NUM_EVAL_GAMES = 100
 
 flags.DEFINE_string('sp_bin_path', '', 'Local path to self-play binary.')
 flags.DEFINE_string('eval_bin_path', '', 'Local path to eval binary.')
@@ -48,8 +48,8 @@ def print_stdout(out: Popen.stdout):  # pytype : disable=unbound-type-param
 
 
 def eval(run_id: str, eval_bin_path: str, eval_res_path: str,
-         cur_model_path: str, cand_model_path: str,
-         local_run_dir: str) -> EvalResult:
+         cur_model_path: str, cand_model_path: str, local_run_dir: str, k: int,
+         n: int) -> EvalResult:
   '''`cur_model_path` and `cand_model_path` are the _base_ paths of the models.'''
   cur_model_path_trt = str(Path(cur_model_path, '_trt'))
   cand_model_path_trt = str(Path(cand_model_path, '_trt'))
@@ -61,7 +61,8 @@ def eval(run_id: str, eval_bin_path: str, eval_res_path: str,
                     f' --res_write_path={eval_res_path}' +
                     f' --recorder_path={local_run_dir}' +
                     f' --cache_size={EVAL_CACHE_SIZE}' +
-                    f' --num_games={NUM_EVAL_GAMES}')
+                    f' --num_games={NUM_EVAL_GAMES}' +
+                    f' --cur_n={n} --cur_k={k} --cand_n={n} --cand_k={k}')
   eval_proc = Popen(cmd,
                     stdin=PIPE,
                     stdout=PIPE,
@@ -133,7 +134,8 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
 
     # Run eval.
     eval_result = eval(run_id, eval_bin_path, eval_res_path, cur_model_path,
-                       cand_model_path, local_run_dir)
+                       cand_model_path, local_run_dir, config.eval_k,
+                       config.eval_n)
     if eval_result.winner == EvalResult.CAND:
       # The cand model is stronger. Upload it as new golden.
       logging.info(f'Uploading model {cand_model_path} as new golden')

@@ -84,6 +84,10 @@ inline float SumChildrenN(TreeNode* node) {
   return node == nullptr ? 0 : node->n - 1;
 }
 
+inline float ChildScore(TreeNode* node, int action) {
+  return node == nullptr ? node->score_est : -node->children[action]->score_est;
+}
+
 void AdvanceState(TreeNode* node);
 
 }  // namespace mcts
