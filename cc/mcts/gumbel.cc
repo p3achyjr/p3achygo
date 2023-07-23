@@ -28,6 +28,7 @@ static constexpr int kVisit = 50;
 static constexpr float kValueScale = 1.0;
 
 struct GumbelMoveInfo {
+  float prob = 0;
   float logit = 0;
   float gumbel_noise = 0;
   float qtransform = 0;
@@ -109,17 +110,19 @@ std::array<float, constants::kMaxNumMoves> ComputeImprovedPolicy(
 // Version of the above that only bumps the probabiilities of Gumbel selected
 // actions. This avoids choosing moves with low visit counts and high Q-values.
 std::array<float, constants::kMaxNumMoves> ComputeRootImprovedPolicy(
-    TreeNode* node, const absl::InlinedVector<int, 16>& visited_actions) {
+    TreeNode* node,
+    const std::array<float, constants::kMaxNumMoves> masked_logits,
+    const absl::InlinedVector<int, 16>& visited_actions) {
   float v_mix = VMixed(node);
   int max_n = MaxN(node);
   alignas(MM_ALIGN) std::array<float, constants::kMaxNumMoves> logits_improved;
   for (int action = 0; action < constants::kMaxNumMoves; ++action) {
     if (core::InlinedVecContains(visited_actions, action)) {
       logits_improved[action] =
-          node->move_logits[action] + QTransform(Q(node, action), max_n);
+          masked_logits[action] + QTransform(Q(node, action), max_n);
     } else {
       logits_improved[action] =
-          node->move_logits[action] + QTransform(v_mix, max_n);
+          masked_logits[action] + QTransform(v_mix, max_n);
     }
   }
 
@@ -137,7 +140,8 @@ GumbelEvaluator::GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id)
 // !! `game` and `node` must be kept in sync with each other.
 GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
                                          Game& game, TreeNode* const root,
-                                         Color color_to_move, int n, int k) {
+                                         Color color_to_move, int n, int k,
+                                         float noise_scaling) {
   DCHECK(root);
   int num_rounds = std::max(log2(k), 1);
 
@@ -147,16 +151,22 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
 
   auto num_moves = constants::kMaxNumMoves;
   auto k_valid = 0;
+
+  std::array<float, constants::kMaxNumMoves> masked_logits;  // for completed-Q.
   GumbelMoveInfo gmove_info[num_moves];
   for (int i = 0; i < num_moves; ++i) {
     if (!game.IsValidMove(i, color_to_move)) {
       // ignore move henceforth
+      masked_logits[i] = kSmallLogit;
       gmove_info[i].logit = kSmallLogit;
       continue;
     }
 
+    masked_logits[i] = root->move_logits[i];
+
+    gmove_info[i].prob = root->move_probs[i];
     gmove_info[i].logit = root->move_logits[i];
-    gmove_info[i].gumbel_noise = probability.GumbelSample();
+    gmove_info[i].gumbel_noise = noise_scaling * probability.GumbelSample();
     gmove_info[i].move_encoding = i;
     gmove_info[i].move_loc = game::AsLoc(i);
 
@@ -230,21 +240,32 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
   GumbelResult result = {raw_nn_move, gmove_info[0].move_loc, {}};
 
   // Get improved policy from completed-Q values.
-  // result.pi_improved = ComputeRootImprovedPolicy(root, top_k_actions);
+  result.pi_improved =
+      ComputeRootImprovedPolicy(root, masked_logits, top_k_actions);
 
-  result.pi_improved[gmove_info[0].move_encoding] = 1.0f;  // one-hot.
+  // result.pi_improved[gmove_info[0].move_encoding] = 1.0f;  // one-hot.
 
   // Populate stats for visited children.
   for (int i = 0; i < m; ++i) {
     const GumbelMoveInfo& gmove = gmove_info[i];
-    result.child_stats.emplace_back(ChildStats{
-        gmove.move_loc, static_cast<int>(NAction(root, gmove.move_encoding)),
-        Q(root, gmove.move_encoding), QOutcome(root, gmove.move_encoding),
-        ChildScore(root, gmove.move_encoding), gmove.logit, gmove.gumbel_noise,
-        gmove.qtransform});
+    result.child_stats.emplace_back(
+        ChildStats{gmove.move_loc /* move */,
+                   static_cast<int>(NAction(root, gmove.move_encoding)) /* n */,
+                   Q(root, gmove.move_encoding) /* q */,
+                   QOutcome(root, gmove.move_encoding) /* qz */,
+                   ChildScore(root, gmove.move_encoding) /* score */,
+                   gmove.prob /* prob */, gmove.logit /* logit */,
+                   gmove.gumbel_noise /* gumbel_noise */,
+                   gmove.qtransform /* qtransform */});
   }
 
   return result;
+}
+
+GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
+                                         Game& game, TreeNode* const root,
+                                         Color color_to_move, int n, int k) {
+  return SearchRoot(probability, game, root, color_to_move, n, k, 1.0f);
 }
 
 // `board`: Local search board

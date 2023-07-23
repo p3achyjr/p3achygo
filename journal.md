@@ -286,3 +286,433 @@ In general there seems to be a big parallel between model-based methods (where w
 ## 7-17-2023
 
 - Starting to implement a training sample window, and realized that we should train past the end of self-play. Samples that are drawn through their entire window are used an average of $k$ times (depending on how we pick our sample draw probability), but samples that lie at the end are drawn much less than that (i.e. the last generation is drawn $\frac{k}{gen_{window}}$ times). Therefore we should train past the end of self-play. I think a reasonable starting point is to train $gen_{window} - 10$ generations past the end of self-play.
+
+## 7-21-2023
+
+- Sample window is implemented and untested.
+- GTP Engine is implemented. I tried on CPU and it is slowwwwwwww. Recompiling Tensorflow to see if that's the problem. Have not stress tested it yet.
+- Need to implement `genmove_analyze` and `analyze` commands.
+- Noticed that the raw policy network seems to completely ignore the first move, and suggest the top right corner regardless. Maybe I have a bug, or maybe the regularization strength is too strong? I'm reading up on the fixup variance stuff that @lightvector did.
+
+## 7-22-2023
+
+Noticed severe policy blind spots for model_0069 and model_0091. Looks like it persists throughout training.
+Sample positions:
+
+```
+19 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+18 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+17 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+16 ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅
+15 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+14 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+13 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+12 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+11 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+10 ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅
+9  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+8  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+7  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+6  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+5  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅
+4  ⋅ ⋅ ● + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅
+3  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅
+2  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+1  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+   A B C D E F G H J K L M N O P Q R S T
+```
+
+In this position, we would expect white to attach (r5), jump (o3, o4), or tenuki. However, the raw policy estimate gives these:
+
+```
+d3: 0.116455
+q3: 0.106079
+c16: 0.096558
+r4: 0.086182
+c4: 0.085205
+q17: 0.082275
+d17: 0.079468
+r16: 0.079468
+d16: 0.068604
+q16: 0.068176
+```
+These are similar to the policy estimates the net would give at an empty board position. The network itself will *always* play the low approach to the 3-4 point, so the high approach here is off-policy. What's striking is just how severe the blind spot is--why is the net giving policy estimates for an empty board?
+
+Even weirder, a few moves later, a reasonable response to the high approach appears in the top policy candidates:
+
+```
+19 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+18 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+17 ⋅ ⋅ ○ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+16 ⋅ ⋅ ● ○ ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅
+15 ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+14 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+13 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+12 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+11 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+10 ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅
+9  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+8  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+7  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+6  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+5  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+4  ⋅ ⋅ ● + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅
+3  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅
+2  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+1  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+   A B C D E F G H J K L M N O P Q R S T
+
+Top Policy Moves:
+c12: 0.263184
+r5: 0.180908 <--
+d15: 0.113647
+e3: 0.082825
+r17: 0.081543
+e14: 0.066833
+d12: 0.053680
+c11: 0.031677
+e4: 0.021194
+b17: 0.012360
+```
+
+Why does it appear here after the variation in the top left corner?
+
+I want to test playing against the model_0000 too, to see if this is a learned blind spot, or one that was just never remedied.
+
+Another blind spot, in the same game:
+
+```
+19 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+18 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+17 ⋅ ⋅ ○ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+16 ⋅ ⋅ ● ○ ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+15 ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+14 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+13 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+12 ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+11 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+10 ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅
+9  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+8  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+7  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+6  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ○ ⋅ ⋅
+5  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+4  ⋅ ⋅ ● + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+3  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ○ ● ⋅ ⋅ ⋅
+2  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅ ● ⋅ ⋅
+1  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅
+   A B C D E F G H J K L M N O P Q R S T
+
+Top Policy Moves:
+r4: 0.116455
+r16: 0.106079
+d3: 0.096558
+q17: 0.086182
+q3: 0.085205
+c16: 0.082275
+d17: 0.079468
+c4: 0.079468
+d4: 0.068604
+d16: 0.068176
+```
+
+Another blind spot:
+```
+19 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+18 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ● ○ ⋅ ⋅
+17 ⋅ ⋅ ○ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅ ● ○ ○ ⋅
+16 ⋅ ⋅ ● ○ ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ● ○ ● ● ⋅
+15 ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ○ ○ ○ ● ⋅
+14 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅ ● ○ ⋅
+13 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ⋅
+12 ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+11 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+10 ⋅ ⋅ ○ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅
+9  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+8  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+7  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+6  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ○ ⋅ ⋅
+5  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+4  ⋅ ⋅ ● ● ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+3  ⋅ ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ○ ● ⋅ ⋅ ⋅
+2  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅ ● ⋅ ⋅
+1  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅
+   A B C D E F G H J K L M N O P Q R S T
+
+Top Policy Moves:
+d17: 0.116455
+q17: 0.106079
+c4: 0.096558
+r16: 0.086182
+c16: 0.085205
+q3: 0.082275
+r4: 0.079468
+d3: 0.079468
+d4: 0.068604
+q4: 0.068176
+```
+
+Blind spots in model_0000:
+
+```
+19 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+18 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+17 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+16 ⋅ ⋅ ● ○ ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅
+15 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+14 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+13 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+12 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+11 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+10 ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅
+9  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+8  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+7  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+6  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+5  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+4  ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ● ● ● ⋅ ⋅
+3  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ○ ○ ⋅ ⋅
+2  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+1  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+   A B C D E F G H J K L M N O P Q R S T
+
+Tree Stats:
+  N: 11
+  V: 0.041657
+  Score: 0.761295
+Top Policy Moves:
+d4: 0.145303
+d16: 0.139462
+q4: 0.136512
+q16: 0.133628
+r16: 0.059653
+c4: 0.055424
+c16: 0.053411
+d3: 0.048746
+```
+
+```
+19 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+18 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+17 ⋅ ⋅ ○ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅
+16 ⋅ ⋅ ● ○ ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅
+15 ⋅ ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+14 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+13 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+12 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+11 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+10 ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅
+9  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+8  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+7  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+6  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+5  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+4  ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ● ● ● ⋅ ⋅
+3  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ○ ○ ⋅ ⋅
+2  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+1  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+   A B C D E F G H J K L M N O P Q R S T
+
+Tree Stats:
+  N: 11
+  V: 0.028123
+  Score: 0.578272
+Top Policy Moves:
+q4: 0.145303
+d4: 0.139462
+q16: 0.136512
+d16: 0.133628
+d17: 0.059653
+q3: 0.055424
+d3: 0.053411
+r4: 0.048746
+```
+
+3-3 Blind Spot:
+
+```
+19 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+18 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+17 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+16 ⋅ ⋅ ● + ○ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+15 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+14 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+13 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+12 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+11 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+10 ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅
+9  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+8  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+7  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+6  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+5  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+4  ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅
+3  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+2  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+1  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+   A B C D E F G H J K L M N O P Q R S T
+```
+
+model_0093 Blind Spot:
+
+```
+
+Tree Stats:
+  N: 56
+  V: -0.299922
+  Score: -15.850084
+
+19 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+18 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+17 ⋅ ⋅ ⋅ ● ○ ⋅ ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+16 ⋅ ⋅ ● + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+15 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+14 ⋅ ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ○ ● ⋅
+13 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ●
+12 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅
+11 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+10 ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅
+9  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+8  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+7  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+6  ⋅ ⋅ ○ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+5  ⋅ ⋅ ● ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+4  ⋅ ⋅ ● + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅
+3  ⋅ ⋅ ⋅ ● ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+2  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+1  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+   A B C D E F G H J K L M N O P Q R S T
+
+Top Policy Moves:
+r16: 0.117676
+r4: 0.097595
+c4: 0.096069
+q3: 0.094177
+c16: 0.089172
+d3: 0.078735
+d17: 0.076904
+q17: 0.076233
+```
+
+Another blind spot:
+
+```
+19 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+18 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+17 ⋅ ⋅ ⋅ ● ○ ⋅ ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+16 ⋅ ⋅ ● + ○ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+15 ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+14 ⋅ ⋅ ○ ● ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ○ ● ⋅
+13 ⋅ ⋅ ○ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ●
+12 ⋅ ⋅ ○ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅
+11 ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+10 ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅
+9  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+8  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+7  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+6  ⋅ ⋅ ○ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+5  ⋅ ⋅ ● ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+4  ⋅ ⋅ ● + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅
+3  ⋅ ⋅ ⋅ ● ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅
+2  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+1  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+   A B C D E F G H J K L M N O P Q R S T
+
+Top Policy Moves:
+d3: 0.117676
+q3: 0.097595
+q17: 0.096069
+r4: 0.094177
+d17: 0.089172
+r16: 0.078735
+c16: 0.076904
+c4: 0.076233
+```
+
+Another blind spot, but MCTS recovers a decent move:
+
+```
+19 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+18 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+17 ⋅ ⋅ ⋅ ● ○ ⋅ ● ⋅ ⋅ ● ⋅ ○ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+16 ⋅ ⋅ ● + ○ ⋅ ○ ● ⋅ + ⋅ ● ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+15 ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+14 ⋅ ⋅ ○ ● ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ○ ● ⋅
+13 ⋅ ⋅ ○ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ●
+12 ⋅ ⋅ ○ ● ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅
+11 ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+10 ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅
+9  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+8  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+7  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+6  ⋅ ⋅ ○ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+5  ⋅ ⋅ ● ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+4  ⋅ ⋅ ● + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ● ○ ○ ⋅ ⋅
+3  ⋅ ⋅ ⋅ ● ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ● ○ ⋅ ⋅
+2  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+1  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+   A B C D E F G H J K L M N O P Q R S T
+
+Top Policy Moves:
+c4: 0.117676
+c16: 0.097595
+r16: 0.096069
+d17: 0.094177
+r4: 0.089172
+q17: 0.078735
+q3: 0.076904
+d3: 0.076233
+```
+
+Another blind spot. Here gumbel noise was not enough to recover a good move.
+```
+19 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+18 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+17 ⋅ ⋅ ⋅ ● ○ ⋅ ● ⋅ ⋅ ● ○ ○ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+16 ⋅ ⋅ ● ● ○ ⋅ ○ ● ⋅ + ⋅ ● ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+15 ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+14 ⋅ ⋅ ○ ● ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ○ ● ⋅
+13 ⋅ ⋅ ○ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ●
+12 ⋅ ⋅ ○ ● ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅
+11 ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+10 ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅
+9  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+8  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+7  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+6  ⋅ ⋅ ○ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+5  ⋅ ⋅ ● ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+4  ⋅ ⋅ ● + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ● ○ ○ ⋅ ⋅
+3  ⋅ ⋅ ⋅ ● ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ● ○ ⋅ ⋅
+2  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+1  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+   A B C D E F G H J K L M N O P Q R S T
+
+Top Policy Moves:
+c16: 0.117676
+c4: 0.097595
+r4: 0.096069
+d3: 0.094177
+r16: 0.089172
+q3: 0.078735
+q17: 0.076904
+d17: 0.076233
+```
+
+When black extends at Q15, white gets confused in later nets. This problem is not present in earlier nets. The above position is from playing against model_0030.
+
+Possible approaches to remedy:
+- Use a larger, more diverse pool of initial games to train from (Tygem dataset?).
+- Send it and start from 0.
+- Use completed-Q values to provide a more nuanced training target (in the case of the 3-4 point, both the high and low kakari are fine, but with a one-hot training target the net may arbitrarily converge on one).
+- Keep a gradually-growing go-exploit buffer that contains positions from all generations of play.
+- On a small percentage of games, play randomly for the first `n` moves (literally randomly). Alternatively, do a root policy softmax temperature for the opening.
+- Root policy temperature for all moves, before applying noise.
+- Force branch the net to a low-visit move on a certain percentage of moves.
+
+Other notes:
+- Maybe the gumbel noise + self-play is not enough to remedy off-policy issues.
+- Is Gumbel itself flawed? I.e. it is guaranteed to produce a policy improvement _relative to the Q-prediction of the current network_, but may not produce a generalized, robust policy improvement.
+- We can generate random positions on a small percentage of games start self-play from these, to help with policy generalization.
+- We can also randomly sample positions from all previous states, not just states generated from the current generation of self-play.
+- Eval should play against the last best model, and also a randomly selected golden from the last `n` goldens, before being promoted.
+- Akin to temperature, we can play according to completed-Q values in the first `n` moves of search.

@@ -37,13 +37,10 @@ static constexpr float kUseSeenStateProb = .25f;
 static constexpr int kMaxNumRawPolicyMoves = 30;
 
 // Probability of exploration.
-static constexpr float kOpeningExploreProb = .95f;
+static constexpr float kOpeningExploreProb = .75f;
 
 // Thresholds at which to compute pass-alive regions.
 static constexpr int kComputePAMoveNums[] = {175, 200, 250, 300, 350, 400};
-
-// Low train probability.
-static constexpr float kLowTrainProb = .25;
 
 // Probability that game is selected for full tree logging.
 static constexpr float kLogFullTreeProb = .002;
@@ -56,9 +53,6 @@ static constexpr float kDownBadThreshold = -.90;
 
 // Number of moves at down bad threshold before decreasing visit count.
 static constexpr float kNumDownBadMovesThreshold = 5;
-
-// Minimal visit count for almost-guaranteed lost games.
-static constexpr GumbelParams kDownBadParams = GumbelParams{24, 4};
 
 // Whether the thread should continue running.
 static std::atomic<bool> running = true;
@@ -246,9 +240,6 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       } else if (is_move_selected_for_training) {
         gumbel_n = trainable_gumbel_params.n;
         gumbel_k = trainable_gumbel_params.k;
-      } else if (is_either_down_bad) {
-        gumbel_n = kDownBadParams.n;
-        gumbel_k = kDownBadParams.k;
       } else {
         gumbel_n = config.default_params.n;
         gumbel_k = config.default_params.k;

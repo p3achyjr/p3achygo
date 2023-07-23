@@ -16,6 +16,7 @@ struct ChildStats {
   float q;
   float qz;
   float score;
+  float prob;
   float logit;
   float gumbel_noise;
   float qtransform;
@@ -45,6 +46,9 @@ class GumbelEvaluator final {
   // Performs a full Gumbel root search. Returns a pair of the original move,
   // and the selected move.
   // If n == 1, we will sample a move directly from the policy.
+  GumbelResult SearchRoot(core::Probability& probability, game::Game& game,
+                          TreeNode* root, game::Color color_to_move, int n,
+                          int k, float noise_scaling);
   GumbelResult SearchRoot(core::Probability& probability, game::Game& game,
                           TreeNode* root, game::Color color_to_move, int n,
                           int k);

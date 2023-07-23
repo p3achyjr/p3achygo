@@ -2,6 +2,7 @@
 
 #include "absl/log/check.h"
 #include "cc/constants/constants.h"
+#include "cc/core/util.h"
 #include "cc/nn/create_tensor_shape.h"
 #include "tensorflow/cc/ops/array_ops.h"
 #include "tensorflow/cc/ops/math_ops.h"
@@ -23,7 +24,7 @@ void FillNNInput(int batch_id, int batch_size, Tensor& input_planes,
 
   auto raw = input_planes.shaped<float, 4>(
       {batch_size, BOARD_LEN, BOARD_LEN, constants::kNumInputFeaturePlanes});
-  auto fill_plane_pair = [batch_id, color, &raw](Board::BoardData grid,
+  auto fill_plane_pair = [batch_id, color, &raw](const Board::BoardData& grid,
                                                  int our_index, int opp_index) {
     for (auto i = 0; i < BOARD_LEN; ++i) {
       for (auto j = 0; j < BOARD_LEN; ++j) {
