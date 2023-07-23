@@ -1,50 +1,71 @@
 #include "cc/mcts/leaf_evaluator.h"
 
 #include "absl/log/check.h"
+#include "cc/mcts/constants.h"
 
 namespace mcts {
 namespace {
-using ::game::Color;
-using ::game::Game;
-using ::game::Loc;
-
-static constexpr float kScoreScale = .5;
-
-float ScoreTransform(float score_est, float root_score_est) {
-  return kScoreScale * M_2_PI *
-         std::atan((score_est - root_score_est) / BOARD_LEN);
-}
+using namespace ::game;
 }  // namespace
 
 LeafEvaluator::LeafEvaluator(nn::NNInterface* nn_interface, int thread_id)
-    : nn_interface_(nn_interface), thread_id_(thread_id) {}
+    : LeafEvaluator(nn_interface, thread_id, kDefaultScoreWeight) {}
 
-void LeafEvaluator::EvaluateRoot(const Game& game, TreeNode* node,
+LeafEvaluator::LeafEvaluator(nn::NNInterface* nn_interface, int thread_id,
+                             float score_weight)
+    : nn_interface_(nn_interface),
+      thread_id_(thread_id),
+      score_weight_(score_weight) {}
+
+void LeafEvaluator::EvaluateRoot(core::Probability& probability,
+                                 const Game& game, TreeNode* node,
                                  Color color_to_move) {
   // Call for any not-yet-evaluated root nodes.
-  InitTreeNode(node, game, color_to_move);
-  node->n = 1;
-  node->w = node->value_est;
-  node->q = node->w;
-  node->init_util_est = node->w;
+  InitTreeNode(probability, node, game, color_to_move);
+  InitFields(node, 0);
 }
 
-void LeafEvaluator::EvaluateLeaf(const Game& game, TreeNode* node,
-                                 Color color_to_move, float root_score_est) {
-  InitTreeNode(node, game, color_to_move);
-  float score_utility = ScoreTransform(node->score_est, root_score_est);
+void LeafEvaluator::EvaluateLeaf(core::Probability& probability,
+                                 const Game& game, TreeNode* node,
+                                 Color color_to_move, Color root_color,
+                                 float root_score_est) {
+  InitTreeNode(probability, node, game, color_to_move);
 
-  node->n = 1;
-  node->w = node->value_est + score_utility;
-  node->q = node->w;
-  node->init_util_est = node->w;
+  root_score_est *= color_to_move == root_color ? 1.0f : -1.0f;
+  float score_utility =
+      ScoreTransform(score_weight_, node->score_est, root_score_est);
+
+  InitFields(node, score_utility);
 }
 
-void LeafEvaluator::InitTreeNode(TreeNode* node, const Game& game,
-                                 Color color_to_move) {
+void LeafEvaluator::EvaluateTerminal(const Scores& scores,
+                                     TreeNode* terminal_node,
+                                     Color color_to_move, Color root_color,
+                                     float root_score_estimate) {
+  float player_score =
+      color_to_move == BLACK ? scores.black_score : scores.white_score;
+  float opp_score =
+      color_to_move == BLACK ? scores.white_score : scores.black_score;
+  // float final_score =
+  //     player_score - opp_score + constants::kScoreInflectionPoint;
+  // float empirical_q =
+  //     (player_score > opp_score ? 1.0 : -1.0) +
+  //     ScoreTransform(final_score, root_score_est, BOARD_LEN);
+
+  // TODO: Experiment with this.
+  float empirical_q = player_score > opp_score ? kMaxQ : kMinQ;
+  float empirical_outcome = player_score > opp_score ? 1.0 : -1.0;
+
+  terminal_node->is_terminal = true;
+  terminal_node->v = empirical_q;
+  terminal_node->v_outcome = empirical_outcome;
+}
+
+void LeafEvaluator::InitTreeNode(core::Probability& probability, TreeNode* node,
+                                 const Game& game, Color color_to_move) {
   DCHECK(node->state == TreeNodeState::kNew);
-  nn::NNInferResult infer_result =
-      nn_interface_->LoadAndGetInference(thread_id_, game, color_to_move);
+  nn::NNInferResult infer_result = nn_interface_->LoadAndGetInference(
+      thread_id_, game, color_to_move, probability);
 
   std::copy(infer_result.move_logits.begin(), infer_result.move_logits.end(),
             node->move_logits.begin());
@@ -56,13 +77,23 @@ void LeafEvaluator::InitTreeNode(TreeNode* node, const Game& game,
 
   float score_est = 0.0;
   for (auto i = 0; i < constants::kNumScoreLogits; ++i) {
-    score_est += (infer_result.score_probs[i] * i);
+    float score_normalized = i - constants::kScoreInflectionPoint + .5;
+    score_est += (infer_result.score_probs[i] * score_normalized);
   }
 
   node->color_to_move = color_to_move;
-  node->value_est = value_est;
+  node->outcome_est = value_est;
   node->score_est = score_est;
 
   AdvanceState(node);
+}
+
+inline void LeafEvaluator::InitFields(TreeNode* node, float score_utility) {
+  node->n = 1;
+  node->w = node->outcome_est + score_utility;
+  node->w_outcome = node->outcome_est;
+  node->v = node->w;
+  node->v_outcome = node->w_outcome;
+  node->init_util_est = node->w;
 }
 }  // namespace mcts

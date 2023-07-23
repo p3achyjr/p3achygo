@@ -1,11 +1,11 @@
-#include "cc/recorder/sgf_serializer.h"
+#include "cc/sgf/sgf_serializer.h"
 
 #include "cc/core/doctest_include.h"
 #include "cc/game/game.h"
 #include "cc/game/loc.h"
 #include "cc/game/move.h"
 
-namespace recorder {
+namespace sgf {
 using ::game::Game;
 using ::game::Loc;
 using ::game::Move;
@@ -28,7 +28,7 @@ std::unique_ptr<SgfNode> ToSgfNode(const Game& game) {
   root_node->AddProperty(std::make_unique<SgfBPlayerProp>(kTestPB));
   root_node->AddProperty(std::make_unique<SgfWPlayerProp>(kTestPW));
 
-  int num_moves = game.move_num();
+  int num_moves = game.num_moves();
   SgfNode* current_node = root_node.get();
   for (int i = 0; i < num_moves; ++i) {
     const Move& move = game.move(i);
@@ -135,4 +135,4 @@ TEST_CASE("SgfSerializer") {
              "(;FF[4]GM[1](;B[aa])(;B[ab](;W[ac])(;W[ad])))\n");
   }
 }
-}  // namespace recorder
+}  // namespace sgf

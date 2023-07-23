@@ -1,5 +1,5 @@
-#ifndef __SHUFFLER_FILENAME_BUFFER_H_
-#define __SHUFFLER_FILENAME_BUFFER_H_
+#ifndef SHUFFLER_FILENAME_BUFFER_H_
+#define SHUFFLER_FILENAME_BUFFER_H_
 
 #include <deque>
 #include <optional>
@@ -16,7 +16,8 @@ namespace shuffler {
  */
 class FilenameBuffer final {
  public:
-  FilenameBuffer(const absl::flat_hash_set<std::string>& files);
+  explicit FilenameBuffer(const absl::flat_hash_set<std::string>& files);
+  FilenameBuffer() = default;
   ~FilenameBuffer() = default;
 
   // Disable Copy

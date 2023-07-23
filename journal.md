@@ -183,3 +183,536 @@ Other performance improvements are:
 - SSE Softmax implementation. This saves about ~25% CPU for MCTS.
 
 I _still_ need to get my stuff running on Kubernetes. Honestly I've been pushing this off since it just seems like the least interesting part. But by the end of this week, it should be there :)
+
+## 7-06-2023 (Run v0)
+I am currently training on an HPC cluster from Lambda Labs, with 30 vCPUs and 1 A100 GPU. It takes about ~70 minutes to complete one generation, with 5000 games per generation. Gumbel N, K is a flat 32, 4. I am on generation 15 at the moment. The net learns steadily, with each generation improving by 50-100 Elo. I have yet to evaluate against other bots, or to check whether the Elo gain is transitive.
+
+Some observations:
+
+- The model prefers a moyo-based playstyle in early generationos. Maybe this is a result of the net not being able to do good enough reads to justify the tight, fighting-heavy style in professional play, or maybe the N, K parameters are just too low.
+- The model is very bad at detecting atari, especially for larger groups. This might be because it's easy to create an atari circuit for single stones, but hard for chains of arbitrary shape and size. Our model is small, so it might be worth just adding this as a field, even if it means that we will not be able to tell if the model will eventually learn to recognize arbitrary atari. This may also be a result of low visit MCTS, but considering how compute bound I am I can't just simply raise the number of visits.
+- Opening and midgame play looks good for the most part, but late game play is atrocious. For one, the model will pretty much never pass. I think this might be because we set win/loss to 1.5/-1.5, so the losing side will pretty much never pass. It might be better to just have this as 1.0/-1.0 + score_diff.
+- Groups that should not die end up dying. This leads to wild swings in score across the game and huge captures at the end. The model is actually pretty good at predicting these large score differentials, but this could also indicate value overfitting. This might also be a result (again) of low visit counts, as we do not explore the search tree deep enough to see these groups die, or to have the effect of the dying group affect our search tree.
+- The model does steadily improve, but the winrate of the model as white is far, far higher as white than black. Maybe it's because the komi parameter was not normalized (we pass in 7.5 instead of .5). Whoops :) I should start logging the average winrate of each color, overall and per candidate, during evaluation games.
+
+## 7-09-2023 (Run v0)
+
+- The last run seemed like it would not recover, as white was winning practically every game. I restarted the run with 64, 4 and normalized the komi, and so far it looks better. Funnily enough I forgot to update the training code to normalize the komi but oh well.
+- I added support for resignation in eval, and low visits in selfplay after one side is pretty much guaranteed to lose. I only lower to visit count of the losing side, so in one game, the side that wins will actually produce more training examples. This is bad. Playout Cap Randomization should fix this. If I were to implement that, I would also just drop the visit counts of both players.
+- I also realized that in my Go-Exploit buffer, I add many states per game, but pop the earliest state inserted. This could also be bad, since all those states will share the same result. Instead, I should pop a random value. Since buffer ordering does not matter, I can afford to do a swap-and-pop.
+- Minigo implemented resignation in self-play partly to prevent overfitting to a large number of endgame states. I can emulate this by implementing some kind of weighting to moves past a certain move number or certain threshold. Maybe this could be min(first_down_bad, 300) or something.
+
+## 7-10-2023 (Run v0)
+- In a rerun with N=64, K=4, it looks like the model is more willing to fight. I would not be surprised if this is because N=32, K=4 does not give the model enough reading horizon to make accurate predictions, so a moyo-based approach is safer.
+
+
+## 7-14-2023
+
+I ended up just renting an A100 on Lambda Labs. Dollar for dollar it seems to be a much better use of resources.
+
+I did some early runs and the results seemed to be promising--but it turns out that I was just doing evaluation incorrectly. Instead of playing against the current best model, I was just playing against the last model. Kind of sad, but maybe this is at least signal that the RL feedback loop works? I plan on testing the RL loop feedback loop on 9x9 games.
+
+I am doing some testing on MCTS hyperparameters to see what the best values of N, K are. It seems like my initial hypothesis that keeping K low was wrong :) I will also run some experiments to check the position diversity that low visit counts generate, as well as tests on Elo gain relative to N, given the optimal K value for each N. Maybe there is a rough closed-form formula we can use?
+
+Some other ideas:
+
+- Learning Rate Growth: We know we have a good model to begin with, so we do not want to destroy it. Also, with SWA, we compute an average of $0.75w_{old} + 0.25w_{new}$. However, the beginning chunks that we train on are very small, and probably just serve to introduce noise instead of leading to convergence (these early chunks often will not even span 100 mini-batches). Thus, we can gradually increase the learning rate to its full value, maybe based on the size of the chunk we receive.
+  - Alternatively, we can vary the SWA momentum based on the number of mini-batches. A simple way to do this is to scale it linearly based on the number of mini-batches in the chunk. We know that a full-sized chunk should contain 8000 mini-batches (in our formulation, this depends on the number of samples per game and could be between 6000 - 8000). We can scale the momentum via $m_{SWA_{new}} = 0.25 * max(1, \frac{\text{num\_batches}}{6000})$
+  - (Probably better) write down checkpoints every 1000 batches, instead of after every chunk. We can use the chunk number as a generation counter. Additionally, we can do a "model_0 bootstrap", where model_0 plays a large number of games before the shuffler creates a chunk for it. This prevents us from overdrawing games from the first generation, and will make it so that the first chunk should, in expectation, contain at least 1000 batches.
+    - To make this easier, we would probably have to rewrite the shuffler to output 1000 batches at a time. Maybe keeping it simple for now is fine (i.e. just do the model_0 bootstrap).
+- Entropy-weighted policy selection: instead of using a fixed probability for selecting nodes for training, weight the probability of selecting a node for training based on the entropy of the prior distribution. We could weight samples based on value estimation as well, but this could just lead to overfitting (i.e. the model overfits to give sharp value estimates )
+- Cache `N`, `v_mix` values for evaluated nodes, and use a weighted average of this estimate + the NN estimate for leaf nodes based on the number of visits used to calculate `v_mix`. This is kind of like subtree bias correction in Katago. I still need to flesh out how to accurately update these values throughout self-play. I am not sure if will introduce bias into training.
+- Policy surprise weighting. Same as Katago.
+- Some kind of quiescence search. Maybe better for test time than self-play training.
+- Reset `n` on each search? If we keep `n` values at each search, we already have some pre-defined idea of how good each node is. It will be hard to override this value if `n` is already high (should verify that `v_mix` behaves this way). If we reset `n` values, we keep the `q` values already found for each note, but reset the _weight_ that the existing `q` values give. Thus, we depend solely on the value observations for the _current_ search to find our observed `q` for the current node.
+  - The result of this would be to weight deeper nodes' value estimates higher than shallower nodes. Is this valid? I'm not sure. Deeper nodes lie closer to the end of the game, but may be noisier.
+  - Another way to incorporate this is to have `q` values from previous searches decay by some factor.
+- NN uncertainty estimation (estimate $\mu$, $\sigma$ for value targets). Still not sure how this would help, but it may increase position diversity. We could also have the MCTS planning change based on uncertainty, although this could also be detrimental (or maybe not? would the model just learn to avoid big fights and ladders?). With this, I'm not sure if caching `v_mix` would still work. Maybe we can cache $\mu_{v_{mix}}$, $\sigma_{v_{mix}}$.
+  - I also need to flesh out how to combine these values via MCTS. If we just do a running statistical average, this assumes that all subtree Q estimates are i.i.d, which of course they are not. Granted--the original MCTS algorithm does the same with the regular Q-values, so maybe this would not be an issue in practice.
+- NN Uncertainty Estimation and planning.
+  - If we do not predict $\mu_q$, $\sigma_q$ from the model, we can also have an empirical estimate $\sigma_{q_{MCTS}}$ gathered from the search. We can use Welford's algorithm to calculate this online.
+  - If we do predict $\mu_q$, $\sigma_q$, we can simply treat each value prediction from MCTS as a gaussian. Similar to AlphaZero, we will treat these as i.i.d reward estimates and keep the running average (of course they are not i.i.d but w/e).
+
+Other tests:
+- Check position diversity generated by low visit count MCTS.
+  - Update 7-15: This is essentially negligible, all values give ~2.5% shared root positions across 180 games. These shared root positions are likely at the beginning of games.
+- Check relative Elo for high visit counts, given the optimal K for each.
+  - MCTS starts to go blind above 192 visits. We are probably brushing up against the limits of our value function. Maybe deeper search nodes give noisier estimates, or non-root planning gives compounding errors deeper in the search tree.
+- Compare KL-div of completed Q-values at high visit counts compared to the true distribution (estimated by `Gumbel(10000, 64)`), and find the first-order peak. This is similar to https://github.com/leela-zero/leela-zero/issues/1416
+- Check whether playing according to completed-Q values is stronger than playing according to $A_{n+1}$ from gumbel.
+- Check Elo loss between base model and TRT converted model.
+- Introspect the training data to see, for each training example:
+  - The prior entropy of the position.
+  - The KL Divergence of the MCTS move relative to the prior.
+
+Other implementation
+- GTP Commands
+- Merge game-playing options
+
+## 7-15-2023
+
+I'm currently doing another run. The model seems to be improving, besting the old goldens every other model. I plan on letting this run to completion, which should take about a week. I did make a few mistakes, so jotting down some notes here:
+
+- Don't add initial states for positions with under 5% winrate for the losing side.
+- Implement the down-bad metric to be 5 consecutive turns across both sides.
+- Implement "soft resign" visit count cap.
+- Lift control knobs for selfplay into configs.
+- Add timestamps to self-play training chunks.
+- Only convert new goldens to TRT. Play eval games with unconverted model.
+- Implement some kind of training window growth.
+- Output score gaussian instead of score logits, to prevent the model from always chasing deterministic high scores in MCTS.
+- Experiment with training configuration.
+  - Try Cyclic LR per chunk.
+  - Play more games in generation 1, to ensure that we have a critical mass of training examples in the first generation (20000, 8000 maybe?).
+  - SWA momentum growth seems to work well. Maybe we can try replacing it with learning rate growth, but this is low-pri.
+  - Only promote models as new goldens if we hit some confidence bound. The original AlphaGo Zero paper picked a 55% winrate across 400 games, which corresponds to a 95% CI. If I play 75 games, the corresponding winrate would be about 62%, but making this strict could end up overfitting to a single policy. Maybe one standard deviation is a good start.
+
+I also went down a whole rabbit hole of model uncertainty. I was considering having the model predict its own error, but a quick glance at some UC Berkeley slides tabled that idea. The issue is that we need to measure our uncertainty about the model, not the model's uncertainty about our state space. In Go, the state space's uncertainty might well be 0, and the model is incentivized to output 0 if it is optimizing against a fixed dataset.
+
+I also had an idea around online uncertainty calculation, which we can easily compute by using Welford's algorithm. This seems to be something that a lot of people have thought about. Pasting some resources here:
+
+- [A Distributional Perspective on Reinforcement Learning](https://arxiv.org/pdf/1707.06887.pdf)
+- [Deep Exploration via Randomized Value Functions](https://arxiv.org/pdf/1703.07608.pdf)
+- [Randomized Prior Functions for DRL](https://arxiv.org/pdf/1806.03335.pdf)
+- [Model Based Value Expansion for Efficient Model-free Reinforcement Learning](https://arxiv.org/pdf/1803.00101.pdf)
+- [Online Robust Reinforcement Learning with Model Uncertainty](https://arxiv.org/pdf/2109.14523.pdf)
+
+In general there seems to be a big parallel between model-based methods (where we are trying to learn and refine a dynamics model), and the way we calculate Q via MCTS. We can view Q as a dynamics function $p(q_{s'} | s, a)$, where instead of modeling a distribution over next states, we are modeling a distribution over our next q-value. I need to refine this line of thinking, but methods to deal with model-based RL should be directly applicable to our case, where we are planning through a noisy q-estimate on every timestep.
+
+## 7-16-2023
+
+- Found a bug where we are not viewing our root score estimate from the perspective of the current player...
+
+## 7-17-2023
+
+- Starting to implement a training sample window, and realized that we should train past the end of self-play. Samples that are drawn through their entire window are used an average of $k$ times (depending on how we pick our sample draw probability), but samples that lie at the end are drawn much less than that (i.e. the last generation is drawn $\frac{k}{gen_{window}}$ times). Therefore we should train past the end of self-play. I think a reasonable starting point is to train $gen_{window} - 10$ generations past the end of self-play.
+
+## 7-21-2023
+
+- Sample window is implemented and untested.
+- GTP Engine is implemented. I tried on CPU and it is slowwwwwwww. Recompiling Tensorflow to see if that's the problem. Have not stress tested it yet.
+- Need to implement `genmove_analyze` and `analyze` commands.
+- Noticed that the raw policy network seems to completely ignore the first move, and suggest the top right corner regardless. Maybe I have a bug, or maybe the regularization strength is too strong? I'm reading up on the fixup variance stuff that @lightvector did.
+
+## 7-22-2023
+
+Noticed severe policy blind spots for model_0069 and model_0091. Looks like it persists throughout training.
+Sample positions:
+
+```
+19 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+18 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+17 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+16 ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅
+15 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+14 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+13 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+12 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+11 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+10 ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅
+9  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+8  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+7  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+6  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+5  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅
+4  ⋅ ⋅ ● + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅
+3  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅
+2  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+1  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+   A B C D E F G H J K L M N O P Q R S T
+```
+
+In this position, we would expect white to attach (r5), jump (o3, o4), or tenuki. However, the raw policy estimate gives these:
+
+```
+d3: 0.116455
+q3: 0.106079
+c16: 0.096558
+r4: 0.086182
+c4: 0.085205
+q17: 0.082275
+d17: 0.079468
+r16: 0.079468
+d16: 0.068604
+q16: 0.068176
+```
+These are similar to the policy estimates the net would give at an empty board position. The network itself will *always* play the low approach to the 3-4 point, so the high approach here is off-policy. What's striking is just how severe the blind spot is--why is the net giving policy estimates for an empty board?
+
+Even weirder, a few moves later, a reasonable response to the high approach appears in the top policy candidates:
+
+```
+19 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+18 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+17 ⋅ ⋅ ○ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+16 ⋅ ⋅ ● ○ ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅
+15 ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+14 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+13 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+12 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+11 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+10 ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅
+9  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+8  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+7  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+6  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+5  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+4  ⋅ ⋅ ● + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅
+3  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅
+2  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+1  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+   A B C D E F G H J K L M N O P Q R S T
+
+Top Policy Moves:
+c12: 0.263184
+r5: 0.180908 <--
+d15: 0.113647
+e3: 0.082825
+r17: 0.081543
+e14: 0.066833
+d12: 0.053680
+c11: 0.031677
+e4: 0.021194
+b17: 0.012360
+```
+
+Why does it appear here after the variation in the top left corner?
+
+I want to test playing against the model_0000 too, to see if this is a learned blind spot, or one that was just never remedied.
+
+Another blind spot, in the same game:
+
+```
+19 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+18 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+17 ⋅ ⋅ ○ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+16 ⋅ ⋅ ● ○ ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+15 ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+14 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+13 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+12 ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+11 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+10 ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅
+9  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+8  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+7  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+6  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ○ ⋅ ⋅
+5  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+4  ⋅ ⋅ ● + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+3  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ○ ● ⋅ ⋅ ⋅
+2  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅ ● ⋅ ⋅
+1  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅
+   A B C D E F G H J K L M N O P Q R S T
+
+Top Policy Moves:
+r4: 0.116455
+r16: 0.106079
+d3: 0.096558
+q17: 0.086182
+q3: 0.085205
+c16: 0.082275
+d17: 0.079468
+c4: 0.079468
+d4: 0.068604
+d16: 0.068176
+```
+
+Another blind spot:
+```
+19 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+18 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ● ○ ⋅ ⋅
+17 ⋅ ⋅ ○ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅ ● ○ ○ ⋅
+16 ⋅ ⋅ ● ○ ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ● ○ ● ● ⋅
+15 ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ○ ○ ○ ● ⋅
+14 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅ ● ○ ⋅
+13 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ⋅
+12 ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+11 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+10 ⋅ ⋅ ○ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅
+9  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+8  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+7  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+6  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ○ ⋅ ⋅
+5  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+4  ⋅ ⋅ ● ● ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+3  ⋅ ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ○ ● ⋅ ⋅ ⋅
+2  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅ ● ⋅ ⋅
+1  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅
+   A B C D E F G H J K L M N O P Q R S T
+
+Top Policy Moves:
+d17: 0.116455
+q17: 0.106079
+c4: 0.096558
+r16: 0.086182
+c16: 0.085205
+q3: 0.082275
+r4: 0.079468
+d3: 0.079468
+d4: 0.068604
+q4: 0.068176
+```
+
+Blind spots in model_0000:
+
+```
+19 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+18 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+17 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+16 ⋅ ⋅ ● ○ ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅
+15 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+14 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+13 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+12 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+11 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+10 ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅
+9  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+8  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+7  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+6  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+5  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+4  ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ● ● ● ⋅ ⋅
+3  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ○ ○ ⋅ ⋅
+2  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+1  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+   A B C D E F G H J K L M N O P Q R S T
+
+Tree Stats:
+  N: 11
+  V: 0.041657
+  Score: 0.761295
+Top Policy Moves:
+d4: 0.145303
+d16: 0.139462
+q4: 0.136512
+q16: 0.133628
+r16: 0.059653
+c4: 0.055424
+c16: 0.053411
+d3: 0.048746
+```
+
+```
+19 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+18 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+17 ⋅ ⋅ ○ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅
+16 ⋅ ⋅ ● ○ ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅
+15 ⋅ ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+14 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+13 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+12 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+11 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+10 ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅
+9  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+8  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+7  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+6  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+5  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+4  ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ● ● ● ⋅ ⋅
+3  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ○ ○ ⋅ ⋅
+2  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+1  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+   A B C D E F G H J K L M N O P Q R S T
+
+Tree Stats:
+  N: 11
+  V: 0.028123
+  Score: 0.578272
+Top Policy Moves:
+q4: 0.145303
+d4: 0.139462
+q16: 0.136512
+d16: 0.133628
+d17: 0.059653
+q3: 0.055424
+d3: 0.053411
+r4: 0.048746
+```
+
+3-3 Blind Spot:
+
+```
+19 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+18 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+17 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+16 ⋅ ⋅ ● + ○ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+15 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+14 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+13 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+12 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+11 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+10 ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅
+9  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+8  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+7  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+6  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+5  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+4  ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅
+3  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+2  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+1  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+   A B C D E F G H J K L M N O P Q R S T
+```
+
+model_0093 Blind Spot:
+
+```
+
+Tree Stats:
+  N: 56
+  V: -0.299922
+  Score: -15.850084
+
+19 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+18 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+17 ⋅ ⋅ ⋅ ● ○ ⋅ ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+16 ⋅ ⋅ ● + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+15 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+14 ⋅ ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ○ ● ⋅
+13 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ●
+12 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅
+11 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+10 ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅
+9  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+8  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+7  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+6  ⋅ ⋅ ○ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+5  ⋅ ⋅ ● ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+4  ⋅ ⋅ ● + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅
+3  ⋅ ⋅ ⋅ ● ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+2  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+1  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+   A B C D E F G H J K L M N O P Q R S T
+
+Top Policy Moves:
+r16: 0.117676
+r4: 0.097595
+c4: 0.096069
+q3: 0.094177
+c16: 0.089172
+d3: 0.078735
+d17: 0.076904
+q17: 0.076233
+```
+
+Another blind spot:
+
+```
+19 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+18 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+17 ⋅ ⋅ ⋅ ● ○ ⋅ ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+16 ⋅ ⋅ ● + ○ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+15 ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+14 ⋅ ⋅ ○ ● ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ○ ● ⋅
+13 ⋅ ⋅ ○ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ●
+12 ⋅ ⋅ ○ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅
+11 ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+10 ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅
+9  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+8  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+7  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+6  ⋅ ⋅ ○ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+5  ⋅ ⋅ ● ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+4  ⋅ ⋅ ● + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅
+3  ⋅ ⋅ ⋅ ● ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅
+2  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+1  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+   A B C D E F G H J K L M N O P Q R S T
+
+Top Policy Moves:
+d3: 0.117676
+q3: 0.097595
+q17: 0.096069
+r4: 0.094177
+d17: 0.089172
+r16: 0.078735
+c16: 0.076904
+c4: 0.076233
+```
+
+Another blind spot, but MCTS recovers a decent move:
+
+```
+19 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+18 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+17 ⋅ ⋅ ⋅ ● ○ ⋅ ● ⋅ ⋅ ● ⋅ ○ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+16 ⋅ ⋅ ● + ○ ⋅ ○ ● ⋅ + ⋅ ● ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+15 ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+14 ⋅ ⋅ ○ ● ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ○ ● ⋅
+13 ⋅ ⋅ ○ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ●
+12 ⋅ ⋅ ○ ● ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅
+11 ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+10 ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅
+9  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+8  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+7  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+6  ⋅ ⋅ ○ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+5  ⋅ ⋅ ● ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+4  ⋅ ⋅ ● + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ● ○ ○ ⋅ ⋅
+3  ⋅ ⋅ ⋅ ● ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ● ○ ⋅ ⋅
+2  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+1  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+   A B C D E F G H J K L M N O P Q R S T
+
+Top Policy Moves:
+c4: 0.117676
+c16: 0.097595
+r16: 0.096069
+d17: 0.094177
+r4: 0.089172
+q17: 0.078735
+q3: 0.076904
+d3: 0.076233
+```
+
+Another blind spot. Here gumbel noise was not enough to recover a good move.
+```
+19 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+18 ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+17 ⋅ ⋅ ⋅ ● ○ ⋅ ● ⋅ ⋅ ● ○ ○ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+16 ⋅ ⋅ ● ● ○ ⋅ ○ ● ⋅ + ⋅ ● ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+15 ⋅ ⋅ ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ⋅
+14 ⋅ ⋅ ○ ● ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ○ ● ⋅
+13 ⋅ ⋅ ○ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ○ ● ⋅ ●
+12 ⋅ ⋅ ○ ● ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ⋅
+11 ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+10 ⋅ ⋅ ⋅ ○ ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅
+9  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+8  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+7  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+6  ⋅ ⋅ ○ ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+5  ⋅ ⋅ ● ○ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+4  ⋅ ⋅ ● + ⋅ ⋅ ⋅ ⋅ ⋅ + ⋅ ⋅ ⋅ ⋅ ● ○ ○ ⋅ ⋅
+3  ⋅ ⋅ ⋅ ● ⋅ ● ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ● ● ○ ⋅ ⋅
+2  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+1  ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅ ⋅
+   A B C D E F G H J K L M N O P Q R S T
+
+Top Policy Moves:
+c16: 0.117676
+c4: 0.097595
+r4: 0.096069
+d3: 0.094177
+r16: 0.089172
+q3: 0.078735
+q17: 0.076904
+d17: 0.076233
+```
+
+When black extends at Q15, white gets confused in later nets. This problem is not present in earlier nets. The above position is from playing against model_0030.
+
+Possible approaches to remedy:
+- Use a larger, more diverse pool of initial games to train from (Tygem dataset?).
+- Send it and start from 0.
+- Use completed-Q values to provide a more nuanced training target (in the case of the 3-4 point, both the high and low kakari are fine, but with a one-hot training target the net may arbitrarily converge on one).
+- Keep a gradually-growing go-exploit buffer that contains positions from all generations of play.
+- On a small percentage of games, play randomly for the first `n` moves (literally randomly). Alternatively, do a root policy softmax temperature for the opening.
+- Root policy temperature for all moves, before applying noise.
+- Force branch the net to a low-visit move on a certain percentage of moves.
+
+Other notes:
+- Maybe the gumbel noise + self-play is not enough to remedy off-policy issues.
+- Is Gumbel itself flawed? I.e. it is guaranteed to produce a policy improvement _relative to the Q-prediction of the current network_, but may not produce a generalized, robust policy improvement.
+- We can generate random positions on a small percentage of games start self-play from these, to help with policy generalization.
+- We can also randomly sample positions from all previous states, not just states generated from the current generation of self-play.
+- Eval should play against the last best model, and also a randomly selected golden from the last `n` goldens, before being promoted.
+- Akin to temperature, we can play according to completed-Q values in the first `n` moves of search.

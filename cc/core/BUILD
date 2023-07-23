@@ -9,6 +9,7 @@ cc_library(
         ":elo",
         ":file_log_sink",
         ":filepath",
+        ":lru_cache",
         ":probability",
         ":rand",
         ":ring_buffer",
@@ -62,7 +63,7 @@ cc_library(
 cc_library(
     name = "probability",
     srcs = select({
-        "//cc:test": ["probability_dummy.cc"],
+        "//cc:probability_dummy": ["probability_dummy.cc"],
         "//conditions:default": ["probability.cc"],
     }),
     hdrs = ["probability.h"],
@@ -90,6 +91,7 @@ cc_test(
 cc_library(
     name = "ring_buffer",
     hdrs = ["ring_buffer.h"],
+    deps = [":rand"],
 )
 
 cc_library(
@@ -98,6 +100,12 @@ cc_library(
         "doctest_include.h",
     ],
     deps = ["@doctest//doctest"],
+)
+
+cc_library(
+    name = "lru_cache",
+    hdrs = ["lru_cache.h"],
+    deps = ["@com_google_absl//absl/container:flat_hash_set"],
 )
 
 cc_library(

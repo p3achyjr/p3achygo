@@ -8,6 +8,7 @@
 #include "absl/log/log.h"
 #include "absl/strings/str_format.h"
 #include "absl/time/time.h"
+#include "cc/data/filename_format.h"
 #include "cc/shuffler/chunk_info.h"
 #include "cc/shuffler/constants.h"
 #include "tensorflow/core/lib/io/compression.h"
@@ -17,6 +18,7 @@
 namespace shuffler {
 namespace {
 namespace fs = std::filesystem;
+using ::data::kGoldenChunkFormat;
 using ::tensorflow::tstring;
 using ::tensorflow::io::RecordReaderOptions;
 using ::tensorflow::io::RecordWriter;
@@ -27,9 +29,6 @@ using ::tensorflow::io::compression::kZlib;
 static constexpr size_t kDefaultChunkSize = 2048000;
 static constexpr int kDefaultPollIntervalS = 30;
 static constexpr int kLoggingInterval = 1000000;
-
-// keep in sync with python/gcs_utils.py
-static constexpr char kChunkFormat[] = "chunk_%d.tfrecord.zz";
 
 void WriteChunkToDisk(std::string filename, const std::vector<tstring>& chunk) {
   std::unique_ptr<tensorflow::WritableFile> file;
@@ -50,15 +49,15 @@ void WriteChunkToDisk(std::string filename, const std::vector<tstring>& chunk) {
 }  // namespace
 
 ChunkManager::ChunkManager(std::string dir, int gen, float p, int games_per_gen,
-                           std::vector<int> exclude_gens)
+                           int train_window_size, bool is_continuous)
     : dir_(dir),
       gen_(gen),
       p_(p),
       chunk_size_(kDefaultChunkSize),
       poll_interval_s_(kDefaultPollIntervalS),
       games_per_gen_(games_per_gen),
-      exclude_gens_(exclude_gens),
-      watcher_(dir_, exclude_gens_),
+      is_continuous_(is_continuous),
+      watcher_(dir_, train_window_size),
       fbuffer_(watcher_.GetFiles()),
       running_(true) {
   fs_thread_ = std::thread(&ChunkManager::FsThread, this);
@@ -75,7 +74,11 @@ ChunkManager::~ChunkManager() {
 }
 
 void ChunkManager::CreateChunk() {
-  LOG(INFO) << "Creating Chunk...";
+  if (is_continuous_) {
+    LOG(INFO) << "Creating Chunk (Continuous Mode)...";
+  } else {
+    LOG(INFO) << "Creating Chunk (Finite Task Mode)...";
+  }
 
   int num_scanned = 0;
   auto start = std::chrono::steady_clock::now();
@@ -83,9 +86,13 @@ void ChunkManager::CreateChunk() {
     // Pop file to read, if one exists.
     std::optional<std::string> f = PopFile();
     if (f == std::nullopt) {
-      absl::MutexLock l(&mu_);
-      cv_.WaitWithTimeout(&mu_, absl::Seconds(poll_interval_s_));
-      continue;
+      if (is_continuous_) {
+        absl::MutexLock l(&mu_);
+        cv_.WaitWithTimeout(&mu_, absl::Seconds(poll_interval_s_));
+        continue;
+      } else {
+        break;
+      }
     }
 
     // Read file into memory.
@@ -127,14 +134,22 @@ void ChunkManager::ShuffleAndFlush() {
   // create directory
   std::string chunk_dir = fs::path(dir_) / kGoldenChunkDirname;
   std::string chunk_filename =
-      fs::path(chunk_dir) / absl::StrFormat(kChunkFormat, gen_);
+      fs::path(chunk_dir) / absl::StrFormat(kGoldenChunkFormat, gen_);
   fs::create_directory(chunk_dir);
 
   // write to disk
+  start = std::chrono::steady_clock::now();
   WriteChunkToDisk(chunk_filename, golden_chunk);
+  end = std::chrono::steady_clock::now();
+  elapsed = end - start;
+  LOG(INFO) << "Writing chunk took " << elapsed.count() << "s.";
 }
 
 void ChunkManager::SignalStop() {
+  if (is_continuous_) {
+    return;
+  }
+
   absl::MutexLock l(&mu_);
   running_.store(false, std::memory_order_acquire);
   cv_.SignalAll();
@@ -153,6 +168,10 @@ void ChunkManager::AppendToChunk(tstring&& proto) {
 }
 
 void ChunkManager::FsThread() {
+  if (!is_continuous_) {
+    return;
+  }
+
   while (true) {
     absl::MutexLock l(&mu_);
     cv_.WaitWithTimeout(&mu_, absl::Seconds(poll_interval_s_));

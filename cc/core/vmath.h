@@ -1,5 +1,5 @@
-#ifndef __CC_CORE_VMATH_H_
-#define __CC_CORE_VMATH_H_
+#ifndef CORE_VMATH_H_
+#define CORE_VMATH_H_
 
 #include <immintrin.h>
 
@@ -152,4 +152,4 @@ std::array<float, N> SoftmaxV(const std::array<float, N>& logits) {
 
 }  // namespace core
 
-#endif  // __CC_CORE_VMATH_H_
+#endif  // CORE_VMATH_H_

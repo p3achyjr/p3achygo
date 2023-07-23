@@ -1,5 +1,5 @@
-#ifndef __RECORDER_DIR_H_
-#define __RECORDER_DIR_H_
+#ifndef RECORDER_DIR_H_
+#define RECORDER_DIR_H_
 
 namespace recorder {
 

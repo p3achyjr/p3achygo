@@ -22,12 +22,22 @@ sudo mv bazelisk-linux-amd64 /usr/bin/bazel
 # Add stuff to ~/.bashrc
 grep -qxF 'export PATH="/usr/lib/llvm-12/bin:/home/axlui/.local/bin:$PATH"' ~/bashrc ||
 	echo 'export PATH="/usr/lib/llvm-12/bin:/home/axlui/.local/bin:$PATH"' >>~/.bashrc
-grep -qxF 'export PYTHONPATH="/home/axlui/p3achyGo/python:$PATH"' ~/.bashrc ||
-	echo 'export PYTHONPATH="/home/axlui/p3achyGo/python:$PATH"' >>~/.bashrc
-grep -qxF 'export ASAN_SYMBOLIZER_PATH="/usr/lib/llvm-12/bin/llvm-symbolizer' ~/.bashrc ||
-	echo 'export ASAN_SYMBOLIZER_PATH="/usr/lib/llvm-12/bin/llvm-symbolizer' >>~/.bashrc
+grep -qxF 'export PYTHONPATH="/home/axlui/p3achygo/python:$PATH"' ~/.bashrc ||
+	echo 'export PYTHONPATH="/home/axlui/p3achygo/python:$PATH"' >>~/.bashrc
+grep -qxF 'export ASAN_SYMBOLIZER_PATH="/usr/lib/llvm-12/bin/llvm-symbolizer"' ~/.bashrc ||
+	echo 'export ASAN_SYMBOLIZER_PATH="/usr/lib/llvm-12/bin/llvm-symbolizer"' >>~/.bashrc
+grep -qxF 'export LD_LIBRARY_PATH="/usr/local/lib:$LD_LIBRARY_PATH"' ~/.bashrc ||
+	echo 'export LD_LIBRARY_PATH="/usr/local/lib:$LD_LIBRARY_PATH"' >> ~/.bashrc
 
-grep -qxF 'alias python="python3"' ~/.bashrc || echo 'alias python="python3"' >>~/.bashrc
-grep -qxF 'alias pip="pip3"' ~/.bashrc || echo 'alias pip="pip3"' >>~/.bashrc
+# Install mimalloc
+RUN git clone https://github.com/microsoft/mimalloc.git && \
+  cd mimalloc && \
+  mkdir -p out/release && \
+  cd out/release && \
+  cmake ../.. && \
+  make && \
+  make install && \
+  cd ../../.. && \
+  rm -rf mimalloc
 
 source ~/.bashrc

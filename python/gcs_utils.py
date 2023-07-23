@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import shlex, subprocess, re
+import shlex, subprocess, re, os
 
 from google.cloud import storage
 from pathlib import Path
@@ -16,12 +16,16 @@ GOLDEN_CHUNK_DIR = 'goldens'
 SP_CHUNK_DIR = 'chunks'
 SGF_DIR = 'sgf'
 
-CHUNK_PREFIX = 'chunk'
-CHUNK_FORMAT = CHUNK_PREFIX + '_{}.tfrecord.zz'
-CHUNK_RE = re.compile(CHUNK_PREFIX + '_([0-9]+)\.tfrecord\.zz')
+GOLDEN_CHUNK_PREFIX = 'chunk'
+GOLDEN_CHUNK_FORMAT = GOLDEN_CHUNK_PREFIX + '_{:04d}.tfrecord.zz'
+GOLDEN_CHUNK_RE = re.compile(GOLDEN_CHUNK_PREFIX + '_([0-9]+)\.tfrecord\.zz')
 MODEL_PREFIX = 'model'
-MODEL_FORMAT = MODEL_PREFIX + '_{}'
+MODEL_FORMAT = MODEL_PREFIX + '_{:04d}'
 MODEL_RE = re.compile(MODEL_PREFIX + '_([0-9]+)')
+
+# Keep in sync with //cc/shuffler/chunk_info.h
+SP_CHUNK_RE = re.compile(
+    'gen(\d+)_b(\d+)_g(\d+)_n(\d+)_t(\d+)_(.*)\.tfrecord\.zz')
 
 DONE_PREFIX = 'DONE'
 DONE_FILENAME = 'DONE'
@@ -46,7 +50,7 @@ def _get_model_num(blob_path: str) -> int:
 
 
 def _get_chunk_num(blob_path: str) -> int:
-  return _get_num(blob_path, CHUNK_RE)
+  return _get_num(blob_path, GOLDEN_CHUNK_RE)
 
 
 def _get_most_recent(prefix: str, num_fn: Callable[[str], int],
@@ -76,7 +80,7 @@ def _upload_model(run_id: str, local_models_dir: str, model_dir: str):
   if not local_dir.exists():
     raise Exception(f'Model not found: {str(local_dir)}')
 
-  cmd = f'gsutil -m cp -r {str(local_dir)} gs://{GCS_BUCKET}/{str(gcs_dir)}'
+  cmd = f'gsutil -m rsync -r {str(local_dir)} gs://{GCS_BUCKET}/{str(gcs_dir)}'
   subprocess.run(shlex.split(cmd), check=True)
 
 
@@ -86,7 +90,7 @@ def _upload_model_cand(run_id: str, local_models_dir: str, model_dir: str):
   if not local_dir.exists():
     raise Exception(f'Model not found: {str(local_dir)}')
 
-  cmd = f'gsutil -m cp -r {str(local_dir)} gs://{GCS_BUCKET}/{str(gcs_dir)}'
+  cmd = f'gsutil -m rsync -r {str(local_dir)} gs://{GCS_BUCKET}/{str(gcs_dir)}'
   subprocess.run(shlex.split(cmd), check=True)
 
 
@@ -102,7 +106,10 @@ def _download_model(run_id: str, local_models_dir: str, model_dir: str) -> str:
   local_dir = Path(local_models_dir, model_dir)
   gcs_dir = Path(gcs_models_dir(run_id), model_dir)
 
-  cmd = f'gsutil -m cp -r gs://{GCS_BUCKET}/{str(gcs_dir)} {str(local_models_dir)}'
+  if not os.path.exists(local_dir):
+    os.mkdir(local_dir)
+
+  cmd = f'gsutil -m rsync -r gs://{GCS_BUCKET}/{str(gcs_dir)} {str(local_dir)}'
   subprocess.run(shlex.split(cmd), check=True)
 
   return str(local_dir)
@@ -113,7 +120,10 @@ def _download_model_cand(run_id: str, local_models_dir: str,
   local_dir = Path(local_models_dir, model_dir)
   gcs_dir = Path(gcs_model_cands_dir(run_id), model_dir)
 
-  cmd = f'gsutil -m cp -r gs://{GCS_BUCKET}/{str(gcs_dir)} {str(local_models_dir)}'
+  if not os.path.exists(local_dir):
+    os.mkdir(local_dir)
+
+  cmd = f'gsutil -m rsync -r gs://{GCS_BUCKET}/{str(gcs_dir)} {str(local_dir)}'
   subprocess.run(shlex.split(cmd), check=True)
 
   return str(local_dir)
@@ -175,7 +185,7 @@ def get_most_recent_chunk(run_id: str) -> int:
 
 
 def upload_chunk(run_id: str, local_chunk_dir: str, gen: int):
-  _upload_chunk(run_id, local_chunk_dir, CHUNK_FORMAT.format(gen))
+  _upload_chunk(run_id, local_chunk_dir, GOLDEN_CHUNK_FORMAT.format(gen))
 
 
 def upload_model(run_id: str, local_models_dir: str, gen: int):
@@ -207,7 +217,8 @@ def upload_sgf(run_id: str, local_path: Path):
 
 
 def download_golden_chunk(run_id: str, local_chunk_dir: str, gen: int) -> str:
-  return _download_chunk(run_id, local_chunk_dir, CHUNK_FORMAT.format(gen))
+  return _download_chunk(run_id, local_chunk_dir,
+                         GOLDEN_CHUNK_FORMAT.format(gen))
 
 
 def download_model(run_id: str, local_models_dir: str, gen: int) -> str:

@@ -1,5 +1,5 @@
-#ifndef __GAME_LOC_H_
-#define __GAME_LOC_H_
+#ifndef GAME_LOC_H_
+#define GAME_LOC_H_
 
 #include <iostream>
 #include <utility>

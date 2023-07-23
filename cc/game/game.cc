@@ -64,11 +64,11 @@ Scores Game::GetScores() { return board_.GetScores(); }
 void Game::WriteResult() {
   Scores scores = GetScores();
   if (scores.black_score > scores.white_score) {
-    result_ =
-        Result{BLACK, scores.black_score, scores.white_score, scores.ownership};
+    result_ = Result{BLACK, scores.black_score, scores.white_score,
+                     false /* by_resign */, scores.ownership};
   } else if (scores.white_score > scores.black_score) {
-    result_ =
-        Result{WHITE, scores.black_score, scores.white_score, scores.ownership};
+    result_ = Result{WHITE, scores.black_score, scores.white_score,
+                     false /* by_resign */, scores.ownership};
   }
 }
 

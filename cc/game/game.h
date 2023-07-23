@@ -1,5 +1,5 @@
-#ifndef __GAME_GAME_H_
-#define __GAME_GAME_H_
+#ifndef GAME_GAME_H_
+#define GAME_GAME_H_
 
 #include "absl/container/inlined_vector.h"
 #include "cc/constants/constants.h"
@@ -19,6 +19,7 @@ class Game final {
     Color winner;
     float bscore;
     float wscore;
+    bool by_resign;
 
     std::array<Color, BOARD_LEN * BOARD_LEN> ownership;
   };
@@ -54,6 +55,8 @@ class Game final {
 
   Scores GetScores();
   void WriteResult();
+  void SetWinner(Color winner) { result_.winner = winner; }
+  void SetDidResign(bool did_resign) { result_.by_resign = true; }
 
  private:
   Board board_;

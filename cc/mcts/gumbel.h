@@ -1,5 +1,5 @@
-#ifndef __MCTS_GUMBEL_H_
-#define __MCTS_GUMBEL_H_
+#ifndef MCTS_GUMBEL_H_
+#define MCTS_GUMBEL_H_
 
 #include "cc/core/probability.h"
 #include "cc/game/color.h"
@@ -10,10 +10,23 @@
 
 namespace mcts {
 
+struct ChildStats {
+  game::Loc move;
+  int n;
+  float q;
+  float qz;
+  float score;
+  float prob;
+  float logit;
+  float gumbel_noise;
+  float qtransform;
+};
+
 struct GumbelResult {
   game::Loc nn_move;
   game::Loc mcts_move;
   std::array<float, constants::kMaxNumMoves> pi_improved;
+  absl::InlinedVector<ChildStats, 16> child_stats;
 };
 
 /*
@@ -35,6 +48,9 @@ class GumbelEvaluator final {
   // If n == 1, we will sample a move directly from the policy.
   GumbelResult SearchRoot(core::Probability& probability, game::Game& game,
                           TreeNode* root, game::Color color_to_move, int n,
+                          int k, float noise_scaling);
+  GumbelResult SearchRoot(core::Probability& probability, game::Game& game,
+                          TreeNode* root, game::Color color_to_move, int n,
                           int k);
 
  private:
@@ -42,16 +58,9 @@ class GumbelEvaluator final {
   // Runs Gumbel non-root search path until leaf, and returns the search path
   // including root.
   absl::InlinedVector<TreeNode*, kMaxPathLenEst> SearchNonRoot(
-      game::Game& game, TreeNode* root, TreeNode* node,
-      game::Color color_to_move, float root_score_est);
-
-  // Special case of `EvaluateLeaf` where the leaf node is the root.
-  void EvaluateRoot(const game::Game& game, TreeNode* node,
-                    game::Color color_to_move);
-
-  // Evaluates a leaf node.
-  void EvaluateLeaf(const game::Game& game, TreeNode* node,
-                    game::Color color_to_move, float root_score_est);
+      core::Probability& probability, game::Game& game, TreeNode* root,
+      TreeNode* node, game::Color color_to_move, game::Color root_color,
+      float root_score_est);
 
   // Updates all nodes in tree, based on leaf evaluation.
   void Backward(absl::InlinedVector<TreeNode*, kMaxPathLenEst>& path);

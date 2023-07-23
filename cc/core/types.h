@@ -1,5 +1,5 @@
-#ifndef __CORE_TYPES_H_
-#define __CORE_TYPES_H_
+#ifndef CORE_TYPES_H_
+#define CORE_TYPES_H_
 
 #include <cstdint>
 #include <iostream>
@@ -20,4 +20,4 @@ inline std::ostream& operator<<(std::ostream& os, const UInt128& x) {
 }
 }  // namespace core
 
-#endif  // __CORE_TYPES_H_
+#endif  // CORE_TYPES_H_

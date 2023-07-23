@@ -4,8 +4,9 @@
 
 cc_library(
     name = "tensorflow",
-    srcs = glob(["include/**/*.so.2"]) + [
-        "libtensorflow_cc.so.2",
+    srcs = glob(["include/**/*.so.2"]) + glob([
+        "libtensorflow_cc.so.*",  # not in CPU builds.
+    ]) + [
         "libtensorflow_framework.so.2",
     ],
     hdrs = glob(

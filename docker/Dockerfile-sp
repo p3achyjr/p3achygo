@@ -1,4 +1,5 @@
-FROM gcr.io/p3achygo/p3achygo_base:latest
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
 
 RUN mkdir -p /tmp/p3achygo
 WORKDIR /app

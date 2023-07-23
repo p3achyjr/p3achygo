@@ -1,8 +1,15 @@
 package(default_visibility = ["//visibility:public"])
 
 cc_library(
+    name = "nn",
+    deps = [
+        ":nn_board_utils",
+        ":nn_interface",
+    ],
+)
+
+cc_library(
     name = "create_tensor_shape",
-    srcs = ["create_tensor_shape.cc"],
     hdrs = ["create_tensor_shape.h"],
     deps = ["//cc/tensorflow"],
 )
@@ -23,7 +30,7 @@ cc_library(
 cc_library(
     name = "nn_interface",
     srcs = select({
-        "//cc:test": ["nn_interface_dummy.cc"],
+        "//cc:nn_interface_dummy": ["nn_interface_dummy.cc"],
         "//conditions:default": ["nn_interface.cc"],
     }),
     hdrs = ["nn_interface.h"],
@@ -35,7 +42,7 @@ cc_library(
         "//cc/tensorflow",
         "@com_google_absl//absl/status",
     ] + select({
-        "//cc:test": [],
+        "//cc:nn_interface_dummy": [],
         "//conditions:default": [
             ":create_tensor_shape",
             ":nn_board_utils",
@@ -53,10 +60,13 @@ cc_library(
     hdrs = ["feed_fetch_names.h"],
 )
 
-cc_library(
-    name = "nn",
+cc_test(
+    name = "nn_board_utils_test",
+    srcs = ["nn_board_utils_test.cc"],
     deps = [
+        ":create_tensor_shape",
         ":nn_board_utils",
-        ":nn_interface",
+        "//cc/core:doctest",
+        "//cc/tensorflow",
     ],
 )

@@ -1,11 +1,12 @@
-#ifndef __RECORDER_SGF_RECORDER_H_
-#define __RECORDER_SGF_RECORDER_H_
+#ifndef RECORDER_SGF_RECORDER_H_
+#define RECORDER_SGF_RECORDER_H_
 
 #include <memory>
 #include <string>
 
 #include "absl/container/inlined_vector.h"
 #include "cc/game/game.h"
+#include "cc/mcts/tree.h"
 
 namespace recorder {
 
@@ -25,7 +26,10 @@ class SgfRecorder {
   SgfRecorder& operator=(SgfRecorder&&) = delete;
 
   // Recorder Impl.
-  virtual void RecordGame(int thread_id, const game::Game& game) = 0;
+  virtual void RecordGame(
+      int thread_id, const game::Game& game, std::string b_name,
+      std::string w_name,
+      std::vector<std::unique_ptr<mcts::TreeNode>>&& roots) = 0;
 
   // Flushes all pending writes.
   virtual void Flush() = 0;

@@ -1,5 +1,5 @@
-#ifndef __CC_CORE_UTIL_H_
-#define __CC_CORE_UTIL_H_
+#ifndef CORE_UTIL_H_
+#define CORE_UTIL_H_
 
 #include <sstream>
 #include <string>

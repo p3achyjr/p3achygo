@@ -27,6 +27,7 @@ flags.DEFINE_integer('gen', -1, 'Generation, or -1 for most recent')
 flags.DEFINE_integer('next_gen', -1, 'Next generation.')
 flags.DEFINE_string('chunk_path', '', 'Path to training chunk')
 flags.DEFINE_string('val_ds_path', '', 'Path to val ds')
+flags.DEFINE_string('batch_num_path', '', 'File storing batch counter.')
 
 
 def get_model_path(models_dir: str, gen: int) -> Tuple[str, int]:
@@ -58,6 +59,9 @@ def main(_):
   if FLAGS.val_ds_path == '':
     logging.error('No --val_ds_path specified.')
     return
+  if FLAGS.batch_num_path == '':
+    logging.error('No --batch_num_path specified.')
+    return
 
   is_gpu = False
   if tf.config.list_physical_devices('GPU'):
@@ -68,7 +72,7 @@ def main(_):
 
   config = rl_loop.config.parse(FLAGS.run_id)
   val_ds = tf.data.TFRecordDataset(FLAGS.val_ds_path, compression_type='ZLIB')
-  val_ds = val_ds.map(transforms.expand_rl, num_parallel_calls=tf.data.AUTOTUNE)
+  val_ds = val_ds.map(transforms.expand, num_parallel_calls=tf.data.AUTOTUNE)
   val_ds = val_ds.batch(config.batch_size)
   val_ds = val_ds.prefetch(tf.data.AUTOTUNE)
 
@@ -76,17 +80,24 @@ def main(_):
   model = tf.keras.models.load_model(
       model_path, custom_objects=P3achyGoModel.custom_objects())
 
-  rl_loop.train.train_one_gen(model,
-                              FLAGS.chunk_path,
-                              val_ds,
-                              batch_size=config.batch_size,
-                              lr=config.lr,
-                              is_gpu=is_gpu)
+  with open(FLAGS.batch_num_path, 'r') as f:  # assumes file is already created.
+    batch_num = int(f.read())
+
+  batch_num = rl_loop.train.train_one_gen(model,
+                                          FLAGS.gen,
+                                          FLAGS.chunk_path,
+                                          val_ds,
+                                          config=config,
+                                          is_gpu=is_gpu,
+                                          batch_num=batch_num)
   model_utils.save_trt(model,
                        FLAGS.val_ds_path,
                        FLAGS.models_dir,
                        FLAGS.next_gen,
                        batch_size=trt_batch_size())
+
+  with open(FLAGS.batch_num_path, 'w') as f:
+    f.write(str(batch_num))
 
 
 if __name__ == '__main__':

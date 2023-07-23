@@ -1,5 +1,5 @@
-#ifndef __GAME_BOARD_H_
-#define __GAME_BOARD_H_
+#ifndef GAME_BOARD_H_
+#define GAME_BOARD_H_
 
 #include <iostream>
 #include <optional>
@@ -278,6 +278,15 @@ class Board final {
   inline int move_count() const { return move_count_; }
   inline const BoardData& position() const { return board_; }
 
+  inline bool IsEmpty() const {
+    return std::all_of(board_.begin(), board_.end(),
+                       [](Color c) { return c == EMPTY; });
+  }
+
+  inline BoardData GetStonesInAtari() const {
+    return GetStonesWithLiberties(1);
+  }
+
   bool IsValidMove(Loc loc, Color color) const;
   bool IsGameOver() const;
 
@@ -290,6 +299,9 @@ class Board final {
   void CalculatePassAliveRegions();
 
   Scores GetScores();
+
+  // Retrieve stones with `liberties` number of liberties.
+  BoardData GetStonesWithLiberties(const int liberties) const;
 
   friend std::ostream& operator<<(std::ostream& os, const Board& board);
 
@@ -427,4 +439,4 @@ inline std::ostream& operator<<(std::ostream& os, const Board& board) {
 
 }  // namespace game
 
-#endif  // __GAME_BOARD_H_
+#endif  // GAME_BOARD_H_

@@ -3,14 +3,11 @@ import trt_convert
 from absl import app, flags, logging
 from pathlib import Path
 
-# Use the same batch size when running self-play.
-BATCH_SIZE = 48
-NUM_CALIB_BATCHES = 10
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string('model_path', '', 'Path to SavedModel.')
 flags.DEFINE_string('calib_ds', '', 'Dataset to use for calibration.')
-flags.DEFINE_string('batch_size', 0, 'Conversion Batch Size.')
+flags.DEFINE_integer('batch_size', 0, 'Conversion Batch Size.')
 
 
 def main(_):

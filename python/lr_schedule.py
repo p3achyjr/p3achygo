@@ -3,6 +3,21 @@ from __future__ import annotations
 import tensorflow as tf
 
 
+class ConstantLRSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
+  '''
+  Constant LR Schedule.
+  '''
+
+  def __init__(self, lr: float):
+    self.lr = lr
+
+  def __call__(self, _):
+    return self.lr
+
+  def info(self) -> str:
+    return (f'Constant Learning Rate: {self.lr}')
+
+
 class CyclicLRSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
   '''
   Implements cyclic learning rate.
@@ -11,27 +26,26 @@ class CyclicLRSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
   '''
 
   def __init__(self, min_lr: float, max_lr: float, cycle_len: int):
-    self._lr_min = tf.constant(min_lr)
-    self._lr_max = tf.constant(max_lr)
-    self._cycle_len = tf.constant(cycle_len, dtype=tf.int64)
-    self._half_cycle_len = tf.constant(cycle_len // 2 if cycle_len %
-                                       2 == 0 else cycle_len // 2 + 1,
-                                       dtype=tf.int64)
+    self.lr_min = tf.constant(min_lr)
+    self.lr_max = tf.constant(max_lr)
+    self.cycle_len = tf.constant(cycle_len, dtype=tf.int64)
+    self.half_cycle_len = tf.constant(cycle_len // 2 if cycle_len %
+                                      2 == 0 else cycle_len // 2 + 1,
+                                      dtype=tf.int64)
 
-    self._lr_delta = tf.constant(max_lr - min_lr) / tf.cast(
-        self._half_cycle_len, dtype=tf.float32)
+    self.lr_delta = tf.constant(max_lr - min_lr) / tf.cast(self.half_cycle_len,
+                                                           dtype=tf.float32)
 
   def __call__(self, step):
-    step %= self._cycle_len
-    ninc, ndec = tf.minimum(step, self._half_cycle_len), tf.maximum(
-        tf.constant(0, dtype=tf.int64), step - self._half_cycle_len)
+    step %= self.cycle_len
+    ninc, ndec = tf.minimum(step, self.half_cycle_len), tf.maximum(
+        tf.constant(0, dtype=tf.int64), step - self.half_cycle_len)
 
-    return self._lr_min + self._lr_delta * tf.cast(ninc - ndec,
-                                                   dtype=tf.float32)
+    return self.lr_min + self.lr_delta * tf.cast(ninc - ndec, dtype=tf.float32)
 
   def info(self) -> str:
-    return (f'Cyclic LR. LR Min: {self._lr_min}' + f', LR Max: {self._lr_max}' +
-            f', Cycle Len: {self._cycle_len}, LR_Delta: {self._lr_delta}')
+    return (f'Cyclic LR. LR Min: {self.lr_min}' + f', LR Max: {self.lr_max}' +
+            f', Cycle Len: {self.cycle_len}, LR_Delta: {self.lr_delta}')
 
 
 class CyclicLRDecaySchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
@@ -45,7 +59,7 @@ class CyclicLRDecaySchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
                min_lr: float,
                max_lr: float,
                cycle_len: int,
-               decay_bound=.9):
+               decay_bound=.95):
     self._main_cycle_len = tf.constant(int(cycle_len * decay_bound),
                                        dtype=tf.int64)
     self._half_cycle_len = tf.constant(cycle_len // 2 if cycle_len %

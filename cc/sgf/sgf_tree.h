@@ -1,13 +1,13 @@
-#ifndef __RECORDER_SGF_TREE_H__
-#define __RECORDER_SGF_TREE_H__
+#ifndef SGF_SGF_TREE_H__
+#define SGF_SGF_TREE_H__
 
 #include <string>
 
 #include "cc/game/game.h"
 #include "cc/game/loc.h"
-#include "cc/recorder/sgf_visitor.h"
+#include "cc/sgf/sgf_visitor.h"
 
-namespace recorder {
+namespace sgf {
 
 /*
  * Classes defining an SGF Tree.
@@ -26,6 +26,19 @@ class SgfProp : public SgfVisitable {
   ~SgfProp() = default;
 };
 
+class SgfSizeProp final : public SgfProp {
+ public:
+  SgfSizeProp(int size) : size_(size) {}
+  void Accept(SgfVisitor* visitor) const override { visitor->Visit(this); }
+  std::string tag() const { return kTag; }
+  int size() const { return size_; }
+
+  static constexpr char kTag[] = "SZ";
+
+ private:
+  int size_;
+};
+
 class SgfKomiProp final : public SgfProp {
  public:
   SgfKomiProp(float komi) : komi_(komi) {}
@@ -33,8 +46,9 @@ class SgfKomiProp final : public SgfProp {
   std::string tag() const { return kTag; }
   float komi() const { return komi_; }
 
- private:
   static constexpr char kTag[] = "KM";
+
+ private:
   float komi_;
 };
 
@@ -45,9 +59,36 @@ class SgfResultProp final : public SgfProp {
   std::string tag() const { return kTag; }
   game::Game::Result result() const { return result_; }
 
- private:
   static constexpr char kTag[] = "RE";
+
+ private:
   game::Game::Result result_;
+};
+
+class SgfHandicapProp final : public SgfProp {
+ public:
+  SgfHandicapProp(int handicap) : handicap_(handicap) {}
+  void Accept(SgfVisitor* visitor) const override { visitor->Visit(this); }
+  std::string tag() const { return kTag; }
+  int handicap() const { return handicap_; }
+
+  static constexpr char kTag[] = "HA";
+
+ private:
+  int handicap_;
+};
+
+class SgfCommentProp final : public SgfProp {
+ public:
+  SgfCommentProp(std::string comment) : comment_(comment) {}
+  void Accept(SgfVisitor* visitor) const override { visitor->Visit(this); }
+  std::string tag() const { return kTag; }
+  std::string comment() const { return comment_; }
+
+  static constexpr char kTag[] = "C";
+
+ private:
+  std::string comment_;
 };
 
 class SgfBPlayerProp final : public SgfProp {
@@ -57,8 +98,9 @@ class SgfBPlayerProp final : public SgfProp {
   std::string tag() const { return kTag; }
   std::string player() const { return player_; }
 
- private:
   static constexpr char kTag[] = "PB";
+
+ private:
   std::string player_;
 };
 
@@ -69,8 +111,9 @@ class SgfWPlayerProp final : public SgfProp {
   std::string tag() const { return kTag; }
   std::string player() const { return player_; }
 
- private:
   static constexpr char kTag[] = "PW";
+
+ private:
   std::string player_;
 };
 
@@ -81,8 +124,9 @@ class SgfBMoveProp final : public SgfProp {
   std::string tag() const { return kTag; }
   game::Loc move() const { return move_; }
 
- private:
   static constexpr char kTag[] = "B";
+
+ private:
   game::Loc move_;
 };
 
@@ -93,8 +137,9 @@ class SgfWMoveProp final : public SgfProp {
   std::string tag() const { return kTag; }
   game::Loc move() const { return move_; }
 
- private:
   static constexpr char kTag[] = "W";
+
+ private:
   game::Loc move_;
 };
 
@@ -127,6 +172,6 @@ class SgfNode final : public SgfVisitable {
   std::vector<std::unique_ptr<SgfNode>> children_;
 };
 
-}  // namespace recorder
+}  // namespace sgf
 
 #endif

@@ -1,5 +1,5 @@
-#ifndef __CC_CORE_LOG_SINK_H_
-#define __CC_CORE_LOG_SINK_H_
+#ifndef CORE_LOG_SINK_H_
+#define CORE_LOG_SINK_H_
 
 #include "absl/log/check.h"
 #include "absl/log/log.h"

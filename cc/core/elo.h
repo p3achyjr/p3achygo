@@ -1,5 +1,5 @@
-#ifndef __CC_CORE_ELO_H_
-#define __CC_CORE_ELO_H_
+#ifndef CORE_ELO_H_
+#define CORE_ELO_H_
 
 #include <cmath>
 

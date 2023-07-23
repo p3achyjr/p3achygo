@@ -15,12 +15,13 @@
 
 ABSL_FLAG(std::string, data_path, "", "Path to self-play data.");
 ABSL_FLAG(int, gen, -1, "Generation to make chunk for.");
-ABSL_FLAG(int, games_per_gen, -1, "Num new games to wait for.");
-ABSL_FLAG(std::vector<std::string>, exclude_gens, {},
-          "Comma-separated list of data generations to exclude.");
+ABSL_FLAG(int, games_this_gen, -1, "Num new games to wait for.");
+ABSL_FLAG(int, train_window_size, -1, "Size of training window to draw from.");
 ABSL_FLAG(float, p, .01f,
           "Probability that any _individual_ sample is selected to include for "
           "training.");
+ABSL_FLAG(bool, run_continuously, true,
+          "Whether to run the shuffler in continuous mode.");
 
 void WaitForSignal(shuffler::ChunkManager* chunk_manager) {
   // any line from stdin is a shutdown signal.
@@ -47,20 +48,25 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  int games_per_gen = absl::GetFlag(FLAGS_games_per_gen);
-  if (games_per_gen == -1) {
-    LOG(ERROR) << "No --games_per_gen specified.";
+  int games_this_gen = absl::GetFlag(FLAGS_games_this_gen);
+  if (games_this_gen == -1) {
+    LOG(ERROR) << "No --games_this_gen specified.";
     return 1;
   }
 
-  std::vector<std::string> exclude_gens_str = absl::GetFlag(FLAGS_exclude_gens);
-  std::vector<int> exclude_gens;
-  std::transform(exclude_gens_str.begin(), exclude_gens_str.end(),
-                 std::back_inserter(exclude_gens),
-                 [](const std::string& s) { return std::atoi(s.c_str()); });
+  int train_window_size = absl::GetFlag(FLAGS_train_window_size);
+  if (train_window_size == -1) {
+    LOG(ERROR) << "No --train_window_size specified.";
+    return 1;
+  }
 
-  shuffler::ChunkManager chunk_manager(data_path, gen, absl::GetFlag(FLAGS_p),
-                                       games_per_gen, exclude_gens);
+  float p = absl::GetFlag(FLAGS_p);
+  LOG(INFO) << "Using Training Window of n=" << train_window_size
+            << " samples and p=" << p << " sample draw probability.";
+
+  shuffler::ChunkManager chunk_manager(data_path, gen, p, games_this_gen,
+                                       train_window_size,
+                                       absl::GetFlag(FLAGS_run_continuously));
   std::thread wait_thread(WaitForSignal, &chunk_manager);
 
   // CreateChunk blocks until we receive a signal, or play `games_per_gen`

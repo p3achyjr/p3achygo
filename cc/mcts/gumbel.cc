@@ -28,6 +28,7 @@ static constexpr int kVisit = 50;
 static constexpr float kValueScale = 1.0;
 
 struct GumbelMoveInfo {
+  float prob = 0;
   float logit = 0;
   float gumbel_noise = 0;
   float qtransform = 0;
@@ -66,7 +67,7 @@ float VMixed(TreeNode* node) {
   double visited_prob = 0;
   for (int action = 0; action < constants::kMaxNumMoves; ++action) {
     if (NAction(node, action) > 0) {
-      weighted_visited_q += (node->move_probs[action] * QAction(node, action));
+      weighted_visited_q += (node->move_probs[action] * Q(node, action));
       visited_prob += node->move_probs[action];
     }
   }
@@ -91,6 +92,7 @@ int Argmax(std::array<float, constants::kMaxNumMoves>& logits) {
   return arg_max;
 }
 
+// Compute completedQ = {q(a) if N(a) > 0, v_mixed otherwise }.
 std::array<float, constants::kMaxNumMoves> ComputeImprovedPolicy(
     TreeNode* node) {
   float v_mix = VMixed(node);
@@ -99,8 +101,29 @@ std::array<float, constants::kMaxNumMoves> ComputeImprovedPolicy(
   for (int action = 0; action < constants::kMaxNumMoves; ++action) {
     logits_improved[action] =
         node->move_logits[action] +
-        QTransform(NAction(node, action) > 0 ? QAction(node, action) : v_mix,
-                   max_n);
+        QTransform(NAction(node, action) > 0 ? Q(node, action) : v_mix, max_n);
+  }
+
+  return core::SoftmaxV(logits_improved);
+}
+
+// Version of the above that only bumps the probabiilities of Gumbel selected
+// actions. This avoids choosing moves with low visit counts and high Q-values.
+std::array<float, constants::kMaxNumMoves> ComputeRootImprovedPolicy(
+    TreeNode* node,
+    const std::array<float, constants::kMaxNumMoves> masked_logits,
+    const absl::InlinedVector<int, 16>& visited_actions) {
+  float v_mix = VMixed(node);
+  int max_n = MaxN(node);
+  alignas(MM_ALIGN) std::array<float, constants::kMaxNumMoves> logits_improved;
+  for (int action = 0; action < constants::kMaxNumMoves; ++action) {
+    if (core::InlinedVecContains(visited_actions, action)) {
+      logits_improved[action] =
+          masked_logits[action] + QTransform(Q(node, action), max_n);
+    } else {
+      logits_improved[action] =
+          masked_logits[action] + QTransform(v_mix, max_n);
+    }
   }
 
   return core::SoftmaxV(logits_improved);
@@ -117,27 +140,33 @@ GumbelEvaluator::GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id)
 // !! `game` and `node` must be kept in sync with each other.
 GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
                                          Game& game, TreeNode* const root,
-                                         Color color_to_move, int n, int k) {
+                                         Color color_to_move, int n, int k,
+                                         float noise_scaling) {
   DCHECK(root);
   int num_rounds = std::max(log2(k), 1);
-  int visits_per_action = n / (k * num_rounds);
 
   if (root->state == TreeNodeState::kNew) {
-    EvaluateRoot(game, root, color_to_move);
+    leaf_evaluator_.EvaluateRoot(probability, game, root, color_to_move);
   }
 
   auto num_moves = constants::kMaxNumMoves;
   auto k_valid = 0;
+
+  std::array<float, constants::kMaxNumMoves> masked_logits;  // for completed-Q.
   GumbelMoveInfo gmove_info[num_moves];
   for (int i = 0; i < num_moves; ++i) {
     if (!game.IsValidMove(i, color_to_move)) {
       // ignore move henceforth
+      masked_logits[i] = kSmallLogit;
       gmove_info[i].logit = kSmallLogit;
       continue;
     }
 
+    masked_logits[i] = root->move_logits[i];
+
+    gmove_info[i].prob = root->move_probs[i];
     gmove_info[i].logit = root->move_logits[i];
-    gmove_info[i].gumbel_noise = probability.GumbelSample();
+    gmove_info[i].gumbel_noise = noise_scaling * probability.GumbelSample();
     gmove_info[i].move_encoding = i;
     gmove_info[i].move_loc = game::AsLoc(i);
 
@@ -150,7 +179,13 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
   std::sort(gmove_info, gmove_info + num_moves, GumbelMoveInfoGreater);
   if (n == 1) {
     return GumbelResult{game::AsLoc(Argmax(root->move_logits)),
-                        gmove_info[0].move_loc};
+                        gmove_info[0].move_loc, root->move_probs};
+  }
+
+  // populate top-k moves.
+  absl::InlinedVector<int, 16> top_k_actions;
+  for (int i = 0; i < k; ++i) {
+    top_k_actions.emplace_back(gmove_info[i].move_encoding);
   }
 
   // For each round:
@@ -158,7 +193,12 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
   // - Reject half for next round.
   // - Divide k by 2
   // - Multiply visits_per_action by 2
+  int n_remaining = n;
+  int m = k;
   while (k > 1) {
+    // Visits for this round: floor(n / (num_rounds * k)). If k ~ {2, 3}, then
+    // this is the last round.
+    int visits_per_action = k < 4 ? (n_remaining / k) : (n / (num_rounds * k));
     for (auto i = 0; i < k; ++i) {
       auto& move_info = gmove_info[i];
       if (move_info.move_encoding == game::kInvalidMoveEncoding) {
@@ -176,32 +216,56 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
         search_game.PlayMove(move_info.move_loc, color_to_move);
 
         absl::InlinedVector<TreeNode*, kMaxPathLenEst> search_path =
-            SearchNonRoot(search_game, root, child,
-                          game::OppositeColor(color_to_move), root->score_est);
+            SearchNonRoot(probability, search_game, root, child,
+                          game::OppositeColor(color_to_move), color_to_move,
+                          root->score_est);
 
         // update tree
         Backward(search_path);
+        --n_remaining;
       }
 
       // update qvalue
-      auto child_q = -Q(child);
+      auto child_q = -V(child);
       move_info.qtransform = QTransform(child_q, MaxN(root));
     }
 
     std::sort(gmove_info, gmove_info + k, GumbelMoveInfoGreater);
     k /= 2;
-    visits_per_action *= 2;
   }
 
   AdvanceState(root);
 
   Loc raw_nn_move = game::AsLoc(Argmax(root->move_logits));
-  GumbelResult result = {raw_nn_move, gmove_info[0].move_loc};
+  GumbelResult result = {raw_nn_move, gmove_info[0].move_loc, {}};
 
   // Get improved policy from completed-Q values.
-  result.pi_improved = ComputeImprovedPolicy(root);
+  result.pi_improved =
+      ComputeRootImprovedPolicy(root, masked_logits, top_k_actions);
+
+  // result.pi_improved[gmove_info[0].move_encoding] = 1.0f;  // one-hot.
+
+  // Populate stats for visited children.
+  for (int i = 0; i < m; ++i) {
+    const GumbelMoveInfo& gmove = gmove_info[i];
+    result.child_stats.emplace_back(
+        ChildStats{gmove.move_loc /* move */,
+                   static_cast<int>(NAction(root, gmove.move_encoding)) /* n */,
+                   Q(root, gmove.move_encoding) /* q */,
+                   QOutcome(root, gmove.move_encoding) /* qz */,
+                   ChildScore(root, gmove.move_encoding) /* score */,
+                   gmove.prob /* prob */, gmove.logit /* logit */,
+                   gmove.gumbel_noise /* gumbel_noise */,
+                   gmove.qtransform /* qtransform */});
+  }
 
   return result;
+}
+
+GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
+                                         Game& game, TreeNode* const root,
+                                         Color color_to_move, int n, int k) {
+  return SearchRoot(probability, game, root, color_to_move, n, k, 1.0f);
 }
 
 // `board`: Local search board
@@ -211,12 +275,15 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
 // `root_score_est`: Value estimate for root node. Subsequent node score
 // estimates will be centered against this value.
 absl::InlinedVector<TreeNode*, GumbelEvaluator::kMaxPathLenEst>
-GumbelEvaluator::SearchNonRoot(Game& game, TreeNode* root, TreeNode* node,
-                               Color color_to_move, float root_score_est) {
+GumbelEvaluator::SearchNonRoot(core::Probability& probability, Game& game,
+                               TreeNode* root, TreeNode* node,
+                               Color color_to_move, Color root_color,
+                               float root_score_est) {
   absl::InlinedVector<TreeNode*, kMaxPathLenEst> path = {root, node};
   if (node->state == TreeNodeState::kNew) {
     // leaf node. evaluate and return.
-    EvaluateLeaf(game, node, color_to_move, root_score_est);
+    leaf_evaluator_.EvaluateLeaf(probability, game, node, color_to_move,
+                                 root_color, root_score_est);
     return path;
   }
 
@@ -256,57 +323,40 @@ GumbelEvaluator::SearchNonRoot(Game& game, TreeNode* root, TreeNode* node,
   // or both.
   TreeNode* leaf_node = path.back();
   if (leaf_node->state == TreeNodeState::kNew) {
-    EvaluateLeaf(game, leaf_node, color_to_move, root_score_est);
+    leaf_evaluator_.EvaluateLeaf(probability, game, leaf_node, color_to_move,
+                                 root_color, root_score_est);
   }
 
   if (game.IsGameOver() && !leaf_node->is_terminal) {
     // evaluate score
     game::Scores scores = game.GetScores();
-    float player_score =
-        color_to_move == BLACK ? scores.black_score : scores.white_score;
-    float opp_score =
-        color_to_move == BLACK ? scores.white_score : scores.black_score;
-    // float final_score =
-    //     player_score - opp_score + constants::kScoreInflectionPoint;
-    // float empirical_q =
-    //     (player_score > opp_score ? 1.0 : -1.0) +
-    //     ScoreTransform(final_score, root_score_est, BOARD_LEN);
-
-    // TODO: Experiment with this.
-    float empirical_q = player_score > opp_score ? 1.5 : -1.5;
-
-    leaf_node->is_terminal = true;
-    leaf_node->q = empirical_q;
+    leaf_evaluator_.EvaluateTerminal(scores, leaf_node, color_to_move,
+                                     root_color, root_score_est);
   }
 
   return path;
 }
 
-void GumbelEvaluator::EvaluateRoot(const Game& game, TreeNode* node,
-                                   Color color_to_move) {
-  leaf_evaluator_.EvaluateRoot(game, node, color_to_move);
-}
-
-void GumbelEvaluator::EvaluateLeaf(const Game& game, TreeNode* node,
-                                   Color color_to_move, float root_score_est) {
-  leaf_evaluator_.EvaluateLeaf(game, node, color_to_move, root_score_est);
-}
-
 void GumbelEvaluator::Backward(
     absl::InlinedVector<TreeNode*, kMaxPathLenEst>& path) {
-  float leaf_util = path[path.size() - 1]->q;
+  TreeNode* leaf = path.back();
+  float leaf_q = leaf->v;
+  float leaf_q_outcome = leaf->v_outcome;
 
   for (int i = path.size() - 2; i >= 0; --i) {
     TreeNode* parent = path[i];
     TreeNode* child = path[i + 1];
     parent->n += 1;
-    parent->w += -leaf_util;
-    parent->q = parent->w / parent->n;
+    parent->w += -leaf_q;
+    parent->w_outcome += -leaf_q_outcome;
+    parent->v = parent->w / parent->n;
+    parent->v_outcome = parent->w_outcome / parent->n;
     if (child->n > parent->max_child_n) {
       parent->max_child_n = child->n;
     }
 
-    leaf_util *= -1;
+    leaf_q *= -1;
+    leaf_q_outcome *= -1;
   }
 }
 

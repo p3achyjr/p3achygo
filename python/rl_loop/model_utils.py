@@ -9,7 +9,8 @@ import trt_convert
 
 from pathlib import Path
 
-SWA_MOMENTUM = .75
+SWA_MOMENTUM = .5
+NUM_BATCHES_FULL_CHECKPOINT = 4000
 
 
 def new_model(name: str) -> P3achyGoModel:
@@ -20,9 +21,15 @@ def new_model(name: str) -> P3achyGoModel:
                               name=name)
 
 
-def avg_weights(prev_weights: list, cur_weights: list) -> list:
+def avg_weights(prev_weights: list, cur_weights: list,
+                num_batches_in_chunk: int) -> list:
+  chunk_ratio = min(1.0,
+                    float(num_batches_in_chunk) / NUM_BATCHES_FULL_CHECKPOINT)
+  m_swa_new = (1 - SWA_MOMENTUM) * chunk_ratio
+  swa_momentum = 1 - m_swa_new
+  print('SWA Momentum:', swa_momentum, 'Num Batches:', num_batches_in_chunk)
   return [
-      prev_layer_weights * SWA_MOMENTUM + layer_weights * (1 - SWA_MOMENTUM)
+      prev_layer_weights * swa_momentum + layer_weights * (1 - swa_momentum)
       for prev_layer_weights, layer_weights in zip(prev_weights, cur_weights)
   ]
 
@@ -41,7 +48,7 @@ def save_trt(model: P3achyGoModel, calib_ds_path: str, local_model_dir: str,
   '''
   Saves model and returns _base_ path of model.
   '''
-  model_path = Path(local_model_dir, f'model_{gen}')
+  model_path = Path(local_model_dir, gcs.MODEL_FORMAT.format(gen))
   model.save(str(model_path))
 
   logging.info('Converting to TensorRT...')

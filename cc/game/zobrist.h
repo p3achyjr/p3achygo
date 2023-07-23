@@ -1,5 +1,5 @@
-#ifndef __GAME_ZOBRIST_HASH_H_
-#define __GAME_ZOBRIST_HASH_H_
+#ifndef GAME_ZOBRIST_HASH_H_
+#define GAME_ZOBRIST_HASH_H_
 
 #include <cstdint>
 
@@ -36,4 +36,4 @@ class Zobrist final {
 
 }  // namespace game
 
-#endif  // __GAME_ZOBRIST_HASH_H_
+#endif  // GAME_ZOBRIST_HASH_H_

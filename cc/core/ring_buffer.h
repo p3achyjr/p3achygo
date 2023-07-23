@@ -1,10 +1,12 @@
-#ifndef __CC_CORE_CIRCULAR_BUFFER_H_
-#define __CC_CORE_CIRCULAR_BUFFER_H_
+#ifndef CORE_CIRCULAR_BUFFER_H_
+#define CORE_CIRCULAR_BUFFER_H_
 
 #include <array>
 #include <cstddef>
 #include <memory>
 #include <optional>
+
+#include "cc/core/rand.h"
 
 namespace core {
 
@@ -27,10 +29,13 @@ class RingBuffer final {
     }
   }
 
-  std::optional<T> Pop() {
+  std::optional<T> PopRandom() {
     if (size_ == 0 || !buffer_[start_]) {
       return std::nullopt;
     }
+
+    int idx = (start_ + RandRange(prng_, 0, size_)) % N;
+    std::swap(buffer_[start_], buffer_[idx]);
 
     T elem = *buffer_[start_];
     buffer_[start_].reset();
@@ -44,6 +49,7 @@ class RingBuffer final {
   std::array<std::unique_ptr<T>, N> buffer_;
   int start_;
   int size_;
+  PRng prng_;
 };
 
 }  // namespace core

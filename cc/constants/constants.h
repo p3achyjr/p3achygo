@@ -1,5 +1,5 @@
-#ifndef __CONSTANTS_CONSTANTS_H_
-#define __CONSTANTS_CONSTANTS_H_
+#ifndef CONSTANTS_CONSTANTS_H_
+#define CONSTANTS_CONSTANTS_H_
 
 #include <cstddef>
 
@@ -38,7 +38,10 @@ static constexpr int kMaxNumMoves = BOARD_LEN * BOARD_LEN + 1;
 static constexpr int kMaxGameLen = 600;
 
 /* Number of feature planes for neural network */
-static constexpr int kNumInputFeaturePlanes = 7;
+static constexpr int kNumInputFeaturePlanes = 13;
+
+/* Number of feature scalars in game state vector */
+static constexpr int kNumInputFeatureScalars = 7;
 
 /* Number of score logits from neural network */
 static constexpr int kNumValueLogits = 2;
@@ -62,11 +65,14 @@ static constexpr int kNoopMoveEncoding = -1;
 static constexpr int kNumPassesBeforeBensons = 3;
 
 /* Maximum number of threads. */
-static constexpr int kMaxNumThreads = 64;
+static constexpr int kMaxNumThreads = 256;
 
 /* Default Max NN Cache Size */
 static constexpr size_t kDefaultNNCacheSize = 1048576;
 
+/* Go-Exploit Buffer Size. https://arxiv.org/pdf/2302.12359.pdf. */
+static constexpr int kGoExploitBufferSize = 8192;
+
 }  // namespace constants
 
-#endif  // __CONSTANTS_CONSTANTS_H_
+#endif  // CONSTANTS_CONSTANTS_H_

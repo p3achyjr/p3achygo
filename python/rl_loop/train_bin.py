@@ -89,12 +89,12 @@ def main(_):
 
   model.summary(batch_size=BATCH_SIZE)
   val_ds = tf.data.TFRecordDataset(FLAGS.val_ds_path, compression_type='ZLIB')
-  val_ds = val_ds.map(transforms.expand_rl, num_parallel_calls=tf.data.AUTOTUNE)
+  val_ds = val_ds.map(transforms.expand, num_parallel_calls=tf.data.AUTOTUNE)
   val_ds = val_ds.batch(BATCH_SIZE)
   val_ds = val_ds.prefetch(tf.data.AUTOTUNE)
 
   logging.info(f'Collecting initial validation stats...')
-  train.val(model, mode=train.Mode.RL, val_ds=val_ds)
+  train.val(model, mode=train.Mode.RL, val_ds=val_ds, val_batch_num=0)
   while model_gen < FLAGS.num_generations:
     next_model_gen = model_gen + 1
     most_recent_chunk = gcs.get_most_recent_chunk(FLAGS.run_id)
@@ -107,7 +107,7 @@ def main(_):
     chunk_filename = gcs.download_golden_chunk(FLAGS.run_id, str(chunk_dir),
                                                next_model_gen)
     logging.info(f'Training model gen {model_gen}...')
-    rl_loop.train.train_one_gen(model, chunk_filename, val_ds,
+    rl_loop.train.train_one_gen(model, model_gen, chunk_filename, val_ds,
                                 FLAGS.log_interval, is_gpu)
 
     model_utils.save_trt_and_upload(model,

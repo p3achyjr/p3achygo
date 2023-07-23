@@ -1,5 +1,5 @@
-#ifndef __CORE_HEAP_H_
-#define __CORE_HEAP_H_
+#ifndef CORE_HEAP_H_
+#define CORE_HEAP_H_
 
 #include <algorithm>
 #include <vector>
@@ -38,4 +38,4 @@ class Heap {
 
 }  // namespace core
 
-#endif  // __CORE_HEAP_H_
+#endif  // CORE_HEAP_H_
