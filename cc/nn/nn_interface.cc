@@ -128,6 +128,7 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
 
   // Not cached. Load for inference.
   DCHECK(game.moves().size() >= constants::kNumLastMoves);
+
   Symmetry sym = GetRandomSymmetry(probability.prng());
   board_utils::FillNNInput(thread_id, num_threads_, nn_input_buf_[0],
                            nn_input_buf_[1], game, color_to_move, sym);
@@ -258,14 +259,24 @@ void NNInterface::Infer() {
   TF_CHECK_OK(model_bundle_.GetSession()->Run(nn_input, kOutputNames, {},
                                               &nn_output_buf_));
 
-  // reset input buffers.
-  nn_input_buf_[0].flat<float>().setZero();
-  nn_input_buf_[1].flat<float>().setZero();
-
-  for (auto& thread : thread_info_) {
-    if (thread.registered && !thread.res_cached) {
+  for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
+    ThreadInfo& thread = thread_info_[thread_id];
+    if (thread.registered && thread.loaded_for_inference) {
+      // If we do not check `thread.loaded_for_inference` before clearing input,
+      // the following sequence of events is possible:
+      // - worker_thread fills their NN Input.
+      // - infer_thread acquires lock via timeout.
+      // - infer_thread runs inference.
+      // - worker_thread acquires lock.
+      // - worker_thread marks `thread.loaded_for_inference = true`.
+      // - infer_thread acquires lock and runs inference. The input is empty, so
+      //   inference gives back bogus data.
       thread.res_ready = true;
       thread.loaded_for_inference = false;
+
+      // reset input buffers for the current thread only. See above.
+      nn_input_buf_[0].SubSlice(thread_id).unaligned_flat<float>().setZero();
+      nn_input_buf_[1].SubSlice(thread_id).unaligned_flat<float>().setZero();
     }
   }
 

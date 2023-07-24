@@ -30,6 +30,8 @@ GTPCode StringToGTPCode(std::string token) {
     return GTPCode::kGenMove;
   } else if (token == "print_board") {
     return GTPCode::kPrintBoard;
+  } else if (token == "final_score") {
+    return GTPCode::kFinalScore;
   } else if (token == "play_dbg") {
     return GTPCode::kPlayDbg;
   } else if (token == "genmove_dbg") {
@@ -65,6 +67,8 @@ std::string GTPCodeToString(GTPCode code) {
       return "genmove";
     case GTPCode::kPrintBoard:
       return "print_board";
+    case GTPCode::kFinalScore:
+      return "final_score";
     case GTPCode::kPlayDbg:
       return "play_dbg";
     case GTPCode::kGenMoveDbg:
@@ -99,6 +103,13 @@ std::string GtpValueString(game::Loc loc) {
   vertex_string += std::to_string(BOARD_LEN - loc.i);
 
   return vertex_string;
+}
+
+std::string GtpValueString(game::Scores scores) {
+  std::stringstream ss;
+  ss << "B: " << scores.black_score << ", W: " << scores.white_score;
+
+  return ss.str();
 }
 
 }  // namespace gtp

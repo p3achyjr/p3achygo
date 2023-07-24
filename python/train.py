@@ -4,7 +4,6 @@ import functools
 import numpy as np
 import tensorflow as tf
 
-from absl import logging
 from board import GoBoard
 from collections import defaultdict
 from constants import *
@@ -69,10 +68,11 @@ def train_step_gpu(w_pi, w_pi_aux, w_val, w_outcome, w_score, w_own, w_q30,
     reg_loss = tf.math.add_n(model.losses)
 
     loss = loss + reg_loss
-    scaled_loss = optimizer.get_scaled_loss(loss)
+    scaled_loss = tf.clip_by_value(loss, -15.0, 15.0)
+    scaled_loss = optimizer.get_scaled_loss(scaled_loss)
 
-  scaled_gradients = g.gradient(scaled_loss, model.trainable_variables)
-  gradients = optimizer.get_unscaled_gradients(scaled_gradients)
+  gradients = g.gradient(scaled_loss, model.trainable_variables)
+  gradients = optimizer.get_unscaled_gradients(gradients)
   optimizer.apply_gradients(zip(gradients, model.trainable_variables))
 
   return (pi_logits, pi_logits_aux, outcome_logits, own_pred, q30_pred,
@@ -194,6 +194,9 @@ def train(model: P3achyGoModel,
     # train
     for (input, input_global_state, color, komi, score, score_one_hot, policy,
          policy_aux, own, q30, q100, q200) in train_ds:
+      if save_path and save_interval and batch_num % save_interval == 0:
+        save_model(model, batch_num, save_path)
+
       (pi_logits, pi_logits_aux, outcome_logits, own_pred, q30_pred, q100_pred,
        q200_pred, score_logits, loss, policy_loss, policy_aux_loss,
        outcome_loss, q30_loss, q100_loss, q200_loss, score_pdf_loss,
@@ -210,9 +213,6 @@ def train(model: P3achyGoModel,
                     outcome_logits, own_pred, q30_pred, q100_pred, q200_pred,
                     policy, policy_aux, score, q30, q100, q200,
                     optimizer.learning_rate.numpy(), losses_train, own, mode)
-
-      if save_path and save_interval and batch_num % save_interval == 0:
-        save_model(model, batch_num, save_path)
 
       batch_num += 1
 

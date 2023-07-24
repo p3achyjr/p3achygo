@@ -776,12 +776,10 @@ class P3achyGoModel(tf.keras.Model):
         'name': self.name,
     }
 
-  def summary(self, batch_size=32):
+  def summary(self):
     x0 = tf.keras.layers.Input(shape=(self.board_len, self.board_len,
-                                      self.num_input_planes),
-                               batch_size=batch_size)
-    x1 = tf.keras.layers.Input(shape=(self.num_input_features,),
-                               batch_size=batch_size)
+                                      self.num_input_planes))
+    x1 = tf.keras.layers.Input(shape=(self.num_input_features,))
     model = tf.keras.Model(inputs=[x0, x1], outputs=self.call(x0, x1))
     return model.summary()
 

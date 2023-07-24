@@ -19,6 +19,7 @@ class RunConfig(object):
   min_lr: float
   max_lr: float
   extra_train_gens: int
+  lr_growth_window: int
 
   # Gumbel Controls
   min_train_selected_k: int
@@ -44,6 +45,7 @@ def parse(run_id: str) -> RunConfig:
     max_lr = obj.get('max_lr', obj['lr'])
     use_cyclic_lr = min_lr != max_lr
     extra_train_gens = obj.get('extra_train_gens', 0)
+    lr_growth_window = obj.get('lr_growth_window', 0)
 
     min_train_selected_k = obj.get('min_train_selected_k', 8)
     min_train_selected_n = obj.get('min_train_selected_n', 128)
@@ -59,7 +61,8 @@ def parse(run_id: str) -> RunConfig:
     return RunConfig(obj['num_generations'], games_first_gen,
                      obj['games_per_gen'], obj['batch_size'], use_cyclic_lr,
                      obj['lr'], min_lr, max_lr, extra_train_gens,
-                     min_train_selected_k, min_train_selected_n,
-                     max_train_selected_k, max_train_selected_n,
-                     min_train_default_k, min_train_default_n,
-                     max_train_default_k, max_train_default_n, eval_k, eval_n)
+                     lr_growth_window, min_train_selected_k,
+                     min_train_selected_n, max_train_selected_k,
+                     max_train_selected_n, min_train_default_k,
+                     min_train_default_n, max_train_default_k,
+                     max_train_default_n, eval_k, eval_n)

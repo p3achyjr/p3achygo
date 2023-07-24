@@ -26,6 +26,9 @@ flags.DEFINE_string('models_dir', '', 'Directory to find model.')
 flags.DEFINE_integer('gen', -1, 'Generation, or -1 for most recent')
 flags.DEFINE_integer('next_gen', -1, 'Next generation.')
 flags.DEFINE_string('chunk_path', '', 'Path to training chunk')
+flags.DEFINE_integer(
+    'chunk_size', None,
+    'Size of chunk. Used for cyclic LR. Specify `None` to use linear LR.')
 flags.DEFINE_string('val_ds_path', '', 'Path to val ds')
 flags.DEFINE_string('batch_num_path', '', 'File storing batch counter.')
 
@@ -89,7 +92,8 @@ def main(_):
                                           val_ds,
                                           config=config,
                                           is_gpu=is_gpu,
-                                          batch_num=batch_num)
+                                          batch_num=batch_num,
+                                          chunk_size=FLAGS.chunk_size)
   model_utils.save_trt(model,
                        FLAGS.val_ds_path,
                        FLAGS.models_dir,

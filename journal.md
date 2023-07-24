@@ -296,6 +296,8 @@ In general there seems to be a big parallel between model-based methods (where w
 
 ## 7-22-2023
 
+<b>Update 7-23-2023: This was just a race condition.</b>
+
 Noticed severe policy blind spots for model_0069 and model_0091. Looks like it persists throughout training.
 Sample positions:
 
@@ -716,3 +718,9 @@ Other notes:
 - We can also randomly sample positions from all previous states, not just states generated from the current generation of self-play.
 - Eval should play against the last best model, and also a randomly selected golden from the last `n` goldens, before being promoted.
 - Akin to temperature, we can play according to completed-Q values in the first `n` moves of search.
+
+## 7-23-2023
+
+^^ The above was just a race condition. When the inference thread acquires the lock from a timeout, it's possible that the worker thread has not yet marked itself as having loaded inference. Thus, inference will run and clear the input. However, the worker thread will acquire the lock on the _next_ iteration of inference, at which point the data that it has already loaded is zeroed out. I made it so that we only reset parts of the buffer that have marked themselves as loaded for inference, and the bug no longer seems to occur.
+
+Big thanks to the Go Discord for helping me out here :)

@@ -13,7 +13,7 @@ namespace gtp {
 
 class Service {
  public:
-  ~Service() = default;
+  virtual ~Service() = default;
 
   virtual Response<int> GtpProtocolVersion(std::optional<int> id) = 0;
   virtual Response<std::string> GtpName(std::optional<int> id) = 0;
@@ -28,6 +28,7 @@ class Service {
   virtual Response<game::Loc> GtpGenMove(std::optional<int> id,
                                          game::Color color) = 0;
   virtual Response<std::string> GtpPrintBoard(std::optional<int> id) = 0;
+  virtual Response<game::Scores> GtpFinalScore(std::optional<int> id) = 0;
 
   // Private Commands.
   virtual Response<std::string> GtpPlayDbg(std::optional<int> id,

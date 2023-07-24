@@ -85,7 +85,8 @@ inline float SumChildrenN(TreeNode* node) {
 }
 
 inline float ChildScore(TreeNode* node, int action) {
-  return node == nullptr ? node->score_est : -node->children[action]->score_est;
+  return !node->children[action] ? node->score_est
+                                 : -node->children[action]->score_est;
 }
 
 void AdvanceState(TreeNode* node);

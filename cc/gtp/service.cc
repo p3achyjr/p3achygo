@@ -68,6 +68,7 @@ class ServiceImpl final : public Service {
   Response<> GtpPlay(std::optional<int> id, Move move) override;
   Response<Loc> GtpGenMove(std::optional<int> id, Color color) override;
   Response<std::string> GtpPrintBoard(std::optional<int> id) override;
+  Response<game::Scores> GtpFinalScore(std::optional<int> id) override;
 
   // Private Commands.
   Response<std::string> GtpPlayDbg(std::optional<int> id,
@@ -167,6 +168,10 @@ Response<std::string> ServiceImpl::GtpPrintBoard(std::optional<int> id) {
   return MakeResponse(id, ss.str());
 }
 
+Response<game::Scores> ServiceImpl::GtpFinalScore(std::optional<int> id) {
+  return MakeResponse(id, game_->GetScores());
+}
+
 Response<std::string> ServiceImpl::GtpPlayDbg(std::optional<int> id,
                                               game::Move move) {
   if (!game_->IsValidMove(move.loc, move.color)) {
@@ -194,14 +199,6 @@ Response<std::string> ServiceImpl::GtpGenMoveDbg(std::optional<int> id,
                     : std::vector<std::pair<game::Loc, float>>();
   std::vector<std::pair<game::Loc, float>> top_policy_moves_improved =
       GetTopPolicyMoves(search_result.pi_improved);
-  MakeMove(color, search_result.mcts_move);
-
-  // Run this to populate the policy logits at the new root.
-  gumbel_evaluator_->SearchRoot(probability_, *game_, current_root_.get(),
-                                game::OppositeColor(color), 1, 1);
-  std::vector<std::pair<game::Loc, float>> top_policy_moves_next =
-      current_root_ ? GetTopPolicyMoves(current_root_->move_probs)
-                    : std::vector<std::pair<game::Loc, float>>();
 
   std::string dbg_str;
   dbg_str += "---- Move Num " + std::to_string(game_->num_moves()) + " ----\n";
@@ -232,6 +229,15 @@ Response<std::string> ServiceImpl::GtpGenMoveDbg(std::optional<int> id,
                ", qz: " + std::to_string(selected_child.qz) + "\n";
   }
 
+  MakeMove(color, search_result.mcts_move);
+
+  // Run this to populate the policy logits at the new root.
+  gumbel_evaluator_->SearchRoot(probability_, *game_, current_root_.get(),
+                                game::OppositeColor(color), 1, 1);
+  std::vector<std::pair<game::Loc, float>> top_policy_moves_next =
+      current_root_ ? GetTopPolicyMoves(current_root_->move_probs)
+                    : std::vector<std::pair<game::Loc, float>>();
+
   dbg_str += "Top Policy Moves Next:\n";
   for (const auto& move : top_policy_moves_next) {
     dbg_str +=
@@ -243,8 +249,8 @@ Response<std::string> ServiceImpl::GtpGenMoveDbg(std::optional<int> id,
 }
 
 GumbelResult ServiceImpl::GenMoveCommon(Color color) {
-  static constexpr int kDefaultN = 192;
-  static constexpr int kDefaultK = 8;
+  static constexpr int kDefaultN = 1024;
+  static constexpr int kDefaultK = 10;
   if (!(color == current_color_)) {
     // We are moving twice consecutively. Fake a pass first.
     current_color_ = color;

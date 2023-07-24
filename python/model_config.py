@@ -49,3 +49,13 @@ class ModelConfig:
   @staticmethod
   def small():
     return ModelConfig()
+
+  @staticmethod
+  def medium():
+    return ModelConfig(blocks=24,
+                       broadcast_interval=8,
+                       bottleneck_length=4,
+                       channels=192,
+                       bottleneck_channels=96,
+                       head_channels=48,
+                       c_val=64)

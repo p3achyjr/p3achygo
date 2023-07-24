@@ -322,6 +322,9 @@ void Client::HandleCommand(Command cmd) {
     case GTPCode::kPrintBoard:
       AddResponse(service_->GtpPrintBoard(cmd.id));
       return;
+    case GTPCode::kFinalScore:
+      AddResponse(service_->GtpFinalScore(cmd.id));
+      return;
     case GTPCode::kPlayDbg:
       ARITY_CHECK(cmd, 2);
       {

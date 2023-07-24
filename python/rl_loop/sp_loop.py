@@ -85,14 +85,18 @@ def loop(bin_path: str,
     def get_gumbel_params():
       # Linear growth
       c = gen / config.num_generations
-      selected_n = config.min_train_selected_n + c * (
-          config.max_train_selected_n - config.min_train_selected_n)
-      selected_k = config.min_train_selected_k + c * (
-          config.max_train_selected_k - config.min_train_selected_k)
-      default_n = config.min_train_default_n + c * (config.max_train_default_n -
-                                                    config.min_train_default_n)
-      default_k = config.min_train_default_k + c * (config.max_train_default_k -
-                                                    config.min_train_default_k)
+      selected_n = int(
+          round(config.min_train_selected_n + c *
+                (config.max_train_selected_n - config.min_train_selected_n)))
+      selected_k = int(
+          round(config.min_train_selected_k + c *
+                (config.max_train_selected_k - config.min_train_selected_k)))
+      default_n = int(
+          round(config.min_train_default_n + c *
+                (config.max_train_default_n - config.min_train_default_n)))
+      default_k = int(
+          round(config.min_train_default_k + c *
+                (config.max_train_default_k - config.min_train_default_k)))
       return selected_n, selected_k, default_n, default_k
 
     selected_n, selected_k, default_n, default_k = get_gumbel_params()
@@ -125,9 +129,9 @@ def loop(bin_path: str,
                                                    local_sgf_dir, sp_chunks,
                                                    sgfs)
 
-      # Shut down loop if run is finished.
-      if gcs.is_done(run_id):
-        logging.info('Run is done. Shutting down...')
+      # Shut down loop if no more self-play games are needed.
+      if gcs.get_most_recent_chunk(run_id) >= config.num_generations:
+        logging.info('No more self-play needed. Shutting down...')
         is_done = True
         break
 

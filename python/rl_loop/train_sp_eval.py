@@ -100,37 +100,40 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
   5. Repeat from (1).
   '''
 
-  def train(model_gen: int, local_models_dir: str, chunk_path: str,
-            batch_num_path: str):
-    logging.info(f'Training model {model_gen}...')
-    cmd = shlex.split(f'python -m python.rl_loop.train_one_gen' +
-                      f' --run_id={run_id}' +
-                      f' --models_dir={local_models_dir}' +
-                      f' --gen={model_gen}' +
-                      f' --next_gen={latest_chunk_gen}' +
-                      f' --chunk_path={chunk_path}' +
-                      f' --val_ds_path={val_ds_path}' +
-                      f' --batch_num_path={batch_num_path}')
-    train_proc = Popen(cmd,
-                       stdin=PIPE,
-                       stdout=PIPE,
-                       stderr=STDOUT,
-                       universal_newlines=True)
-    t = Thread(target=print_stdout, args=(train_proc.stdout,), daemon=True)
-    t.start()
-    train_proc.wait()
+  def train(model_gen: int, next_model_gen: int, local_models_dir: str,
+            chunk_path: str, chunk_size_path: str, batch_num_path: str):
+    with open(chunk_size_path, 'r') as f:
+      logging.info(f'Training model {next_model_gen}...')
+      chunk_size = int(f.read())
+      cmd = shlex.split(f'python -m python.rl_loop.train_one_gen' +
+                        f' --run_id={run_id}' +
+                        f' --models_dir={local_models_dir}' +
+                        f' --gen={model_gen}' +
+                        f' --next_gen={next_model_gen}' +
+                        f' --chunk_path={chunk_path}' +
+                        f' --chunk_size={chunk_size}' +
+                        f' --val_ds_path={val_ds_path}' +
+                        f' --batch_num_path={batch_num_path}')
+      train_proc = Popen(cmd,
+                         stdin=PIPE,
+                         stdout=PIPE,
+                         stderr=STDOUT,
+                         universal_newlines=True)
+      t = Thread(target=print_stdout, args=(train_proc.stdout,), daemon=True)
+      t.start()
+      train_proc.wait()
 
-  def eval_new_model(latest_chunk_gen: int, eval_res_path: str):
+  def eval_new_model(next_model_gen: int, eval_res_path: str):
     # Play against current _best_ model.
     current_golden_gen = gcs.get_most_recent_model(run_id)
     cur_model_path = str(
         Path(local_models_dir, gcs.MODEL_FORMAT.format(current_golden_gen)))
     cand_model_path = str(
-        Path(local_models_dir, gcs.MODEL_FORMAT.format(latest_chunk_gen)))
+        Path(local_models_dir, gcs.MODEL_FORMAT.format(next_model_gen)))
 
     # Upload as new model candidate, in case we are pre-empted.
     logging.info(f'Uploading model candidate {cand_model_path}.')
-    gcs.upload_model_cand(run_id, local_models_dir, latest_chunk_gen)
+    gcs.upload_model_cand(run_id, local_models_dir, next_model_gen)
 
     # Run eval.
     eval_result = eval(run_id, eval_bin_path, eval_res_path, cur_model_path,
@@ -139,11 +142,11 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
     if eval_result.winner == EvalResult.CAND:
       # The cand model is stronger. Upload it as new golden.
       logging.info(f'Uploading model {cand_model_path} as new golden')
-      gcs.upload_model(run_id, local_models_dir, latest_chunk_gen)
+      gcs.upload_model(run_id, local_models_dir, next_model_gen)
 
     with open(eval_history_path, 'a') as f:
       f.write(f'Elo: {eval_result.rel_elo}' +
-              f' Cur: {current_golden_gen}, Cand: {latest_chunk_gen}\n')
+              f' Cur: {current_golden_gen}, Cand: {next_model_gen}\n')
 
   # populate local dirs
   (local_models_dir, local_golden_chunk_dir, _,
@@ -192,11 +195,16 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
     sp_queue.put(())  # Send any message to trigger shutdown.
     sp_thread.join()
 
+    next_model_gen = model_gen + 1
     chunk_path = gcs.download_golden_chunk(run_id, local_golden_chunk_dir,
-                                           latest_chunk_gen)
-    train(model_gen, local_models_dir, chunk_path, batch_num_path)
-    eval_new_model(latest_chunk_gen, eval_res_path)
-    model_gen = latest_chunk_gen
+                                           next_model_gen)
+    chunk_size_path = gcs.download_golden_chunk_size(run_id,
+                                                     local_golden_chunk_dir,
+                                                     next_model_gen)
+    train(model_gen, next_model_gen, local_models_dir, chunk_path,
+          chunk_size_path, batch_num_path)
+    eval_new_model(next_model_gen, eval_res_path)
+    model_gen = next_model_gen
     logging.info('Eval finished. Restarting self-play -> train -> eval loop.')
 
   logging.info('Reached number of generations. ' +
@@ -204,7 +212,7 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
 
   # We have completed all self-play. Continue to train on the tail of self-play
   # data. Shuffler is responsible for notifying when there are no more chunks.
-  while not gcs.is_done(run_id):
+  while model_gen < config.num_generations + config.extra_train_gens:
     # Wait for chunk.
     latest_chunk_gen = gcs.get_most_recent_chunk(run_id)
     while latest_chunk_gen <= model_gen:
@@ -214,15 +222,21 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
     # Found new chunk.
     logging.info(f'Found training chunk {latest_chunk_gen}.' +
                  f' Current generation is {model_gen}.')
+    next_model_gen = model_gen + 1
     chunk_path = gcs.download_golden_chunk(run_id, local_golden_chunk_dir,
-                                           latest_chunk_gen)
-    train(model_gen, local_models_dir, chunk_path, batch_num_path)
-    eval_new_model(latest_chunk_gen, eval_res_path)
+                                           next_model_gen)
+    chunk_size_path = gcs.download_golden_chunk_size(run_id,
+                                                     local_golden_chunk_dir,
+                                                     next_model_gen)
+    train(model_gen, next_model_gen, local_models_dir, chunk_path,
+          chunk_size_path, batch_num_path)
+    eval_new_model(next_model_gen, eval_res_path)
 
-    model_gen = latest_chunk_gen
+    model_gen = next_model_gen
     logging.info('Eval finished. Waiting for next chunk...')
 
   logging.info('Run is finished. Shutting down...')
+  gcs.signal_done(run_id)
 
 
 def main(_):

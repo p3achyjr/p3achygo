@@ -90,7 +90,7 @@ def main(_):
                                name='p3achygo_sl')
   lr_schedule = CyclicLRDecaySchedule(lr, lr * 10, ds_len * epochs)
   print(lr_schedule.info())
-  print(model.summary(batch_size=batch_size))
+  model.summary()
 
   is_gpu = False
   if tf.config.list_physical_devices('GPU'):

@@ -27,6 +27,7 @@ enum class GTPCode : uint8_t {
   kPlay = 10,
   kGenMove = 11,
   kPrintBoard = 12,
+  kFinalScore = 13,
 
   // [13 - 100 reserved]
   // Private Commands.
@@ -54,6 +55,7 @@ static constexpr GTPCode kSupportedCommands[] = {
     GTPCode::kPlay,
     GTPCode::kGenMove,
     GTPCode::kPrintBoard,
+    GTPCode::kFinalScore,
 
     // Private.
     GTPCode::kPlayDbg,
@@ -100,6 +102,7 @@ std::string GtpValueString(float x);
 std::string GtpValueString(std::string s);
 std::string GtpValueString(bool b);
 std::string GtpValueString(game::Loc loc);
+std::string GtpValueString(game::Scores loc);
 
 }  // namespace gtp
 
