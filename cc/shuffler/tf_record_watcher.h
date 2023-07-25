@@ -37,10 +37,11 @@ class TfRecordWatcher final {
 
  private:
   absl::flat_hash_set<std::string> GlobFiles();
-  absl::flat_hash_set<std::string> PopulateInitialTrainingWindow(
-      int train_window_size);
+  void PopulateInitialTrainingWindow(int train_window_size);
+
   std::string dir_;
   absl::flat_hash_set<std::string> files_;
+  absl::flat_hash_set<std::string> excluded_files_;
   int num_new_games_;
 };
 }  // namespace shuffler

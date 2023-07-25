@@ -15,9 +15,9 @@ namespace fs = std::filesystem;
 using namespace ::core;
 
 TfRecordWatcher::TfRecordWatcher(std::string dir, int train_window_size)
-    : dir_(dir),
-      files_(PopulateInitialTrainingWindow(train_window_size)),
-      num_new_games_(0) {}
+    : dir_(dir), num_new_games_(0) {
+  PopulateInitialTrainingWindow(train_window_size);
+}
 
 const absl::flat_hash_set<std::string>& TfRecordWatcher::GetFiles() {
   return files_;
@@ -28,6 +28,10 @@ std::vector<std::string> TfRecordWatcher::UpdateAndGetNew() {
   std::vector<std::string> new_files;
 
   for (const auto& f : files) {
+    if (excluded_files_.contains(f)) {
+      continue;
+    }
+
     if (!files_.contains(f)) {
       new_files.emplace_back(f);
       std::optional<ChunkInfo> chunk_info =
@@ -63,8 +67,7 @@ absl::flat_hash_set<std::string> TfRecordWatcher::GlobFiles() {
   return files;
 }
 
-absl::flat_hash_set<std::string> TfRecordWatcher::PopulateInitialTrainingWindow(
-    int train_window_size) {
+void TfRecordWatcher::PopulateInitialTrainingWindow(int train_window_size) {
   struct ChunkData {
     std::string filename;
     ChunkInfo info;
@@ -87,19 +90,19 @@ absl::flat_hash_set<std::string> TfRecordWatcher::PopulateInitialTrainingWindow(
   // iterate through all files, adding each file to a buffer until we consume
   // our `train_window_size`.
   int window_size = 0;
-  absl::flat_hash_set<std::string> filtered_files;
   for (const auto& data : file_data) {
     if (window_size >= train_window_size) {
-      break;
+      LOG_EVERY_N(INFO, 25) << "Excluded File: " << data.filename;
+      excluded_files_.insert(data.filename);
+    } else {
+      LOG_EVERY_N(INFO, 25) << "Included File: " << data.filename;
+      files_.insert(data.filename);
     }
 
-    filtered_files.insert(data.filename);
     window_size += data.info.num_examples;
   }
 
   LOG(INFO) << "Total Number of Files: " << files.size()
-            << ". Number of Files in Training Window: "
-            << filtered_files.size();
-  return filtered_files;
+            << ". Number of Files in Training Window: " << files_.size();
 }
 }  // namespace shuffler
