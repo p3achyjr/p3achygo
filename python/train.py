@@ -416,10 +416,6 @@ def log_val(batch_num: int, losses: LossTracker, metrics: ValMetrics):
   log('Min Val Policy Aux Loss', losses.min_losses["policy_aux"])
   log('Min Val Outcome Loss', losses.min_losses["outcome"])
   log('Min Val Score PDF Loss', losses.min_losses["score_pdf"])
-  log('Min Val Own Loss', losses.min_losses["own"])
-  log('Min Val q30 Loss', losses.min_losses["q30"])
-  log('Min Val q100 Loss', losses.min_losses["q100"])
-  log('Min Val q200 Loss', losses.min_losses["q200"])
   print("Correct Moves: ", metrics.correct_moves, ", Total Moves: ",
         metrics.num_moves)
   print("Correct Outcomes: ", metrics.correct_outcomes, ", Total Outcomes: ",

@@ -75,7 +75,7 @@ def num_samples_in_chunks(gcs_sp_chunks: set[str]) -> int:
       logging.error(f'Wrong number of matches for chunk file: {sp_chunk}')
       continue
 
-    _, _, _, _, num_samples_in_chunk, _ = match.groups()
+    _, _, _, num_samples_in_chunk, _, _ = match.groups()
     num_samples += int(num_samples_in_chunk)
 
   return num_samples

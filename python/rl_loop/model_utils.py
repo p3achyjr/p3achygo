@@ -28,7 +28,7 @@ def avg_weights(prev_weights: list, cur_weights: list,
   # m_swa_new = (1 - SWA_MOMENTUM) * chunk_ratio
   # swa_momentum = 1 - m_swa_new
   swa_momentum = SWA_MOMENTUM
-  print('SWA Momentum:', swa_momentum)
+  print('SWA Momentum:', swa_momentum, "Num Batches: ", num_batches_in_chunk)
   return [
       prev_layer_weights * swa_momentum + layer_weights * (1 - swa_momentum)
       for prev_layer_weights, layer_weights in zip(prev_weights, cur_weights)
