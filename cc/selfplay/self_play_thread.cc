@@ -130,7 +130,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     std::unique_ptr<TreeNode> root_node = std::make_unique<TreeNode>();
 
     // Completed Q-values for each timestep.
-    std::vector<std::array<float, constants::kMaxNumMoves>> mcts_pis;
+    std::vector<std::array<float, constants::kMaxMovesPerPosition>> mcts_pis;
 
     // Root Q values for each timestep (outcome only).
     std::vector<float> root_q_outcomes;

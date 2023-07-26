@@ -18,11 +18,10 @@ using RegionMap = GroupTracker::BensonSolver::RegionMap;
 static constexpr size_t kBensonCacheSize = 262144 / constants::kMaxNumThreads;
 
 // Array containing adjacent vertices for every coordinate.
-static const std::array<absl::InlinedVector<Loc, 4>,
-                        constants::kMaxNumBoardLocs>
+static const std::array<absl::InlinedVector<Loc, 4>, constants::kNumBoardLocs>
     kAdjacentPoints = []() {
-      std::array<absl::InlinedVector<Loc, 4>, constants::kMaxNumBoardLocs> adj;
-      for (int idx = 0; idx < constants::kMaxNumBoardLocs; ++idx) {
+      std::array<absl::InlinedVector<Loc, 4>, constants::kNumBoardLocs> adj;
+      for (int idx = 0; idx < constants::kNumBoardLocs; ++idx) {
         Loc loc = Loc{idx / BOARD_LEN, idx % BOARD_LEN};
         if (loc.i > 0) {
           adj[idx].emplace_back(Loc{loc.i - 1, loc.j});
@@ -579,7 +578,7 @@ MoveResult Board::PlayMoveDry(Loc loc, Color color) const {
   MoveInfo::Transitions capture_transitions;
 
   // resolve captures.
-  absl::InlinedVector<Loc, constants::kMaxNumBoardLocs> captured_stones;
+  absl::InlinedVector<Loc, constants::kNumBoardLocs> captured_stones;
   for (const groupid& captured_id : captured_groups) {
     LocVec captures = group_tracker_.ExpandGroup(captured_id);
     captured_stones.insert(captured_stones.end(), captures.begin(),

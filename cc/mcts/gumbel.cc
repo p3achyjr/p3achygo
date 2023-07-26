@@ -65,7 +65,7 @@ float VMixed(TreeNode* node) {
 
   double weighted_visited_q = 0;
   double visited_prob = 0;
-  for (int action = 0; action < constants::kMaxNumMoves; ++action) {
+  for (int action = 0; action < constants::kMaxMovesPerPosition; ++action) {
     if (NAction(node, action) > 0) {
       weighted_visited_q += (node->move_probs[action] * Q(node, action));
       visited_prob += node->move_probs[action];
@@ -79,7 +79,7 @@ float VMixed(TreeNode* node) {
   return interpolated_q / (1 + SumChildrenN(node));
 }
 
-int Argmax(std::array<float, constants::kMaxNumMoves>& logits) {
+int Argmax(std::array<float, constants::kMaxMovesPerPosition>& logits) {
   int arg_max = 0;
   float max_logit = kSmallLogit;
   for (int i = 0; i < logits.size(); ++i) {
@@ -93,12 +93,13 @@ int Argmax(std::array<float, constants::kMaxNumMoves>& logits) {
 }
 
 // Compute completedQ = {q(a) if N(a) > 0, v_mixed otherwise }.
-std::array<float, constants::kMaxNumMoves> ComputeImprovedPolicy(
+std::array<float, constants::kMaxMovesPerPosition> ComputeImprovedPolicy(
     TreeNode* node) {
   float v_mix = VMixed(node);
   int max_n = MaxN(node);
-  alignas(MM_ALIGN) std::array<float, constants::kMaxNumMoves> logits_improved;
-  for (int action = 0; action < constants::kMaxNumMoves; ++action) {
+  alignas(MM_ALIGN) std::array<float, constants::kMaxMovesPerPosition>
+      logits_improved;
+  for (int action = 0; action < constants::kMaxMovesPerPosition; ++action) {
     logits_improved[action] =
         node->move_logits[action] +
         QTransform(NAction(node, action) > 0 ? Q(node, action) : v_mix, max_n);
@@ -109,14 +110,15 @@ std::array<float, constants::kMaxNumMoves> ComputeImprovedPolicy(
 
 // Version of the above that only bumps the probabiilities of Gumbel selected
 // actions. This avoids choosing moves with low visit counts and high Q-values.
-std::array<float, constants::kMaxNumMoves> ComputeRootImprovedPolicy(
+std::array<float, constants::kMaxMovesPerPosition> ComputeRootImprovedPolicy(
     TreeNode* node,
-    const std::array<float, constants::kMaxNumMoves> masked_logits,
+    const std::array<float, constants::kMaxMovesPerPosition> masked_logits,
     const absl::InlinedVector<int, 16>& visited_actions) {
   float v_mix = VMixed(node);
   int max_n = MaxN(node);
-  alignas(MM_ALIGN) std::array<float, constants::kMaxNumMoves> logits_improved;
-  for (int action = 0; action < constants::kMaxNumMoves; ++action) {
+  alignas(MM_ALIGN) std::array<float, constants::kMaxMovesPerPosition>
+      logits_improved;
+  for (int action = 0; action < constants::kMaxMovesPerPosition; ++action) {
     if (core::InlinedVecContains(visited_actions, action)) {
       logits_improved[action] =
           masked_logits[action] + QTransform(Q(node, action), max_n);
@@ -149,10 +151,11 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
     leaf_evaluator_.EvaluateRoot(probability, game, root, color_to_move);
   }
 
-  auto num_moves = constants::kMaxNumMoves;
+  auto num_moves = constants::kMaxMovesPerPosition;
   auto k_valid = 0;
 
-  std::array<float, constants::kMaxNumMoves> masked_logits;  // for completed-Q.
+  std::array<float, constants::kMaxMovesPerPosition>
+      masked_logits;  // Logits that zero-out probability for illegal moves.
   GumbelMoveInfo gmove_info[num_moves];
   for (int i = 0; i < num_moves; ++i) {
     if (!game.IsValidMove(i, color_to_move)) {
@@ -291,14 +294,14 @@ GumbelEvaluator::SearchNonRoot(core::Probability& probability, Game& game,
   while (path.back()->state != TreeNodeState::kNew &&
          !(path.back()->is_terminal) && !game.IsGameOver()) {
     auto node = path.back();
-    std::array<float, constants::kMaxNumMoves> policy_improved =
+    std::array<float, constants::kMaxMovesPerPosition> policy_improved =
         ComputeImprovedPolicy(node);
 
     // select node with greatest disparity between expected value and visit
     // count.
     int selected_action = 0;
     float max_disparity = kMinNonRootDisparity;
-    for (int i = 0; i < constants::kMaxNumMoves; ++i) {
+    for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
       TreeNode* child = node->children[i].get();
       float disparity =
           policy_improved[i] - (N(child) / (1 + SumChildrenN(node)));

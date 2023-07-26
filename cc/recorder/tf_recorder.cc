@@ -166,7 +166,7 @@ void TfRecorderImpl::Flush() {
           Move next_move = move_num < game.num_moves() - 1
                                ? game.move(move_num + 1)
                                : Move{OppositeColor(move.color), kPassLoc};
-          const std::array<float, constants::kMaxNumMoves>& pi =
+          const std::array<float, constants::kMaxMovesPerPosition>& pi =
               mcts_pis[move_num];
           Color color = move.color;
           float z = game.result().winner == color ? 1.0 : -1.0;

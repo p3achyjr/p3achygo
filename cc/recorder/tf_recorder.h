@@ -16,7 +16,7 @@ namespace recorder {
 class TfRecorder {
  public:
   using ImprovedPolicies =
-      std::vector<std::array<float, constants::kMaxNumMoves>>;
+      std::vector<std::array<float, constants::kMaxMovesPerPosition>>;
   virtual ~TfRecorder() = default;
 
   // Disable Copy and Move.

@@ -23,7 +23,7 @@ tensorflow::Example MakeTfExample(
     const std::array<game::Color, BOARD_LEN * BOARD_LEN>& stones_two_liberties,
     const std::array<game::Color, BOARD_LEN * BOARD_LEN>&
         stones_three_liberties,
-    const std::array<float, constants::kMaxNumMoves>& pi_improved,
+    const std::array<float, constants::kMaxMovesPerPosition>& pi_improved,
     int16_t pi_aux, const game::Game::Result result, const float q30,
     const float q100, const float q200, game::Color color, float komi,
     uint8_t bsize) {

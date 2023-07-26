@@ -22,7 +22,7 @@ class NNBoardUtils;
 namespace game {
 
 using groupid = int16_t;
-using LocVec = absl::InlinedVector<Loc, constants::kMaxNumBoardLocs>;
+using LocVec = absl::InlinedVector<Loc, constants::kNumBoardLocs>;
 using BensonCache =
     core::Cache<Zobrist::Hash, std::array<Color, BOARD_LEN * BOARD_LEN>>;
 
@@ -39,8 +39,7 @@ struct Transition {
  * A struct that fully describes the state transitions for a board from a move.
  */
 struct MoveInfo {
-  using Transitions =
-      absl::InlinedVector<Transition, constants::kMaxNumBoardLocs>;
+  using Transitions = absl::InlinedVector<Transition, constants::kNumBoardLocs>;
 
   Transition stone_transition;
   Transitions capture_transitions;

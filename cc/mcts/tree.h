@@ -35,11 +35,12 @@ struct TreeNode final {
 
   int max_child_n = 0;
 
-  std::array<std::unique_ptr<TreeNode>, constants::kMaxNumMoves> children{};
+  std::array<std::unique_ptr<TreeNode>, constants::kMaxMovesPerPosition>
+      children{};
 
   // write-once
-  std::array<float, constants::kMaxNumMoves> move_logits{};
-  std::array<float, constants::kMaxNumMoves> move_probs{};
+  std::array<float, constants::kMaxMovesPerPosition> move_logits{};
+  std::array<float, constants::kMaxMovesPerPosition> move_probs{};
   float outcome_est = 0;
   float score_est = 0;
   float init_util_est = 0;  // mix value estimate and score estimate.

@@ -5,14 +5,17 @@ cc_library(
     srcs = [
         "client.cc",
         "command.cc",
+        "parse.cc",
         "service.cc",
     ],
     hdrs = [
         "client.h",
         "command.h",
+        "parse.h",
         "service.h",
     ],
     deps = [
+        "//cc/analysis",
         "//cc/core",
         "//cc/mcts",
         "//cc/nn",

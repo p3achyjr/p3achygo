@@ -149,7 +149,7 @@ void Worker(int worker_id, Coordinator* coordinator, const std::string out_dir,
       Move next_move = i < game_info.main_variation.size() - 1
                            ? game_info.main_variation[i + 1]
                            : Move{OppositeColor(move.color), kPassLoc};
-      std::array<float, constants::kMaxNumMoves> pi{};
+      std::array<float, constants::kMaxMovesPerPosition> pi{};
       pi[move.loc] = 1.0;
       tensorflow::Example example = recorder::MakeTfExample(
           board.position(), last_moves, board.GetStonesInAtari(),

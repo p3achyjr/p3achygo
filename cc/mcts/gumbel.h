@@ -25,7 +25,7 @@ struct ChildStats {
 struct GumbelResult {
   game::Loc nn_move;
   game::Loc mcts_move;
-  std::array<float, constants::kMaxNumMoves> pi_improved;
+  std::array<float, constants::kMaxMovesPerPosition> pi_improved;
   absl::InlinedVector<ChildStats, 16> child_stats;
 };
 
