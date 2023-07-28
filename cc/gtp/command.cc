@@ -42,6 +42,8 @@ GTPCode StringToGTPCode(std::string token) {
     return GTPCode::kGenMoveDbg;
   } else if (token == "ownership") {
     return GTPCode::kOwnership;
+  } else if (token == "serialize_sgf_with_trees") {
+    return GTPCode::kSerializeSgfWithTrees;
   } else {
     return GTPCode::kUnknownCommand;
   }
@@ -85,6 +87,8 @@ std::string GTPCodeToString(GTPCode code) {
       return "genmove_dbg";
     case GTPCode::kOwnership:
       return "ownership";
+    case GTPCode::kSerializeSgfWithTrees:
+      return "serialize_sgf_with_trees";
     case GTPCode::kUnknown:
     case GTPCode::kServerError:
     case GTPCode::kCommandParseError:

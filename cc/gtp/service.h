@@ -45,6 +45,8 @@ class Service {
                                               game::Color color) = 0;
   virtual Response<std::array<float, BOARD_LEN * BOARD_LEN>> GtpOwnership(
       std::optional<int> id) = 0;
+  virtual Response<std::string> GtpSerializeSgfWithTrees(
+      std::optional<int> id, std::string filename) = 0;
 
   static absl::StatusOr<std::unique_ptr<Service>> CreateService(
       std::string model_path, int n, int k);

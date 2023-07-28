@@ -33,14 +33,12 @@ int main(int argc, char** argv) {
 
   std::unique_ptr<gtp::Client> client = std::make_unique<gtp::Client>();
 
-  std::cerr << "Initializing...\n";
   absl::Status status =
       client->Start(model_path, absl::GetFlag(FLAGS_n), absl::GetFlag(FLAGS_k));
   if (!status.ok()) {
     std::cerr << status.message() << "\n";
     return 1;
   }
-  std::cerr << "Gtp Protocol Ready!\n";
 
   std::thread input_thread = std::thread(&InputLoop, client.get());
   input_thread.join();

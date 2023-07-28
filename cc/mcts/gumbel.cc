@@ -358,6 +358,12 @@ void GumbelEvaluator::Backward(
       parent->max_child_n = child->n;
     }
 
+    // Add V to bucket.
+    int v_bucket =
+        std::clamp(static_cast<int>((-leaf_q_outcome + 1.0f) / kBucketRange), 0,
+                   kNumVBuckets - 1);
+    parent->v_categorical[v_bucket] += 1;
+
     leaf_q *= -1;
     leaf_q_outcome *= -1;
   }

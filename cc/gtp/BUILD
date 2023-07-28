@@ -19,6 +19,7 @@ cc_library(
         "//cc/core",
         "//cc/mcts",
         "//cc/nn",
+        "//cc/recorder:sgf_recorder",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/status",

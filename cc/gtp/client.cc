@@ -356,6 +356,11 @@ void Client::HandleCommand(Command cmd) {
     case GTPCode::kOwnership:
       AddResponse(service_->GtpOwnership(cmd.id));
       return;
+    case GTPCode::kSerializeSgfWithTrees:
+      ARITY_CHECK(cmd, 1);
+      AddResponse(
+          service_->GtpSerializeSgfWithTrees(cmd.id, cmd.arg_tokens[0]));
+      return;
     case GTPCode::kCommandParseError:
     case GTPCode::kUnknown:
     case GTPCode::kServerError:

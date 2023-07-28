@@ -12,6 +12,7 @@
 #include "cc/mcts/gumbel.h"
 #include "cc/mcts/tree.h"
 #include "cc/nn/nn_interface.h"
+#include "cc/recorder/sgf_recorder.h"
 
 namespace gtp {
 namespace {
@@ -19,19 +20,25 @@ using namespace ::core;
 using namespace ::game;
 using namespace ::nn;
 using namespace ::mcts;
+using namespace ::recorder;
 
 std::string GtpBoardString(const Board& board) {
+  static constexpr char kColIndices[] =
+      "   A B C D E F G H J K L M N O P Q R S T";
   std::stringstream ss;
   auto is_star_point = [](int i, int j) {
     return (i == 3 || i == 9 || i == 15) && (j == 3 || j == 9 || j == 15);
   };
 
+  ss << kColIndices << "\n";
   for (auto i = 0; i < BOARD_LEN; i++) {
     int gtp_row = BOARD_LEN - i;
-    if (gtp_row < 10)
+    if (gtp_row < 10) {
       ss << gtp_row << "  ";
-    else
+    } else {
       ss << gtp_row << " ";
+    }
+
     for (auto j = 0; j < BOARD_LEN; j++) {
       if (board.at(i, j) == EMPTY && is_star_point(i, j)) {
         ss << "+ ";
@@ -44,11 +51,16 @@ std::string GtpBoardString(const Board& board) {
       }
     }
 
+    if (gtp_row < 10) {
+      ss << " " << gtp_row;
+    } else {
+      ss << gtp_row;
+    }
+
     ss << "\n";
   }
 
-  ss << "   "
-     << "A B C D E F G H J K L M N O P Q R S T";
+  ss << kColIndices;
 
   return ss.str();
 }
@@ -87,18 +99,21 @@ class ServiceImpl final : public Service {
                                       game::Color color) override;
   Response<std::array<float, BOARD_LEN * BOARD_LEN>> GtpOwnership(
       std::optional<int> id) override;
+  Response<std::string> GtpSerializeSgfWithTrees(std::optional<int> id,
+                                                 std::string filename) override;
 
  private:
   GumbelResult GenMoveCommon(game::Color color);
   std::vector<std::pair<game::Loc, float>> GetTopPolicyMoves(
       const std::array<float, constants::kMaxMovesPerPosition>& pi);
   void MakeMove(Color color, Loc loc);
+  inline TreeNode* current_root() const { return root_history_.back().get(); }
 
   Probability probability_;
   std::unique_ptr<NNInterface> nn_interface_;
   std::unique_ptr<GumbelEvaluator> gumbel_evaluator_;
   std::unique_ptr<Game> game_;
-  std::unique_ptr<TreeNode> current_root_;
+  std::vector<std::unique_ptr<TreeNode>> root_history_;
   Color current_color_;
   const int n_;
   const int k_;
@@ -113,11 +128,12 @@ ServiceImpl::ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
     : nn_interface_(std::move(nn_interface)),
       gumbel_evaluator_(std::move(gumbel_evaluator)),
       game_(std::make_unique<Game>()),
-      current_root_(std::make_unique<TreeNode>()),
       current_color_(BLACK),
       n_(n),
       k_(k),
-      analysis_running_(false) {}
+      analysis_running_(false) {
+  root_history_.emplace_back(std::make_unique<TreeNode>());
+}
 
 Response<int> ServiceImpl::GtpProtocolVersion(std::optional<int> id) {
   return MakeResponse(id, 2);
@@ -159,7 +175,8 @@ Response<> ServiceImpl::GtpBoardSize(std::optional<int> id, int board_size) {
 
 Response<> ServiceImpl::GtpClearBoard(std::optional<int> id) {
   game_ = std::make_unique<Game>();
-  current_root_ = std::make_unique<TreeNode>();
+  root_history_.clear();
+  root_history_.emplace_back(std::make_unique<TreeNode>());
 
   return MakeResponse(id);
 }
@@ -179,7 +196,7 @@ Response<> ServiceImpl::GtpPlay(std::optional<int> id, Move move) {
 
 Response<Loc> ServiceImpl::GtpGenMove(std::optional<int> id, Color color) {
   GumbelResult search_result = GenMoveCommon(color);
-  if (V(current_root_.get()) < -0.96f) {
+  if (V(current_root()) < -0.96f) {
     return MakeResponse(id, kNoopLoc);
   }
 
@@ -213,7 +230,7 @@ Response<> ServiceImpl::GtpStartAnalysis(std::optional<int> id, Color color) {
 
 analysis::AnalysisSnapshot ServiceImpl::GtpAnalysisSnapshot(Color color) {
   if (analysis_running_.load(std::memory_order_acquire)) {
-    return analysis::ConstructAnalysisSnapshot(current_root_.get());
+    return analysis::ConstructAnalysisSnapshot(current_root());
   }
 
   return analysis::AnalysisSnapshot{};
@@ -248,9 +265,9 @@ Response<std::string> ServiceImpl::GtpPlayDbg(std::optional<int> id,
   std::string dbg_str;
   dbg_str += "---- Move Num " + std::to_string(game_->num_moves()) + " ----\n";
   dbg_str += "\nTree Stats:\n  N: " +
-             std::to_string(static_cast<int>(N(current_root_.get()))) +
-             "\n  V: " + std::to_string(V(current_root_.get())) +
-             "\n  Score: " + std::to_string(current_root_->score_est) + "\n";
+             std::to_string(static_cast<int>(N(current_root()))) +
+             "\n  V: " + std::to_string(V(current_root())) +
+             "\n  Score: " + std::to_string(current_root()->score_est) + "\n";
 
   MakeMove(move.color, move.loc);
   dbg_str += "\n" + GtpBoardString(game_->board());
@@ -262,18 +279,18 @@ Response<std::string> ServiceImpl::GtpGenMoveDbg(std::optional<int> id,
                                                  game::Color color) {
   GumbelResult search_result = GenMoveCommon(color);
   std::vector<std::pair<game::Loc, float>> top_policy_moves =
-      current_root_ ? GetTopPolicyMoves(current_root_->move_probs)
-                    : std::vector<std::pair<game::Loc, float>>();
+      current_root() == nullptr ? GetTopPolicyMoves(current_root()->move_probs)
+                                : std::vector<std::pair<game::Loc, float>>();
   std::vector<std::pair<game::Loc, float>> top_policy_moves_improved =
       GetTopPolicyMoves(search_result.pi_improved);
 
   std::string dbg_str;
   dbg_str += "---- Move Num " + std::to_string(game_->num_moves()) + " ----\n";
-  dbg_str +=
-      "\nTree Stats:\n  N: " +
-      std::to_string(static_cast<int>(N(current_root_.get()))) +
-      "\n  V: " + std::to_string(V(current_root_.get())) + "\n  Score: " +
-      std::to_string(current_root_ ? current_root_->score_est : 0.0f) + "\n";
+  dbg_str += "\nTree Stats:\n  N: " +
+             std::to_string(static_cast<int>(N(current_root()))) +
+             "\n  V: " + std::to_string(V(current_root())) + "\n  Score: " +
+             std::to_string(current_root() ? current_root()->score_est : 0.0f) +
+             "\n";
 
   dbg_str += "Top Policy Moves:\n";
   for (const auto& move : top_policy_moves) {
@@ -296,7 +313,9 @@ Response<std::string> ServiceImpl::GtpGenMoveDbg(std::optional<int> id,
                ", qz: " + std::to_string(selected_child.qz) + "\n";
   }
 
-  if (V(current_root_.get()) < -0.96f) {
+  dbg_str += VCategoricalHistogram(current_root());
+
+  if (V(current_root()) < -0.96f) {
     dbg_str += "p3achygo resigns :(";
     return MakeResponse(id, dbg_str);
   }
@@ -304,11 +323,11 @@ Response<std::string> ServiceImpl::GtpGenMoveDbg(std::optional<int> id,
   MakeMove(color, search_result.mcts_move);
 
   // Run this to populate the policy logits at the new root.
-  gumbel_evaluator_->SearchRoot(probability_, *game_, current_root_.get(),
+  gumbel_evaluator_->SearchRoot(probability_, *game_, current_root(),
                                 game::OppositeColor(color), 1, 1);
   std::vector<std::pair<game::Loc, float>> top_policy_moves_next =
-      current_root_ ? GetTopPolicyMoves(current_root_->move_probs)
-                    : std::vector<std::pair<game::Loc, float>>();
+      current_root() ? GetTopPolicyMoves(current_root()->move_probs)
+                     : std::vector<std::pair<game::Loc, float>>();
 
   dbg_str += "Top Policy Moves Next:\n";
   for (const auto& move : top_policy_moves_next) {
@@ -326,18 +345,32 @@ Response<std::array<float, BOARD_LEN * BOARD_LEN>> ServiceImpl::GtpOwnership(
       id, nn_interface_->LoadAndGetOwnership(0, *game_, current_color_));
 }
 
+Response<std::string> ServiceImpl::GtpSerializeSgfWithTrees(
+    std::optional<int> id, std::string filename) {
+  if (!RecordSingleSgfWithTrees(filename, *game_, root_history_)) {
+    return MakeErrorResponse<std::string>(
+        id, "Could not create SGF file at " + filename + ".");
+  }
+
+  return MakeResponse(id, filename);
+}
+
 GumbelResult ServiceImpl::GenMoveCommon(Color color) {
   if (!(color == current_color_)) {
     // We are moving twice consecutively. Fake a pass first.
-    current_color_ = color;
-    current_root_ = std::move(current_root_->children[kPassLoc]);
-    if (!current_root_) {
-      current_root_ = std::make_unique<TreeNode>();
+    game_->PlayMove(kPassLoc, current_color_);
+    std::unique_ptr<TreeNode> next_root =
+        std::move(root_history_.back()->children[kPassLoc]);
+    if (!next_root) {
+      next_root = std::make_unique<TreeNode>();
     }
+
+    root_history_.emplace_back(std::move(next_root));
+    current_color_ = color;
   }
 
   GumbelResult search_result = gumbel_evaluator_->SearchRoot(
-      probability_, *game_, current_root_.get(), color, n_, k_);
+      probability_, *game_, current_root(), color, n_, k_);
   return search_result;
 }
 
@@ -360,10 +393,12 @@ std::vector<std::pair<game::Loc, float>> ServiceImpl::GetTopPolicyMoves(
 void ServiceImpl::MakeMove(Color color, Loc loc) {
   game_->PlayMove(loc, color);
   current_color_ = game::OppositeColor(color);
-  current_root_ = std::move(current_root_->children[loc]);
-  if (!current_root_) {
-    current_root_ = std::make_unique<TreeNode>();
+  std::unique_ptr<TreeNode> next_root =
+      std::move(root_history_.back()->children[kPassLoc]);
+  if (!next_root) {
+    next_root = std::make_unique<TreeNode>();
   }
+  root_history_.emplace_back(std::move(next_root));
 }
 }  // namespace
 
