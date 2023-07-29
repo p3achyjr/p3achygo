@@ -224,9 +224,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
         int n = (1.0f - down_bad_coeff) * config.default_params.n +
                 down_bad_coeff * config.selected_params.n;
-        int k = std::round((n - config.default_params.n) /
-                           static_cast<float>(config.selected_params.n -
-                                              config.default_params.n));
+        int k = config.default_params.k;
         return GumbelParams{n, k};
       }();
 

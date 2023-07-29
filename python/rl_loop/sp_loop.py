@@ -14,7 +14,7 @@ from typing import Tuple
 
 POLL_INTERVAL_S = 10
 TFREC_GLOB = '*.tfrecord.zz'
-SGF_GLOB = '*.sgfs'
+SGF_GLOB = '*.sgf'
 DONE_GLOB = '*.done'
 
 
@@ -150,6 +150,9 @@ def loop(bin_path: str,
         is_done = True
         queue.task_done()
         break
+
+      if selfplay_proc.poll():
+        logging.warning(f'Selfplay Process Exited: {selfplay_proc.poll()}')
 
     selfplay_proc.communicate('\n')
     selfplay_proc.wait()

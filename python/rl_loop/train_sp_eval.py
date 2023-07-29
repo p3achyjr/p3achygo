@@ -75,7 +75,7 @@ def eval(run_id: str, eval_bin_path: str, eval_res_path: str,
 
   # Upload Eval SGFs. This is safe because the process has terminated.
   _, _, _, local_sgf_dir = fs_utils.ensure_local_dirs(local_run_dir)
-  eval_sgfs = local_sgf_dir.glob("*EVAL*.sgfs")
+  eval_sgfs = local_sgf_dir.glob("*EVAL*.sgf")
   for sgf in eval_sgfs:
     gcs.upload_sgf(run_id, sgf)
 
