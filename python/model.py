@@ -1,32 +1,7 @@
 '''
-Model definition for p3achyGo.
+Model Definition.
 
-Input:
-
-At move k, pass in 7 19 x 19 binary feature planes containing:
-
-1. Location has own stone
-2. Location has opponent stone
-3. {k - 5}th move (one hot)
-4. {k - 4}th move
-5. {k - 3}rd move
-6. {k - 2}nd move
-7. {k - 1}st move
-
-as well as a scalar vector consisting of
-
-(komi / 15.0,)
-
-Output:
-
-A pi = (19, 19) feature plane of logits, where softmax(pi) = policy
-A v_outcome = (2, ) logit vector, where softmax(v_outcome) = p(win, lose)
-A v_ownership = (19, 19) feature plane representing board ownership in [-1, 1]
-A v_score = (800, ) logit vector, where softmax(v_score) = p(each score)
-
-Architecture:
-
-We mimic the architecture in https://openreview.net/pdf?id=bERaNdoegnO.
+Amalgamation of different layers types from various AlphaZero reproductions.
 '''
 
 from __future__ import annotations
@@ -794,7 +769,7 @@ class P3achyGoModel(tf.keras.Model):
                          config.kBottleneckChannels,
                          config.kHeadChannels,
                          config.kCVal,
-                         config.kBottleneckLength,
+                         config.kInnerBottleneckLayers + 2,
                          config.kConvSize,
                          config.kBroadcastInterval,
                          name=name)

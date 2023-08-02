@@ -44,8 +44,14 @@ ABSL_FLAG(int, cache_size, constants::kDefaultNNCacheSize / 2,
           "Default size of cache.");
 ABSL_FLAG(int, cur_n, kDefaultGumbelN, "N for current player");
 ABSL_FLAG(int, cur_k, kDefaultGumbelK, "K for current player");
+ABSL_FLAG(float, cur_noise_scaling, 1.0f, "Cur gumbel noise scaling");
+ABSL_FLAG(bool, cur_use_puct, false, "Whether to use PUCT for cur.");
+ABSL_FLAG(float, cur_c_puct, 1.5f, "c_puct for cur.");
 ABSL_FLAG(int, cand_n, kDefaultGumbelN, "N for candidate player");
 ABSL_FLAG(int, cand_k, kDefaultGumbelK, "K for candidate player");
+ABSL_FLAG(float, cand_noise_scaling, 1.0f, "Cand gumbel noise scaling");
+ABSL_FLAG(bool, cand_use_puct, false, "Whether to use PUCT for cur.");
+ABSL_FLAG(float, cand_c_puct, 1.5f, "c_puct for cand.");
 
 float ConfidenceDelta(float z_score, float num_sims, float wr) {
   return z_score * std::sqrt(wr * (1 - wr) / num_sims);
@@ -132,8 +138,20 @@ int main(int argc, char** argv) {
           absl::StrFormat("EVAL_%s_%s", cur_name, cand_name));
 
   // Spawn games.
-  EvalConfig config =
-      EvalConfig{cur_name, cand_name, cur_n, cur_k, cand_n, cand_k};
+  EvalConfig config = EvalConfig{
+      cur_name,
+      cand_name,
+      cur_n,
+      cur_k,
+      cand_n,
+      cand_k,
+      absl::GetFlag(FLAGS_cur_noise_scaling),
+      absl::GetFlag(FLAGS_cand_noise_scaling),
+      absl::GetFlag(FLAGS_cur_use_puct),
+      absl::GetFlag(FLAGS_cur_c_puct),
+      absl::GetFlag(FLAGS_cand_use_puct),
+      absl::GetFlag(FLAGS_cand_c_puct),
+  };
   std::vector<std::thread> threads;
   std::vector<std::future<EvalResult>> eval_results;
   for (int thread_id = 0; thread_id < num_games; ++thread_id) {

@@ -168,6 +168,7 @@ def train(model: P3achyGoModel,
   Training through single dataset.
   """
   summary_writer = tf.summary.create_file_writer(tensorboard_log_dir)
+  tf.summary.trace_on(graph=True, profiler=True)
   coeffs = LossCoeffs.SLCoeffs() if mode == Mode.SL else LossCoeffs.RLCoeffs()
 
   # yapf: disable
@@ -190,6 +191,7 @@ def train(model: P3achyGoModel,
     optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
 
   losses_train = LossTracker()
+  did_log_graph = False
   for _ in range(epochs):
     # train
     for (input, input_global_state, color, komi, score, score_one_hot, policy,
@@ -209,6 +211,12 @@ def train(model: P3achyGoModel,
 
       if batch_num % log_interval == 0:
         with summary_writer.as_default():
+          if not did_log_graph:
+            tf.summary.trace_export(name="model_trace",
+                                    step=0,
+                                    profiler_outdir=tensorboard_log_dir)
+            did_log_graph = True
+            
           log_train(batch_num, input, pi_logits, pi_logits_aux, score_logits,
                     outcome_logits, own_pred, q30_pred, q100_pred, q200_pred,
                     policy, policy_aux, score, q30, q100, q200,

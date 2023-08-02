@@ -63,6 +63,14 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
   int k_b = cur_is_black ? cur_k : cand_k;
   int n_w = cur_is_black ? cand_n : cur_n;
   int k_w = cur_is_black ? cand_k : cur_k;
+  float noise_scaling_b =
+      cur_is_black ? config.cur_noise_scaling : config.cand_noise_scaling;
+  float noise_scaling_w =
+      cur_is_black ? config.cand_noise_scaling : config.cur_noise_scaling;
+  bool use_puct_b = cur_is_black ? config.cur_use_puct : config.cand_use_puct;
+  bool use_puct_w = cur_is_black ? config.cand_use_puct : config.cur_use_puct;
+  float c_puct_b = cur_is_black ? config.cur_c_puct : config.cand_c_puct;
+  float c_puct_w = cur_is_black ? config.cand_c_puct : config.cur_c_puct;
 
   Game game;
   std::unique_ptr<TreeNode> btree = std::make_unique<TreeNode>();
@@ -98,9 +106,16 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
     // Search.
     int n = color_to_move == BLACK ? n_b : n_w;
     int k = color_to_move == BLACK ? k_b : k_w;
+    float noise_scaling =
+        color_to_move == BLACK ? noise_scaling_b : noise_scaling_w;
+    bool use_puct = color_to_move == BLACK ? use_puct_b : use_puct_w;
+    float c_puct = color_to_move == BLACK ? c_puct_b : c_puct_w;
     auto begin = std::chrono::high_resolution_clock::now();
-    GumbelResult gumbel_res = gumbel.SearchRoot(
-        probability, game, player_tree.get(), color_to_move, n, k);
+    GumbelResult gumbel_res =
+        use_puct ? gumbel.SearchRoot(probability, game, player_tree.get(),
+                                     color_to_move, n, k, noise_scaling)
+                 : gumbel.SearchRootPuct(probability, game, player_tree.get(),
+                                         color_to_move, n, c_puct);
     auto end = std::chrono::high_resolution_clock::now();
     if (VOutcome(player_tree.get()) < kResignThreshold) {
       LOG_TO_SINK(INFO, sink)
@@ -142,7 +157,8 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
       std::string root_color = ToString(OppositeColor(color_to_move));
       std::stringstream s;
       s << "\n----- Move Num: " << game.num_moves() << " -----\n";
-      s << "N: " << n << ", K: " << k << "\n";
+      s << "N: " << n << ", K: " << k << ", Noise Scaling: " << noise_scaling
+        << "\n";
       s << "Gumbel Move: " << move << ", q: " << move_q << "\n";
       s << "Last 5 Moves: " << game.move(game.num_moves() - 5) << ", "
         << game.move(game.num_moves() - 4) << ", "
