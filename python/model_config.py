@@ -53,9 +53,9 @@ class ModelConfig:
   @staticmethod
   def medium():
     return ModelConfig(blocks=24,
-                       broadcast_interval=8,
+                       broadcast_interval=6,
                        bottleneck_length=4,
                        channels=192,
                        bottleneck_channels=96,
-                       head_channels=48,
+                       head_channels=32,
                        c_val=64)

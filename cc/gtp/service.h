@@ -30,6 +30,7 @@ class Service {
                                          game::Color color) = 0;
   virtual Response<std::string> GtpPrintBoard(std::optional<int> id) = 0;
   virtual Response<game::Scores> GtpFinalScore(std::optional<int> id) = 0;
+  virtual Response<> GtpUndo(std::optional<int> id) = 0;
 
   // Analysis methods. Call these from separate threads.
   virtual Response<> GtpStartAnalysis(std::optional<int> id,
@@ -47,9 +48,11 @@ class Service {
       std::optional<int> id) = 0;
   virtual Response<std::string> GtpSerializeSgfWithTrees(
       std::optional<int> id, std::string filename) = 0;
+  virtual Response<> GtpLoadSgf(std::optional<int> id,
+                                std::string filename) = 0;
 
   static absl::StatusOr<std::unique_ptr<Service>> CreateService(
-      std::string model_path, int n, int k);
+      std::string model_path, int n, int k, bool use_puct);
 
  protected:
   Service() = default;

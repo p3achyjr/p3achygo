@@ -25,7 +25,7 @@ class Client final {
   Client();
   ~Client();
 
-  absl::Status Start(std::string model_path, int n, int k);
+  absl::Status Start(std::string model_path, int n, int k, bool use_puct);
 
   // Parses and adds `cmd_string` to the list of commands to process.
   // Returns whether to continue running the loop.

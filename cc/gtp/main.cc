@@ -8,6 +8,7 @@
 ABSL_FLAG(std::string, model_path, "", "Path to model.");
 ABSL_FLAG(int, n, 128, "Number of visits.");
 ABSL_FLAG(int, k, 8, "Number of samples to draw.");
+ABSL_FLAG(bool, puct, false, "Whether to use PUCT at root.");
 
 void InputLoop(gtp::Client* client) {
   while (true) {
@@ -34,7 +35,8 @@ int main(int argc, char** argv) {
   std::unique_ptr<gtp::Client> client = std::make_unique<gtp::Client>();
 
   absl::Status status =
-      client->Start(model_path, absl::GetFlag(FLAGS_n), absl::GetFlag(FLAGS_k));
+      client->Start(model_path, absl::GetFlag(FLAGS_n), absl::GetFlag(FLAGS_k),
+                    absl::GetFlag(FLAGS_puct));
   if (!status.ok()) {
     std::cerr << status.message() << "\n";
     return 1;

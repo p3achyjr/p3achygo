@@ -29,10 +29,12 @@ struct TreeNode final {
   int n = 0;
   float w = 0;
   float v = 0;
+  float v_var = 0;
   std::array<int16_t, kNumVBuckets> v_categorical{};
 
   float w_outcome = 0;
   float v_outcome = 0;
+  float v_outcome_var = 0;
 
   int max_child_n = 0;
 
@@ -62,16 +64,30 @@ inline float VOutcome(TreeNode* node) {
   return node == nullptr ? -1.0 : node->v_outcome;
 }
 
+inline float VVar(TreeNode* node) {
+  return node == nullptr || node->n < 3 ? kMaxQ : node->v_var;
+}
+
+inline float VOutcomeVar(TreeNode* node) {
+  return node == nullptr || node->n < 3 ? 1.0f : node->v_outcome_var;
+}
+
 inline float Q(TreeNode* node, int action) {
-  // remember to flip sign. In bare MCTS, this will also cause MCTS to make deep
-  // reads.
+  // remember to flip sign.
   return !node->children[action] ? kMinQ : -node->children[action]->v;
 }
 
 inline float QOutcome(TreeNode* node, int action) {
-  // remember to flip sign. In bare MCTS, this will also cause MCTS to make deep
-  // reads.
+  // remember to flip sign.
   return !node->children[action] ? -1.0 : -node->children[action]->v_outcome;
+}
+
+inline float QVar(TreeNode* node, int action) {
+  return node == nullptr ? kMaxQ : VVar(node->children[action].get());
+}
+
+inline float QOutcomeVar(TreeNode* node, int action) {
+  return node == nullptr ? 1.0f : VOutcomeVar(node->children[action].get());
 }
 
 inline float MaxN(TreeNode* node) {

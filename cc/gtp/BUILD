@@ -20,6 +20,7 @@ cc_library(
         "//cc/mcts",
         "//cc/nn",
         "//cc/recorder:sgf_recorder",
+        "//cc/sgf",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/status",

@@ -31,6 +31,7 @@ enum class GTPCode : uint8_t {
   kFinalScore = 13,
   kAnalyze = 14,
   kGenMoveAnalyze = 15,
+  kUndo = 16,
 
   // [13 - 100 reserved]
   // Private Commands.
@@ -38,6 +39,7 @@ enum class GTPCode : uint8_t {
   kGenMoveDbg = 102,
   kOwnership = 103,
   kSerializeSgfWithTrees = 104,
+  kLoadSgf = 105,
 
   // [100 - 200 reserved]
   // Errors.
@@ -63,12 +65,14 @@ static constexpr GTPCode kSupportedCommands[] = {
     GTPCode::kFinalScore,
     GTPCode::kAnalyze,
     GTPCode::kGenMoveAnalyze,
+    GTPCode::kUndo,
 
     // Private.
     GTPCode::kPlayDbg,
     GTPCode::kGenMoveDbg,
     GTPCode::kOwnership,
     GTPCode::kSerializeSgfWithTrees,
+    GTPCode::kLoadSgf,
 };
 
 struct Command {

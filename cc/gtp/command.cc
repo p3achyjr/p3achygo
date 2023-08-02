@@ -36,6 +36,8 @@ GTPCode StringToGTPCode(std::string token) {
     return GTPCode::kAnalyze;
   } else if (token == "genmove_analyze") {
     return GTPCode::kGenMoveAnalyze;
+  } else if (token == "undo") {
+    return GTPCode::kUndo;
   } else if (token == "play_dbg") {
     return GTPCode::kPlayDbg;
   } else if (token == "genmove_dbg") {
@@ -44,6 +46,8 @@ GTPCode StringToGTPCode(std::string token) {
     return GTPCode::kOwnership;
   } else if (token == "serialize_sgf_with_trees") {
     return GTPCode::kSerializeSgfWithTrees;
+  } else if (token == "load_sgf") {
+    return GTPCode::kLoadSgf;
   } else {
     return GTPCode::kUnknownCommand;
   }
@@ -81,6 +85,8 @@ std::string GTPCodeToString(GTPCode code) {
       return "analyze";
     case GTPCode::kGenMoveAnalyze:
       return "genmove_analyze";
+    case GTPCode::kUndo:
+      return "undo";
     case GTPCode::kPlayDbg:
       return "play_dbg";
     case GTPCode::kGenMoveDbg:
@@ -89,6 +95,8 @@ std::string GTPCodeToString(GTPCode code) {
       return "ownership";
     case GTPCode::kSerializeSgfWithTrees:
       return "serialize_sgf_with_trees";
+    case GTPCode::kLoadSgf:
+      return "load_sgf";
     case GTPCode::kUnknown:
     case GTPCode::kServerError:
     case GTPCode::kCommandParseError:

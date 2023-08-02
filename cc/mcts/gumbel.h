@@ -53,17 +53,25 @@ class GumbelEvaluator final {
                           TreeNode* root, game::Color color_to_move, int n,
                           int k);
 
+  // Uses PUCT formula to select actions at the root, but uses Q-based planning
+  // at non-root nodes, as described in the Gumbel paper.
+  GumbelResult SearchRootPuct(core::Probability& probability, game::Game& game,
+                              TreeNode* root, game::Color color_to_move, int n,
+                              const float c_puct);
+
  private:
   static constexpr int kMaxPathLenEst = 128;
   // Runs Gumbel non-root search path until leaf, and returns the search path
   // including root.
   absl::InlinedVector<TreeNode*, kMaxPathLenEst> SearchNonRoot(
-      core::Probability& probability, game::Game& game, TreeNode* root,
-      TreeNode* node, game::Color color_to_move, game::Color root_color,
-      float root_score_est);
+      core::Probability& probability, game::Game& game, TreeNode* node,
+      game::Color color_to_move, game::Color root_color, float root_score_est);
 
   // Updates all nodes in tree, based on leaf evaluation.
   void Backward(absl::InlinedVector<TreeNode*, kMaxPathLenEst>& path);
+
+  // Single Backward Step.
+  void SingleBackup(TreeNode* node, int child_n, float leaf_q, float leaf_q_outcome);
 
   // Leaf Evaluation module.
   LeafEvaluator leaf_evaluator_;

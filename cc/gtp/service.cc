@@ -6,6 +6,7 @@
 #include <sstream>
 
 #include "absl/log/log.h"
+#include "absl/status/statusor.h"
 #include "cc/analysis/analysis.h"
 #include "cc/core/probability.h"
 #include "cc/game/game.h"
@@ -13,6 +14,8 @@
 #include "cc/mcts/tree.h"
 #include "cc/nn/nn_interface.h"
 #include "cc/recorder/sgf_recorder.h"
+#include "cc/sgf/parse_sgf.h"
+#include "cc/sgf/sgf_tree.h"
 
 namespace gtp {
 namespace {
@@ -21,6 +24,7 @@ using namespace ::game;
 using namespace ::nn;
 using namespace ::mcts;
 using namespace ::recorder;
+using namespace ::sgf;
 
 std::string GtpBoardString(const Board& board) {
   static constexpr char kColIndices[] =
@@ -68,7 +72,8 @@ std::string GtpBoardString(const Board& board) {
 class ServiceImpl final : public Service {
  public:
   ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
-              std::unique_ptr<GumbelEvaluator> gumbel_evaluator, int n, int k);
+              std::unique_ptr<GumbelEvaluator> gumbel_evaluator, int n, int k,
+              bool use_puct);
   ~ServiceImpl() = default;
 
   Response<int> GtpProtocolVersion(std::optional<int> id) override;
@@ -84,6 +89,7 @@ class ServiceImpl final : public Service {
   Response<Loc> GtpGenMove(std::optional<int> id, Color color) override;
   Response<std::string> GtpPrintBoard(std::optional<int> id) override;
   Response<game::Scores> GtpFinalScore(std::optional<int> id) override;
+  Response<> GtpUndo(std::optional<int> id) override;
 
   // Analysis methods. Call these from separate threads.
   Response<> GtpStartAnalysis(std::optional<int> id,
@@ -101,11 +107,13 @@ class ServiceImpl final : public Service {
       std::optional<int> id) override;
   Response<std::string> GtpSerializeSgfWithTrees(std::optional<int> id,
                                                  std::string filename) override;
+  Response<> GtpLoadSgf(std::optional<int> id, std::string filename) override;
 
  private:
   GumbelResult GenMoveCommon(game::Color color);
   std::vector<std::pair<game::Loc, float>> GetTopPolicyMoves(
       const std::array<float, constants::kMaxMovesPerPosition>& pi);
+  void ClearBoard();
   void MakeMove(Color color, Loc loc);
   inline TreeNode* current_root() const { return root_history_.back().get(); }
 
@@ -117,6 +125,7 @@ class ServiceImpl final : public Service {
   Color current_color_;
   const int n_;
   const int k_;
+  const bool use_puct_;
 
   std::atomic<bool> analysis_running_;
   std::thread analysis_thread_;
@@ -124,13 +133,14 @@ class ServiceImpl final : public Service {
 
 ServiceImpl::ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
                          std::unique_ptr<GumbelEvaluator> gumbel_evaluator,
-                         int n, int k)
+                         int n, int k, bool use_puct)
     : nn_interface_(std::move(nn_interface)),
       gumbel_evaluator_(std::move(gumbel_evaluator)),
       game_(std::make_unique<Game>()),
       current_color_(BLACK),
       n_(n),
       k_(k),
+      use_puct_(use_puct),
       analysis_running_(false) {
   root_history_.emplace_back(std::make_unique<TreeNode>());
 }
@@ -174,10 +184,7 @@ Response<> ServiceImpl::GtpBoardSize(std::optional<int> id, int board_size) {
 }
 
 Response<> ServiceImpl::GtpClearBoard(std::optional<int> id) {
-  game_ = std::make_unique<Game>();
-  root_history_.clear();
-  root_history_.emplace_back(std::make_unique<TreeNode>());
-
+  ClearBoard();
   return MakeResponse(id);
 }
 
@@ -213,6 +220,24 @@ Response<std::string> ServiceImpl::GtpPrintBoard(std::optional<int> id) {
 
 Response<game::Scores> ServiceImpl::GtpFinalScore(std::optional<int> id) {
   return MakeResponse(id, game_->GetScores());
+}
+
+Response<> ServiceImpl::GtpUndo(std::optional<int> id) {
+  if (game_->num_moves() == 0) {
+    return MakeErrorResponse(id, "Nothing to undo.");
+  }
+
+  root_history_.pop_back();
+
+  // Replay from beginning.
+  std::unique_ptr<Game> new_game = std::make_unique<Game>();
+  for (int move_num = 0; move_num < game_->num_moves() - 1; ++move_num) {
+    Move move = game_->move(move_num);
+    new_game->PlayMove(move.loc, move.color);
+  }
+
+  game_ = std::move(new_game);
+  return MakeResponse(id);
 }
 
 Response<> ServiceImpl::GtpStartAnalysis(std::optional<int> id, Color color) {
@@ -279,18 +304,22 @@ Response<std::string> ServiceImpl::GtpGenMoveDbg(std::optional<int> id,
                                                  game::Color color) {
   GumbelResult search_result = GenMoveCommon(color);
   std::vector<std::pair<game::Loc, float>> top_policy_moves =
-      current_root() == nullptr ? GetTopPolicyMoves(current_root()->move_probs)
-                                : std::vector<std::pair<game::Loc, float>>();
+      current_root() ? GetTopPolicyMoves(current_root()->move_probs)
+                     : std::vector<std::pair<game::Loc, float>>();
   std::vector<std::pair<game::Loc, float>> top_policy_moves_improved =
       GetTopPolicyMoves(search_result.pi_improved);
 
   std::string dbg_str;
   dbg_str += "---- Move Num " + std::to_string(game_->num_moves()) + " ----\n";
-  dbg_str += "\nTree Stats:\n  N: " +
-             std::to_string(static_cast<int>(N(current_root()))) +
-             "\n  V: " + std::to_string(V(current_root())) + "\n  Score: " +
-             std::to_string(current_root() ? current_root()->score_est : 0.0f) +
-             "\n";
+  dbg_str +=
+      "\nTree Stats:\n  N: " +
+      std::to_string(static_cast<int>(N(current_root()))) +
+      "\n  V: " + std::to_string(V(current_root())) +
+      "\n  V_z: " + std::to_string(VOutcome(current_root())) +
+      "\n  V StdDev: " + std::to_string(std::sqrt(VVar(current_root()))) +
+      "\n  V_z StdDev: " +
+      std::to_string(std::sqrt(VOutcomeVar(current_root()))) + "\n  Score: " +
+      std::to_string(current_root() ? current_root()->score_est : 0.0f) + "\n";
 
   dbg_str += "Top Policy Moves:\n";
   for (const auto& move : top_policy_moves) {
@@ -355,6 +384,24 @@ Response<std::string> ServiceImpl::GtpSerializeSgfWithTrees(
   return MakeResponse(id, filename);
 }
 
+Response<> ServiceImpl::GtpLoadSgf(std::optional<int> id,
+                                   std::string filename) {
+  absl::StatusOr<std::unique_ptr<sgf::SgfNode>> sgf_root =
+      ParseSgfFile(filename);
+  if (!sgf_root.ok()) {
+    return MakeErrorResponse(id, std::string(sgf_root.status().message()));
+  }
+
+  GameInfo game_info = ExtractGameInfo(sgf_root->get());
+
+  ClearBoard();
+  for (const auto& mv : game_info.main_variation) {
+    MakeMove(mv.color, mv.loc);
+  }
+
+  return MakeResponse(id);
+}
+
 GumbelResult ServiceImpl::GenMoveCommon(Color color) {
   if (!(color == current_color_)) {
     // We are moving twice consecutively. Fake a pass first.
@@ -369,8 +416,11 @@ GumbelResult ServiceImpl::GenMoveCommon(Color color) {
     current_color_ = color;
   }
 
-  GumbelResult search_result = gumbel_evaluator_->SearchRoot(
-      probability_, *game_, current_root(), color, n_, k_);
+  GumbelResult search_result =
+      use_puct_ ? gumbel_evaluator_->SearchRootPuct(
+                      probability_, *game_, current_root(), color, n_, 1.0f)
+                : gumbel_evaluator_->SearchRoot(probability_, *game_,
+                                                current_root(), color, n_, k_);
   return search_result;
 }
 
@@ -400,10 +450,16 @@ void ServiceImpl::MakeMove(Color color, Loc loc) {
   }
   root_history_.emplace_back(std::move(next_root));
 }
+
+void ServiceImpl::ClearBoard() {
+  game_ = std::make_unique<Game>();
+  root_history_.clear();
+  root_history_.emplace_back(std::make_unique<TreeNode>());
+}
 }  // namespace
 
 /* static */ absl::StatusOr<std::unique_ptr<Service>> Service::CreateService(
-    std::string model_path, int n, int k) {
+    std::string model_path, int n, int k, bool use_puct) {
   std::unique_ptr<NNInterface> nn_interface = std::make_unique<NNInterface>(
       1 /* num_threads */, std::numeric_limits<int64_t>::max(), 16384);
   if (!nn_interface->Initialize(std::move(model_path)).ok()) {
@@ -412,8 +468,8 @@ void ServiceImpl::MakeMove(Color color, Loc loc) {
   std::unique_ptr<GumbelEvaluator> gumbel_evaluator =
       std::make_unique<GumbelEvaluator>(nn_interface.get(), 0);
 
-  return std::make_unique<ServiceImpl>(std::move(nn_interface),
-                                       std::move(gumbel_evaluator), n, k);
+  return std::make_unique<ServiceImpl>(
+      std::move(nn_interface), std::move(gumbel_evaluator), n, k, use_puct);
 }
 
 }  // namespace gtp

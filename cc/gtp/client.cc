@@ -44,9 +44,10 @@ Client::~Client() {
   CHECK(response_queue_.empty());
 }
 
-absl::Status Client::Start(std::string model_path, int n, int k) {
+absl::Status Client::Start(std::string model_path, int n, int k,
+                           bool use_puct) {
   absl::StatusOr<std::unique_ptr<Service>> service =
-      Service::CreateService(model_path, n, k);
+      Service::CreateService(model_path, n, k, use_puct);
   if (!service.ok()) {
     return service.status();
   }
@@ -327,6 +328,9 @@ void Client::HandleCommand(Command cmd) {
             std::thread(&Client::GenmoveAnalyze, this, color, centiseconds);
         return;
       }
+    case GTPCode::kUndo:
+      AddResponse(service_->GtpUndo(cmd.id));
+      return;
     case GTPCode::kPlayDbg:
       ARITY_CHECK(cmd, 2);
       {
@@ -360,6 +364,10 @@ void Client::HandleCommand(Command cmd) {
       ARITY_CHECK(cmd, 1);
       AddResponse(
           service_->GtpSerializeSgfWithTrees(cmd.id, cmd.arg_tokens[0]));
+      return;
+    case GTPCode::kLoadSgf:
+      ARITY_CHECK(cmd, 1);
+      AddResponse(service_->GtpLoadSgf(cmd.id, cmd.arg_tokens[0]));
       return;
     case GTPCode::kCommandParseError:
     case GTPCode::kUnknown:
