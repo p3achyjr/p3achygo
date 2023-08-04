@@ -112,10 +112,10 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
     float c_puct = color_to_move == BLACK ? c_puct_b : c_puct_w;
     auto begin = std::chrono::high_resolution_clock::now();
     GumbelResult gumbel_res =
-        use_puct ? gumbel.SearchRoot(probability, game, player_tree.get(),
-                                     color_to_move, n, k, noise_scaling)
-                 : gumbel.SearchRootPuct(probability, game, player_tree.get(),
-                                         color_to_move, n, c_puct);
+        use_puct ? gumbel.SearchRootPuct(probability, game, player_tree.get(),
+                                         color_to_move, n, c_puct)
+                 : gumbel.SearchRoot(probability, game, player_tree.get(),
+                                     color_to_move, n, k, noise_scaling);
     auto end = std::chrono::high_resolution_clock::now();
     if (VOutcome(player_tree.get()) < kResignThreshold) {
       LOG_TO_SINK(INFO, sink)
@@ -158,7 +158,7 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
       std::stringstream s;
       s << "\n----- Move Num: " << game.num_moves() << " -----\n";
       s << "N: " << n << ", K: " << k << ", Noise Scaling: " << noise_scaling
-        << "\n";
+        << ", PUCT: " << use_puct << "\n";
       s << "Gumbel Move: " << move << ", q: " << move_q << "\n";
       s << "Last 5 Moves: " << game.move(game.num_moves() - 5) << ", "
         << game.move(game.num_moves() - 4) << ", "

@@ -363,11 +363,6 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
     float u_new = u(root, mv);
     float q_new = Q(root, mv);
 
-    LOG(INFO) << "Mv: " << game::AsLoc(mv) << "P: " << root->move_probs[mv]
-              << ", U: " << us[mv]
-              << ", Q: " << (visit_counts[mv] == 0 ? v_fpu : qs[mv])
-              << ", Util: " << child_utilities[mv] << ", Var: " << VVar(root);
-
     us[mv] = u_new;
     qs[mv] = q_new;
     if (visit_counts[mv] == 0) {

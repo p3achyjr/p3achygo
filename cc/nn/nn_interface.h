@@ -104,6 +104,18 @@ class NNInterface final {
   // Called by worker.
   inline void SignalLoadedAndBlockUntilReady(int thread_id)
       ABSL_LOCKS_EXCLUDED(mu_) {
+    if (num_threads_ == 1) {
+      // Fast, non-locking path.
+      std::vector<std::pair<std::string, ::tensorflow::Tensor>> nn_input = {
+          {kInputNames[0], nn_input_buf_[0]},
+          {kInputNames[1], nn_input_buf_[1]}};
+      TF_CHECK_OK(model_bundle_.GetSession()->Run(nn_input, kOutputNames, {},
+                                                  &nn_output_buf_));
+      nn_input_buf_[0].SubSlice(thread_id).unaligned_flat<float>().setZero();
+      nn_input_buf_[1].SubSlice(thread_id).unaligned_flat<float>().setZero();
+      return;
+    }
+
     ThreadInfo& thread_info = thread_info_[thread_id];
 
     mu_.Lock();

@@ -107,7 +107,10 @@ absl::Status NNInterface::Initialize(std::string&& model_path) {
     return ToAbslStatus(status);
   }
 
-  infer_thread_ = std::thread(&NNInterface::InferLoop, this);
+  if (num_threads_ > 1) {
+    infer_thread_ = std::thread(&NNInterface::InferLoop, this);
+  }
+
   is_initialized_ = true;
 
   return absl::OkStatus();
@@ -258,6 +261,7 @@ void NNInterface::CacheInsert(int thread_id, const NNKey& key,
 }
 
 void NNInterface::InferLoop() {
+  CHECK(num_threads_ > 1);
   while (running_.load(std::memory_order_acquire)) {
     Infer();
   }
