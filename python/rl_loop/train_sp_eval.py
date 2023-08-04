@@ -76,13 +76,23 @@ def eval(run_id: str, eval_bin_path: str, eval_res_path: str,
 
   env = os.environ.copy()
   env['LD_PRELOAD'] = '/usr/local/lib/libmimalloc.so'
-  cmd = (f'{eval_bin_path} --cur_model_path={cur_model_path_trt}' +
-         f' --cand_model_path={cand_model_path_trt}' +
-         f' --res_write_path={eval_res_path}' +
-         f' --recorder_path={local_run_dir}' +
-         f' --cache_size={EVAL_CACHE_SIZE}' + f' --num_games={NUM_EVAL_GAMES}' +
-         f' --cur_n={n} --cur_k={k} --cand_n={n} --cand_k={k}')
-  run_proc(cmd, env=env)
+  cmd = shlex.split(f'{eval_bin_path} --cur_model_path={cur_model_path_trt}' +
+                    f' --cand_model_path={cand_model_path_trt}' +
+                    f' --res_write_path={eval_res_path}' +
+                    f' --recorder_path={local_run_dir}' +
+                    f' --cache_size={EVAL_CACHE_SIZE}' +
+                    f' --num_games={NUM_EVAL_GAMES}' +
+                    f' --cur_n={n} --cur_k={k} --cand_n={n} --cand_k={k}')
+  logging.info(f'Running Eval Command:\n\'{cmd}\'')
+  eval_proc = Popen(cmd,
+                    stdin=PIPE,
+                    stdout=PIPE,
+                    stderr=STDOUT,
+                    universal_newlines=True,
+                    env=env)
+  t = Thread(target=print_stdout, args=(eval_proc.stdout,), daemon=True)
+  t.start()
+  eval_proc.wait()
 
   # Upload Eval SGFs. This is safe because the process has terminated.
   _, _, _, local_sgf_dir = fs_utils.ensure_local_dirs(local_run_dir)

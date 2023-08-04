@@ -31,7 +31,7 @@ static constexpr int kShouldLogShard = 8;
 static constexpr float kAddSeenStateProb = .02f;
 
 // Probability of drawing a state from the visited buffer.
-static constexpr float kUseSeenStateProb = .3f;
+static constexpr float kUseSeenStateProb = .25f;
 
 // Max Number of beginning moves to sample directly.
 static constexpr int kMaxNumRawPolicyMoves = 30;
@@ -367,10 +367,9 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         if (!gumbel_res.child_stats.empty()) {
           s << "Considered Moves:\n";
           for (const ChildStats& mv_stats : gumbel_res.child_stats) {
-            s << "  " << mv_stats.move
-              << ", L: " << absl::StrFormat("%.3f", mv_stats.logit)
-              << ", g: " << absl::StrFormat("%.3f", mv_stats.gumbel_noise)
-              << ", Qc: " << absl::StrFormat("%.3f", mv_stats.qtransform)
+            s << "  " << ("ABCDEFGHIJKLMNOPQRS"[mv_stats.move.j])
+              << mv_stats.move.i
+              << ", p: " << absl::StrFormat("%.3f", mv_stats.prob)
               << ", n: " << absl::StrFormat("%d", mv_stats.n)
               << ", q: " << absl::StrFormat("%.3f", mv_stats.q)
               << ", qz: " << absl::StrFormat("%.3f", mv_stats.qz)

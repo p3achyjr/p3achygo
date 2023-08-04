@@ -282,10 +282,12 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
 
       // Update categorical distribution.
       TreeNode* child = root->children[child_stat.move].get();
-      for (int v_bucket = 0; v_bucket < kNumVBuckets; ++v_bucket) {
-        // Mirror buckets, since we should flip signs.
-        root->v_categorical[v_bucket] +=
-            child->v_categorical[kNumVBuckets - v_bucket - 1];
+      if (child != nullptr) {
+        for (int v_bucket = 0; v_bucket < kNumVBuckets; ++v_bucket) {
+          // Mirror buckets, since we should flip signs.
+          root->v_categorical[v_bucket] +=
+              child->v_categorical[kNumVBuckets - v_bucket - 1];
+        }
       }
     }
 
@@ -293,12 +295,6 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
   }
 
   return result;
-}
-
-GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
-                                         Game& game, TreeNode* const root,
-                                         Color color_to_move, int n, int k) {
-  return SearchRoot(probability, game, root, color_to_move, n, k, 1.0f);
 }
 
 // Search using PUCT to select root actions. Still uses Gumbel planning at

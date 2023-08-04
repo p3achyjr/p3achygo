@@ -1,5 +1,5 @@
 {
-  "num_generations": 100,
+  "num_generations": 200,
   "games_first_gen": 5000,
   "games_per_gen": 5000,
   "batch_size": 256,
@@ -7,9 +7,9 @@
   "min_lr": 1.8e-3,
   "max_lr": 1.8e-2,
   "lr_growth_window": 10,
-  "extra_train_gens": 0,
+  "extra_train_gens": 20,
   "min_train_selected_k": 16,
-  "min_train_selected_n": 256,
+  "min_train_selected_n": 64,
   "max_train_selected_k": 16,
   "max_train_selected_n": 448,
   "min_train_default_k": 8,
