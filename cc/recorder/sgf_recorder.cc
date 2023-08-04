@@ -152,10 +152,6 @@ SgfRecorderImpl::SgfRecorderImpl() : SgfRecorderImpl("", 1, 0, "") {}
 void SgfRecorderImpl::RecordGame(
     int thread_id, const game::Game& game, std::string b_name,
     std::string w_name, std::vector<std::unique_ptr<mcts::TreeNode>>&& roots) {
-  if (path_.empty()) {
-    return;
-  }
-
   CHECK(game.has_result());
 
   std::vector<std::unique_ptr<Record>>& thread_records = records_[thread_id];
@@ -167,9 +163,7 @@ void SgfRecorderImpl::RecordGame(
 // Only one thread can call this function. Additionally, no thread can call
 // `RecordGame` while this function is running.
 void SgfRecorderImpl::Flush() {
-  if (path_.empty()) {
-    return;
-  }
+  LOG(INFO) << path_;
 
   int games_in_batch = 0;
   int games_with_trees_in_batch = 0;
