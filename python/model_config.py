@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+CONFIG_OPTIONS = ['tiny', 'small', 'b32c128', 'b20c256', 'b32c256']
+
 
 class ModelConfig:
   """
@@ -39,12 +41,22 @@ class ModelConfig:
     return ModelConfig()
 
   @staticmethod
-  def b24c192():
+  def b32c128():
+    return ModelConfig(blocks=32,
+                       broadcast_interval=8,
+                       inner_bottleneck_layers=3,
+                       channels=128,
+                       bottleneck_channels=64,
+                       head_channels=32,
+                       c_val=64)
+
+  @staticmethod
+  def b20c256():
     return ModelConfig(blocks=24,
                        broadcast_interval=6,
                        inner_bottleneck_layers=3,
-                       channels=192,
-                       bottleneck_channels=96,
+                       channels=256,
+                       bottleneck_channels=128,
                        head_channels=32,
                        c_val=64)
 
@@ -64,7 +76,9 @@ class ModelConfig:
       return ModelConfig.tiny()
     elif s == 'small':
       return ModelConfig.small()
-    elif s == 'b24c192':
-      return ModelConfig.b24c192()
+    elif s == 'b32c128':
+      return ModelConfig.b32c128()
+    elif s == 'b20c256':
+      return ModelConfig.b20c256()
     elif s == 'b32c256':
       return ModelConfig.b32c256()

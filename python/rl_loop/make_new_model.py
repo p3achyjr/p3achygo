@@ -1,11 +1,13 @@
-import gcs_utils as gcs
-import sys
 import rl_loop.model_utils as model_utils
+import sys
+import numpy as np
+import tensorflow as tf
 from absl import app, flags, logging
+from model_config import CONFIG_OPTIONS
 
 FLAGS = flags.FLAGS
 
-flags.DEFINE_enum('model_config', 'small', ['small', 'b24c192', 'b32c256'])
+flags.DEFINE_enum('model_config', 'small', CONFIG_OPTIONS, 'Model Config/Size.')
 flags.DEFINE_string('model_path', '', 'Path to store model')
 
 
@@ -17,8 +19,14 @@ def main(_):
     logging.error('No --model_path specified.')
     return
 
+  batch_size = 32
   model = model_utils.new_model(name=f'p3achygo',
                                 model_config=FLAGS.model_config)
+  model(
+      tf.convert_to_tensor(
+          np.random.random([batch_size] + model.input_planes_shape())),
+      tf.convert_to_tensor(
+          np.random.random([batch_size] + model.input_features_shape())))
   model.summary()
   model.save(FLAGS.model_path)
 

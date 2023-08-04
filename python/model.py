@@ -758,6 +758,12 @@ class P3achyGoModel(tf.keras.Model):
     model = tf.keras.Model(inputs=[x0, x1], outputs=self.call(x0, x1))
     return model.summary()
 
+  def input_planes_shape(self):
+    return [self.board_len, self.board_len, self.num_input_planes]
+
+  def input_features_shape(self):
+    return [self.num_input_features]
+
   @staticmethod
   def create(config: ModelConfig, board_len: int, num_input_planes: int,
              num_input_features: int, name: str):

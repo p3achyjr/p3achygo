@@ -29,7 +29,6 @@ NUM_EVAL_GAMES = 100
 flags.DEFINE_string(
     'from_existing_run', '',
     'Existing run from which to use SP chunks to train a new model from.')
-flags.DEFINE_enum('model_config', 'small', ['small', 'b24c192', 'b32c256'])
 flags.DEFINE_string('sp_bin_path', '', 'Local path to self-play binary.')
 flags.DEFINE_string('eval_bin_path', '', 'Local path to eval binary.')
 flags.DEFINE_string('run_id', '', 'ID corresponding to the current run.')
@@ -53,7 +52,7 @@ def print_stdout(out: Popen.stdout):  # pytype : disable=unbound-type-param
 
 def run_proc(cmd: str, env=None):
   if not env:
-    env = os.environ()
+    env = os.environ
 
   cmd = shlex.split(cmd)
   proc = Popen(cmd,
@@ -173,7 +172,7 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
   if model_gen < 0:
     # make new model.
     model_gen = 0
-    model_path = str(Path(local_models_dir), 'model_0000')
+    model_path = str(Path(local_models_dir, 'model_0000'))
     cmd = (f'python -m python.rl_loop.make_new_model' +
            f' --model_path={model_path}' +
            f' --model_config={config.model_config}')

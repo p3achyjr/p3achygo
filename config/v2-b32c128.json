@@ -1,6 +1,6 @@
 {
   "from_existing_run": "v2",
-  "model_config": "b24c192",
+  "model_config": "b32c128",
   "batch_size": 256,
   "lr": 1e-2,
   "min_lr": 1.8e-3,
