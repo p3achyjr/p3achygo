@@ -3,7 +3,7 @@
 <b>Date</b>: 7-14-2023 to 7-24-2023
 <b>Num Games</b>: 500,000
 <b>Best Model</b>: model_0093
-<b>From SL Bootstrap?</b>: Yes
+<b>Starting Point</b>: SL Bootstrap
 
 ## Self-Elo
 
@@ -67,3 +67,77 @@ p3achygo-v1     11 36.67%       5  33.33%     6  40.00%   1259.11
 ```
 Pachi Elo: 1733
 Elo: 1638
+
+# v2
+
+<b>Date</b>: 7-25-2023 - 8-01-2023
+<b>Num Games</b>: 500,000
+<b>Best Model</b>: model_0113
+<b>Starting Point</b>: Zero
+<b>Best Model</b>: model_0113
+
+## Self-Elo
+
+#### Visit Scaling
+
+### Elo
+
+| vs         | n=128, k=16 |n=256, k=16 | n=512, k=16 | n=1024, k=16 |
+|------------|:----------:|:----------:|:----------:|:----------:|
+| n=128, k=16 | - |  -0.568 +- 0.070 |  |  |
+| n=256, k=16 | 0.568 +- 0.070 | - |  |  |
+| n=512, k=16 | | | - |  |
+| n=1024, k=16 | | | | - |
+
+#### Same Number of Visits on Chosen Child
+
+### Elo
+
+| vs         | n=205, k=8 | n=256, k=16 | n=309, k=32 |
+|------------|:----------:|:----------:|:----------:|
+| n=205, k=8 | - |  -0.568 +- 0.070 |  -0.560 +- 0.097 |  
+| n=256, k=16 | 0.568 +- 0.070 | - |  -0.550 +- 0.098| 
+| n=309, k=32 | 0.560 +- 0.097 | 0.550 +- 0.098| - |  
+
+## vs. Pachi 12.82
+#### n=256, k=8, 30 games
+```
+pachi v p3achygo-v2 (30/30 games)
+board size: 19   komi: 7.5
+              wins              black         white        avg cpu
+pachi            2  6.67%       0   0.00%     2   13.33%    778.27
+p3achygo-v2     28 93.33%       13 86.67%     15 100.00%   2270.71
+                                13 43.33%     17  56.67%
+```
+Pachi Elo: 1733
+Elo: 2191
+
+## vs. Leela 071
+`leelaz -g --noponder -p 1000 -w 071.gz`
+`p3achygo --model_path=/tmp/p3achygo/models/model_0113/_trt --n=256`
+```
+leela v p3achygo-v2 (100/100 games)
+board size: 19   komi: 7.5
+              wins              black         white       avg cpu
+leela           59 59.00%       30 60.00%     29 58.00%     32.36
+p3achygo-v2     41 41.00%       21 42.00%     20 40.00%    139.96
+                                51 51.00%     49 49.00%
+```
+
+Leela Elo: 2485
+Elo: 2422
+
+## vs. Leela 076
+`leelaz -g --noponder -p 1000 -w 076.gz`
+`p3achygo --model_path=/tmp/p3achygo/models/model_0113/_trt --n=256`
+```
+leela v p3achygo-v2 (30/30 games)
+board size: 19   komi: 7.5
+              wins              black         white       forfeits avg cpu
+leela           18 60.00%       10 66.67%     8  53.33%          1   30.94
+p3achygo-v2     12 40.00%       7  46.67%     5  33.33%          0  135.37
+                                17 56.67%     13 43.33%
+```
+
+Leela Elo: 2569
+Elo: 2499

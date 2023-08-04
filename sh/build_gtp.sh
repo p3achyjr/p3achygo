@@ -6,8 +6,7 @@ BUILD_ARGS=(
     "--config=mimalloc"
     "--copt=-flto"
     "--linkopt=-flto=O2"
-    "--linkopt=-lprofiler"
 )
 
 
-bazel build "${BUILD_ARGS[@]}" //cc/eval:main
+bazel build "${BUILD_ARGS[@]}" //cc/gtp:main
