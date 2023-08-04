@@ -13,8 +13,8 @@ SWA_MOMENTUM = .35
 NUM_BATCHES_FULL_CHECKPOINT = 1000
 
 
-def new_model(name: str) -> P3achyGoModel:
-  return P3achyGoModel.create(config=ModelConfig.small(),
+def new_model(name: str, model_config='small') -> P3achyGoModel:
+  return P3achyGoModel.create(config=ModelConfig.from_str(model_config),
                               board_len=BOARD_LEN,
                               num_input_planes=NUM_INPUT_PLANES,
                               num_input_features=NUM_INPUT_FEATURES,

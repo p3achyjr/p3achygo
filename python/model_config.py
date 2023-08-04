@@ -35,23 +35,11 @@ class ModelConfig:
                        c_val=16)
 
   @staticmethod
-  def b6c96():
-    # Tries to mimic KataGo architecture. Need 8 blocks b/c model creates
-    # `blocks-2` blocks in the trunk.
-    return ModelConfig(blocks=8,
-                       broadcast_interval=4,
-                       inner_bottleneck_layers=1,
-                       channels=96,
-                       bottleneck_channels=48,
-                       head_channels=32,
-                       c_val=48)
-
-  @staticmethod
   def small():
     return ModelConfig()
 
   @staticmethod
-  def medium():
+  def b24c192():
     return ModelConfig(blocks=24,
                        broadcast_interval=6,
                        inner_bottleneck_layers=3,
@@ -59,3 +47,24 @@ class ModelConfig:
                        bottleneck_channels=96,
                        head_channels=32,
                        c_val=64)
+
+  @staticmethod
+  def b32c256():
+    return ModelConfig(blocks=32,
+                       broadcast_interval=8,
+                       inner_bottleneck_layers=3,
+                       channels=256,
+                       bottleneck_channels=128,
+                       head_channels=48,
+                       c_val=64)
+
+  @staticmethod
+  def from_str(s: str):
+    if s == 'tiny':
+      return ModelConfig.tiny()
+    elif s == 'small':
+      return ModelConfig.small()
+    elif s == 'b24c192':
+      return ModelConfig.b24c192()
+    elif s == 'b32c256':
+      return ModelConfig.b32c256()

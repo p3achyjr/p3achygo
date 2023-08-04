@@ -1,0 +1,9 @@
+{
+  "from_existing_run": "v2",
+  "model_config": "b24c192",
+  "batch_size": 256,
+  "lr": 1e-2,
+  "min_lr": 1.8e-3,
+  "max_lr": 1.8e-2,
+  "lr_growth_window": 10
+}
