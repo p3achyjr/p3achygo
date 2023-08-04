@@ -31,13 +31,13 @@ static constexpr int kShouldLogShard = 8;
 static constexpr float kAddSeenStateProb = .02f;
 
 // Probability of drawing a state from the visited buffer.
-static constexpr float kUseSeenStateProb = .25f;
+static constexpr float kUseSeenStateProb = .3f;
 
 // Max Number of beginning moves to sample directly.
 static constexpr int kMaxNumRawPolicyMoves = 30;
 
 // Probability of exploration.
-static constexpr float kOpeningExploreProb = .75f;
+static constexpr float kOpeningExploreProb = .7f;
 
 // Thresholds at which to compute pass-alive regions.
 static constexpr int kComputePAMoveNums[] = {175, 200, 250, 300, 350, 400};
@@ -224,9 +224,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
         int n = (1.0f - down_bad_coeff) * config.default_params.n +
                 down_bad_coeff * config.selected_params.n;
-        int k = std::round((n - config.default_params.n) /
-                           static_cast<float>(config.selected_params.n -
-                                              config.default_params.n));
+        int k = config.default_params.k;
         return GumbelParams{n, k};
       }();
 

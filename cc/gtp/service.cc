@@ -136,7 +136,7 @@ ServiceImpl::ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
                          int n, int k, bool use_puct)
     : nn_interface_(std::move(nn_interface)),
       gumbel_evaluator_(std::move(gumbel_evaluator)),
-      game_(std::make_unique<Game>()),
+      game_(std::make_unique<Game>(false /* prohibit_pass_alive */)),
       current_color_(BLACK),
       n_(n),
       k_(k),
@@ -418,7 +418,7 @@ GumbelResult ServiceImpl::GenMoveCommon(Color color) {
 
   GumbelResult search_result =
       use_puct_ ? gumbel_evaluator_->SearchRootPuct(
-                      probability_, *game_, current_root(), color, n_, 1.0f)
+                      probability_, *game_, current_root(), color, n_, 2.0f)
                 : gumbel_evaluator_->SearchRoot(probability_, *game_,
                                                 current_root(), color, n_, k_);
   return search_result;
@@ -452,7 +452,7 @@ void ServiceImpl::MakeMove(Color color, Loc loc) {
 }
 
 void ServiceImpl::ClearBoard() {
-  game_ = std::make_unique<Game>();
+  game_ = std::make_unique<Game>(false /* prohibit_pass_alive */);
   root_history_.clear();
   root_history_.emplace_back(std::make_unique<TreeNode>());
 }

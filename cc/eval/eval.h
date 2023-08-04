@@ -22,6 +22,12 @@ struct EvalConfig {
   const int cur_k;
   const int cand_n;
   const int cand_k;
+  const float cur_noise_scaling;
+  const float cand_noise_scaling;
+  const bool cur_use_puct;
+  const float cur_c_puct;
+  const bool cand_use_puct;
+  const float cand_c_puct;
 };
 
 struct EvalResult {

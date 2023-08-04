@@ -37,12 +37,12 @@ class LeafEvaluator final {
   // Calls `InitTreeNode` and fills initial stats.
   void EvaluateLeaf(core::Probability& probability, const game::Game& game,
                     TreeNode* node, game::Color color_to_move,
-                    game::Color root_color, float root_score_estimate);
+                    game::Color root_color, float root_score_est);
 
   // Populates a terminal node.
   void EvaluateTerminal(const game::Scores& scores, TreeNode* terminal_node,
                         game::Color color_to_move, game::Color root_color,
-                        float root_score_estimate);
+                        float root_score_est);
 
   // Evaluates a leaf node using the neural net.
   void InitTreeNode(core::Probability& probability, TreeNode* node,

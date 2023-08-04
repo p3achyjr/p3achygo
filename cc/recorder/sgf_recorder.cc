@@ -147,8 +147,6 @@ SgfRecorderImpl::SgfRecorderImpl(std::string path, int num_threads, int gen,
       worker_id_(worker_id),
       batch_num_(0) {}
 
-SgfRecorderImpl::SgfRecorderImpl() : SgfRecorderImpl("", 1, 0, "") {}
-
 void SgfRecorderImpl::RecordGame(
     int thread_id, const game::Game& game, std::string b_name,
     std::string w_name, std::vector<std::unique_ptr<mcts::TreeNode>>&& roots) {
