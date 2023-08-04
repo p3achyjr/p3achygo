@@ -112,6 +112,20 @@ p3achygo-v2     28 93.33%       13 86.67%     15 100.00%   2270.71
 Pachi Elo: 1733
 Elo: 2191
 
+## vs. Leela 066
+`leelaz -g --noponder -p 1000 -w 066.gz`
+`p3achygo --model_path=/tmp/p3achygo/models/model_0113/_trt --n=256`
+```
+leela v p3achygo-v2 (100/100 games)
+board size: 19   komi: 7.5
+              wins              black         white       forfeits avg cpu
+leela           44 44.00%       19 38.00%     25 50.00%          1   44.03
+p3achygo-v2     56 56.00%       25 50.00%     31 62.00%          0  141.38
+                                44 44.00%     56 56.00%
+```
+Leela Elo: 2331
+Elo: 2393
+
 ## vs. Leela 071
 `leelaz -g --noponder -p 1000 -w 071.gz`
 `p3achygo --model_path=/tmp/p3achygo/models/model_0113/_trt --n=256`

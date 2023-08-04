@@ -288,6 +288,9 @@ class Board final {
   }
 
   inline void SetKomi(float komi) { komi_ = komi; }
+  inline void CalculatePassAliveRegions() {
+    group_tracker_.CalculatePassAliveRegions(hash_);
+  }
 
   bool IsValidMove(Loc loc, Color color) const;
   bool IsGameOver() const;

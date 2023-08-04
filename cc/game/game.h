@@ -52,6 +52,9 @@ class Game final {
   bool PlayMove(Loc loc, Color color);
   bool Pass(Color color);
   inline void SetKomi(float komi) { board_.SetKomi(komi); }
+  inline void CalculatePassAliveRegions() {
+    board_.CalculatePassAliveRegions();
+  }
 
   Scores GetScores();
   void WriteResult();

@@ -100,17 +100,20 @@ def loop(bin_path: str,
       return selected_n, selected_k, default_n, default_k
 
     selected_n, selected_k, default_n, default_k = get_gumbel_params()
+    cmd_str = (f'{bin_path} --num_threads={num_threads}' +
+               f' --model_path={str(model_path)}' +
+               f' --recorder_path={local_run_dir}' +
+               f' --flush_interval={num_threads} --gen={gen}' +
+               f' --id={worker_id.upper()}' +
+               f' --gumbel_selected_k={selected_k}' +
+               f' --gumbel_selected_n={selected_n}' +
+               f' --gumbel_default_k={default_k}' +
+               f' --gumbel_default_n={default_n}')
+
+    logging.info(f'Running Self-Play Command:\n\'{cmd_str}\'')
     env = os.environ.copy()
     env['LD_PRELOAD'] = '/usr/local/lib/libmimalloc.so'
-    cmd = shlex.split(f'{bin_path} --num_threads={num_threads}' +
-                      f' --model_path={str(model_path)}' +
-                      f' --recorder_path={local_run_dir}' +
-                      f' --flush_interval={num_threads} --gen={gen}' +
-                      f' --id={worker_id.upper()}' +
-                      f' --gumbel_selected_k={selected_k}' +
-                      f' --gumbel_selected_n={selected_n}' +
-                      f' --gumbel_default_k={default_k}' +
-                      f' --gumbel_default_n={default_n}')
+    cmd = shlex.split(cmd_str)
     selfplay_proc = Popen(cmd,
                           stdin=PIPE,
                           stdout=PIPE,

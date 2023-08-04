@@ -49,9 +49,11 @@ class GumbelEvaluator final {
   GumbelResult SearchRoot(core::Probability& probability, game::Game& game,
                           TreeNode* root, game::Color color_to_move, int n,
                           int k, float noise_scaling);
-  GumbelResult SearchRoot(core::Probability& probability, game::Game& game,
-                          TreeNode* root, game::Color color_to_move, int n,
-                          int k);
+  inline GumbelResult SearchRoot(core::Probability& probability,
+                                 game::Game& game, TreeNode* root,
+                                 game::Color color_to_move, int n, int k) {
+    return SearchRoot(probability, game, root, color_to_move, n, k, 1.0f);
+  }
 
   // Uses PUCT formula to select actions at the root, but uses Q-based planning
   // at non-root nodes, as described in the Gumbel paper.
@@ -71,7 +73,8 @@ class GumbelEvaluator final {
   void Backward(absl::InlinedVector<TreeNode*, kMaxPathLenEst>& path);
 
   // Single Backward Step.
-  void SingleBackup(TreeNode* node, int child_n, float leaf_q, float leaf_q_outcome);
+  void SingleBackup(TreeNode* node, int child_n, float leaf_q,
+                    float leaf_q_outcome);
 
   // Leaf Evaluation module.
   LeafEvaluator leaf_evaluator_;

@@ -161,8 +161,6 @@ void SgfRecorderImpl::RecordGame(
 // Only one thread can call this function. Additionally, no thread can call
 // `RecordGame` while this function is running.
 void SgfRecorderImpl::Flush() {
-  LOG(INFO) << path_;
-
   int games_in_batch = 0;
   int games_with_trees_in_batch = 0;
   std::string sgfs = "";

@@ -6,7 +6,6 @@ BUILD_ARGS=(
     "--config=mimalloc"
     "--copt=-flto"
     "--linkopt=-flto=O2"
-    "--linkopt=-lprofiler"
 )
 
 

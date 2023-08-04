@@ -54,15 +54,17 @@ def eval(run_id: str, eval_bin_path: str, eval_res_path: str,
   cur_model_path_trt = str(Path(cur_model_path, '_trt'))
   cand_model_path_trt = str(Path(cand_model_path, '_trt'))
 
+  cmd_str = (f'{eval_bin_path} --cur_model_path={cur_model_path_trt}' +
+             f' --cand_model_path={cand_model_path_trt}' +
+             f' --res_write_path={eval_res_path}' +
+             f' --recorder_path={local_run_dir}' +
+             f' --cache_size={EVAL_CACHE_SIZE}' +
+             f' --num_games={NUM_EVAL_GAMES}' +
+             f' --cur_n={n} --cur_k={k} --cand_n={n} --cand_k={k}')
+  logging.info(f'Running Eval Command:\n\'{cmd_str}\'')
   env = os.environ.copy()
   env['LD_PRELOAD'] = '/usr/local/lib/libmimalloc.so'
-  cmd = shlex.split(f'{eval_bin_path} --cur_model_path={cur_model_path_trt}' +
-                    f' --cand_model_path={cand_model_path_trt}' +
-                    f' --res_write_path={eval_res_path}' +
-                    f' --recorder_path={local_run_dir}' +
-                    f' --cache_size={EVAL_CACHE_SIZE}' +
-                    f' --num_games={NUM_EVAL_GAMES}' +
-                    f' --cur_n={n} --cur_k={k} --cand_n={n} --cand_k={k}')
+  cmd = shlex.split(cmd_str)
   eval_proc = Popen(cmd,
                     stdin=PIPE,
                     stdout=PIPE,
