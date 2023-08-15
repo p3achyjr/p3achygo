@@ -7,7 +7,7 @@ import rl_loop.model_utils as model_utils
 
 from absl import logging
 from constants import *
-from lr_schedule import ConstantLRSchedule
+from lr_schedule import ConstantLRSchedule, CyclicLRSchedule
 from model import P3achyGoModel
 from rl_loop.config import RunConfig
 
@@ -22,12 +22,19 @@ def train_one_gen(model: P3achyGoModel,
                   config: RunConfig,
                   log_interval=100,
                   is_gpu=True,
-                  batch_num=0):
+                  batch_num=0,
+                  chunk_size=None):
   '''
   Trains through dataset held at `chunk_path`.
   '''
   batch_size = config.batch_size
-  lr_schedule = ConstantLRSchedule(config.lr)
+  lr_scale = 0.1 + 0.9 * min(1.0, model_gen / config.lr_growth_window)
+  if not chunk_size:
+    lr_schedule = ConstantLRSchedule(config.lr * lr_scale)
+  else:
+    num_batches = chunk_size // batch_size
+    lr_schedule = CyclicLRSchedule(config.min_lr * lr_scale,
+                                   config.max_lr * lr_scale, num_batches)
 
   logging.info(f'Batch Size: {batch_size}')
   logging.info(f'Learning Rate Schedule: {lr_schedule.info()}')

@@ -29,17 +29,21 @@ struct TreeNode final {
   int n = 0;
   float w = 0;
   float v = 0;
+  float v_var = 0;
+  std::array<int16_t, kNumVBuckets> v_categorical{};
 
   float w_outcome = 0;
   float v_outcome = 0;
+  float v_outcome_var = 0;
 
   int max_child_n = 0;
 
-  std::array<std::unique_ptr<TreeNode>, constants::kMaxNumMoves> children{};
+  std::array<std::unique_ptr<TreeNode>, constants::kMaxMovesPerPosition>
+      children{};
 
   // write-once
-  std::array<float, constants::kMaxNumMoves> move_logits{};
-  std::array<float, constants::kMaxNumMoves> move_probs{};
+  std::array<float, constants::kMaxMovesPerPosition> move_logits{};
+  std::array<float, constants::kMaxMovesPerPosition> move_probs{};
   float outcome_est = 0;
   float score_est = 0;
   float init_util_est = 0;  // mix value estimate and score estimate.
@@ -60,16 +64,30 @@ inline float VOutcome(TreeNode* node) {
   return node == nullptr ? -1.0 : node->v_outcome;
 }
 
+inline float VVar(TreeNode* node) {
+  return node == nullptr || node->n < 3 ? kMaxQ : node->v_var;
+}
+
+inline float VOutcomeVar(TreeNode* node) {
+  return node == nullptr || node->n < 3 ? 1.0f : node->v_outcome_var;
+}
+
 inline float Q(TreeNode* node, int action) {
-  // remember to flip sign. In bare MCTS, this will also cause MCTS to make deep
-  // reads.
+  // remember to flip sign.
   return !node->children[action] ? kMinQ : -node->children[action]->v;
 }
 
 inline float QOutcome(TreeNode* node, int action) {
-  // remember to flip sign. In bare MCTS, this will also cause MCTS to make deep
-  // reads.
+  // remember to flip sign.
   return !node->children[action] ? -1.0 : -node->children[action]->v_outcome;
+}
+
+inline float QVar(TreeNode* node, int action) {
+  return node == nullptr ? kMaxQ : VVar(node->children[action].get());
+}
+
+inline float QOutcomeVar(TreeNode* node, int action) {
+  return node == nullptr ? 1.0f : VOutcomeVar(node->children[action].get());
 }
 
 inline float MaxN(TreeNode* node) {
@@ -85,10 +103,12 @@ inline float SumChildrenN(TreeNode* node) {
 }
 
 inline float ChildScore(TreeNode* node, int action) {
-  return node == nullptr ? node->score_est : -node->children[action]->score_est;
+  return !node->children[action] ? node->score_est
+                                 : -node->children[action]->score_est;
 }
 
 void AdvanceState(TreeNode* node);
+std::string VCategoricalHistogram(TreeNode* node);
 
 }  // namespace mcts
 

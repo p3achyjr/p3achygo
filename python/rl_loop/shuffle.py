@@ -20,10 +20,6 @@ from threading import Thread
 FLAGS = flags.FLAGS
 POLL_INTERVAL_S = 10
 
-# there are ~20mil samples in the SL dataset, so we "pretend" like we've already
-# generated this many self-play samples.
-NUM_SAMPLES_OFFSET = 20000000
-
 # How many times to use each sample, on average.
 AVG_NUM_SYMMETRIES = 3
 
@@ -79,7 +75,7 @@ def num_samples_in_chunks(gcs_sp_chunks: set[str]) -> int:
       logging.error(f'Wrong number of matches for chunk file: {sp_chunk}')
       continue
 
-    _, _, _, _, num_samples_in_chunk, _ = match.groups()
+    _, _, _, num_samples_in_chunk, _, _ = match.groups()
     num_samples += int(num_samples_in_chunk)
 
   return num_samples
@@ -137,6 +133,8 @@ def loop(bin_path: str, run_id: str, local_run_dir: str,
 
     # Upload chunk.
     gcs.upload_chunk(run_id, gcs.local_chunk_dir(local_sp_chunk_dir), chunk_gen)
+    gcs.upload_chunk_size(run_id, gcs.local_chunk_dir(local_sp_chunk_dir),
+                          chunk_gen)
     logging.info(f'Uploaded chunk gen {chunk_gen} to gs://p3achygo/{run_id}')
 
     return num_new_samples, gcs_sp_chunks
@@ -153,7 +151,7 @@ def loop(bin_path: str, run_id: str, local_run_dir: str,
   while chunk_gen <= config.num_generations:
     # calculate metadata.
     train_window_size = shuffle_metadata.training_window_size(
-        num_samples_generated, NUM_SAMPLES_OFFSET)
+        num_samples_generated)
     select_sample_prob = shuffle_metadata.select_sample_probability(
         train_window_size, config.games_per_gen, AVG_NUM_SYMMETRIES)
     num_new_samples, gcs_sp_chunks = generate_one_chunk(chunk_gen,
@@ -186,8 +184,7 @@ def loop(bin_path: str, run_id: str, local_run_dir: str,
     num_samples_generated_sim = (num_samples_generated +
                                  extra_gen * num_samples_per_gen_est)
     train_window_size = shuffle_metadata.training_window_size(
-        num_samples_generated_sim, NUM_SAMPLES_OFFSET)
-
+        num_samples_generated_sim)
     # compute sample probability as if we had played extra generations
     select_sample_prob = shuffle_metadata.select_sample_probability(
         train_window_size, config.games_per_gen, AVG_NUM_SYMMETRIES)
@@ -205,7 +202,6 @@ def loop(bin_path: str, run_id: str, local_run_dir: str,
     chunk_gen += 1
     extra_gen += 1
 
-  gcs.signal_done(run_id)
   logging.info(f'Chunk gen: {chunk_gen}. Shutting down.')
 
 

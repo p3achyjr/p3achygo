@@ -30,10 +30,24 @@ GTPCode StringToGTPCode(std::string token) {
     return GTPCode::kGenMove;
   } else if (token == "print_board") {
     return GTPCode::kPrintBoard;
+  } else if (token == "final_score") {
+    return GTPCode::kFinalScore;
+  } else if (token == "analyze") {
+    return GTPCode::kAnalyze;
+  } else if (token == "genmove_analyze") {
+    return GTPCode::kGenMoveAnalyze;
+  } else if (token == "undo") {
+    return GTPCode::kUndo;
   } else if (token == "play_dbg") {
     return GTPCode::kPlayDbg;
   } else if (token == "genmove_dbg") {
     return GTPCode::kGenMoveDbg;
+  } else if (token == "ownership") {
+    return GTPCode::kOwnership;
+  } else if (token == "serialize_sgf_with_trees") {
+    return GTPCode::kSerializeSgfWithTrees;
+  } else if (token == "load_sgf") {
+    return GTPCode::kLoadSgf;
   } else {
     return GTPCode::kUnknownCommand;
   }
@@ -65,17 +79,32 @@ std::string GTPCodeToString(GTPCode code) {
       return "genmove";
     case GTPCode::kPrintBoard:
       return "print_board";
+    case GTPCode::kFinalScore:
+      return "final_score";
+    case GTPCode::kAnalyze:
+      return "analyze";
+    case GTPCode::kGenMoveAnalyze:
+      return "genmove_analyze";
+    case GTPCode::kUndo:
+      return "undo";
     case GTPCode::kPlayDbg:
       return "play_dbg";
     case GTPCode::kGenMoveDbg:
       return "genmove_dbg";
+    case GTPCode::kOwnership:
+      return "ownership";
+    case GTPCode::kSerializeSgfWithTrees:
+      return "serialize_sgf_with_trees";
+    case GTPCode::kLoadSgf:
+      return "load_sgf";
     case GTPCode::kUnknown:
     case GTPCode::kServerError:
     case GTPCode::kCommandParseError:
     case GTPCode::kUnknownCommand:
-    default:
       return "";
   }
+
+  return "";
 }
 
 std::string GtpValueString(std::monostate _) { return ""; }
@@ -89,7 +118,11 @@ std::string GtpValueString(std::string s) { return s; }
 std::string GtpValueString(bool b) { return b ? "true" : "false"; }
 
 std::string GtpValueString(game::Loc loc) {
-  static constexpr char kColIndices[] = "abcdefghjklmnopqrst";
+  static constexpr char kColIndices[] = "ABCDEFGHJKLMNOPQRST";
+  if (loc == game::kNoopLoc) {
+    return "resign";
+  }
+
   if (loc == game::kPassLoc) {
     return "pass";
   }
@@ -99,6 +132,81 @@ std::string GtpValueString(game::Loc loc) {
   vertex_string += std::to_string(BOARD_LEN - loc.i);
 
   return vertex_string;
+}
+
+std::string GtpValueString(game::Scores scores) {
+  std::stringstream ss;
+  ss << "B: " << scores.black_score << ", W: " << scores.white_score;
+
+  return ss.str();
+}
+
+std::string GtpValueString(std::array<float, BOARD_LEN * BOARD_LEN> ownership) {
+  std::stringstream ss;
+  ss << "\n";
+
+  float bown_est = 0, wown_est = 0;
+  for (auto i = 0; i < BOARD_LEN; i++) {
+    int gtp_row = BOARD_LEN - i;
+    if (gtp_row < 10) {
+      ss << gtp_row << "  ";
+    } else {
+      ss << gtp_row << " ";
+    }
+
+    for (auto j = 0; j < BOARD_LEN; j++) {
+      float own = ownership[i * BOARD_LEN + j];
+      if (own < -0.75f) {
+        ss << "● ";
+      } else if (own < -0.25f) {
+        ss << "◆ ";
+      } else if (own < 0.25f) {
+        ss << "⋅ ";
+      } else if (own < 0.75f) {
+        ss << "◇ ";
+      } else {
+        ss << "○ ";
+      }
+
+      if (own < 0) {
+        wown_est -= own;
+      } else {
+        bown_est += own;
+      }
+    }
+
+    ss << "\n";
+  }
+
+  ss << "   "
+     << "A B C D E F G H J K L M N O P Q R S T\n";
+  ss << "Black Own Pred: " << bown_est
+     << ", White Own Pred (No Komi): " << wown_est;
+  return ss.str();
+}
+
+std::string GtpValueString(analysis::AnalysisSnapshot snapshot) {
+  auto row_string = [](const analysis::AnalysisSnapshot::Row row) {
+    std::stringstream ss;
+    ss << "info";
+    ss << " move " << GtpValueString(row.loc);
+    ss << " visits " << row.visits;
+    ss << " winrate " << row.winrate;
+    ss << " prior " << row.prior;
+    ss << " pv";
+    for (const auto& mv : row.principal_variation) {
+      ss << " " << GtpValueString(mv);
+    }
+
+    return ss.str();
+  };
+
+  std::stringstream ss;
+  for (const auto& row : snapshot.rows) {
+    ss << row_string(row) << " ";
+  }
+
+  return ss.str();
 }
 
 }  // namespace gtp

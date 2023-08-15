@@ -338,6 +338,9 @@ absl::StatusOr<std::unique_ptr<sgf::SgfNode>> ParseSgf(std::string contents) {
 absl::StatusOr<std::unique_ptr<sgf::SgfNode>> ParseSgfFile(
     std::string sgf_filename) {
   FILE* const fp = fopen(sgf_filename.c_str(), "r");
+  if (fp == nullptr) {
+    return absl::InternalError("Could not open file " + sgf_filename);
+  }
   std::string contents;
   while (!feof(fp)) {
     char buf[4096];

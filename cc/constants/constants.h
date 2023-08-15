@@ -29,10 +29,10 @@
 namespace constants {
 
 /* Maximum number of board locations */
-static constexpr int kMaxNumBoardLocs = BOARD_LEN * BOARD_LEN;
+static constexpr int kNumBoardLocs = BOARD_LEN * BOARD_LEN;
 
 /* Maximum number of moves allowed per board state */
-static constexpr int kMaxNumMoves = BOARD_LEN * BOARD_LEN + 1;
+static constexpr int kMaxMovesPerPosition = BOARD_LEN * BOARD_LEN + 1;
 
 /* Maximum number of moves per game */
 static constexpr int kMaxGameLen = 600;

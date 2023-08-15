@@ -7,6 +7,7 @@
 #include <variant>
 #include <vector>
 
+#include "cc/analysis/analysis.h"
 #include "cc/game/game.h"
 
 namespace gtp {
@@ -27,11 +28,18 @@ enum class GTPCode : uint8_t {
   kPlay = 10,
   kGenMove = 11,
   kPrintBoard = 12,
+  kFinalScore = 13,
+  kAnalyze = 14,
+  kGenMoveAnalyze = 15,
+  kUndo = 16,
 
   // [13 - 100 reserved]
   // Private Commands.
   kPlayDbg = 101,
   kGenMoveDbg = 102,
+  kOwnership = 103,
+  kSerializeSgfWithTrees = 104,
+  kLoadSgf = 105,
 
   // [100 - 200 reserved]
   // Errors.
@@ -54,10 +62,17 @@ static constexpr GTPCode kSupportedCommands[] = {
     GTPCode::kPlay,
     GTPCode::kGenMove,
     GTPCode::kPrintBoard,
+    GTPCode::kFinalScore,
+    GTPCode::kAnalyze,
+    GTPCode::kGenMoveAnalyze,
+    GTPCode::kUndo,
 
     // Private.
     GTPCode::kPlayDbg,
     GTPCode::kGenMoveDbg,
+    GTPCode::kOwnership,
+    GTPCode::kSerializeSgfWithTrees,
+    GTPCode::kLoadSgf,
 };
 
 struct Command {
@@ -100,6 +115,9 @@ std::string GtpValueString(float x);
 std::string GtpValueString(std::string s);
 std::string GtpValueString(bool b);
 std::string GtpValueString(game::Loc loc);
+std::string GtpValueString(game::Scores scores);
+std::string GtpValueString(std::array<float, BOARD_LEN * BOARD_LEN> ownership);
+std::string GtpValueString(analysis::AnalysisSnapshot snapshot);
 
 }  // namespace gtp
 

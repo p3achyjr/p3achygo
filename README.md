@@ -20,7 +20,7 @@ python -m python.rl_loop.train_sp_eval --sp_bin_path=/app/bazel-bin/cc/selfplay/
 
 To run the shuffler, do
 ```
-python -m python.rl_loop.shuffle --bin_path=/app/bazel-bin/cc/shuffler/main --run_id=v1 --local_run_dir=/tmp/shuffler
+python -m python.rl_loop.shuffle --bin_path=/app/bazel-bin/cc/shuffler/main --run_id=${RUN_ID} --local_run_dir=/tmp/shuffler
 ```
 
 Alternatively, you can run the CC binaries themselves. For eval, do

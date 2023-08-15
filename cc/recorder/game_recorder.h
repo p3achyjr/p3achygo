@@ -18,7 +18,7 @@ namespace recorder {
 class GameRecorder {
  public:
   using ImprovedPolicies =
-      std::vector<std::array<float, constants::kMaxNumMoves>>;
+      std::vector<std::array<float, constants::kMaxMovesPerPosition>>;
   virtual ~GameRecorder() = default;
 
   // Disable Copy and Move.

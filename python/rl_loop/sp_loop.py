@@ -14,7 +14,7 @@ from typing import Tuple
 
 POLL_INTERVAL_S = 10
 TFREC_GLOB = '*.tfrecord.zz'
-SGF_GLOB = '*.sgfs'
+SGF_GLOB = '*.sgf'
 DONE_GLOB = '*.done'
 
 
@@ -85,28 +85,35 @@ def loop(bin_path: str,
     def get_gumbel_params():
       # Linear growth
       c = gen / config.num_generations
-      selected_n = config.min_train_selected_n + c * (
-          config.max_train_selected_n - config.min_train_selected_n)
-      selected_k = config.min_train_selected_k + c * (
-          config.max_train_selected_k - config.min_train_selected_k)
-      default_n = config.min_train_default_n + c * (config.max_train_default_n -
-                                                    config.min_train_default_n)
-      default_k = config.min_train_default_k + c * (config.max_train_default_k -
-                                                    config.min_train_default_k)
+      selected_n = int(
+          round(config.min_train_selected_n + c *
+                (config.max_train_selected_n - config.min_train_selected_n)))
+      selected_k = int(
+          round(config.min_train_selected_k + c *
+                (config.max_train_selected_k - config.min_train_selected_k)))
+      default_n = int(
+          round(config.min_train_default_n + c *
+                (config.max_train_default_n - config.min_train_default_n)))
+      default_k = int(
+          round(config.min_train_default_k + c *
+                (config.max_train_default_k - config.min_train_default_k)))
       return selected_n, selected_k, default_n, default_k
 
     selected_n, selected_k, default_n, default_k = get_gumbel_params()
+    cmd_str = (f'{bin_path} --num_threads={num_threads}' +
+               f' --model_path={str(model_path)}' +
+               f' --recorder_path={local_run_dir}' +
+               f' --flush_interval={num_threads} --gen={gen}' +
+               f' --id={worker_id.upper()}' +
+               f' --gumbel_selected_k={selected_k}' +
+               f' --gumbel_selected_n={selected_n}' +
+               f' --gumbel_default_k={default_k}' +
+               f' --gumbel_default_n={default_n}')
+
+    logging.info(f'Running Self-Play Command:\n\'{cmd_str}\'')
     env = os.environ.copy()
     env['LD_PRELOAD'] = '/usr/local/lib/libmimalloc.so'
-    cmd = shlex.split(f'{bin_path} --num_threads={num_threads}' +
-                      f' --model_path={str(model_path)}' +
-                      f' --recorder_path={local_run_dir}' +
-                      f' --flush_interval={num_threads} --gen={gen}' +
-                      f' --id={worker_id.upper()}' +
-                      f' --gumbel_selected_k={selected_k}' +
-                      f' --gumbel_selected_n={selected_n}' +
-                      f' --gumbel_default_k={default_k}' +
-                      f' --gumbel_default_n={default_n}')
+    cmd = shlex.split(cmd_str)
     selfplay_proc = Popen(cmd,
                           stdin=PIPE,
                           stdout=PIPE,
@@ -125,9 +132,9 @@ def loop(bin_path: str,
                                                    local_sgf_dir, sp_chunks,
                                                    sgfs)
 
-      # Shut down loop if run is finished.
-      if gcs.is_done(run_id):
-        logging.info('Run is done. Shutting down...')
+      # Shut down loop if no more self-play games are needed.
+      if gcs.get_most_recent_chunk(run_id) >= config.num_generations:
+        logging.info('No more self-play needed. Shutting down...')
         is_done = True
         break
 
@@ -146,6 +153,9 @@ def loop(bin_path: str,
         is_done = True
         queue.task_done()
         break
+
+      if selfplay_proc.poll():
+        logging.warning(f'Selfplay Process Exited: {selfplay_proc.poll()}')
 
     selfplay_proc.communicate('\n')
     selfplay_proc.wait()

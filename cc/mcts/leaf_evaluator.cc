@@ -41,19 +41,18 @@ void LeafEvaluator::EvaluateLeaf(core::Probability& probability,
 void LeafEvaluator::EvaluateTerminal(const Scores& scores,
                                      TreeNode* terminal_node,
                                      Color color_to_move, Color root_color,
-                                     float root_score_estimate) {
+                                     float root_score_est) {
   float player_score =
       color_to_move == BLACK ? scores.black_score : scores.white_score;
   float opp_score =
       color_to_move == BLACK ? scores.white_score : scores.black_score;
-  // float final_score =
-  //     player_score - opp_score + constants::kScoreInflectionPoint;
-  // float empirical_q =
-  //     (player_score > opp_score ? 1.0 : -1.0) +
-  //     ScoreTransform(final_score, root_score_est, BOARD_LEN);
+  float final_score = player_score - opp_score;
 
-  // TODO: Experiment with this.
-  float empirical_q = player_score > opp_score ? kMaxQ : kMinQ;
+  // Using the actual score, instead of {-1.5, 1.5}, incentivizes search to
+  // pass if all other moves just lead to worse outcomes.
+  float empirical_q =
+      (player_score > opp_score ? 1.0 : -1.0) +
+      ScoreTransform(score_weight_, final_score, root_score_est);
   float empirical_outcome = player_score > opp_score ? 1.0 : -1.0;
 
   terminal_node->is_terminal = true;
@@ -95,5 +94,10 @@ inline void LeafEvaluator::InitFields(TreeNode* node, float score_utility) {
   node->v = node->w;
   node->v_outcome = node->w_outcome;
   node->init_util_est = node->w;
+
+  // Add V to bucket.
+  int v_bucket = std::clamp(static_cast<int>((node->v + 1.0f) / kBucketRange),
+                            0, kNumVBuckets - 1);
+  node->v_categorical[v_bucket] += 1;
 }
 }  // namespace mcts

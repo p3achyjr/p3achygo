@@ -82,10 +82,6 @@ void TfRecorderImpl::RecordGame(int thread_id, const Board& init_board,
                                 const ImprovedPolicies& mcts_pis,
                                 const std::vector<uint8_t>& move_trainables,
                                 const std::vector<float>& root_qs) {
-  if (path_.empty()) {
-    return;
-  }
-
   CHECK(game.has_result());
   CHECK(game.num_moves() == mcts_pis.size());
   thread_records_[thread_id].emplace_back(
@@ -96,10 +92,6 @@ void TfRecorderImpl::RecordGame(int thread_id, const Board& init_board,
 // Only one thread can call this method. Additionally, no thread can call
 // `RecordGame` while this method is running.
 void TfRecorderImpl::Flush() {
-  if (path_.empty()) {
-    return;
-  }
-
   int num_games =
       std::accumulate(thread_game_counts_.begin(),
                       thread_game_counts_.begin() + num_threads_, 0);
@@ -166,7 +158,7 @@ void TfRecorderImpl::Flush() {
           Move next_move = move_num < game.num_moves() - 1
                                ? game.move(move_num + 1)
                                : Move{OppositeColor(move.color), kPassLoc};
-          const std::array<float, constants::kMaxNumMoves>& pi =
+          const std::array<float, constants::kMaxMovesPerPosition>& pi =
               mcts_pis[move_num];
           Color color = move.color;
           float z = game.result().winner == color ? 1.0 : -1.0;

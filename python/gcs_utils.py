@@ -19,6 +19,8 @@ SGF_DIR = 'sgf'
 GOLDEN_CHUNK_PREFIX = 'chunk'
 GOLDEN_CHUNK_FORMAT = GOLDEN_CHUNK_PREFIX + '_{:04d}.tfrecord.zz'
 GOLDEN_CHUNK_RE = re.compile(GOLDEN_CHUNK_PREFIX + '_([0-9]+)\.tfrecord\.zz')
+GOLDEN_CHUNK_SIZE_FORMAT = GOLDEN_CHUNK_PREFIX + '_{:04d}.size'
+GOLDEN_CHUNK_SIZE_RE = re.compile(GOLDEN_CHUNK_PREFIX + '_([0-9]+)\.size')
 MODEL_PREFIX = 'model'
 MODEL_FORMAT = MODEL_PREFIX + '_{:04d}'
 MODEL_RE = re.compile(MODEL_PREFIX + '_([0-9]+)')
@@ -63,7 +65,7 @@ def _get_most_recent(prefix: str, num_fn: Callable[[str], int],
   return most_recent
 
 
-def _upload_chunk(run_id: str, local_chunk_dir: str, chunk_filename: str):
+def _upload_chunk_file(run_id: str, local_chunk_dir: str, chunk_filename: str):
   local_chunk_path = Path(local_chunk_dir, chunk_filename)
   gcs_chunk_path = Path(gcs_chunk_dir(run_id), chunk_filename)
   if not local_chunk_path.exists():
@@ -129,8 +131,8 @@ def _download_model_cand(run_id: str, local_models_dir: str,
   return str(local_dir)
 
 
-def _download_chunk(run_id: str, local_chunk_dir: str,
-                    chunk_filename: str) -> str:
+def _download_chunk_file(run_id: str, local_chunk_dir: str,
+                         chunk_filename: str) -> str:
   local_chunk_path = Path(local_chunk_dir, chunk_filename)
   gcs_chunk_path = Path(gcs_chunk_dir(run_id), chunk_filename)
 
@@ -185,7 +187,12 @@ def get_most_recent_chunk(run_id: str) -> int:
 
 
 def upload_chunk(run_id: str, local_chunk_dir: str, gen: int):
-  _upload_chunk(run_id, local_chunk_dir, GOLDEN_CHUNK_FORMAT.format(gen))
+  _upload_chunk_file(run_id, local_chunk_dir, GOLDEN_CHUNK_FORMAT.format(gen))
+
+
+def upload_chunk_size(run_id: str, local_chunk_dir: str, gen: int):
+  _upload_chunk_file(run_id, local_chunk_dir,
+                     GOLDEN_CHUNK_SIZE_FORMAT.format(gen))
 
 
 def upload_model(run_id: str, local_models_dir: str, gen: int):
@@ -216,9 +223,15 @@ def upload_sgf(run_id: str, local_path: Path):
   blob.upload_from_filename(str(local_path))
 
 
+def download_golden_chunk_size(run_id: str, local_chunk_dir: str,
+                               gen: int) -> str:
+  return _download_chunk_file(run_id, local_chunk_dir,
+                              GOLDEN_CHUNK_SIZE_FORMAT.format(gen))
+
+
 def download_golden_chunk(run_id: str, local_chunk_dir: str, gen: int) -> str:
-  return _download_chunk(run_id, local_chunk_dir,
-                         GOLDEN_CHUNK_FORMAT.format(gen))
+  return _download_chunk_file(run_id, local_chunk_dir,
+                              GOLDEN_CHUNK_FORMAT.format(gen))
 
 
 def download_model(run_id: str, local_models_dir: str, gen: int) -> str:

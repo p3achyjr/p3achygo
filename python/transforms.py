@@ -204,14 +204,18 @@ def expand(tf_example):
                                  white_three_liberties)
   opp_three_liberties = tf.where(color == BLACK, white_three_liberties,
                                  black_three_liberties)
+  # mask last moves on a small percentage of examples to prevent net from
+  # tunnel-visioning on move history.
+  mask_last_moves = tf.random.uniform(()) < 0.05
+  no_move = tf.zeros((bsize, bsize), dtype=tf.float32)
   input = tf.convert_to_tensor([
       our_stones,
       opp_stones,
-      as_one_hot(last_moves[0], bsize=bsize),
-      as_one_hot(last_moves[1], bsize=bsize),
-      as_one_hot(last_moves[2], bsize=bsize),
-      as_one_hot(last_moves[3], bsize=bsize),
-      as_one_hot(last_moves[4], bsize=bsize),
+      no_move if mask_last_moves else as_one_hot(last_moves[0], bsize=bsize),
+      no_move if mask_last_moves else as_one_hot(last_moves[1], bsize=bsize),
+      no_move if mask_last_moves else as_one_hot(last_moves[2], bsize=bsize),
+      no_move if mask_last_moves else as_one_hot(last_moves[3], bsize=bsize),
+      no_move if mask_last_moves else as_one_hot(last_moves[4], bsize=bsize),
       our_atari,
       opp_atari,
       our_two_liberties,

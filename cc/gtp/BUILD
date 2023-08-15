@@ -5,17 +5,22 @@ cc_library(
     srcs = [
         "client.cc",
         "command.cc",
+        "parse.cc",
         "service.cc",
     ],
     hdrs = [
         "client.h",
         "command.h",
+        "parse.h",
         "service.h",
     ],
     deps = [
+        "//cc/analysis",
         "//cc/core",
         "//cc/mcts",
         "//cc/nn",
+        "//cc/recorder:sgf_recorder",
+        "//cc/sgf",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/status",

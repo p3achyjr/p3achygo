@@ -7,6 +7,7 @@
 #include "absl/log/check.h"
 #include "absl/strings/numbers.h"
 #include "absl/synchronization/mutex.h"
+#include "cc/gtp/parse.h"
 
 #define ARITY_CHECK(cmd, arity)                                     \
   if ((cmd).arg_tokens.size() != (arity)) {                         \
@@ -16,149 +17,37 @@
   }
 
 namespace gtp {
-namespace {
 
-std::string ToLower(std::string s) {
-  std::string ls;
-  for (const auto& c : s) {
-    ls += std::tolower(c);
-  }
-
-  return ls;
-}
-
-bool ParseVertex(std::string s, game::Loc* loc) {
-  static const std::string kColIndices = "abcdefghjklmnopqrst";
-
-  s = ToLower(s);
-  if (s == "pass") {
-    *loc = game::kPassLoc;
-    return true;
-  }
-
-  std::string row_encoding = s.substr(1);
-  char col_encoding = s[0];
-
-  int row;
-  int col = kColIndices.find(col_encoding);
-  if (col == std::string::npos) {
-    return false;
-  }
-
-  if (!absl::SimpleAtoi(row_encoding, &row)) {
-    return false;
-  }
-
-  if (row < 1 || row > BOARD_LEN) {
-    return false;
-  }
-
-  // normalize row to fit in [0, 18], and to index top to bottom.
-  row = BOARD_LEN - row;
-
-  *loc = game::Loc{row, col};
-  return true;
-}
-
-bool ParseColor(std::string s, game::Color* color) {
-  std::string ls = ToLower(s);
-  if (ls == "black" || ls == "b") {
-    *color = BLACK;
-    return true;
-  } else if (ls == "white" || ls == "w") {
-    *color = WHITE;
-    return true;
-  }
-
-  return false;
-}
-
-bool ParseMove(std::string cs, std::string vs, game::Move* move) {
-  game::Color color;
-  game::Loc loc;
-  if (!ParseColor(cs, &color)) {
-    return false;
-  }
-
-  if (!ParseVertex(vs, &loc)) {
-    return false;
-  }
-
-  *move = game::Move{color, loc};
-  return true;
-}
-
-std::vector<std::string> SplitLines(const std::string& s) {
-  std::vector<std::string> lines;
-
-  size_t start = 0, end;
-  while ((end = s.find('\n', start)) != std::string::npos) {
-    lines.push_back(s.substr(start, end - start));
-    start = end + 1;
-  }
-  // Add the last line (or the only line if there are no newline characters)
-  lines.push_back(s.substr(start));
-
-  return lines;
-}
-
-std::string PreProcess(std::string cmd_string) {
-  static constexpr char kElidedControlChars[] = {'\r', '\v', '\a', '\0',
-                                                 '\b', '\f', '\e'};
-
-  // Remove/convert elided chars.
-  std::string cmd_string_cleaned;
-  for (const char& c : cmd_string) {
-    if (std::find(std::begin(kElidedControlChars),
-                  std::end(kElidedControlChars),
-                  c) != std::end(kElidedControlChars)) {
-      continue;
-    }
-
-    cmd_string_cleaned += c == '\t' ? ' ' : c;
-  }
-
-  // Remove comments.
-  int comment_start = cmd_string_cleaned.find('#');
-  if (comment_start != std::string::npos) {
-    cmd_string_cleaned.erase(comment_start);
-  }
-
-  // Remove whitespace lines.
-  std::vector<std::string> lines = SplitLines(cmd_string_cleaned);
-  std::string cmd_string_final;
-  for (const std::string& line : lines) {
-    auto is_whitespace_line = [&line]() {
-      for (const auto& c : line) {
-        if (!std::isspace(c)) {
-          return false;
-        }
-      }
-
-      return true;
-    };
-
-    if (!is_whitespace_line()) {
-      cmd_string_final += line;
-    }
-  }
-
-  return cmd_string_final;
-}
-
-}  // namespace
-
-Client::Client() : running_(false) {}
+Client::Client()
+    : running_(false),
+      analyze_running_(false),
+      genmove_analyze_running_(false) {}
 
 Client::~Client() {
-  client_thread_.join();
+  if (genmove_analyze_thread_.joinable()) {
+    genmove_analyze_thread_.join();
+  }
+
+  if (analyze_thread_.joinable()) {
+    analyze_thread_.join();
+  }
+
+  if (client_thread_.joinable()) {
+    client_thread_.join();
+  }
+
+  if (response_thread_.joinable()) {
+    response_thread_.join();
+  }
+
   CHECK(cmd_queue_.empty());
   CHECK(response_queue_.empty());
 }
 
-absl::Status Client::Start(std::string model_path) {
+absl::Status Client::Start(std::string model_path, int n, int k,
+                           bool use_puct) {
   absl::StatusOr<std::unique_ptr<Service>> service =
-      Service::CreateService(model_path);
+      Service::CreateService(model_path, n, k, use_puct);
   if (!service.ok()) {
     return service.status();
   }
@@ -166,6 +55,7 @@ absl::Status Client::Start(std::string model_path) {
   service_ = std::move(service.value());
   running_.store(true, std::memory_order_release);
   client_thread_ = std::thread(&Client::ClientLoop, this);
+  response_thread_ = std::thread(&Client::ResponseLoop, this);
   return absl::OkStatus();
 }
 
@@ -179,7 +69,7 @@ InputLoopStatus Client::ParseAndAddCommand(std::string cmd_string) {
     tokens.push_back(token);
   }
 
-  Command cmd;
+  Command cmd{std::nullopt, GTPCode::kUnknown, {}};
   for (int i = 0; i < tokens.size(); ++i) {
     const std::string& token = tokens[i];
     if (i == 0) {
@@ -212,6 +102,22 @@ InputLoopStatus Client::ParseAndAddCommand(std::string cmd_string) {
   return InputLoopStatus::kContinue;
 }
 
+void Client::StopAnalysis() {
+  if (genmove_analyze_thread_.joinable()) {
+    // This is basically just a synchronous thread. Wait for it to end.
+    genmove_analyze_thread_.join();
+    return;
+  }
+
+  mu_.Lock();
+  analyze_running_ = false;
+  mu_.Unlock();
+
+  if (analyze_thread_.joinable()) {
+    analyze_thread_.join();
+  }
+}
+
 void Client::ClientLoop() {
   while (running_.load(std::memory_order_acquire)) {
     absl::MutexLock l(&mu_,
@@ -227,7 +133,17 @@ void Client::ClientLoop() {
     for (const Command& cmd : cmds) {
       HandleCommand(cmd);
     }
+  }
+}
 
+bool Client::ShouldWakeClientThread() {
+  return !running_.load(std::memory_order_acquire) || !cmd_queue_.empty();
+}
+
+void Client::ResponseLoop() {
+  while (running_.load(std::memory_order_acquire)) {
+    absl::MutexLock l(&mu_,
+                      absl::Condition(this, &Client::ShouldWakeResponseThread));
     // Consume entire response queue.
     while (!response_queue_.empty()) {
       std::cout << response_queue_.front() << std::flush;
@@ -236,8 +152,49 @@ void Client::ClientLoop() {
   }
 }
 
-bool Client::ShouldWakeClientThread() {
-  return !running_.load(std::memory_order_acquire) || !cmd_queue_.empty();
+bool Client::ShouldWakeResponseThread() {
+  return !running_.load(std::memory_order_acquire) || !response_queue_.empty();
+}
+
+void Client::AnalysisSnapshotLoop(game::Color color, int centiseconds,
+                                  bool* running) {
+  if (!(*running)) {
+    return;
+  }
+
+  while (true) {
+    bool stopped = mu_.LockWhenWithTimeout(
+        absl::Condition(
+            +[](bool* running) { return !(*running); }, running),
+        absl::Milliseconds(centiseconds * 10));
+    if (stopped) {
+      service_->GtpStopAnalysis();
+      mu_.Unlock();
+      return;
+    }
+
+    AddAnalysisSnapshot(service_->GtpAnalysisSnapshot(color));
+    mu_.Unlock();
+  }
+}
+
+void Client::GenmoveAnalyze(game::Color color, int centiseconds) {
+  DCHECK(genmove_analyze_running_);
+  analyze_thread_ = std::thread(&Client::AnalysisSnapshotLoop, this, color,
+                                centiseconds, &genmove_analyze_running_);
+  game::Loc move = service_->GtpGenMoveAnalyze(color);
+
+  mu_.Lock();
+  genmove_analyze_running_ = false;
+  mu_.Unlock();
+
+  if (analyze_thread_.joinable()) {
+    analyze_thread_.join();
+  }
+
+  mu_.Lock();
+  AddFinalAnalysisMove(move);
+  mu_.Unlock();
 }
 
 void Client::HandleCommand(Command cmd) {
@@ -322,6 +279,58 @@ void Client::HandleCommand(Command cmd) {
     case GTPCode::kPrintBoard:
       AddResponse(service_->GtpPrintBoard(cmd.id));
       return;
+    case GTPCode::kFinalScore:
+      AddResponse(service_->GtpFinalScore(cmd.id));
+      return;
+    case GTPCode::kAnalyze:
+      ARITY_CHECK(cmd, 2);
+      {
+        game::Color color;
+        int centiseconds;
+        if (!ParseColor(cmd.arg_tokens[0], &color)) {
+          AddResponse(MakeErrorResponse(
+              cmd.id, "analyze: could not parse argument into color."));
+          return;
+        }
+
+        if (!absl::SimpleAtoi(cmd.arg_tokens[1], &centiseconds)) {
+          AddResponse(MakeErrorResponse(
+              cmd.id,
+              "analyze: could not parse argument into centisecond interval."));
+          return;
+        }
+        AddResponse(service_->GtpStartAnalysis(cmd.id, color));
+        analyze_running_ = true;
+        analyze_thread_ = std::thread(&Client::AnalysisSnapshotLoop, this,
+                                      color, centiseconds, &analyze_running_);
+        return;
+      }
+    case GTPCode::kGenMoveAnalyze:
+      ARITY_CHECK(cmd, 2);
+      {
+        game::Color color;
+        int centiseconds;
+        if (!ParseColor(cmd.arg_tokens[0], &color)) {
+          AddResponse(MakeErrorResponse(
+              cmd.id, "genmove_analyze: could not parse argument into color."));
+          return;
+        }
+
+        if (!absl::SimpleAtoi(cmd.arg_tokens[1], &centiseconds)) {
+          AddResponse(MakeErrorResponse(cmd.id,
+                                        "genmove_analyze: could not parse "
+                                        "argument into centisecond interval."));
+          return;
+        }
+        AddResponse(Response<>{});
+        genmove_analyze_running_ = true;
+        genmove_analyze_thread_ =
+            std::thread(&Client::GenmoveAnalyze, this, color, centiseconds);
+        return;
+      }
+    case GTPCode::kUndo:
+      AddResponse(service_->GtpUndo(cmd.id));
+      return;
     case GTPCode::kPlayDbg:
       ARITY_CHECK(cmd, 2);
       {
@@ -348,6 +357,18 @@ void Client::HandleCommand(Command cmd) {
         AddResponse(service_->GtpGenMoveDbg(cmd.id, color));
         return;
       }
+    case GTPCode::kOwnership:
+      AddResponse(service_->GtpOwnership(cmd.id));
+      return;
+    case GTPCode::kSerializeSgfWithTrees:
+      ARITY_CHECK(cmd, 1);
+      AddResponse(
+          service_->GtpSerializeSgfWithTrees(cmd.id, cmd.arg_tokens[0]));
+      return;
+    case GTPCode::kLoadSgf:
+      ARITY_CHECK(cmd, 1);
+      AddResponse(service_->GtpLoadSgf(cmd.id, cmd.arg_tokens[0]));
+      return;
     case GTPCode::kCommandParseError:
     case GTPCode::kUnknown:
     case GTPCode::kServerError:

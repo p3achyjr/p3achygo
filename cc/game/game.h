@@ -28,6 +28,7 @@ class Game final {
       const Board& board,
       const absl::InlinedVector<Move, constants::kMaxGameLen> last_moves);
   Game();
+  Game(bool prohibit_pass_alive);
   ~Game() = default;
 
   const Board& board() const;
@@ -50,8 +51,10 @@ class Game final {
   bool IsValidMove(Loc loc, Color color) const;
   bool PlayMove(Loc loc, Color color);
   bool Pass(Color color);
-
-  void CalculatePassAliveRegions();
+  inline void SetKomi(float komi) { board_.SetKomi(komi); }
+  inline void CalculatePassAliveRegions() {
+    board_.CalculatePassAliveRegions();
+  }
 
   Scores GetScores();
   void WriteResult();

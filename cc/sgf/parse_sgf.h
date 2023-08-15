@@ -41,7 +41,8 @@ struct GameInfo {
   std::string w_player_name;
   game::Game::Result result;
   int handicap = 0;
-  absl::InlinedVector<game::Move, constants::kMaxNumMoves> main_variation;
+  absl::InlinedVector<game::Move, constants::kMaxMovesPerPosition>
+      main_variation;
 };
 
 GameInfo ExtractGameInfo(sgf::SgfNode* root);

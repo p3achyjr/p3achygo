@@ -29,8 +29,8 @@ class Tensor;
 namespace nn {
 
 struct NNInferResult {
-  std::array<float, constants::kMaxNumMoves> move_logits;
-  std::array<float, constants::kMaxNumMoves> move_probs;
+  std::array<float, constants::kMaxMovesPerPosition> move_logits;
+  std::array<float, constants::kMaxMovesPerPosition> move_probs;
   std::array<float, constants::kNumValueLogits> value_probs;
   std::array<float, constants::kNumScoreLogits> score_probs;
 };
@@ -58,6 +58,11 @@ class NNInterface final {
   NNInferResult LoadAndGetInference(int thread_id, const game::Game& game,
                                     game::Color color_to_move,
                                     core::Probability& probability)
+      ABSL_LOCKS_EXCLUDED(mu_);
+
+  // Just get ownership.
+  std::array<float, constants::kNumBoardLocs> LoadAndGetOwnership(
+      int thread_id, const game::Game& game, game::Color color_to_move)
       ABSL_LOCKS_EXCLUDED(mu_);
 
   void RegisterThread(int thread_id) ABSL_LOCKS_EXCLUDED(mu_);
@@ -95,6 +100,34 @@ class NNInterface final {
   std::optional<NNInferResult> CacheGet(int thread_id, const NNKey& key);
   void CacheInsert(int thread_id, const NNKey& key,
                    const NNInferResult& result);
+
+  // Called by worker.
+  inline void SignalLoadedAndBlockUntilReady(int thread_id)
+      ABSL_LOCKS_EXCLUDED(mu_) {
+    if (num_threads_ == 1) {
+      // Fast, non-locking path.
+      std::vector<std::pair<std::string, ::tensorflow::Tensor>> nn_input = {
+          {kInputNames[0], nn_input_buf_[0]},
+          {kInputNames[1], nn_input_buf_[1]}};
+      TF_CHECK_OK(model_bundle_.GetSession()->Run(nn_input, kOutputNames, {},
+                                                  &nn_output_buf_));
+      nn_input_buf_[0].SubSlice(thread_id).unaligned_flat<float>().setZero();
+      nn_input_buf_[1].SubSlice(thread_id).unaligned_flat<float>().setZero();
+      return;
+    }
+
+    ThreadInfo& thread_info = thread_info_[thread_id];
+
+    mu_.Lock();
+    thread_info.loaded_for_inference = true;
+    thread_info.res_ready = false;
+    thread_info.res_cached = false;
+
+    // Wait for result.
+    mu_.Await(absl::Condition(&thread_info.res_ready));
+    thread_info.res_ready = false;
+    mu_.Unlock();
+  }
 
   // Inference Loop.
   void InferLoop();

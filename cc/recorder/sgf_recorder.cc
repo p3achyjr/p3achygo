@@ -38,7 +38,7 @@ void PopulateHeader(SgfNode* root, float komi, game::Game::Result result,
 
 void PopulateTree(SgfNode* sgf_node, TreeNode* node, Color color) {
   std::vector<std::pair<int, TreeNode*>> visited_children;
-  for (int i = 0; i < constants::kMaxNumMoves; ++i) {
+  for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
     if (node->children[i] && node->children[i]->n > 0) {
       visited_children.emplace_back(i, node->children[i].get());
     }
@@ -70,10 +70,39 @@ void PopulateTree(SgfNode* sgf_node, TreeNode* node, Color color) {
   }
 }
 
+std::unique_ptr<SgfNode> ToSgfNode(
+    const Game& game, const std::string& b_name, const std::string& w_name,
+    const std::vector<std::unique_ptr<mcts::TreeNode>>& roots) {
+  std::unique_ptr<SgfNode> root_node = std::make_unique<SgfNode>();
+  PopulateHeader(root_node.get(), game.komi(), game.result(), b_name, w_name);
+
+  int num_moves = game.num_moves();
+  SgfNode* current_node = root_node.get();
+  for (int i = 0; i < num_moves; ++i) {
+    const Move& move = game.move(i);
+    std::unique_ptr<SgfNode> child = std::make_unique<SgfNode>();
+    if (move.color == BLACK) {
+      child->AddProperty(std::make_unique<SgfBMoveProp>(move.loc));
+    } else if (move.color == WHITE) {
+      child->AddProperty(std::make_unique<SgfWMoveProp>(move.loc));
+    }
+
+    SgfNode* tmp = child.get();
+    current_node->AddChild(std::move(child));
+
+    if (!roots.empty()) PopulateTree(current_node, roots[i].get(), move.color);
+
+    current_node = tmp;
+  }
+
+  return root_node;
+}
+
 class SgfRecorderImpl final : public SgfRecorder {
  public:
   SgfRecorderImpl(std::string path, int num_threads, int gen,
                   std::string worker_id);
+  SgfRecorderImpl();
   ~SgfRecorderImpl() override = default;
 
   // Disable Copy and Move.
@@ -100,9 +129,6 @@ class SgfRecorderImpl final : public SgfRecorder {
     // The child actually played at each root should be moved from.
     std::vector<std::unique_ptr<TreeNode>> roots;
   };
-  std::unique_ptr<SgfNode> ToSgfNode(
-      const Game& game, const std::string& b_name, const std::string& w_name,
-      const std::vector<std::unique_ptr<mcts::TreeNode>>& roots);
 
   const std::string path_;
   std::array<std::vector<std::unique_ptr<Record>>, constants::kMaxNumThreads>
@@ -124,10 +150,6 @@ SgfRecorderImpl::SgfRecorderImpl(std::string path, int num_threads, int gen,
 void SgfRecorderImpl::RecordGame(
     int thread_id, const game::Game& game, std::string b_name,
     std::string w_name, std::vector<std::unique_ptr<mcts::TreeNode>>&& roots) {
-  if (path_.empty()) {
-    return;
-  }
-
   CHECK(game.has_result());
 
   std::vector<std::unique_ptr<Record>>& thread_records = records_[thread_id];
@@ -139,10 +161,6 @@ void SgfRecorderImpl::RecordGame(
 // Only one thread can call this function. Additionally, no thread can call
 // `RecordGame` while this function is running.
 void SgfRecorderImpl::Flush() {
-  if (path_.empty()) {
-    return;
-  }
-
   int games_in_batch = 0;
   int games_with_trees_in_batch = 0;
   std::string sgfs = "";
@@ -207,38 +225,26 @@ void SgfRecorderImpl::Flush() {
 
   ++batch_num_;
 }
-
-std::unique_ptr<SgfNode> SgfRecorderImpl::ToSgfNode(
-    const Game& game, const std::string& b_name, const std::string& w_name,
-    const std::vector<std::unique_ptr<mcts::TreeNode>>& roots) {
-  std::unique_ptr<SgfNode> root_node = std::make_unique<SgfNode>();
-  PopulateHeader(root_node.get(), game.komi(), game.result(), b_name, w_name);
-
-  int num_moves = game.num_moves();
-  SgfNode* current_node = root_node.get();
-  for (int i = 0; i < num_moves; ++i) {
-    const Move& move = game.move(i);
-    std::unique_ptr<SgfNode> child = std::make_unique<SgfNode>();
-    if (move.color == BLACK) {
-      child->AddProperty(std::make_unique<SgfBMoveProp>(move.loc));
-    } else if (move.color == WHITE) {
-      child->AddProperty(std::make_unique<SgfWMoveProp>(move.loc));
-    }
-
-    SgfNode* tmp = child.get();
-    current_node->AddChild(std::move(child));
-
-    if (!roots.empty()) PopulateTree(current_node, roots[i].get(), move.color);
-
-    current_node = tmp;
-  }
-
-  return root_node;
-}
 }  // namespace
 
 /* static */ std::unique_ptr<SgfRecorder> SgfRecorder::Create(
     std::string path, int num_threads, int gen, std::string worker_id) {
   return std::make_unique<SgfRecorderImpl>(path, num_threads, gen, worker_id);
+}
+
+bool RecordSingleSgfWithTrees(
+    std::string path, const game::Game& game,
+    const std::vector<std::unique_ptr<mcts::TreeNode>>& roots) {
+  FILE* const sgf_file = fopen(path.c_str(), "w");
+  if (sgf_file == nullptr) {
+    return false;
+  }
+
+  SgfSerializer serializer;
+  std::string sgf = serializer.Serialize(
+      ToSgfNode(game, "player_b", "player_w", roots).get());
+  absl::FPrintF(sgf_file, "%s", sgf);
+  fclose(sgf_file);
+  return true;
 }
 }  // namespace recorder

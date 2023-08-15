@@ -54,8 +54,9 @@ NNInterface::NNInterface(int num_threads, int64_t timeout, size_t cache_size)
 
   nn_output_buf_ = {
       // move logits
-      Tensor(DataType::DT_FLOAT,
-             CreateTensorShape({num_threads_, constants::kMaxNumMoves})),
+      Tensor(
+          DataType::DT_FLOAT,
+          CreateTensorShape({num_threads_, constants::kMaxMovesPerPosition})),
       // q30
       Tensor(DataType::DT_FLOAT, CreateTensorShape({num_threads_, 1})),
       // q100
@@ -63,8 +64,9 @@ NNInterface::NNInterface(int num_threads, int64_t timeout, size_t cache_size)
       // q200
       Tensor(DataType::DT_FLOAT, CreateTensorShape({num_threads_, 1})),
       // move softmax
-      Tensor(DataType::DT_FLOAT,
-             CreateTensorShape({num_threads_, constants::kMaxNumMoves})),
+      Tensor(
+          DataType::DT_FLOAT,
+          CreateTensorShape({num_threads_, constants::kMaxMovesPerPosition})),
       // win logits
       Tensor(DataType::DT_FLOAT,
              CreateTensorShape({num_threads_, constants::kNumValueLogits})),
@@ -83,12 +85,15 @@ NNInterface::NNInterface(int num_threads, int64_t timeout, size_t cache_size)
       // gamma, just ignore
       Tensor(DataType::DT_FLOAT, CreateTensorShape({num_threads_, 1})),
       // auxiliary move logits
-      Tensor(DataType::DT_FLOAT,
-             CreateTensorShape({num_threads_, constants::kMaxNumMoves}))};
+      Tensor(
+          DataType::DT_FLOAT,
+          CreateTensorShape({num_threads_, constants::kMaxMovesPerPosition}))};
 }
 
 NNInterface::~NNInterface() {
+  mu_.Lock();
   running_.store(false, std::memory_order_release);
+  mu_.Unlock();
 
   if (infer_thread_.joinable()) {
     infer_thread_.join();
@@ -102,7 +107,10 @@ absl::Status NNInterface::Initialize(std::string&& model_path) {
     return ToAbslStatus(status);
   }
 
-  infer_thread_ = std::thread(&NNInterface::InferLoop, this);
+  if (num_threads_ > 1) {
+    infer_thread_ = std::thread(&NNInterface::InferLoop, this);
+  }
+
   is_initialized_ = true;
 
   return absl::OkStatus();
@@ -112,7 +120,6 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
                                                Color color_to_move,
                                                Probability& probability) {
   DCHECK(is_initialized_);
-  ThreadInfo& thread_info = thread_info_[thread_id];
   NNKey cache_key = NNKey{
       color_to_move,
       game.board().hash(),
@@ -121,26 +128,19 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
   if (CacheContains(thread_id, cache_key)) {
     // Cached. Immediately return result.
     absl::MutexLock l(&mu_);
-    thread_info.res_cached = true;
+    thread_info_[thread_id].res_cached = true;
 
     return CacheGet(thread_id, cache_key).value();
   }
 
   // Not cached. Load for inference.
   DCHECK(game.moves().size() >= constants::kNumLastMoves);
+
   Symmetry sym = GetRandomSymmetry(probability.prng());
   board_utils::FillNNInput(thread_id, num_threads_, nn_input_buf_[0],
                            nn_input_buf_[1], game, color_to_move, sym);
 
-  mu_.Lock();
-  thread_info.loaded_for_inference = true;
-  thread_info.res_ready = false;
-  thread_info.res_cached = false;
-
-  // Wait for result.
-  mu_.Await(absl::Condition(&thread_info.res_ready));
-  thread_info.res_ready = false;
-  mu_.Unlock();
+  SignalLoadedAndBlockUntilReady(thread_id);
 
   // Inference result is now ready.
   const auto move_logits = nn_output_buf_[kPiLogitsIndex]
@@ -156,10 +156,10 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
 
   // Need hand-rolled for loops b/c of potential alignment issues.
   NNInferResult infer_result;
-  for (int i = 0; i < constants::kMaxNumMoves; ++i) {
+  for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
     infer_result.move_logits[i] = move_logits(i);
   }
-  for (int i = 0; i < constants::kMaxNumMoves; ++i) {
+  for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
     infer_result.move_probs[i] = move_probs(i);
   }
   for (int i = 0; i < constants::kNumValueLogits; ++i) {
@@ -170,17 +170,17 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
   }
 
   // Unapply symmetry.
-  std::array<float, constants::kMaxNumBoardLocs> grid_logits_sym;
-  std::array<float, constants::kMaxNumBoardLocs> grid_probs_sym;
+  std::array<float, constants::kNumBoardLocs> grid_logits_sym;
+  std::array<float, constants::kNumBoardLocs> grid_probs_sym;
   std::copy(infer_result.move_logits.begin(),
-            infer_result.move_logits.begin() + constants::kMaxNumBoardLocs,
+            infer_result.move_logits.begin() + constants::kNumBoardLocs,
             grid_logits_sym.begin());
   std::copy(infer_result.move_probs.begin(),
-            infer_result.move_probs.begin() + constants::kMaxNumBoardLocs,
+            infer_result.move_probs.begin() + constants::kNumBoardLocs,
             grid_probs_sym.begin());
-  std::array<float, constants::kMaxNumBoardLocs> grid_logits =
+  std::array<float, constants::kNumBoardLocs> grid_logits =
       ApplyInverse(sym, grid_logits_sym, BOARD_LEN);
-  std::array<float, constants::kMaxNumBoardLocs> grid_probs =
+  std::array<float, constants::kNumBoardLocs> grid_probs =
       ApplyInverse(sym, grid_probs_sym, BOARD_LEN);
   std::copy(grid_logits.begin(), grid_logits.end(),
             infer_result.move_logits.begin());
@@ -190,6 +190,28 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
   // Cache this result.
   CacheInsert(thread_id, cache_key, infer_result);
   return infer_result;
+}
+
+std::array<float, constants::kNumBoardLocs> NNInterface::LoadAndGetOwnership(
+    int thread_id, const Game& game, Color color_to_move) {
+  DCHECK(is_initialized_);
+  board_utils::FillNNInput(thread_id, num_threads_, nn_input_buf_[0],
+                           nn_input_buf_[1], game, color_to_move,
+                           Symmetry::kIdentity);
+
+  SignalLoadedAndBlockUntilReady(thread_id);
+
+  // Inference result is now ready.
+  const auto own_slice =
+      nn_output_buf_[kOwnIndex].SubSlice(thread_id).unaligned_flat<float>();
+
+  // Need hand-rolled for loops b/c of potential alignment issues.
+  std::array<float, BOARD_LEN * BOARD_LEN> ownership;
+  for (int i = 0; i < constants::kNumBoardLocs; ++i) {
+    ownership[i] = own_slice(i);
+  }
+
+  return ownership;
 }
 
 void NNInterface::RegisterThread(int thread_id) {
@@ -239,6 +261,7 @@ void NNInterface::CacheInsert(int thread_id, const NNKey& key,
 }
 
 void NNInterface::InferLoop() {
+  CHECK(num_threads_ > 1);
   while (running_.load(std::memory_order_acquire)) {
     Infer();
   }
@@ -258,14 +281,24 @@ void NNInterface::Infer() {
   TF_CHECK_OK(model_bundle_.GetSession()->Run(nn_input, kOutputNames, {},
                                               &nn_output_buf_));
 
-  // reset input buffers.
-  nn_input_buf_[0].flat<float>().setZero();
-  nn_input_buf_[1].flat<float>().setZero();
-
-  for (auto& thread : thread_info_) {
-    if (thread.registered && !thread.res_cached) {
+  for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
+    ThreadInfo& thread = thread_info_[thread_id];
+    if (thread.registered && thread.loaded_for_inference) {
+      // If we do not check `thread.loaded_for_inference` before clearing input,
+      // the following sequence of events is possible:
+      // - worker_thread fills their NN Input.
+      // - infer_thread acquires lock via timeout.
+      // - infer_thread runs inference.
+      // - worker_thread acquires lock.
+      // - worker_thread marks `thread.loaded_for_inference = true`.
+      // - infer_thread acquires lock and runs inference. The input is empty, so
+      //   inference gives back bogus data.
       thread.res_ready = true;
       thread.loaded_for_inference = false;
+
+      // reset input buffers for the current thread only. See above.
+      nn_input_buf_[0].SubSlice(thread_id).unaligned_flat<float>().setZero();
+      nn_input_buf_[1].SubSlice(thread_id).unaligned_flat<float>().setZero();
     }
   }
 
@@ -273,6 +306,10 @@ void NNInterface::Infer() {
 }
 
 bool NNInterface::ShouldInfer() const {
+  if (!running_.load(std::memory_order_acquire)) {
+    return true;
+  }
+
   // Only return true if at least one leaf evaluation is pending.
   bool exists_pending = false;
   for (int thread_id = 0; thread_id < thread_info_.size(); ++thread_id) {

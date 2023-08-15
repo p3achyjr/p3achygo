@@ -65,6 +65,7 @@ class GameRecorderImpl final : public GameRecorder {
   bool should_flush_ ABSL_GUARDED_BY(mu_);
   const int num_threads_;
   const int flush_interval_;
+  const std::string path_;
 };
 
 GameRecorderImpl::GameRecorderImpl(std::string path, int num_threads,
@@ -79,7 +80,8 @@ GameRecorderImpl::GameRecorderImpl(std::string path, int num_threads,
       games_written_(0),
       should_flush_(false),
       num_threads_(num_threads),
-      flush_interval_(flush_interval) {
+      flush_interval_(flush_interval),
+      path_(path) {
   io_thread_ = std::thread(&GameRecorderImpl::IoThread, this);
 }
 
@@ -99,6 +101,10 @@ void GameRecorderImpl::RecordGame(
     const std::vector<uint8_t>& is_move_trainable,
     const std::vector<float>& root_qs,
     std::vector<std::unique_ptr<mcts::TreeNode>>&& roots) {
+  if (path_.empty()) {
+    return;
+  }
+
   thread_mus_[thread_id].Lock();
   if (init_board.IsEmpty()) {
     sgf_recorder_->RecordGame(
@@ -119,12 +125,20 @@ void GameRecorderImpl::RecordGame(
 void GameRecorderImpl::RecordEvalGame(int thread_id, const game::Game& game,
                                       const std::string& b_name,
                                       const std::string& w_name) {
+  if (path_.empty()) {
+    return;
+  }
+
   // Only log to SGF recorder. We also rely on flush-on-exit to flush SGFs.
   absl::MutexLock l(&thread_mus_[thread_id]);
   sgf_recorder_->RecordGame(thread_id, game, b_name, w_name, {});
 }
 
 void GameRecorderImpl::IoThread() {
+  if (path_.empty()) {
+    return;
+  }
+
   while (running_.load(std::memory_order_acquire)) {
     mu_.LockWhen(absl::Condition(this, &GameRecorderImpl::ShouldFlush));
 
@@ -147,6 +161,10 @@ void GameRecorderImpl::IoThread() {
 
 void GameRecorderImpl::Flush() {
   // Lock all threads.
+  if (path_.empty()) {
+    return;
+  }
+
   for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
     thread_mus_[thread_id].Lock();
   }

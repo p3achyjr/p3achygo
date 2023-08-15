@@ -20,19 +20,22 @@ static constexpr char kChunkRegex[] =
     "gen(\\d+)_b(\\d+)_g(\\d+)_n(\\d+)_t(\\d+)_(.*)\\.tfrecord\\.zz";
 
 // Format for SGFs
-static constexpr char kSgfFormat[] = "gen%03d_b%03d_g%03d_%s.sgfs";
+static constexpr char kSgfFormat[] = "gen%03d_b%03d_g%03d_%s.sgf";
 
 // Format for SGF lock-file.
 static constexpr char kSgfDoneFormat[] = "gen%03d_b%03d_g%03d_%s.done";
 
 // Format for SGFs with full game trees.
-static constexpr char kSgfFullFormat[] = "FULL_gen%03d_b%03d_g%03d_%s.sgfs";
+static constexpr char kSgfFullFormat[] = "FULL_gen%03d_b%03d_g%03d_%s.sgf";
 
 // Format for game-tree SGF lock-file.
 static constexpr char kSgfFullDoneFormat[] = "FULL_gen%03d_b%03d_g%03d_%s.done";
 
 // keep in sync with python/gcs_utils.py
 static constexpr char kGoldenChunkFormat[] = "chunk_%04d.tfrecord.zz";
+
+// keep in sync with python/gcs_utils.py
+static constexpr char kGoldenChunkSizeFormat[] = "chunk_%04d.size";
 
 }  // namespace data
 

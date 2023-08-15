@@ -19,6 +19,7 @@ namespace shuffler {
 namespace {
 namespace fs = std::filesystem;
 using ::data::kGoldenChunkFormat;
+using ::data::kGoldenChunkSizeFormat;
 using ::tensorflow::tstring;
 using ::tensorflow::io::RecordReaderOptions;
 using ::tensorflow::io::RecordWriter;
@@ -135,9 +136,16 @@ void ChunkManager::ShuffleAndFlush() {
   std::string chunk_dir = fs::path(dir_) / kGoldenChunkDirname;
   std::string chunk_filename =
       fs::path(chunk_dir) / absl::StrFormat(kGoldenChunkFormat, gen_);
+  std::string chunk_size_filename =
+      fs::path(chunk_dir) / absl::StrFormat(kGoldenChunkSizeFormat, gen_);
   fs::create_directory(chunk_dir);
 
-  // write to disk
+  // write number of examples in batch.
+  FILE* const file = fopen(chunk_size_filename.c_str(), "w");
+  absl::FPrintF(file, "%d", golden_chunk.size());
+  fclose(file);
+
+  // write to disk.
   start = std::chrono::steady_clock::now();
   WriteChunkToDisk(chunk_filename, golden_chunk);
   end = std::chrono::steady_clock::now();

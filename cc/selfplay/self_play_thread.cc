@@ -37,7 +37,7 @@ static constexpr float kUseSeenStateProb = .25f;
 static constexpr int kMaxNumRawPolicyMoves = 30;
 
 // Probability of exploration.
-static constexpr float kOpeningExploreProb = .75f;
+static constexpr float kOpeningExploreProb = .7f;
 
 // Thresholds at which to compute pass-alive regions.
 static constexpr int kComputePAMoveNums[] = {175, 200, 250, 300, 350, 400};
@@ -130,7 +130,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     std::unique_ptr<TreeNode> root_node = std::make_unique<TreeNode>();
 
     // Completed Q-values for each timestep.
-    std::vector<std::array<float, constants::kMaxNumMoves>> mcts_pis;
+    std::vector<std::array<float, constants::kMaxMovesPerPosition>> mcts_pis;
 
     // Root Q values for each timestep (outcome only).
     std::vector<float> root_q_outcomes;
@@ -224,9 +224,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
         int n = (1.0f - down_bad_coeff) * config.default_params.n +
                 down_bad_coeff * config.selected_params.n;
-        int k = std::round((n - config.default_params.n) /
-                           static_cast<float>(config.selected_params.n -
-                                              config.default_params.n));
+        int k = config.default_params.k;
         return GumbelParams{n, k};
       }();
 
@@ -369,10 +367,9 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         if (!gumbel_res.child_stats.empty()) {
           s << "Considered Moves:\n";
           for (const ChildStats& mv_stats : gumbel_res.child_stats) {
-            s << "  " << mv_stats.move
-              << ", L: " << absl::StrFormat("%.3f", mv_stats.logit)
-              << ", g: " << absl::StrFormat("%.3f", mv_stats.gumbel_noise)
-              << ", Qc: " << absl::StrFormat("%.3f", mv_stats.qtransform)
+            s << "  " << ("ABCDEFGHIJKLMNOPQRS"[mv_stats.move.j])
+              << mv_stats.move.i
+              << ", p: " << absl::StrFormat("%.3f", mv_stats.prob)
               << ", n: " << absl::StrFormat("%d", mv_stats.n)
               << ", q: " << absl::StrFormat("%.3f", mv_stats.q)
               << ", qz: " << absl::StrFormat("%.3f", mv_stats.qz)

@@ -18,11 +18,10 @@ using RegionMap = GroupTracker::BensonSolver::RegionMap;
 static constexpr size_t kBensonCacheSize = 262144 / constants::kMaxNumThreads;
 
 // Array containing adjacent vertices for every coordinate.
-static const std::array<absl::InlinedVector<Loc, 4>,
-                        constants::kMaxNumBoardLocs>
+static const std::array<absl::InlinedVector<Loc, 4>, constants::kNumBoardLocs>
     kAdjacentPoints = []() {
-      std::array<absl::InlinedVector<Loc, 4>, constants::kMaxNumBoardLocs> adj;
-      for (int idx = 0; idx < constants::kMaxNumBoardLocs; ++idx) {
+      std::array<absl::InlinedVector<Loc, 4>, constants::kNumBoardLocs> adj;
+      for (int idx = 0; idx < constants::kNumBoardLocs; ++idx) {
         Loc loc = Loc{idx / BOARD_LEN, idx % BOARD_LEN};
         if (loc.i > 0) {
           adj[idx].emplace_back(Loc{loc.i - 1, loc.j});
@@ -468,13 +467,17 @@ void GroupTracker::BensonSolver::RunBenson(GroupMap& group_map,
   }
 }
 
-Board::Board()
+Board::Board() : Board::Board(true /* prohibit_pass_alive */) {}
+Board::Board(bool prohibit_pass_alive)
     : zobrist_(Zobrist::get()),
       board_(),
       move_count_(0),
+      prohibit_pass_alive_(prohibit_pass_alive),
       consecutive_passes_(0),
       passes_(0),
       komi_(7.5),
+      num_b_prisoners_(0),
+      num_w_prisoners_(0),
       group_tracker_() {
   Zobrist::Hash hash = 0;
   for (auto i = 0; i < BOARD_LEN; i++) {
@@ -519,6 +522,15 @@ MoveStatus Board::PlayMove(Loc loc, Color color) {
     captured_stones.emplace_back(transition.loc);
   }
 
+  if (!captured_stones.empty()) {
+    Color captured_color = game::OppositeColor(color);
+    if (captured_color == BLACK) {
+      num_b_prisoners_ += captured_stones.size();
+    } else if (captured_color == WHITE) {
+      num_w_prisoners_ += captured_stones.size();
+    }
+  }
+
   group_tracker_.RemoveCaptures(captured_stones);
   for (const Loc& loc : captured_stones) {
     SetLoc(loc, EMPTY);
@@ -542,7 +554,8 @@ MoveStatus Board::Pass(Color color) {
   consecutive_passes_++;
   passes_++;
 
-  if (!IsGameOver() && passes_ >= constants::kNumPassesBeforeBensons) {
+  if (!IsGameOver() && prohibit_pass_alive_ &&
+      passes_ >= constants::kNumPassesBeforeBensons) {
     group_tracker_.CalculatePassAliveRegions(hash_);
   }
 
@@ -561,7 +574,7 @@ MoveResult Board::PlayMoveDry(Loc loc, Color color) const {
     return MoveResult{MoveStatus::kOutOfBounds, std::nullopt};
   } else if (AtLoc(loc) != EMPTY) {
     return MoveResult{MoveStatus::kLocNotEmpty, std::nullopt};
-  } else if (group_tracker_.IsPassAlive(loc)) {
+  } else if (prohibit_pass_alive_ && group_tracker_.IsPassAlive(loc)) {
     return MoveResult{MoveStatus::kPassAliveRegion, std::nullopt};
   }
 
@@ -579,7 +592,7 @@ MoveResult Board::PlayMoveDry(Loc loc, Color color) const {
   MoveInfo::Transitions capture_transitions;
 
   // resolve captures.
-  absl::InlinedVector<Loc, constants::kMaxNumBoardLocs> captured_stones;
+  absl::InlinedVector<Loc, constants::kNumBoardLocs> captured_stones;
   for (const groupid& captured_id : captured_groups) {
     LocVec captures = group_tracker_.ExpandGroup(captured_id);
     captured_stones.insert(captured_stones.end(), captures.begin(),
@@ -598,10 +611,6 @@ MoveResult Board::PlayMoveDry(Loc loc, Color color) const {
 
   return MoveResult{MoveStatus::kValid,
                     MoveInfo{move_transition, capture_transitions, hash}};
-}
-
-void Board::CalculatePassAliveRegions() {
-  group_tracker_.CalculatePassAliveRegions(hash_);
 }
 
 Scores Board::GetScores() {

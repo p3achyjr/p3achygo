@@ -40,6 +40,15 @@ class SgfRecorder {
  protected:
   SgfRecorder() = default;
 };
+
+/*
+ * Records a single game at the file given. Returns whether the write was
+ * successful.
+ */
+bool RecordSingleSgfWithTrees(
+    std::string path, const game::Game& game,
+    const std::vector<std::unique_ptr<mcts::TreeNode>>& roots);
+
 }  // namespace recorder
 
 #endif

@@ -22,7 +22,7 @@ class NNBoardUtils;
 namespace game {
 
 using groupid = int16_t;
-using LocVec = absl::InlinedVector<Loc, constants::kMaxNumBoardLocs>;
+using LocVec = absl::InlinedVector<Loc, constants::kNumBoardLocs>;
 using BensonCache =
     core::Cache<Zobrist::Hash, std::array<Color, BOARD_LEN * BOARD_LEN>>;
 
@@ -39,8 +39,7 @@ struct Transition {
  * A struct that fully describes the state transitions for a board from a move.
  */
 struct MoveInfo {
-  using Transitions =
-      absl::InlinedVector<Transition, constants::kMaxNumBoardLocs>;
+  using Transitions = absl::InlinedVector<Transition, constants::kNumBoardLocs>;
 
   Transition stone_transition;
   Transitions capture_transitions;
@@ -270,6 +269,7 @@ class Board final {
  public:
   using BoardData = std::array<Color, BOARD_LEN * BOARD_LEN>;
   Board();
+  Board(bool prohibit_pass_alive);
   ~Board() = default;
 
   inline int at(int i, int j) const { return board_[i * BOARD_LEN + j]; }
@@ -287,6 +287,11 @@ class Board final {
     return GetStonesWithLiberties(1);
   }
 
+  inline void SetKomi(float komi) { komi_ = komi; }
+  inline void CalculatePassAliveRegions() {
+    group_tracker_.CalculatePassAliveRegions(hash_);
+  }
+
   bool IsValidMove(Loc loc, Color color) const;
   bool IsGameOver() const;
 
@@ -295,8 +300,6 @@ class Board final {
   MoveStatus PlayMove(Loc loc, Color color);
   MoveStatus Pass(Color color);
   MoveResult PlayMoveDry(Loc loc, Color color) const;
-
-  void CalculatePassAliveRegions();
 
   Scores GetScores();
 
@@ -327,9 +330,12 @@ class Board final {
   const Zobrist& zobrist_;
   BoardData board_;
   int move_count_;
+  const bool prohibit_pass_alive_;
   int consecutive_passes_;
   int passes_;
   float komi_;
+  int num_b_prisoners_;
+  int num_w_prisoners_;
 
   Zobrist::Hash hash_;
   GroupTracker group_tracker_;
