@@ -26,6 +26,9 @@ POLL_INTERVAL_S = 10
 EVAL_CACHE_SIZE = 32768
 NUM_EVAL_GAMES = 100
 
+flags.DEFINE_string(
+    'from_existing_run', '',
+    'Existing run from which to use SP chunks to train a new model from.')
 flags.DEFINE_string('sp_bin_path', '', 'Local path to self-play binary.')
 flags.DEFINE_string('eval_bin_path', '', 'Local path to eval binary.')
 flags.DEFINE_string('run_id', '', 'ID corresponding to the current run.')
@@ -47,6 +50,22 @@ def print_stdout(out: Popen.stdout):  # pytype : disable=unbound-type-param
     print(line.rstrip())
 
 
+def run_proc(cmd: str, env=None):
+  if not env:
+    env = os.environ
+
+  cmd = shlex.split(cmd)
+  proc = Popen(cmd,
+               stdin=PIPE,
+               stdout=PIPE,
+               stderr=STDOUT,
+               universal_newlines=True,
+               env=env)
+  t = Thread(target=print_stdout, args=(proc.stdout,), daemon=True)
+  t.start()
+  proc.wait()
+
+
 def eval(run_id: str, eval_bin_path: str, eval_res_path: str,
          cur_model_path: str, cand_model_path: str, local_run_dir: str, k: int,
          n: int) -> EvalResult:
@@ -54,17 +73,16 @@ def eval(run_id: str, eval_bin_path: str, eval_res_path: str,
   cur_model_path_trt = str(Path(cur_model_path, '_trt'))
   cand_model_path_trt = str(Path(cand_model_path, '_trt'))
 
-  cmd_str = (f'{eval_bin_path} --cur_model_path={cur_model_path_trt}' +
-             f' --cand_model_path={cand_model_path_trt}' +
-             f' --res_write_path={eval_res_path}' +
-             f' --recorder_path={local_run_dir}' +
-             f' --cache_size={EVAL_CACHE_SIZE}' +
-             f' --num_games={NUM_EVAL_GAMES}' +
-             f' --cur_n={n} --cur_k={k} --cand_n={n} --cand_k={k}')
-  logging.info(f'Running Eval Command:\n\'{cmd_str}\'')
   env = os.environ.copy()
   env['LD_PRELOAD'] = '/usr/local/lib/libmimalloc.so'
-  cmd = shlex.split(cmd_str)
+  cmd = shlex.split(f'{eval_bin_path} --cur_model_path={cur_model_path_trt}' +
+                    f' --cand_model_path={cand_model_path_trt}' +
+                    f' --res_write_path={eval_res_path}' +
+                    f' --recorder_path={local_run_dir}' +
+                    f' --cache_size={EVAL_CACHE_SIZE}' +
+                    f' --num_games={NUM_EVAL_GAMES}' +
+                    f' --cur_n={n} --cur_k={k} --cand_n={n} --cand_k={k}')
+  logging.info(f'Running Eval Command:\n\'{cmd}\'')
   eval_proc = Popen(cmd,
                     stdin=PIPE,
                     stdout=PIPE,
@@ -107,23 +125,12 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
     with open(chunk_size_path, 'r') as f:
       logging.info(f'Training model {next_model_gen}...')
       chunk_size = int(f.read())
-      cmd = shlex.split(f'python -m python.rl_loop.train_one_gen' +
-                        f' --run_id={run_id}' +
-                        f' --models_dir={local_models_dir}' +
-                        f' --gen={model_gen}' +
-                        f' --next_gen={next_model_gen}' +
-                        f' --chunk_path={chunk_path}' +
-                        f' --chunk_size={chunk_size}' +
-                        f' --val_ds_path={val_ds_path}' +
-                        f' --batch_num_path={batch_num_path}')
-      train_proc = Popen(cmd,
-                         stdin=PIPE,
-                         stdout=PIPE,
-                         stderr=STDOUT,
-                         universal_newlines=True)
-      t = Thread(target=print_stdout, args=(train_proc.stdout,), daemon=True)
-      t.start()
-      train_proc.wait()
+      cmd = (f'python -m python.rl_loop.train_one_gen' + f' --run_id={run_id}' +
+             f' --models_dir={local_models_dir}' + f' --gen={model_gen}' +
+             f' --next_gen={next_model_gen}' + f' --chunk_path={chunk_path}' +
+             f' --chunk_size={chunk_size}' + f' --val_ds_path={val_ds_path}' +
+             f' --batch_num_path={batch_num_path}')
+      run_proc(cmd)
 
   def eval_new_model(next_model_gen: int, eval_res_path: str):
     # Play against current _best_ model.
@@ -163,15 +170,23 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
   # fetch or create first model
   model_gen = gcs.get_most_recent_model_cand(FLAGS.run_id)
   if model_gen < 0:
+    # make new model.
     model_gen = 0
-    model = model_utils.new_model(name=f'p3achygo_{FLAGS.run_id}')
-    # upload for self-play to pick up.
-    model_utils.save_trt_and_upload(model,
-                                    val_ds_path,
-                                    local_models_dir,
-                                    gen=0,
-                                    run_id=FLAGS.run_id,
-                                    batch_size=trt_batch_size())
+    model_path = str(Path(local_models_dir, 'model_0000'))
+    cmd = (f'python -m python.rl_loop.make_new_model' +
+           f' --model_path={model_path}' +
+           f' --model_config={config.model_config}')
+    run_proc(cmd)
+
+    # convert to TRT.
+    cmd = (f'python -m python.scripts.convert_to_trt' +
+           f' --model_path={model_path}' + f' --calib_ds={val_ds_path}' +
+           f' --batch_size={trt_batch_size()}')
+    run_proc(cmd)
+
+    # upload to GCS.
+    gcs.upload_model_cand(FLAGS.run_id, local_models_dir, model_gen)
+    gcs.upload_model(FLAGS.run_id, local_models_dir, model_gen)
   else:
     gcs.download_model_cand(FLAGS.run_id, local_models_dir, model_gen)
 
@@ -179,23 +194,24 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
   while model_gen < config.num_generations:
     # Start self-play.
     logging.info(f'Model Generation: {model_gen}')
-    sp_queue = Queue()
-    sp_thread = Thread(target=sp.loop,
-                       args=(sp_bin_path, run_id, local_run_dir,
-                             trt_batch_size(), sp_queue))
-    sp_thread.start()
+    if not config.from_existing_run:
+      sp_queue = Queue()
+      sp_thread = Thread(target=sp.loop,
+                         args=(sp_bin_path, run_id, local_run_dir,
+                               trt_batch_size(), sp_queue))
+      sp_thread.start()
 
-    # Poll GCS to check for the availability of a new golden chunk.
-    latest_chunk_gen = gcs.get_most_recent_chunk(run_id)
-    while latest_chunk_gen <= model_gen:
-      time.sleep(POLL_INTERVAL_S)
+      # Poll GCS to check for the availability of a new golden chunk.
       latest_chunk_gen = gcs.get_most_recent_chunk(run_id)
+      while latest_chunk_gen <= model_gen:
+        time.sleep(POLL_INTERVAL_S)
+        latest_chunk_gen = gcs.get_most_recent_chunk(run_id)
 
-    # Found new chunk.
-    logging.info(f'Found training chunk {latest_chunk_gen}.' +
-                 f' Current generation is {model_gen}.')
-    sp_queue.put(())  # Send any message to trigger shutdown.
-    sp_thread.join()
+      # Found new chunk.
+      logging.info(f'Found training chunk {latest_chunk_gen}.' +
+                   f' Current generation is {model_gen}.')
+      sp_queue.put(())  # Send any message to trigger shutdown.
+      sp_thread.join()
 
     next_model_gen = model_gen + 1
     chunk_path = gcs.download_golden_chunk(run_id, local_golden_chunk_dir,
@@ -254,9 +270,12 @@ def main(_):
 
   val_ds_path = gcs.download_val_ds(FLAGS.local_run_dir)
   run_config = config.parse(FLAGS.run_id)
+  run_id = FLAGS.run_id
+  if run_config.from_existing_run:
+    run_id = run_config.from_existing_run
 
-  loop(FLAGS.run_id, run_config, FLAGS.sp_bin_path, FLAGS.eval_bin_path,
-       val_ds_path, FLAGS.local_run_dir)
+  loop(run_id, run_config, FLAGS.sp_bin_path, FLAGS.eval_bin_path, val_ds_path,
+       FLAGS.local_run_dir)
 
 
 if __name__ == '__main__':
