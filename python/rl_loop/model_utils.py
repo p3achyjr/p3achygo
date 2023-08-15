@@ -9,7 +9,7 @@ import trt_convert
 
 from pathlib import Path
 
-SWA_MOMENTUM = .35
+SWA_MOMENTUM = .4
 NUM_BATCHES_FULL_CHECKPOINT = 1000
 
 
