@@ -68,7 +68,7 @@ def train_step_gpu(w_pi, w_pi_aux, w_val, w_outcome, w_score, w_own, w_q30,
     reg_loss = tf.math.add_n(model.losses)
 
     loss = loss + reg_loss
-    scaled_loss = tf.clip_by_value(loss, -15.0, 15.0)
+    scaled_loss = tf.clip_by_value(loss, -100.0, 100.0)
     scaled_loss = optimizer.get_scaled_loss(scaled_loss)
 
   gradients = g.gradient(scaled_loss, model.trainable_variables)
@@ -78,7 +78,7 @@ def train_step_gpu(w_pi, w_pi_aux, w_val, w_outcome, w_score, w_own, w_q30,
   return (pi_logits, pi_logits_aux, outcome_logits, own_pred, q30_pred,
           q100_pred, q200_pred, score_logits, loss, policy_loss,
           policy_aux_loss, outcome_loss, q30_loss, q100_loss, q200_loss,
-          score_pdf_loss, own_loss)
+          score_pdf_loss, own_loss, gradients)
 
 
 @tf.function
@@ -168,7 +168,7 @@ def train(model: P3achyGoModel,
   Training through single dataset.
   """
   summary_writer = tf.summary.create_file_writer(tensorboard_log_dir)
-  tf.summary.trace_on(graph=True, profiler=True)
+  # tf.summary.trace_on(graph=True, profiler=True)
   coeffs = LossCoeffs.SLCoeffs() if mode == Mode.SL else LossCoeffs.RLCoeffs()
 
   # yapf: disable
@@ -201,22 +201,29 @@ def train(model: P3achyGoModel,
 
       (pi_logits, pi_logits_aux, outcome_logits, own_pred, q30_pred, q100_pred,
        q200_pred, score_logits, loss, policy_loss, policy_aux_loss,
-       outcome_loss, q30_loss, q100_loss, q200_loss, score_pdf_loss,
-       own_loss) = train_fn(input, input_global_state, score, score_one_hot,
-                            policy, policy_aux, own, q30, q100, q200, model,
-                            optimizer)
+       outcome_loss, q30_loss, q100_loss, q200_loss, score_pdf_loss, own_loss,
+       gradients) = train_fn(input, input_global_state, score, score_one_hot,
+                             policy, policy_aux, own, q30, q100, q200, model,
+                             optimizer)
       losses_train.update_losses(loss, policy_loss, policy_aux_loss,
                                  outcome_loss, score_pdf_loss, own_loss,
                                  q30_loss, q100_loss, q200_loss)
 
       if batch_num % log_interval == 0:
         with summary_writer.as_default():
-          if not did_log_graph:
-            tf.summary.trace_export(name="model_trace",
-                                    step=0,
-                                    profiler_outdir=tensorboard_log_dir)
-            did_log_graph = True
-            
+          # if not did_log_graph:
+          #   tf.summary.trace_export(name="model_trace",
+          #                           step=0,
+          #                           profiler_outdir=tensorboard_log_dir)
+          #   did_log_graph = True
+          # Log weights
+          for var in model.trainable_variables:
+            tf.summary.histogram(var.name, var, step=batch_num)
+
+          # Log gradients
+          for grad, var in zip(gradients, model.trainable_variables):
+            tf.summary.histogram(var.name + '/gradient', grad, step=batch_num)
+
           log_train(batch_num, input, pi_logits, pi_logits_aux, score_logits,
                     outcome_logits, own_pred, q30_pred, q100_pred, q200_pred,
                     policy, policy_aux, score, q30, q100, q200,

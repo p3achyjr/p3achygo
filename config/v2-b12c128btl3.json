@@ -1,0 +1,9 @@
+{
+  "from_existing_run": "v2-500-1000k",
+  "model_config": "b12c128btl3",
+  "batch_size": 256,
+  "lr": 1.5e-2,
+  "min_lr": 2.7e-3,
+  "max_lr": 2.7e-2,
+  "lr_growth_window": 10
+}

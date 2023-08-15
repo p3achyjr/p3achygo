@@ -8,6 +8,9 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string('model_path', '', 'Path to SavedModel.')
 flags.DEFINE_string('calib_ds', '', 'Dataset to use for calibration.')
 flags.DEFINE_integer('batch_size', 0, 'Conversion Batch Size.')
+flags.DEFINE_string(
+    'inner_trt_path', '_trt',
+    'Path to append to model_path, where we save the TRT model')
 
 
 def main(_):
@@ -29,7 +32,8 @@ def main(_):
                                         FLAGS.calib_ds,
                                         batch_size=FLAGS.batch_size)
   converter.summary()
-  converter.save(output_saved_model_dir=str(Path(model_path, '_trt')))
+  converter.save(
+      output_saved_model_dir=str(Path(model_path, FLAGS.inner_trt_path)))
 
 
 if __name__ == '__main__':

@@ -31,6 +31,7 @@ flags.DEFINE_integer(
     'Size of chunk. Used for cyclic LR. Specify `None` to use linear LR.')
 flags.DEFINE_string('val_ds_path', '', 'Path to val ds')
 flags.DEFINE_string('batch_num_path', '', 'File storing batch counter.')
+flags.DEFINE_boolean('save_trt', True, 'Whether to save TRT converted model.')
 
 
 def get_model_path(models_dir: str, gen: int) -> Tuple[str, int]:
@@ -86,6 +87,8 @@ def main(_):
   with open(FLAGS.batch_num_path, 'r') as f:  # assumes file is already created.
     batch_num = int(f.read())
 
+  logging.info(
+      f'Model Path: {model_path}, Training on Chunk: {FLAGS.chunk_path}')
   batch_num = rl_loop.train.train_one_gen(model,
                                           FLAGS.gen,
                                           FLAGS.chunk_path,
@@ -94,11 +97,14 @@ def main(_):
                                           is_gpu=is_gpu,
                                           batch_num=batch_num,
                                           chunk_size=FLAGS.chunk_size)
-  model_utils.save_trt(model,
-                       FLAGS.val_ds_path,
-                       FLAGS.models_dir,
-                       FLAGS.next_gen,
-                       batch_size=trt_batch_size())
+  if FLAGS.save_trt:
+    model_utils.save_trt(model,
+                         FLAGS.val_ds_path,
+                         FLAGS.models_dir,
+                         FLAGS.next_gen,
+                         batch_size=trt_batch_size())
+  else:
+    model_utils.save(model, FLAGS.models_dir, FLAGS.next_gen)
 
   with open(FLAGS.batch_num_path, 'w') as f:
     f.write(str(batch_num))

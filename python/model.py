@@ -16,6 +16,26 @@ L2 = tf.keras.regularizers.L2
 C_L2 = 1e-4
 
 
+def make_conv(output_channels: int, kernel_size: int, name=None):
+  return tf.keras.layers.Conv2D(
+      output_channels,
+      kernel_size,
+      activation=None,
+      kernel_initializer=tf.keras.initializers.he_normal,
+      kernel_regularizer=L2(C_L2),
+      padding='same',
+      name=name)
+
+
+def make_dense(output_dim: int, name=None):
+  return tf.keras.layers.Dense(
+      output_dim,
+      kernel_initializer=tf.keras.initializers.he_normal,
+      kernel_regularizer=L2(C_L2),
+      name=name,
+  )
+
+
 class ConvBlock(tf.keras.layers.Layer):
   ''' 
   Basic convolutional block.
@@ -27,12 +47,7 @@ class ConvBlock(tf.keras.layers.Layer):
                activation=tf.keras.activations.relu,
                name=None):
     super(ConvBlock, self).__init__(name=name)
-    self.conv = tf.keras.layers.Conv2D(
-        output_channels,
-        conv_size,
-        activation=None,  # defer until later
-        kernel_regularizer=L2(C_L2),
-        padding='same')
+    self.conv = make_conv(output_channels, kernel_size=conv_size)
     self.batch_norm = tf.keras.layers.BatchNormalization(scale=False,
                                                          momentum=.999,
                                                          epsilon=1e-3)
@@ -165,11 +180,7 @@ class BroadcastResidualBlock(ResidualBlock):
       super(BroadcastResidualBlock.Broadcast, self).__init__(name=name)
       self.channel_flatten = tf.keras.layers.Reshape((c, h * w),
                                                      name='broadcast_flatten')
-      self.dense = tf.keras.layers.Dense(
-          h * w,
-          name='broadcast_linear',
-          kernel_regularizer=L2(C_L2),
-      )
+      self.dense = make_dense(h * w, name='broadcast_linear')
       self.channel_expand = tf.keras.layers.Reshape((c, h, w),
                                                     name='broadcast_expand')
 
@@ -181,11 +192,9 @@ class BroadcastResidualBlock(ResidualBlock):
       n, h, w, c = x.shape
 
       x = tf.transpose(x, perm=(0, 3, 1, 2))  # NHWC -> NCHW
-      # x = tf.reshape(x, (n, c, h * w))  # flatten
       x = self.channel_flatten(x)
       x = self.dense(x)  # mix
       x = tf.keras.activations.relu(x)
-      # x = tf.reshape(x, (n, c, h, w))  # expand
       x = self.channel_expand(x)
       x = tf.transpose(x, perm=(0, 2, 3, 1))  # NCHW -> NHWC
 
@@ -277,7 +286,7 @@ class GlobalPoolBias(tf.keras.layers.Layer):
     self.batch_norm_g = tf.keras.layers.BatchNormalization(
         scale=False, momentum=.999, epsilon=1e-3, name='batch_norm_gpool')
     self.gpool = GlobalPool(channels, board_len, board_len, name='gpool')
-    self.dense = tf.keras.layers.Dense(channels)
+    self.dense = make_dense(channels)
 
     # save for serialization
     self.channels = channels
@@ -321,32 +330,16 @@ class PolicyHead(tf.keras.layers.Layer):
 
   def __init__(self, channels=32, board_len=BOARD_LEN, name=None):
     super(PolicyHead, self).__init__(name=name)
-    self.conv_p = tf.keras.layers.Conv2D(channels,
-                                         1,
-                                         padding='same',
-                                         kernel_regularizer=L2(C_L2),
-                                         name='policy_conv_p')
-    self.conv_g = tf.keras.layers.Conv2D(channels,
-                                         1,
-                                         padding='same',
-                                         kernel_regularizer=L2(C_L2),
-                                         name='policy_conv_g')
+    self.conv_p = make_conv(channels, kernel_size=1, name='policy_conv_p')
+    self.conv_g = make_conv(channels, kernel_size=1, name='policy_conv_g')
     self.gpool = GlobalPoolBias(channels, board_len=board_len)
     self.batch_norm = tf.keras.layers.BatchNormalization(scale=False,
                                                          momentum=.999,
                                                          epsilon=1e-3,
                                                          name='policy_bn')
     self.flatten = tf.keras.layers.Flatten()
-    self.output_moves = tf.keras.layers.Conv2D(2,
-                                               1,
-                                               padding='same',
-                                               kernel_regularizer=L2(C_L2),
-                                               name='policy_output_moves')
-    self.output_pass = tf.keras.layers.Dense(
-        2,
-        name='policy_output_pass',
-        kernel_regularizer=L2(C_L2),
-    )
+    self.output_moves = make_conv(2, kernel_size=1, name='policy_output_moves')
+    self.output_pass = make_dense(2, name='policy_output_pass')
 
     # save parameters for serialization
     self.channels = channels
@@ -406,35 +399,21 @@ class ValueHead(tf.keras.layers.Layer):
     super(ValueHead, self).__init__(name=name)
 
     ## Initialize Model Layers ##
-    self.conv = tf.keras.layers.Conv2D(channels,
-                                       1,
-                                       padding='same',
-                                       kernel_regularizer=L2(C_L2),
-                                       name='value_conv')
+    self.conv = make_conv(channels, kernel_size=1, name='value_conv')
     self.gpool = GlobalPool(channels, board_len, board_len, name='value_gpool')
 
     # Game Outcome/Q Subhead
-    self.outcome_q_biases = tf.keras.layers.Dense(c_val,
-                                                  kernel_regularizer=L2(C_L2),
-                                                  name='value_outcome_q_biases')
-    self.outcome_q_output = tf.keras.layers.Dense(5,
-                                                  kernel_regularizer=L2(C_L2),
-                                                  name='value_outcome_q_output')
+    self.outcome_q_biases = make_dense(c_val, name='value_outcome_q_biases')
+    self.outcome_q_output = make_dense(5, name='value_outcome_q_output')
 
     # Ownership Subhead
-    self.conv_ownership = tf.keras.layers.Conv2D(1,
-                                                 1,
-                                                 padding='same',
-                                                 kernel_regularizer=L2(C_L2),
-                                                 name='value_conv_ownership')
+    self.conv_ownership = make_conv(1,
+                                    kernel_size=1,
+                                    name='value_conv_ownership')
 
     # Score Distribution Subhead
-    self.gamma_pre = tf.keras.layers.Dense(c_val,
-                                           kernel_regularizer=L2(C_L2),
-                                           name='value_gamma_pre')
-    self.gamma_output = tf.keras.layers.Dense(1,
-                                              kernel_regularizer=L2(C_L2),
-                                              name='value_gamma_output')
+    self.gamma_pre = make_dense(c_val, name='value_gamma_pre')
+    self.gamma_output = make_dense(1, name='value_gamma_output')
 
     self.score_range = score_range
     self.score_min, self.score_max = -score_range // 2, score_range // 2
@@ -442,12 +421,8 @@ class ValueHead(tf.keras.layers.Layer):
                                  self.score_max + .5)  # [-399.5 ... 399.5]
     self.score_identity = tf.keras.layers.Activation(
         'linear')  # need for mixed-precision
-    self.score_pre = tf.keras.layers.Dense(c_val,
-                                           kernel_regularizer=L2(C_L2),
-                                           name='score_distribution_pre')
-    self.score_output = tf.keras.layers.Dense(1,
-                                              kernel_regularizer=L2(C_L2),
-                                              name='score_distribution_output')
+    self.score_pre = make_dense(c_val, name='score_distribution_pre')
+    self.score_output = make_dense(1, name='score_distribution_output')
 
     # Save for serialization
     self.channels = channels
@@ -585,9 +560,7 @@ class P3achyGoModel(tf.keras.Model):
     self.init_board_conv = ConvBlock(num_channels,
                                      conv_size + 2,
                                      name='init_board_conv')
-    self.init_game_layer = tf.keras.layers.Dense(num_channels,
-                                                 kernel_regularizer=L2(C_L2),
-                                                 name='init_game_layer')
+    self.init_game_layer = make_dense(num_channels, name='init_game_layer')
     self.blocks = []
     for i in range(num_blocks - 2):
       if i > 0 and i % broadcast_interval == 0:

@@ -33,6 +33,8 @@ class RunConfig(object):
   min_train_default_n: int
   max_train_default_k: int
   max_train_default_n: int
+  n_growth_window: int
+  k_growth_window: int
   eval_k: int
   eval_n: int
 
@@ -64,6 +66,8 @@ def parse(run_id: str) -> RunConfig:
     min_train_default_n = obj.get('min_train_default_n', 32)
     max_train_default_k = obj.get('max_train_default_k', 5)
     max_train_default_n = obj.get('max_train_default_n', 32)
+    n_growth_window = obj.get('n_growth_window', num_generations)
+    k_growth_window = obj.get('k_growth_window', num_generations)
     eval_k = obj.get('eval_k', 8)
     eval_n = obj.get('eval_n', 128)
 
@@ -73,4 +77,5 @@ def parse(run_id: str) -> RunConfig:
                      min_train_selected_k, min_train_selected_n,
                      max_train_selected_k, max_train_selected_n,
                      min_train_default_k, min_train_default_n,
-                     max_train_default_k, max_train_default_n, eval_k, eval_n)
+                     max_train_default_k, max_train_default_n, n_growth_window,
+                     k_growth_window, eval_k, eval_n)

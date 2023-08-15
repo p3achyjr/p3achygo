@@ -64,6 +64,7 @@ def run_proc(cmd: str, env=None):
   t = Thread(target=print_stdout, args=(proc.stdout,), daemon=True)
   t.start()
   proc.wait()
+  return proc.poll()
 
 
 def eval(run_id: str, eval_bin_path: str, eval_res_path: str,
@@ -75,23 +76,16 @@ def eval(run_id: str, eval_bin_path: str, eval_res_path: str,
 
   env = os.environ.copy()
   env['LD_PRELOAD'] = '/usr/local/lib/libmimalloc.so'
-  cmd = shlex.split(f'{eval_bin_path} --cur_model_path={cur_model_path_trt}' +
-                    f' --cand_model_path={cand_model_path_trt}' +
-                    f' --res_write_path={eval_res_path}' +
-                    f' --recorder_path={local_run_dir}' +
-                    f' --cache_size={EVAL_CACHE_SIZE}' +
-                    f' --num_games={NUM_EVAL_GAMES}' +
-                    f' --cur_n={n} --cur_k={k} --cand_n={n} --cand_k={k}')
+  cmd = (f'{eval_bin_path} --cur_model_path={cur_model_path_trt}' +
+         f' --cand_model_path={cand_model_path_trt}' +
+         f' --res_write_path={eval_res_path}' +
+         f' --recorder_path={local_run_dir}' +
+         f' --cache_size={EVAL_CACHE_SIZE}' +
+         f' --num_games={min(NUM_EVAL_GAMES, trt_batch_size())}' +
+         f' --cur_n={n} --cur_k={k} --cand_n={n} --cand_k={k}')
   logging.info(f'Running Eval Command:\n\'{cmd}\'')
-  eval_proc = Popen(cmd,
-                    stdin=PIPE,
-                    stdout=PIPE,
-                    stderr=STDOUT,
-                    universal_newlines=True,
-                    env=env)
-  t = Thread(target=print_stdout, args=(eval_proc.stdout,), daemon=True)
-  t.start()
-  eval_proc.wait()
+  exit_code = run_proc(cmd, env=env)
+  logging.info(f'Eval Exited with Status {exit_code}')
 
   # Upload Eval SGFs. This is safe because the process has terminated.
   _, _, _, local_sgf_dir = fs_utils.ensure_local_dirs(local_run_dir)
@@ -120,8 +114,14 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
   5. Repeat from (1).
   '''
 
-  def train(model_gen: int, next_model_gen: int, local_models_dir: str,
-            chunk_path: str, chunk_size_path: str, batch_num_path: str):
+  def train(run_id: str,
+            model_gen: int,
+            next_model_gen: int,
+            local_models_dir: str,
+            chunk_path: str,
+            chunk_size_path: str,
+            batch_num_path: str,
+            save_trt=True):
     with open(chunk_size_path, 'r') as f:
       logging.info(f'Training model {next_model_gen}...')
       chunk_size = int(f.read())
@@ -129,10 +129,11 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
              f' --models_dir={local_models_dir}' + f' --gen={model_gen}' +
              f' --next_gen={next_model_gen}' + f' --chunk_path={chunk_path}' +
              f' --chunk_size={chunk_size}' + f' --val_ds_path={val_ds_path}' +
-             f' --batch_num_path={batch_num_path}')
-      run_proc(cmd)
+             f' --batch_num_path={batch_num_path}' + f' --save_trt={save_trt}')
+      exit_code = run_proc(cmd)
+      logging.info(f'Training Exited with Status {exit_code}')
 
-  def eval_new_model(next_model_gen: int, eval_res_path: str):
+  def eval_new_model(run_id: str, next_model_gen: int, eval_res_path: str):
     # Play against current _best_ model.
     current_golden_gen = gcs.get_most_recent_model(run_id)
     cur_model_path = str(
@@ -157,6 +158,35 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
       f.write(f'Elo: {eval_result.rel_elo}' +
               f' Cur: {current_golden_gen}, Cand: {next_model_gen}\n')
 
+  def train_from_existing_run(run_id, existing_run_id: str,
+                              local_models_dir: str,
+                              local_golden_chunk_dir: str):
+    logging.info(
+        f'Training from existing run {existing_run_id} for run {run_id}')
+    model_gen = gcs.get_most_recent_model_cand(run_id)
+    while True:
+      latest_chunk_gen = gcs.get_most_recent_chunk(existing_run_id)
+      next_model_gen = model_gen + 1
+      if next_model_gen > latest_chunk_gen:
+        break
+
+      chunk_path = gcs.download_golden_chunk(existing_run_id,
+                                             local_golden_chunk_dir,
+                                             next_model_gen)
+      chunk_size_path = gcs.download_golden_chunk_size(existing_run_id,
+                                                       local_golden_chunk_dir,
+                                                       next_model_gen)
+      train(run_id,
+            model_gen,
+            next_model_gen,
+            local_models_dir,
+            chunk_path,
+            chunk_size_path,
+            batch_num_path,
+            save_trt=False)
+      gcs.upload_model_cand(run_id, local_models_dir, next_model_gen)
+      model_gen = next_model_gen
+
   # populate local dirs
   (local_models_dir, local_golden_chunk_dir, _,
    _) = fs_utils.ensure_local_dirs(local_run_dir)
@@ -168,7 +198,7 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
       f.write('0')
 
   # fetch or create first model
-  model_gen = gcs.get_most_recent_model_cand(FLAGS.run_id)
+  model_gen = gcs.get_most_recent_model_cand(run_id)
   if model_gen < 0:
     # make new model.
     model_gen = 0
@@ -178,40 +208,44 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
            f' --model_config={config.model_config}')
     run_proc(cmd)
 
-    # convert to TRT.
-    cmd = (f'python -m python.scripts.convert_to_trt' +
-           f' --model_path={model_path}' + f' --calib_ds={val_ds_path}' +
-           f' --batch_size={trt_batch_size()}')
-    run_proc(cmd)
+    # # convert to TRT.
+    # cmd = (f'python -m python.scripts.convert_to_trt' +
+    #        f' --model_path={model_path}' + f' --calib_ds={val_ds_path}' +
+    #        f' --batch_size={trt_batch_size()}')
+    # run_proc(cmd)
 
     # upload to GCS.
-    gcs.upload_model_cand(FLAGS.run_id, local_models_dir, model_gen)
-    gcs.upload_model(FLAGS.run_id, local_models_dir, model_gen)
+    gcs.upload_model_cand(run_id, local_models_dir, model_gen)
+    gcs.upload_model(run_id, local_models_dir, model_gen)
   else:
-    gcs.download_model_cand(FLAGS.run_id, local_models_dir, model_gen)
+    gcs.download_model_cand(run_id, local_models_dir, model_gen)
+
+  if config.from_existing_run:
+    train_from_existing_run(run_id, config.from_existing_run, local_models_dir,
+                            local_golden_chunk_dir)
+    return
 
   eval_res_path = str(Path(local_run_dir, 'eval_res.txt'))
   while model_gen < config.num_generations:
     # Start self-play.
     logging.info(f'Model Generation: {model_gen}')
-    if not config.from_existing_run:
-      sp_queue = Queue()
-      sp_thread = Thread(target=sp.loop,
-                         args=(sp_bin_path, run_id, local_run_dir,
-                               trt_batch_size(), sp_queue))
-      sp_thread.start()
+    sp_queue = Queue()
+    sp_thread = Thread(target=sp.loop,
+                       args=(sp_bin_path, run_id, local_run_dir,
+                             trt_batch_size(), sp_queue))
+    sp_thread.start()
 
-      # Poll GCS to check for the availability of a new golden chunk.
+    # Poll GCS to check for the availability of a new golden chunk.
+    latest_chunk_gen = gcs.get_most_recent_chunk(run_id)
+    while latest_chunk_gen <= model_gen:
+      time.sleep(POLL_INTERVAL_S)
       latest_chunk_gen = gcs.get_most_recent_chunk(run_id)
-      while latest_chunk_gen <= model_gen:
-        time.sleep(POLL_INTERVAL_S)
-        latest_chunk_gen = gcs.get_most_recent_chunk(run_id)
 
-      # Found new chunk.
-      logging.info(f'Found training chunk {latest_chunk_gen}.' +
-                   f' Current generation is {model_gen}.')
-      sp_queue.put(())  # Send any message to trigger shutdown.
-      sp_thread.join()
+    # Found new chunk.
+    logging.info(f'Found training chunk {latest_chunk_gen}.' +
+                 f' Current generation is {model_gen}.')
+    sp_queue.put(())  # Send any message to trigger shutdown.
+    sp_thread.join()
 
     next_model_gen = model_gen + 1
     chunk_path = gcs.download_golden_chunk(run_id, local_golden_chunk_dir,
@@ -219,9 +253,9 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
     chunk_size_path = gcs.download_golden_chunk_size(run_id,
                                                      local_golden_chunk_dir,
                                                      next_model_gen)
-    train(model_gen, next_model_gen, local_models_dir, chunk_path,
+    train(run_id, model_gen, next_model_gen, local_models_dir, chunk_path,
           chunk_size_path, batch_num_path)
-    eval_new_model(next_model_gen, eval_res_path)
+    eval_new_model(run_id, next_model_gen, eval_res_path)
     model_gen = next_model_gen
     logging.info('Eval finished. Restarting self-play -> train -> eval loop.')
 
@@ -271,8 +305,6 @@ def main(_):
   val_ds_path = gcs.download_val_ds(FLAGS.local_run_dir)
   run_config = config.parse(FLAGS.run_id)
   run_id = FLAGS.run_id
-  if run_config.from_existing_run:
-    run_id = run_config.from_existing_run
 
   loop(run_id, run_config, FLAGS.sp_bin_path, FLAGS.eval_bin_path, val_ds_path,
        FLAGS.local_run_dir)

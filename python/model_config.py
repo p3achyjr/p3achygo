@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-CONFIG_OPTIONS = ['tiny', 'small', 'b32c128', 'b20c256', 'b32c256']
+CONFIG_OPTIONS = [
+    'tiny',
+    'small',
+    'b12c128btl3',
+]
 
 
 class ModelConfig:
@@ -41,34 +45,39 @@ class ModelConfig:
     return ModelConfig()
 
   @staticmethod
-  def b32c128():
-    return ModelConfig(blocks=32,
-                       broadcast_interval=8,
+  def b10c128btl3():
+    return ModelConfig(blocks=10,
+                       broadcast_interval=4,
                        inner_bottleneck_layers=3,
                        channels=128,
-                       bottleneck_channels=64,
-                       head_channels=32,
-                       c_val=64)
+                       bottleneck_channels=64)
 
   @staticmethod
-  def b20c256():
-    return ModelConfig(blocks=24,
+  def b15c192btl3():
+    return ModelConfig(blocks=15,
+                       broadcast_interval=5,
+                       inner_bottleneck_layers=3,
+                       channels=192,
+                       bottleneck_channels=96)
+
+  @staticmethod
+  def b20c256btl3():
+    return ModelConfig(blocks=20,
                        broadcast_interval=6,
                        inner_bottleneck_layers=3,
                        channels=256,
-                       bottleneck_channels=128,
-                       head_channels=32,
-                       c_val=64)
+                       bottleneck_channels=128)
 
-  @staticmethod
-  def b32c256():
-    return ModelConfig(blocks=32,
-                       broadcast_interval=8,
-                       inner_bottleneck_layers=3,
-                       channels=256,
-                       bottleneck_channels=128,
-                       head_channels=48,
-                       c_val=64)
+  # @staticmethod
+  # def v2_test():
+  #   return ModelConfig(
+  #       blocks=16,
+  #       broadcast_interval=4,
+  #       channels=256,
+  #       bottleneck_channels=128,
+  #       pool_type=ModelConfig.POOL_TYPE_BROADCAST,
+  #       # activation_order=ModelConfig.ACTIVATION_ORDER_PRE,)
+  #   )
 
   @staticmethod
   def from_str(s: str):
@@ -76,9 +85,7 @@ class ModelConfig:
       return ModelConfig.tiny()
     elif s == 'small':
       return ModelConfig.small()
-    elif s == 'b32c128':
-      return ModelConfig.b32c128()
-    elif s == 'b20c256':
-      return ModelConfig.b20c256()
-    elif s == 'b32c256':
-      return ModelConfig.b32c256()
+    elif s == 'b12c128btl3':
+      return ModelConfig.b12c128btl3()
+
+    raise Exception("Unknown Model Config")

@@ -17,7 +17,7 @@ from absl import app, flags, logging
 from constants import *
 from lr_schedule import CyclicLRDecaySchedule
 from model import P3achyGoModel
-from model_config import ModelConfig
+from model_config import ModelConfig, CONFIG_OPTIONS
 from pathlib import Path
 
 sys.stdout.reconfigure(line_buffering=True)  # pytype: disable=attribute-error
@@ -45,6 +45,7 @@ flags.DEFINE_integer('model_save_interval', 5000,
 flags.DEFINE_string('dataset_dir', '', 'Directory to datasets.')
 flags.DEFINE_string('tensorboard_logdir', '/tmp/logs',
                     'Tensorboard log directory.')
+flags.DEFINE_enum('model_config', 'small', CONFIG_OPTIONS, 'Model Config/Size.')
 
 
 def main(_):
@@ -83,7 +84,7 @@ def main(_):
   val_ds = val_ds.batch(batch_size)
 
   lr, momentum, epochs = FLAGS.learning_rate, FLAGS.momentum, FLAGS.epochs
-  model = P3achyGoModel.create(config=ModelConfig.small(),
+  model = P3achyGoModel.create(config=ModelConfig.from_str(FLAGS.model_config),
                                board_len=BOARD_LEN,
                                num_input_planes=NUM_INPUT_PLANES,
                                num_input_features=NUM_INPUT_FEATURES,
