@@ -74,7 +74,6 @@ Elo: 1638
 <b>Num Games</b>: 500,000
 <b>Best Model</b>: model_0113
 <b>Starting Point</b>: Zero
-<b>Best Model</b>: model_0113
 
 ## Self-Elo
 
@@ -155,3 +154,38 @@ p3achygo-v2     12 40.00%       7  46.67%     5  33.33%          0  135.37
 
 Leela Elo: 2569
 Elo: 2499
+
+# v2 500-1000k
+
+<b>Date</b>: 8-04-2023 - 8-10-2023
+<b>Num Games</b>: 250,000
+<b>Best Model</b>: model_0141
+<b>Starting Point</b>: v2
+
+## Self-Elo
+
+### vs v2-model_0113
+
++200 Elo
+
+## vs. Leela 071
+`leelaz -g --noponder -p 1600 -w 071.gz`
+`p3achygo --model_path=/tmp/p3achygo/models/model_0113/_trt --n=256`
+leela v p3achygo-v2 (100/100 games)
+board size: 19   komi: 7.5
+              wins              black         white       avg cpu
+leela           56 56.00%       29 58.00%     27 54.00%     55.54
+p3achygo-v2     44 44.00%       23 46.00%     21 42.00%    253.79
+                                52 52.00%     48 48.00%
+
+## vs. Leela 076
+`leelaz -g --noponder -p 1600 -w 076.gz`
+`p3achygo --model_path=/tmp/p3achygo/models/model_0113/_trt --n=256`
+```
+leela v p3achygo-v2 (100/100 games)
+board size: 19   komi: 7.5
+              wins              black         white       avg cpu
+leela           67 67.00%       32 64.00%     35 70.00%     52.69
+p3achygo-v2     33 33.00%       15 30.00%     18 36.00%    239.24
+                                47 47.00%     53 53.00%
+```
