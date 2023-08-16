@@ -169,6 +169,10 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
     infer_result.score_probs[i] = score_probs(i);
   }
 
+  // We have finished retrieving data. This is not lock-guarded, but it should
+  // be ok since we are not using this property in any signaling mechanisms.
+  thread_info_[thread_id].res_ready = false;
+
   // Unapply symmetry.
   std::array<float, constants::kNumBoardLocs> grid_logits_sym;
   std::array<float, constants::kNumBoardLocs> grid_probs_sym;
@@ -273,6 +277,15 @@ void NNInterface::Infer() {
   if (num_registered_threads_ == 0) {
     mu_.Unlock();
     return;
+  }
+
+  // Do not run inference if there is a thread that still has not retrieved its
+  // inference result.
+  for (const ThreadInfo& thread : thread_info_) {
+    if (thread.res_ready) {
+      mu_.Unlock();
+      return;
+    }
   }
 
   // Run Inference.

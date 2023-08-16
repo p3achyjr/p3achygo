@@ -125,7 +125,6 @@ class NNInterface final {
 
     // Wait for result.
     mu_.Await(absl::Condition(&thread_info.res_ready));
-    thread_info.res_ready = false;
     mu_.Unlock();
   }
 

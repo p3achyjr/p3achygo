@@ -562,8 +562,8 @@ class P3achyGoModel(tf.keras.Model):
                                      name='init_board_conv')
     self.init_game_layer = make_dense(num_channels, name='init_game_layer')
     self.blocks = []
-    for i in range(num_blocks - 2):
-      if i > 0 and i % broadcast_interval == 0:
+    for i in range(num_blocks):
+      if i % broadcast_interval == broadcast_interval - 1:
         self.blocks.append(
             BroadcastResidualBlock(num_channels,
                                    board_len,

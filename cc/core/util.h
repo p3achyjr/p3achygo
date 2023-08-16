@@ -64,22 +64,22 @@ inline std::string MapToString(const absl::flat_hash_map<K, V>& map) {
 }
 
 template <typename T>
-inline bool VecContains(const std::vector<T> vec, T x) {
+inline bool VecContains(const std::vector<T>& vec, T x) {
   return std::find(vec.begin(), vec.end(), x) != vec.end();
 }
 
 template <typename T, size_t N>
-inline bool InlinedVecContains(const absl::InlinedVector<T, N> vec, T x) {
+inline bool InlinedVecContains(const absl::InlinedVector<T, N>& vec, T x) {
   return std::find(vec.begin(), vec.end(), x) != vec.end();
 }
 
 template <typename K>
-inline bool SetContains(const absl::flat_hash_set<K> set, K x) {
+inline bool SetContains(const absl::flat_hash_set<K>& set, K x) {
   return set.find(x) != set.end();
 }
 
 template <typename K, typename V>
-inline bool MapContains(const absl::flat_hash_map<K, V> map, K x) {
+inline bool MapContains(const absl::flat_hash_map<K, V>& map, K x) {
   return map.find(x) != map.end();
 }
 

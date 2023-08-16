@@ -34,6 +34,7 @@ class MetadataTags:
   NBTL = 'nbtl'
   NINPUT_PLANES = 'ninput_planes'
   NINPUT_FEATURES = 'ninput_features'
+  BOARD_LEN = 'board_len'
   ORDER = 'order'  # Generic layer ordering tag.
 
 
@@ -111,6 +112,7 @@ def create_top_level_model_group(model: P3achyGoModel, h5: h5py.File):
   model_group.attrs[MetadataTags.NHEAD_CHANNELS] = model.num_head_channels
   model_group.attrs[MetadataTags.NVAL_CHANNELS] = model.c_val
   model_group.attrs[MetadataTags.NBTL] = model.bottleneck_length - 2
+  model_group.attrs[MetadataTags.BOARD_LEN] = model.board_len
 
   return model_group
 
@@ -131,9 +133,11 @@ def fill_conv_layer(conv_layer: tf.keras.layers.Conv2D, group: h5py.Group):
   assert isinstance(
       conv_layer,
       tf.keras.layers.Conv2D), f'Invalid Layer Type: {type(conv_layer)}'
-  group.create_dataset(DatasetTags.KERNEL,
-                       data=conv_layer.kernel.numpy(),
-                       dtype=np.float32)
+  # kernels are in (k, k, C, C') format. TRT expects (C', C, k, k).
+  kernel = conv_layer.kernel.numpy()
+  kernel = kernel.transpose(
+      (3, 2, 0, 1)).copy()  # (k, k, C, C') -> (C', C, k, k)
+  group.create_dataset(DatasetTags.KERNEL, data=kernel, dtype=np.float32)
   group.create_dataset(DatasetTags.BIAS,
                        data=conv_layer.bias.numpy(),
                        dtype=np.float32)
