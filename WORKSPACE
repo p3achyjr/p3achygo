@@ -93,16 +93,15 @@ cc_library(
     path = "/usr",
 )
 
-# Local CUDA 12.0, with TRT. If not installed, should be empty.
+# Local nvinfer (TRT). If not installed, will fail during build step.
 new_local_repository(
-    name = "cuda",
+    name = "nvinfer",
     build_file_content = """
 cc_library(
-    name = "cuda",
+    name = "nvinfer",
     hdrs = glob(["include/x86_64-linux-gnu/*.h",
                  "local/cuda-12.0/targets/x86_64-linux/include/*.h"]),
-    srcs = glob(["lib/x86_64-linux-gnu/libnv*.so",
-                 "local/cuda-12.0/targets/x86_64-linux/lib/*.so"]),
+    srcs = glob(["lib/x86_64-linux-gnu/libnvinfer*.so"]),
     includes = ["include/x86_64-linux-gnu/",
                 "local/cuda-12.0/targets/x86_64-linux/include"],
     visibility = ["//visibility:public"],
