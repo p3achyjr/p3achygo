@@ -3,7 +3,7 @@ from __future__ import annotations
 CONFIG_OPTIONS = [
     'tiny',
     'small',
-    'b12c128btl3',
+    'b10c128btl3',
 ]
 
 
@@ -68,24 +68,13 @@ class ModelConfig:
                        channels=256,
                        bottleneck_channels=128)
 
-  # @staticmethod
-  # def v2_test():
-  #   return ModelConfig(
-  #       blocks=16,
-  #       broadcast_interval=4,
-  #       channels=256,
-  #       bottleneck_channels=128,
-  #       pool_type=ModelConfig.POOL_TYPE_BROADCAST,
-  #       # activation_order=ModelConfig.ACTIVATION_ORDER_PRE,)
-  #   )
-
   @staticmethod
   def from_str(s: str):
     if s == 'tiny':
       return ModelConfig.tiny()
     elif s == 'small':
       return ModelConfig.small()
-    elif s == 'b12c128btl3':
-      return ModelConfig.b12c128btl3()
+    elif s == 'b10c128btl3':
+      return ModelConfig.b10c128btl3()
 
     raise Exception("Unknown Model Config")
