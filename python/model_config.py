@@ -4,6 +4,7 @@ CONFIG_OPTIONS = [
     'tiny',
     'small',
     'b10c128btl3',
+    'b12c256btl3',
 ]
 
 
@@ -53,17 +54,9 @@ class ModelConfig:
                        bottleneck_channels=64)
 
   @staticmethod
-  def b15c192btl3():
-    return ModelConfig(blocks=15,
+  def b12c256btl3():
+    return ModelConfig(blocks=12,
                        broadcast_interval=5,
-                       inner_bottleneck_layers=3,
-                       channels=192,
-                       bottleneck_channels=96)
-
-  @staticmethod
-  def b20c256btl3():
-    return ModelConfig(blocks=20,
-                       broadcast_interval=6,
                        inner_bottleneck_layers=3,
                        channels=256,
                        bottleneck_channels=128)
@@ -76,5 +69,7 @@ class ModelConfig:
       return ModelConfig.small()
     elif s == 'b10c128btl3':
       return ModelConfig.b10c128btl3()
+    elif s == 'b12c256btl3':
+      return ModelConfig.b12c256btl3()
 
     raise Exception("Unknown Model Config")
