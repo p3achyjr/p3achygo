@@ -1,6 +1,6 @@
 {
   "num_generations": 150,
-  "model_config": "b12c128btl3",
+  "model_config": "b10c128btl3",
   "games_first_gen": 5000,
   "games_per_gen": 5000,
   "batch_size": 256,

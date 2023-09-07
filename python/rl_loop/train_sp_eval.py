@@ -185,6 +185,7 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
             batch_num_path,
             save_trt=False)
       gcs.upload_model_cand(run_id, local_models_dir, next_model_gen)
+      gcs.remove_local_chunk(local_golden_chunk_dir, next_model_gen)
       model_gen = next_model_gen
 
   # populate local dirs
@@ -256,6 +257,7 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
     train(run_id, model_gen, next_model_gen, local_models_dir, chunk_path,
           chunk_size_path, batch_num_path)
     eval_new_model(run_id, next_model_gen, eval_res_path)
+    gcs.remove_local_chunk(local_golden_chunk_dir, next_model_gen)
     model_gen = next_model_gen
     logging.info('Eval finished. Restarting self-play -> train -> eval loop.')
 
@@ -283,6 +285,8 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
     train(model_gen, next_model_gen, local_models_dir, chunk_path,
           chunk_size_path, batch_num_path)
     eval_new_model(next_model_gen, eval_res_path)
+
+    gcs.remove_local_chunk(local_golden_chunk_dir, next_model_gen)
 
     model_gen = next_model_gen
     logging.info('Eval finished. Waiting for next chunk...')

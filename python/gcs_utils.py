@@ -76,6 +76,16 @@ def _upload_chunk_file(run_id: str, local_chunk_dir: str, chunk_filename: str):
   blob.upload_from_filename(str(local_chunk_path))
 
 
+def _remove_chunk_file(local_chunk_dir: str, chunk_filename: str):
+  local_chunk_path = Path(local_chunk_dir, chunk_filename)
+  if not local_chunk_path.exists():
+    print(f'Chunk file not found: {str(local_chunk_path)}. Cannot remove.')
+    return
+
+  if os.path.isfile(local_chunk_path):
+    os.remove(local_chunk_path)
+
+
 def _upload_model(run_id: str, local_models_dir: str, model_dir: str):
   local_dir = Path(local_models_dir, model_dir)
   gcs_dir = Path(gcs_models_dir(run_id), model_dir)
@@ -193,6 +203,10 @@ def upload_chunk(run_id: str, local_chunk_dir: str, gen: int):
 def upload_chunk_size(run_id: str, local_chunk_dir: str, gen: int):
   _upload_chunk_file(run_id, local_chunk_dir,
                      GOLDEN_CHUNK_SIZE_FORMAT.format(gen))
+
+
+def remove_local_chunk(local_chunk_dir: str, gen: int):
+  _remove_chunk_file(local_chunk_dir, GOLDEN_CHUNK_FORMAT.format(gen))
 
 
 def upload_model(run_id: str, local_models_dir: str, gen: int):

@@ -16,7 +16,7 @@ def training_window_size(num_samples_generated: int) -> int:
   c * (1 + beta * ((n/c)^a - 1) / a)
   '''
   alpha = 0.75
-  beta = 0.55
+  beta = 0.5
   c = 250000
   min_window = 100000
 

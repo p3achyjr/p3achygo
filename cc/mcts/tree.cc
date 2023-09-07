@@ -21,6 +21,7 @@ void AdvanceState(TreeNode* node) {
   }
 }
 
+#ifdef V_CATEGORICAL
 std::string VCategoricalHistogram(TreeNode* node) {
   if (node == nullptr) return "";
 
@@ -41,5 +42,6 @@ std::string VCategoricalHistogram(TreeNode* node) {
 
   return ss.str();
 }
+#endif
 
 }  // namespace mcts

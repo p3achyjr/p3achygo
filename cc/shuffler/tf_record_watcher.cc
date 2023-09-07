@@ -92,7 +92,8 @@ void TfRecordWatcher::PopulateInitialTrainingWindow(int train_window_size) {
   int window_size = 0;
   int min_generation = 0;
   int max_generation = 0;
-  int examples_window = 0;
+  int num_examples_in_window = 0;
+  int num_games_in_window = 0;
   for (const auto& data : file_data) {
     if (window_size >= train_window_size) {
       excluded_files_.insert(data.filename);
@@ -100,7 +101,8 @@ void TfRecordWatcher::PopulateInitialTrainingWindow(int train_window_size) {
       files_.insert(data.filename);
       max_generation = std::max(max_generation, data.info.gen);
       min_generation = data.info.gen;
-      examples_window += data.info.num_examples;
+      num_games_in_window += data.info.num_games;
+      num_examples_in_window += data.info.num_examples;
     }
 
     window_size += data.info.num_examples;
@@ -111,6 +113,9 @@ void TfRecordWatcher::PopulateInitialTrainingWindow(int train_window_size) {
             << "\n  Number of Files in Training Window: " << files_.size()
             << "\n  Generation Window: [" << min_generation << ", "
             << max_generation << "]\n  Total Num Examples: " << window_size
-            << "\n  Number of Examples in Training Window: " << examples_window;
+            << "\n  Number of Examples in Training Window: "
+            << num_examples_in_window
+            << "\n  Number of Games in Training Window: "
+            << num_games_in_window;
 }
 }  // namespace shuffler
