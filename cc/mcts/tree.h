@@ -30,7 +30,10 @@ struct TreeNode final {
   float w = 0;
   float v = 0;
   float v_var = 0;
+
+#ifdef V_CATEGORICAL
   std::array<int16_t, kNumVBuckets> v_categorical{};
+#endif
 
   float w_outcome = 0;
   float v_outcome = 0;
@@ -108,7 +111,10 @@ inline float ChildScore(TreeNode* node, int action) {
 }
 
 void AdvanceState(TreeNode* node);
+
+#ifdef V_CATEGORICAL
 std::string VCategoricalHistogram(TreeNode* node);
+#endif
 
 }  // namespace mcts
 

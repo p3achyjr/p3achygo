@@ -136,6 +136,8 @@ def loop(bin_path: str, run_id: str, local_run_dir: str,
     gcs.upload_chunk_size(run_id, gcs.local_chunk_dir(local_sp_chunk_dir),
                           chunk_gen)
     logging.info(f'Uploaded chunk gen {chunk_gen} to gs://p3achygo/{run_id}')
+    gcs.remove_local_chunk(gcs.local_chunk_dir(local_sp_chunk_dir), chunk_gen)
+    logging.info(f'Removed local chunk {chunk_gen} from disk.')
 
     return num_new_samples, gcs_sp_chunks
 

@@ -108,6 +108,7 @@ class LossTracker:
   def __init__(self):
     self.losses = []
     self.min_losses = defaultdict(lambda: self.MAX_LOSS)
+    self.avg_losses = defaultdict(lambda: 0)
 
   def update_losses(self, loss, policy_loss, policy_aux_loss, outcome_loss,
                     score_pdf_loss, own_loss, q30_loss, q100_loss, q200_loss):
@@ -134,6 +135,23 @@ class LossTracker:
     self.min_losses['q30'] = min(self.min_losses['q30'], q30_loss)
     self.min_losses['q100'] = min(self.min_losses['q100'], q100_loss)
     self.min_losses['q200'] = min(self.min_losses['q200'], q200_loss)
+
+    n = len(self.losses)
+    r_m = (n - 1) / n
+    r_c = 1 / n
+    self.avg_losses['loss'] = self.avg_losses['loss'] * r_m + loss * r_c
+    self.avg_losses[
+        'policy'] = self.avg_losses['policy'] * r_m + policy_loss * r_c
+    self.avg_losses['policy_aux'] = self.avg_losses[
+        'policy_aux'] * r_m + policy_aux_loss * r_c
+    self.avg_losses[
+        'outcome'] = self.avg_losses['outcome'] * r_m + outcome_loss * r_c
+    self.avg_losses[
+        'score_pdf'] = self.avg_losses['score_pdf'] * r_m + score_pdf_loss * r_c
+    self.avg_losses['own'] = self.avg_losses['own'] * r_m + own_loss * r_c
+    self.avg_losses['q30'] = self.avg_losses['q30'] * r_m + q30_loss * r_c
+    self.avg_losses['q100'] = self.avg_losses['q100'] * r_m + q100_loss * r_c
+    self.avg_losses['q200'] = self.avg_losses['q200'] * r_m + q200_loss * r_c
 
 
 class ValMetrics:
@@ -431,6 +449,11 @@ def log_val(batch_num: int, losses: LossTracker, metrics: ValMetrics):
   log('Min Val Policy Aux Loss', losses.min_losses["policy_aux"])
   log('Min Val Outcome Loss', losses.min_losses["outcome"])
   log('Min Val Score PDF Loss', losses.min_losses["score_pdf"])
+  log('Avg Val Loss', losses.avg_losses["loss"])
+  log('Avg Val Policy Loss', losses.avg_losses["policy"])
+  log('Avg Val Policy Aux Loss', losses.avg_losses["policy_aux"])
+  log('Avg Val Outcome Loss', losses.avg_losses["outcome"])
+  log('Avg Val Score PDF Loss', losses.avg_losses["score_pdf"])
   print("Correct Moves: ", metrics.correct_moves, ", Total Moves: ",
         metrics.num_moves)
   print("Correct Outcomes: ", metrics.correct_outcomes, ", Total Outcomes: ",

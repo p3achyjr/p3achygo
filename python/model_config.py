@@ -54,6 +54,14 @@ class ModelConfig:
                        bottleneck_channels=64)
 
   @staticmethod
+  def b5c256btl3():
+    return ModelConfig(blocks=5,
+                       broadcast_interval=2,
+                       inner_bottleneck_layers=3,
+                       channels=256,
+                       bottleneck_channels=128)
+
+  @staticmethod
   def b12c256btl3():
     return ModelConfig(blocks=12,
                        broadcast_interval=5,

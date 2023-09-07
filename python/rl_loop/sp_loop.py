@@ -84,18 +84,19 @@ def loop(bin_path: str,
 
     def get_gumbel_params():
       # Linear growth
-      c = gen / config.num_generations
+      c_n = min(gen / config.n_growth_window, 1.0)
+      c_k = min(gen / config.k_growth_window, 1.0)
       selected_n = int(
-          round(config.min_train_selected_n + c *
+          round(config.min_train_selected_n + c_n *
                 (config.max_train_selected_n - config.min_train_selected_n)))
       selected_k = int(
-          round(config.min_train_selected_k + c *
+          round(config.min_train_selected_k + c_n *
                 (config.max_train_selected_k - config.min_train_selected_k)))
       default_n = int(
-          round(config.min_train_default_n + c *
+          round(config.min_train_default_n + c_k *
                 (config.max_train_default_n - config.min_train_default_n)))
       default_k = int(
-          round(config.min_train_default_k + c *
+          round(config.min_train_default_k + c_k *
                 (config.max_train_default_k - config.min_train_default_k)))
       return selected_n, selected_k, default_n, default_k
 
