@@ -342,7 +342,9 @@ Response<std::string> ServiceImpl::GtpGenMoveDbg(std::optional<int> id,
                ", qz: " + std::to_string(selected_child.qz) + "\n";
   }
 
+#ifdef V_CATEGORICAL
   dbg_str += VCategoricalHistogram(current_root());
+#endif
 
   if (V(current_root()) < -0.96f) {
     dbg_str += "p3achygo resigns :(";
@@ -417,10 +419,11 @@ GumbelResult ServiceImpl::GenMoveCommon(Color color) {
   }
 
   GumbelResult search_result =
-      use_puct_ ? gumbel_evaluator_->SearchRootPuct(
-                      probability_, *game_, current_root(), color, n_, 2.0f)
-                : gumbel_evaluator_->SearchRoot(probability_, *game_,
-                                                current_root(), color, n_, k_);
+      use_puct_
+          ? gumbel_evaluator_->SearchRootPuct(probability_, *game_,
+                                              current_root(), color, n_, 2.0f)
+          : gumbel_evaluator_->SearchRoot(probability_, *game_, current_root(),
+                                          color, n_, k_, 0.0f);
   return search_result;
 }
 
