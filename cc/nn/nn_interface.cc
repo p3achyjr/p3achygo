@@ -40,6 +40,11 @@ NNInterface::NNInterface(int num_threads, int64_t timeout, size_t cache_size)
       timeout_(timeout) {
   InitializeCache(cache_size);
 
+  // Allow GPU memory growth.
+  ConfigProto config;
+  config.mutable_gpu_options()->set_allow_growth(true);
+  session_options_.config.MergeFrom(config);
+
   // Allocate inference buffers.
   nn_input_buf_ = {
       Tensor(DataType::DT_FLOAT,

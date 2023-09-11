@@ -192,3 +192,24 @@ leela           67 67.00%       32 64.00%     35 70.00%     52.69
 p3achygo-v2     33 33.00%       15 30.00%     18 36.00%    239.24
                                 47 47.00%     53 53.00%
 ```
+
+# v3
+
+<b>Date</b>: 8-15-2023 - Ongoing
+<b>Starting Point</b>: Zero
+
+## Model 172
+## vs. Leela 066
+`leelaz -g --noponder -p 1600 -w 066.gz`
+
+`p3achygo --model_path=/tmp/p3achygo/models/model_0113/_trt --n=256`
+```
+leela v p3achygo-v2 (100/100 games)
+board size: 19   komi: 7.5
+              wins              black         white       avg cpu
+leela           22 22.00%       9  18.00%     13 26.00%     68.15
+p3achygo-v2     78 78.00%       37 74.00%     41 82.00%    205.19
+                                46 46.00%     54 54.00%
+```
+Leela Elo: 2331
+Elo: 2551
