@@ -609,10 +609,8 @@ class P3achyGoModel(tf.keras.Model):
            board_state,
            game_state,
            training=False,
-           scores=None):
-    if scores is None:
-      scores = .05 * tf.range(-SCORE_RANGE // 2 + .5, SCORE_RANGE // 2 + .5)
-
+           scores=.05 *
+           tf.range(-SCORE_RANGE // 2 + .5, SCORE_RANGE // 2 + .5)):
     x = self.init_board_conv(board_state, training=training)
     game_state_biases = self.init_game_layer(game_state)
 

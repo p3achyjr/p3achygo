@@ -5,7 +5,6 @@
 
 #include "cc/constants/constants.h"
 #include "cc/game/color.h"
-#include "cc/game/loc.h"
 
 namespace nn {
 
@@ -13,7 +12,7 @@ struct GoFeatures {
   int bsize;
   game::Color color;
   std::array<game::Color, constants::kNumBoardLocs> board;
-  std::array<game::Loc, constants::kNumLastMoves> last_moves;
+  std::array<int16_t, constants::kNumLastMoves> last_moves;
   std::array<game::Color, constants::kNumBoardLocs> stones_atari;
   std::array<game::Color, constants::kNumBoardLocs> stones_two_liberties;
   std::array<game::Color, constants::kNumBoardLocs> stones_three_liberties;

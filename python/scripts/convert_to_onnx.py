@@ -4,10 +4,10 @@ import onnxruntime as ort
 import numpy as np
 import collections
 import transforms
-import trt_convert
 
 from absl import app, flags, logging
 from pathlib import Path
+from tensorflow.python.framework.convert_to_constants import convert_variables_to_constants_v2
 
 from model import P3achyGoModel
 from constants import *
@@ -18,7 +18,6 @@ DUMMY_BATCH_SIZE = 32
 flags.DEFINE_string('model_path', '', 'Path to SavedModel.')
 flags.DEFINE_string('onnx_name', 'model.onnx', 'Name of ONNX model.')
 flags.DEFINE_string('val_ds', '', 'Validation DS, to verify conversion.')
-
 
 def random_inputs(planes_shape, features_shape):
   return (np.random.random([DUMMY_BATCH_SIZE] + planes_shape).astype(
@@ -50,18 +49,68 @@ def main(_):
     return
 
   model_path = FLAGS.model_path
+  onnx_path = str(Path(model_path, '_onnx', FLAGS.onnx_name))
   logging.info(f'Model Path: {model_path}')
-
-  onnx_path = trt_convert.convert_onnx(onnx_path)
   logging.info(f'Onnx Path: {onnx_path}')
 
-  if FLAGS.val_ds:
+  with tf.device("/cpu:0"):
+    # Load model and resave without mixed precision.
+    tf.keras.mixed_precision.set_global_policy('float32')
     model = tf.keras.models.load_model(
         model_path, custom_objects=P3achyGoModel.custom_objects())
+    planes_shape = model.input_planes_shape()
+    features_shape = model.input_features_shape()
+    model(*[
+        tf.convert_to_tensor(x)
+        for x in random_inputs(planes_shape, features_shape)
+    ])
+    model.summary()
+
+    @tf.function
+    def model_fn(board_state: tf.Tensor, game_state: tf.Tensor,
+                scores: tf.Tensor):
+      (pi_logits, pi, outcome_logits, outcome, own, score_logits, score_probs,
+      gamma, pi_logits_aux, q30, q100, q200) = model(board_state,
+                                                      game_state,
+                                                      training=False,
+                                                      scores=scores)
+
+      return {
+          '00:pi_logits': pi_logits,
+          '01:pi': pi,
+          '02:outcome_logits': outcome_logits,
+          '03:outcome': outcome,
+          '04:own': own,
+          '05:score_logits': score_logits,
+          '06:score_probs': score_probs,
+          '07:gamma': gamma,
+          '08:pi_logits_aux': pi_logits_aux,
+          '09:q30': q30,
+          '10:q100': q100,
+          '11:q200': q200,
+      }
+
+    input_signature = [
+        tf.TensorSpec(shape=[None] + model.input_planes_shape(),
+                      dtype=tf.float32,
+                      name='board_state'),
+        tf.TensorSpec(shape=[None] + model.input_features_shape(),
+                      dtype=tf.float32,
+                      name='game_state'),
+        # need this b/c otherwise ONNX loses an edge to the score tensor.
+        tf.TensorSpec(shape=(SCORE_RANGE,), dtype=tf.float32, name='scores')
+    ]
+    onnx_model, _ = tf2onnx.convert.from_function(
+        model_fn, input_signature=input_signature)
+    print(onnx.printer.to_text(onnx_model))
+
+    Path(model_path, '_onnx').mkdir(exist_ok=True)
+    onnx.save(onnx_model, onnx_path)
+
+  if FLAGS.val_ds:
     val_ds = tf.data.TFRecordDataset(FLAGS.val_ds, compression_type='ZLIB')
     val_ds = val_ds.map(transforms.expand, num_parallel_calls=tf.data.AUTOTUNE)
     val_ds = val_ds.batch(48)
-    val_ds = val_ds.take(50)
     val_ds = val_ds.prefetch(tf.data.AUTOTUNE)
     scores = (.05 *
               tf.range(-SCORE_RANGE // 2 + .5, SCORE_RANGE // 2 + .5)).numpy()

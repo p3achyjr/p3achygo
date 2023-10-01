@@ -21,7 +21,7 @@ class TrtEngine : public Engine {
   virtual void GetBatch(int batch_id, NNInferResult& result) override = 0;
   virtual void GetOwnership(
       int batch_id,
-      std::array<float, constants::kNumBoardLocs>& own) override = 0;
+      std::array<float, constants::kMaxMovesPerPosition>& own) override = 0;
 
   static std::unique_ptr<TrtEngine> Create(std::string path, int batch_size);
 

@@ -81,8 +81,9 @@ class TFEngineImpl : public TFEngine {
   void LoadBatch(int batch_id, const GoFeatures& features) override;
   void RunInference() override;
   void GetBatch(int batch_id, NNInferResult& result) override;
-  void GetOwnership(int batch_id,
-                    std::array<float, constants::kNumBoardLocs>& own) override;
+  void GetOwnership(
+      int batch_id,
+      std::array<float, constants::kMaxMovesPerPosition>& own) override;
 
  private:
   std::vector<tensorflow::Tensor> nn_input_buf_;
@@ -101,11 +102,6 @@ TFEngineImpl::TFEngineImpl(std::string path, Kind kind, int batch_size)
       kind_(kind),
       batch_size_(batch_size),
       path_(path) {
-  // Allow GPU memory growth.
-  ConfigProto config;
-  config.mutable_gpu_options()->set_allow_growth(true);
-  session_options_.config.MergeFrom(config);
-
   nn_input_buf_ = {
       Tensor(DataType::DT_FLOAT,
              CreateTensorShape({batch_size_, BOARD_LEN, BOARD_LEN,
@@ -241,10 +237,10 @@ void TFEngineImpl::GetBatch(int batch_id, NNInferResult& result) {
 }
 
 void TFEngineImpl::GetOwnership(
-    int batch_id, std::array<float, constants::kNumBoardLocs>& own) {
+    int batch_id, std::array<float, constants::kMaxMovesPerPosition>& own) {
   const auto own_slice =
       nn_output_buf_[kOwnIndex].SubSlice(batch_id).unaligned_flat<float>();
-  for (int i = 0; i < constants::kNumBoardLocs; ++i) {
+  for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
     own[i] = own_slice(i);
   }
 }

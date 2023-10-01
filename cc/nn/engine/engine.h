@@ -17,10 +17,9 @@ struct NNInferResult {
 class Engine {
  public:
   enum class Kind : uint8_t {
-    kUnknown = 0,
-    kTF = 1,
-    kTFTrt = 2,
-    kTrt = 3,
+    kTF = 0,
+    kTFTrt = 1,
+    kTrt = 2,
   };
 
   virtual ~Engine() = default;
@@ -30,23 +29,12 @@ class Engine {
   virtual void RunInference() = 0;
   virtual void GetBatch(int batch_id, NNInferResult& result) = 0;
   virtual void GetOwnership(
-      int batch_id, std::array<float, constants::kNumBoardLocs>& own) = 0;
+      int batch_id,
+      std::array<float, constants::kMaxMovesPerPosition>& own) = 0;
 
  protected:
   Engine() = default;
 };
-
-inline std::string KindToString(Engine::Kind kind) {
-  if (kind == Engine::Kind::kTF) {
-    return "TF";
-  } else if (kind == Engine::Kind::kTFTrt) {
-    return "TF-TRT";
-  } else if (kind == Engine::Kind::kTrt) {
-    return "TensorRT";
-  }
-
-  return "??";
-}
 }  // namespace nn
 
 #endif

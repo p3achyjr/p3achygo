@@ -47,7 +47,7 @@ int SliceSize(std::array<int, N> shape, int i) {
   if (i > N) return 0;
 
   int size = Sizes(shape)[i];
-  return size * shape[i];  // `size` is exclusive.
+  return size * shape[i]; // `size` is exclusive.
 }
 
 /*
@@ -75,6 +75,32 @@ inline void FillPlanePair(
       }
     }
   }
+
+  // if (batch_id == 0 && our_channel == 0) {
+  //   std::cerr << "Val Board:\n" << game::ToString(board_data) << "\n";
+
+  //   std::array<game::Color, constants::kNumBoardLocs> loaded_board;
+  //   for (int i = 0; i < board_len; ++i) {
+  //     for (int j = 0; j < board_len; ++j) {
+  //       std::array<int, 4> our_index = {batch_id, i, j, our_channel};
+  //       auto ours = buf[Offset(shape, our_index)];
+  //       std::array<int, 4> opp_index = {batch_id, i, j, opp_channel};
+  //       auto opps = buf[Offset(shape, opp_index)];
+  //       if (ours == 1.0f) {
+  //         std::cerr << "(" << i << "," << j << "): " << Offset(shape,
+  //         our_index)
+  //                   << " Flat Index: " << (i * BOARD_LEN + j) << ". ";
+  //         loaded_board[i * BOARD_LEN + j] = BLACK;
+  //       } else if (opps == 1.0f) {
+  //         loaded_board[i * BOARD_LEN + j] = WHITE;
+  //       } else {
+  //         loaded_board[i * BOARD_LEN + j] = EMPTY;
+  //       }
+  //     }
+  //   }
+
+  //   std::cerr << "Loaded Board:\n" << game::ToString(loaded_board) << "\n";
+  // }
 }
 
 /*
