@@ -4,15 +4,19 @@
 namespace nn {
 namespace trt {
 namespace input {
-static constexpr char kPlanesName[] = "args_0";    //"input_planes";
-static constexpr char kFeaturesName[] = "args_1";  //"input_features";
+
+// Keep these in sync with //python/scripts:convert_to_onnx.py
+static constexpr char kPlanesName[] = "board_state";
+static constexpr char kFeaturesName[] = "game_state";
+static constexpr char kScoresName[] = "scores";
 }  // namespace input
 
 namespace output {
-static constexpr char kPolicyCombinedName[] = "policy_combined";
-static constexpr char kZqName[] = "zq";
-static constexpr char kOwnershipName[] = "ownership";
-static constexpr char kScoreName[] = "score";
+static constexpr char kPiLogitsName[] = "00:pi_logits";
+static constexpr char kPiProbsName[] = "01:pi";
+static constexpr char kOutcomeName[] = "03:outcome";
+static constexpr char kOwnershipName[] = "04:own";
+static constexpr char kScoreName[] = "06:score_probs";
 }  // namespace output
 }  // namespace trt
 }  // namespace nn

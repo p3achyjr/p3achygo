@@ -7,9 +7,11 @@
 #include <string>
 
 namespace nn {
+class GoDataset;
+
 namespace trt {
 
-class Int8Calibrator : public nvinfer1::IInt8EntropyCalibrator2 {
+class Int8Calibrator : public nvinfer1::IInt8MinMaxCalibrator {
  public:
   virtual ~Int8Calibrator() = default;
   virtual int getBatchSize() const noexcept override = 0;
@@ -21,7 +23,7 @@ class Int8Calibrator : public nvinfer1::IInt8EntropyCalibrator2 {
                                      size_t length) noexcept override = 0;
 
   static std::unique_ptr<Int8Calibrator> Create(size_t batch_size,
-                                                std::string calib_tfrec_path,
+                                                GoDataset* go_ds,
                                                 std::string calib_cache_path);
 };
 

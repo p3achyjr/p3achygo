@@ -5,8 +5,6 @@
 
 #include <iostream>
 
-#include "cc/nn/engine/model_arch.h"
-
 namespace nn {
 namespace trt {
 

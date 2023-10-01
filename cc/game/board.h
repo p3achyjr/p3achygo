@@ -432,6 +432,8 @@ inline std::ostream& operator<<(std::ostream& os,
         os << "○ ";
       } else if (board[i * BOARD_LEN + j] == WHITE) {
         os << "● ";
+      } else {
+        os << "? ";
       }
     }
 
@@ -446,6 +448,12 @@ inline std::ostream& operator<<(std::ostream& os,
 
 inline std::ostream& operator<<(std::ostream& os, const Board& board) {
   return os << board.board_;
+}
+
+inline std::string ToString(const Board::BoardData& board) {
+  std::stringstream ss;
+  ss << board;
+  return ss.str();
 }
 
 }  // namespace game
