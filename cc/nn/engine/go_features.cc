@@ -17,8 +17,8 @@ void LoadPlanes(float* planes_buf, std::array<int, 4> planes_shape,
                 go_features.stones_three_liberties, go_features.bsize,
                 go_features.color);
   for (int i = 0; i < constants::kNumLastMoves; ++i) {
-    int16_t last_move = go_features.last_moves[i];
-    if (last_move < 0 || last_move == constants::kPassMoveEncoding) {
+    game::Loc last_move = go_features.last_moves[i];
+    if (last_move == game::kNoopLoc || last_move == game::kPassLoc) {
       continue;
     }
 
@@ -36,8 +36,8 @@ void LoadFeatures(float* feats_buf, std::array<int, 2> feats_shape,
   SetIndex(feats_buf, feats_shape, color_index, 1.0f);
   feats_buf[go_features.color == BLACK ? 0 : 1] = 1.0f;
   for (int i = 0; i < constants::kNumLastMoves; ++i) {
-    int16_t last_move = go_features.last_moves[i];
-    if (last_move != constants::kPassMoveEncoding) {
+    game::Loc last_move = go_features.last_moves[i];
+    if (last_move != game::kPassLoc) {
       continue;
     }
 

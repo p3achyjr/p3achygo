@@ -7,7 +7,6 @@ import transforms
 
 from absl import app, flags, logging
 from pathlib import Path
-from tensorflow.python.framework.convert_to_constants import convert_variables_to_constants_v2
 
 from model import P3achyGoModel
 from constants import *

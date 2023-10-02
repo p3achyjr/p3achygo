@@ -13,8 +13,9 @@ namespace nn {
 class TFEngine : public Engine {
  public:
   enum class Kind {
-    kTF = 0,
-    kTRT = 1,
+    kUnknown = 0,
+    kTF = 1,
+    kTRT = 2,
   };
 
   virtual ~TFEngine() = default;
@@ -26,7 +27,7 @@ class TFEngine : public Engine {
   virtual void GetBatch(int batch_id, NNInferResult& result) override = 0;
   virtual void GetOwnership(
       int batch_id,
-      std::array<float, constants::kMaxMovesPerPosition>& own) override = 0;
+      std::array<float, constants::kNumBoardLocs>& own) override = 0;
 
   static std::unique_ptr<TFEngine> Create(std::string path, Kind kind,
                                           int batch_size);
