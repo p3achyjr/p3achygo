@@ -79,13 +79,19 @@ GoDataset::GoDataset(size_t batch_size, std::string ds_path)
       int bsize = static_cast<int>(ParseScalar<uint8_t>(bsize_feat));
       CHECK(bsize == BOARD_LEN && bsize * bsize == constants::kNumBoardLocs);
 
+      std::array<game::Loc, constants::kNumLastMoves> last_moves;
+      std::array<int16_t, constants::kNumLastMoves> last_move_encodings =
+          ParseSequence<int16_t, constants::kNumLastMoves>(last_moves_feat);
+      std::transform(last_move_encodings.begin(), last_move_encodings.end(),
+                     last_moves.begin(),
+                     [](int16_t mv) { return game::AsLoc(mv); });
+
       GoFeatures go_features;
       go_features.bsize = bsize;
       go_features.color = ParseScalar<game::Color>(color_feat);
       go_features.board =
           ParseSequence<game::Color, constants::kNumBoardLocs>(board_feat);
-      go_features.last_moves =
-          ParseSequence<int16_t, constants::kNumLastMoves>(last_moves_feat);
+      go_features.last_moves = last_moves;
       go_features.stones_atari =
           ParseSequence<game::Color, constants::kNumBoardLocs>(
               stones_atari_feat);

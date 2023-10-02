@@ -27,9 +27,8 @@ class TrtEngineImpl : public TrtEngine {
   void LoadBatch(int batch_id, const GoFeatures& features) override;
   void RunInference() override;
   void GetBatch(int batch_id, NNInferResult& result) override;
-  void GetOwnership(
-      int batch_id,
-      std::array<float, constants::kMaxMovesPerPosition>& own) override;
+  void GetOwnership(int batch_id,
+                    std::array<float, constants::kNumBoardLocs>& own) override;
 
  private:
   struct BufferHandle {
@@ -219,7 +218,7 @@ void TrtEngineImpl::GetBatch(int batch_id, NNInferResult& result) {
 }
 
 void TrtEngineImpl::GetOwnership(
-    int batch_id, std::array<float, constants::kMaxMovesPerPosition>& own) {
+    int batch_id, std::array<float, constants::kNumBoardLocs>& own) {
   LOG(ERROR) << "Ownership Not Supported on TRT.";
 }
 

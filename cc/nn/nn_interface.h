@@ -9,6 +9,7 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/hash/hash.h"
+#include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "cc/constants/constants.h"
 #include "cc/core/cache.h"
@@ -16,10 +17,7 @@
 #include "cc/game/color.h"
 #include "cc/game/game.h"
 #include "cc/game/symmetry.h"
-#include "cc/nn/feed_fetch_names.h"
-#include "tensorflow/cc/client/client_session.h"
-#include "tensorflow/cc/framework/scope.h"
-#include "tensorflow/cc/saved_model/loader.h"
+#include "cc/nn/engine/engine.h"
 
 namespace tensorflow {
 class GraphDef;
@@ -27,13 +25,6 @@ class Tensor;
 }  // namespace tensorflow
 
 namespace nn {
-
-struct NNInferResult {
-  std::array<float, constants::kMaxMovesPerPosition> move_logits;
-  std::array<float, constants::kMaxMovesPerPosition> move_probs;
-  std::array<float, constants::kNumValueLogits> value_probs;
-  std::array<float, constants::kNumScoreLogits> score_probs;
-};
 
 /*
  * Bridge between `Board` and other game objects to NN evaluation.
@@ -44,15 +35,14 @@ struct NNInferResult {
  */
 class NNInterface final {
  public:
-  NNInterface(int num_threads);
-  NNInterface(int num_threads, int64_t timeout, size_t cache_size);
+  NNInterface(int num_threads, std::unique_ptr<Engine> engine);
+  NNInterface(int num_threads, int64_t timeout, size_t cache_size,
+              std::unique_ptr<Engine> engine);
   ~NNInterface();
 
   // Disable Copy
   NNInterface(NNInterface const&) = delete;
   NNInterface& operator=(NNInterface const&) = delete;
-
-  absl::Status Initialize(std::string&& model_path);
 
   // Blocks until result is ready.
   NNInferResult LoadAndGetInference(int thread_id, const game::Game& game,
@@ -100,19 +90,15 @@ class NNInterface final {
   std::optional<NNInferResult> CacheGet(int thread_id, const NNKey& key);
   void CacheInsert(int thread_id, const NNKey& key,
                    const NNInferResult& result);
+  void LoadBatch(int thread_id, const game::Game& game,
+                 game::Color color_to_move, game::Symmetry sym);
 
   // Called by worker.
   inline void SignalLoadedAndBlockUntilReady(int thread_id)
       ABSL_LOCKS_EXCLUDED(mu_) {
     if (num_threads_ == 1) {
       // Fast, non-locking path.
-      std::vector<std::pair<std::string, ::tensorflow::Tensor>> nn_input = {
-          {kInputNames[0], nn_input_buf_[0]},
-          {kInputNames[1], nn_input_buf_[1]}};
-      TF_CHECK_OK(model_bundle_.GetSession()->Run(nn_input, kOutputNames, {},
-                                                  &nn_output_buf_));
-      nn_input_buf_[0].SubSlice(thread_id).unaligned_flat<float>().setZero();
-      nn_input_buf_[1].SubSlice(thread_id).unaligned_flat<float>().setZero();
+      engine_->RunInference();
       return;
     }
 
@@ -133,15 +119,7 @@ class NNInterface final {
   void Infer() ABSL_LOCKS_EXCLUDED(mu_);
   bool ShouldInfer() const;
 
-  ::tensorflow::SavedModelBundleLite model_bundle_;
-  ::tensorflow::SessionOptions session_options_;
-  ::tensorflow::RunOptions run_options_;
-
-  std::vector<::tensorflow::Tensor> nn_input_buf_;
-  std::vector<::tensorflow::Tensor> nn_output_buf_;
-
   std::string id_;
-  bool is_initialized_;
   int num_registered_threads_ ABSL_GUARDED_BY(mu_);
   const int num_threads_;
 
@@ -156,6 +134,9 @@ class NNInterface final {
   std::array<core::Cache<NNKey, NNInferResult>, constants::kMaxNumThreads>
       thread_caches_;  // Per-thread cache.
   const int64_t timeout_;
+
+  // Engine.
+  std::unique_ptr<Engine> engine_;
 };
 
 }  // namespace nn

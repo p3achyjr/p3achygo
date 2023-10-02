@@ -19,6 +19,7 @@ cc_library(
         "//cc/core",
         "//cc/mcts",
         "//cc/nn",
+        "//cc/nn/engine:engine_factory",
         "//cc/recorder:sgf_recorder",
         "//cc/sgf",
         "@com_google_absl//absl/log",
@@ -30,6 +31,10 @@ cc_library(
 cc_binary(
     name = "main",
     srcs = ["main.cc"],
+    linkopts = [
+        "-lm",
+        "-Wl,-ldl",
+    ],
     deps = [
         ":gtp",
         "@com_google_absl//absl/flags:flag",

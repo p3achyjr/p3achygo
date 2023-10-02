@@ -81,9 +81,8 @@ class TFEngineImpl : public TFEngine {
   void LoadBatch(int batch_id, const GoFeatures& features) override;
   void RunInference() override;
   void GetBatch(int batch_id, NNInferResult& result) override;
-  void GetOwnership(
-      int batch_id,
-      std::array<float, constants::kMaxMovesPerPosition>& own) override;
+  void GetOwnership(int batch_id,
+                    std::array<float, constants::kNumBoardLocs>& own) override;
 
  private:
   std::vector<tensorflow::Tensor> nn_input_buf_;
@@ -237,10 +236,10 @@ void TFEngineImpl::GetBatch(int batch_id, NNInferResult& result) {
 }
 
 void TFEngineImpl::GetOwnership(
-    int batch_id, std::array<float, constants::kMaxMovesPerPosition>& own) {
+    int batch_id, std::array<float, constants::kNumBoardLocs>& own) {
   const auto own_slice =
       nn_output_buf_[kOwnIndex].SubSlice(batch_id).unaligned_flat<float>();
-  for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
+  for (int i = 0; i < constants::kNumBoardLocs; ++i) {
     own[i] = own_slice(i);
   }
 }

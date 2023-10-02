@@ -34,6 +34,7 @@ cc_library(
         "//cc/game",
         "//cc/mcts",
         "//cc/nn",
+        "//cc/nn/engine:engine_factory",
         "//cc/recorder",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",

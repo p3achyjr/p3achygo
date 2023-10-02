@@ -69,6 +69,7 @@ int Argmax(const std::array<float, N>& arr) {
 }  // namespace
 
 ABSL_FLAG(std::string, onnx_path, "", "Path to onnx model.");
+ABSL_FLAG(std::string, ds_path, "", "Path to calibration ds.");
 ABSL_FLAG(std::string, out_dir, "",
           "Directory to store engine. Defaults to same directory as weights.");
 ABSL_FLAG(std::string, engine_path, "", "Path to existing engine.");
@@ -82,9 +83,14 @@ int main(int argc, char** argv) {
   std::string onnx_path = absl::GetFlag(FLAGS_onnx_path);
   std::string engine_path = absl::GetFlag(FLAGS_engine_path);
   std::string out_dir = absl::GetFlag(FLAGS_out_dir);
+  std::string ds_path = absl::GetFlag(FLAGS_ds_path);
+  if (ds_path == "") {
+    LOG(ERROR) << "Must Specify Dataset Path.";
+    return 1;
+  }
 
-  std::unique_ptr<nn::GoDataset> go_ds = std::make_unique<nn::GoDataset>(
-      batch_size, "/tmp/p3achygo/val.tfrecord.zz");
+  std::unique_ptr<nn::GoDataset> go_ds =
+      std::make_unique<nn::GoDataset>(batch_size, ds_path);
   if (engine_path == "") {
     if (onnx_path == "") {
       LOG(ERROR) << "Must Specify ONNX Path.";

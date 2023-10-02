@@ -39,9 +39,11 @@ class Int8CalibratorImpl : public Int8Calibrator {
                              size_t length) noexcept override;
 
  private:
+  static constexpr int kNumCalibExamples = 2000;
   size_t batch_size_;
   std::string calib_tfrec_path_;
   int batch_counter_;
+  int ex_counter_;
   int num_batches_;
   GoDataset* const go_ds_;
   GoDataset::Iterator go_ds_iterator_;
@@ -67,6 +69,7 @@ Int8CalibratorImpl::Int8CalibratorImpl(size_t batch_size, GoDataset* go_ds,
                                        bool use_cache)
     : batch_size_(batch_size),
       batch_counter_(0),
+      ex_counter_(0),
       go_ds_(go_ds),
       go_ds_iterator_(go_ds_->begin()),
       calib_cache_path_(calib_cache_path),
@@ -107,7 +110,7 @@ void Int8CalibratorImpl::initialize() {
 
 bool Int8CalibratorImpl::getBatch(void* bindings[], const char* names[],
                                   int nbBindings) noexcept {
-  if (go_ds_iterator_ == go_ds_->end()) {
+  if (ex_counter_ >= kNumCalibExamples || go_ds_iterator_ == go_ds_->end()) {
     return false;
   }
 
@@ -162,6 +165,7 @@ bool Int8CalibratorImpl::getBatch(void* bindings[], const char* names[],
   }
 
   ++batch_counter_;
+  ex_counter_ += batch_size_;
   return true;
 }
 

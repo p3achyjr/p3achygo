@@ -22,6 +22,7 @@
 #include "cc/core/elo.h"
 #include "cc/core/filepath.h"
 #include "cc/eval/eval.h"
+#include "cc/nn/engine/engine_factory.h"
 #include "cc/nn/nn_interface.h"
 #include "cc/recorder/dir.h"
 #include "cc/recorder/game_recorder.h"
@@ -99,12 +100,16 @@ int main(int argc, char** argv) {
 
   // Initialize NN evaluators.
   int cache_size = absl::GetFlag(FLAGS_cache_size);
+  std::unique_ptr<nn::Engine> cur_engine = nn::CreateEngine(
+      nn::KindFromEnginePath(cur_model_path), cur_model_path, num_games);
+  std::unique_ptr<nn::Engine> cand_engine = nn::CreateEngine(
+      nn::KindFromEnginePath(cand_model_path), cand_model_path, num_games);
   std::unique_ptr<nn::NNInterface> cur_nn_interface =
-      std::make_unique<nn::NNInterface>(num_games, kTimeoutUs, cache_size);
+      std::make_unique<nn::NNInterface>(num_games, kTimeoutUs, cache_size,
+                                        std::move(cur_engine));
   std::unique_ptr<nn::NNInterface> cand_nn_interface =
-      std::make_unique<nn::NNInterface>(num_games, kTimeoutUs, cache_size);
-  CHECK_OK(cur_nn_interface->Initialize(std::move(cur_model_path)));
-  CHECK_OK(cand_nn_interface->Initialize(std::move(cand_model_path)));
+      std::make_unique<nn::NNInterface>(num_games, kTimeoutUs, cache_size,
+                                        std::move(cand_engine));
 
   size_t time = std::chrono::duration_cast<std::chrono::nanoseconds>(
                     std::chrono::steady_clock::now().time_since_epoch())
