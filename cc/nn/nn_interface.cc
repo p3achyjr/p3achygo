@@ -81,6 +81,11 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
   // be ok since we are not using this property in any signaling mechanisms.
   thread_info_[thread_id].res_ready = false;
 
+  // We have finished retrieving data. This should not need to be lock-guarded.
+  mu_.Lock();
+  thread_info_[thread_id].res_ready = false;
+  mu_.Unlock();
+
   // Unapply symmetry.
   std::array<float, constants::kNumBoardLocs> grid_logits_sym;
   std::array<float, constants::kNumBoardLocs> grid_probs_sym;

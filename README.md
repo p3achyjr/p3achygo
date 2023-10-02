@@ -1,6 +1,6 @@
 # p3achyjr's Go Bot :)
 
-Hopefully this gets somewhere.
+Visit [p3achyjr.github.io/p3achygo-page](https://p3achyjr.github.io/p3achygo-page) for more details about methods, implementation, and current status.
 
 ## Building and Running
 

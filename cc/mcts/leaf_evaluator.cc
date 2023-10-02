@@ -95,9 +95,11 @@ inline void LeafEvaluator::InitFields(TreeNode* node, float score_utility) {
   node->v_outcome = node->w_outcome;
   node->init_util_est = node->w;
 
+#ifdef V_CATEGORICAL
   // Add V to bucket.
   int v_bucket = std::clamp(static_cast<int>((node->v + 1.0f) / kBucketRange),
                             0, kNumVBuckets - 1);
   node->v_categorical[v_bucket] += 1;
+#endif
 }
 }  // namespace mcts

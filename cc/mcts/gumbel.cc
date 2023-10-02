@@ -280,6 +280,7 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
       root->v_outcome =
           root_ratio * root->v_outcome + child_ratio * child_stat.qz;
 
+#ifdef V_CATEGORICAL
       // Update categorical distribution.
       TreeNode* child = root->children[child_stat.move].get();
       if (child != nullptr) {
@@ -289,6 +290,7 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
               child->v_categorical[kNumVBuckets - v_bucket - 1];
         }
       }
+#endif
     }
 
     root->n += child_stat.n;
@@ -498,11 +500,13 @@ void GumbelEvaluator::SingleBackup(TreeNode* node, int child_n, float leaf_q,
                         (leaf_q - v_outcome_old) * (leaf_q - node->v_outcome);
   node->v_outcome_var /= node->n;
 
+#ifdef V_CATEGORICAL
   // Add V to bucket.
   int v_bucket =
       std::clamp(static_cast<int>((leaf_q_outcome + 1.0f) / kBucketRange), 0,
                  kNumVBuckets - 1);
   node->v_categorical[v_bucket] += 1;
+#endif
 }
 
 }  // namespace mcts

@@ -232,6 +232,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
           probability.Uniform() < select_move_prob;
 
       int gumbel_n, gumbel_k;
+      float noise_scaling = 1.0f;
       if (sampling_raw_policy) {
         gumbel_n = 1;
         gumbel_k = 1;
@@ -241,6 +242,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       } else {
         gumbel_n = config.default_params.n;
         gumbel_k = config.default_params.k;
+        noise_scaling = 0.5f;
       }
 
       // NN Stats.
@@ -254,9 +256,9 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
       // Run and Profile Search.
       auto begin = std::chrono::high_resolution_clock::now();
-      GumbelResult gumbel_res =
-          gumbel_evaluator.SearchRoot(probability, game, root_node.get(),
-                                      color_to_move, gumbel_n, gumbel_k);
+      GumbelResult gumbel_res = gumbel_evaluator.SearchRoot(
+          probability, game, root_node.get(), color_to_move, gumbel_n, gumbel_k,
+          noise_scaling);
       auto end = std::chrono::high_resolution_clock::now();
 
       // Post Search Statstics.
