@@ -5,11 +5,11 @@ Starts Self-Play, then Trains when a chunk is ready, then runs Eval.
 from __future__ import annotations
 
 import gcs_utils as gcs
-import os, shlex, sys, time
+import os, sys, time
 import rl_loop.config as config
-import rl_loop.model_utils as model_utils
 import rl_loop.sp_loop as sp
 import rl_loop.fs_utils as fs_utils
+import proc
 
 from absl import app, flags, logging
 from constants import *
@@ -22,14 +22,14 @@ from threading import Thread
 
 FLAGS = flags.FLAGS
 
-POLL_INTERVAL_S = 10
+POLL_INTERVAL_S = 60
 EVAL_CACHE_SIZE = 32768
 NUM_EVAL_GAMES = 100
 
 flags.DEFINE_string(
     'from_existing_run', '',
     'Existing run from which to use SP chunks to train a new model from.')
-flags.DEFINE_string('sp_bin_path', '', 'Local path to self-play binary.')
+flags.DEFINE_string('bin_dir', '', 'Local path to bazel-bin dir.')
 flags.DEFINE_string('eval_bin_path', '', 'Local path to eval binary.')
 flags.DEFINE_string('run_id', '', 'ID corresponding to the current run.')
 flags.DEFINE_string('local_run_dir', '/tmp/p3achygo',
@@ -43,28 +43,6 @@ class EvalResult(object):
 
   winner: str
   rel_elo: float
-
-
-def print_stdout(out: Popen.stdout):  # pytype : disable=unbound-type-param
-  for line in out:
-    print(line.rstrip())
-
-
-def run_proc(cmd: str, env=None):
-  if not env:
-    env = os.environ
-
-  cmd = shlex.split(cmd)
-  proc = Popen(cmd,
-               stdin=PIPE,
-               stdout=PIPE,
-               stderr=STDOUT,
-               universal_newlines=True,
-               env=env)
-  t = Thread(target=print_stdout, args=(proc.stdout,), daemon=True)
-  t.start()
-  proc.wait()
-  return proc.poll()
 
 
 def eval(run_id: str, eval_bin_path: str, eval_res_path: str,
@@ -84,7 +62,7 @@ def eval(run_id: str, eval_bin_path: str, eval_res_path: str,
          f' --num_games={min(NUM_EVAL_GAMES, trt_batch_size())}' +
          f' --cur_n={n} --cur_k={k} --cand_n={n} --cand_k={k}')
   logging.info(f'Running Eval Command:\n\'{cmd}\'')
-  exit_code = run_proc(cmd, env=env)
+  exit_code = proc.run_proc(cmd, env=env)
   logging.info(f'Eval Exited with Status {exit_code}')
 
   # Upload Eval SGFs. This is safe because the process has terminated.
@@ -102,7 +80,8 @@ def eval(run_id: str, eval_bin_path: str, eval_res_path: str,
 
 
 def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
-         eval_bin_path: str, val_ds_path: str, local_run_dir: str):
+         eval_bin_path: str, val_ds_path: str, build_trt_engine_path: str,
+         local_run_dir: str):
   '''
   Does the following:
 
@@ -129,8 +108,9 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
              f' --models_dir={local_models_dir}' + f' --gen={model_gen}' +
              f' --next_gen={next_model_gen}' + f' --chunk_path={chunk_path}' +
              f' --chunk_size={chunk_size}' + f' --val_ds_path={val_ds_path}' +
-             f' --batch_num_path={batch_num_path}' + f' --save_trt={save_trt}')
-      exit_code = run_proc(cmd)
+             f' --batch_num_path={batch_num_path}' + f' --save_trt={save_trt}' +
+             f' --trt_convert_path={build_trt_engine_path}')
+      exit_code = proc.run_proc(cmd)
       logging.info(f'Training Exited with Status {exit_code}')
 
   def eval_new_model(run_id: str, next_model_gen: int, eval_res_path: str):
@@ -207,13 +187,13 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
     cmd = (f'python -m python.rl_loop.make_new_model' +
            f' --model_path={model_path}' +
            f' --model_config={config.model_config}')
-    run_proc(cmd)
+    proc.run_proc(cmd)
 
     # # convert to TRT.
     # cmd = (f'python -m python.scripts.convert_to_trt' +
     #        f' --model_path={model_path}' + f' --calib_ds={val_ds_path}' +
     #        f' --batch_size={trt_batch_size()}')
-    # run_proc(cmd)
+    # proc.run_proc(cmd)
 
     # upload to GCS.
     gcs.upload_model_cand(run_id, local_models_dir, model_gen)
@@ -299,19 +279,20 @@ def main(_):
   if FLAGS.run_id == '':
     logging.error('No --run_id specified.')
     return
-  if FLAGS.sp_bin_path == '':
-    logging.error('No --sp_bin_path specified.')
+  if FLAGS.bin_dir == '':
+    logging.error('No --bin_dir specified.')
     return
-  if FLAGS.eval_bin_path == '':
-    logging.error('No --eval_bin_path specified.')
-    return
+
+  sp_bin_path = Path(FLAGS.bin_dir, 'cc', 'selfplay', 'main')
+  eval_bin_path = Path(FLAGS.bin_dir, 'cc', 'eval', 'main')
+  build_trt_engine_path = Path(FLAGS.bin_dir, 'cc', 'nn', 'engine', 'scripts')
 
   val_ds_path = gcs.download_val_ds(FLAGS.local_run_dir)
   run_config = config.parse(FLAGS.run_id)
   run_id = FLAGS.run_id
 
-  loop(run_id, run_config, FLAGS.sp_bin_path, FLAGS.eval_bin_path, val_ds_path,
-       FLAGS.local_run_dir)
+  loop(run_id, run_config, sp_bin_path, eval_bin_path, val_ds_path,
+       build_trt_engine_path, FLAGS.local_run_dir)
 
 
 if __name__ == '__main__':

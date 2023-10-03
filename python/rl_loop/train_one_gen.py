@@ -32,6 +32,7 @@ flags.DEFINE_integer(
 flags.DEFINE_string('val_ds_path', '', 'Path to val ds')
 flags.DEFINE_string('batch_num_path', '', 'File storing batch counter.')
 flags.DEFINE_boolean('save_trt', True, 'Whether to save TRT converted model.')
+flags.DEFINE_string('trt_convert_path', '', 'Path to TRT convert binary.')
 
 
 def get_model_path(models_dir: str, gen: int) -> Tuple[str, int]:
@@ -66,6 +67,9 @@ def main(_):
   if FLAGS.batch_num_path == '':
     logging.error('No --batch_num_path specified.')
     return
+  if FLAGS.trt and FLAGS.trt_convert_path == '':
+    logging.error('No --trt_convert_path specified.')
+    return
 
   is_gpu = False
   if tf.config.list_physical_devices('GPU'):
@@ -98,11 +102,12 @@ def main(_):
                                           batch_num=batch_num,
                                           chunk_size=FLAGS.chunk_size)
   if FLAGS.save_trt:
-    model_utils.save_trt(model,
-                         FLAGS.val_ds_path,
-                         FLAGS.models_dir,
-                         FLAGS.next_gen,
-                         batch_size=trt_batch_size())
+    model_utils.save_onnx_trt(model,
+                              FLAGS.val_ds_path,
+                              FLAGS.models_dir,
+                              FLAGS.next_gen,
+                              batch_size=trt_batch_size(),
+                              trt_convert_path=FLAGS.trt_convert_path)
   else:
     model_utils.save(model, FLAGS.models_dir, FLAGS.next_gen)
 

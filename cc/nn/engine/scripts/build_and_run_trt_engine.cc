@@ -75,16 +75,22 @@ ABSL_FLAG(std::string, out_dir, "",
 ABSL_FLAG(std::string, engine_path, "", "Path to existing engine.");
 ABSL_FLAG(std::string, engine_name, "engine.trt", "Name of engine.");
 ABSL_FLAG(bool, use_int8, false, "Whether to enable INT8.");
+ABSL_FLAG(int, batch_size, 0, "Batch Size.");
 
 int main(int argc, char** argv) {
   absl::ParseCommandLine(argc, argv);
 
-  int batch_size = 48;
+  int batch_size = absl::GetFlag(FLAGS_batch_size);
   std::string onnx_path = absl::GetFlag(FLAGS_onnx_path);
   std::string engine_path = absl::GetFlag(FLAGS_engine_path);
   std::string out_dir = absl::GetFlag(FLAGS_out_dir);
   std::string ds_path = absl::GetFlag(FLAGS_ds_path);
-  if (ds_path == "") {
+  if (batch_size == 0) {
+    LOG(ERROR) << "Must Specify --batch_size.";
+    return 1;
+  }
+
+  if (absl::GetFlag(FLAGS_use_int8) && ds_path == "") {
     LOG(ERROR) << "Must Specify Dataset Path.";
     return 1;
   }
@@ -177,6 +183,7 @@ int main(int argc, char** argv) {
   }
 
   CHECK(engine_path != "");
+  if (ds_path == "") return 0;
 
   // Read back from file.
   std::unique_ptr<TrtEngine> trt_engine =

@@ -4,4 +4,4 @@ sgfmill
 tensorflow==2.11.0
 h5py==3.6.0
 tf2onnx
-onnxruntime
+onnxruntime-gpu

@@ -122,7 +122,6 @@ bool Int8CalibratorImpl::getBatch(void* bindings[], const char* names[],
   std::vector<GoDataset::Row> batch_examples = *go_ds_iterator_;
   ++go_ds_iterator_;
 
-  int batch_id = 8;
   for (int i = 0; i < nbBindings; ++i) {
     const char* name = names[i];
     void* host_binding;

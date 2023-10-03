@@ -12,7 +12,7 @@ from subprocess import Popen, PIPE, STDOUT
 from threading import Thread
 from typing import Tuple
 
-POLL_INTERVAL_S = 10
+POLL_INTERVAL_S = 60
 TFREC_GLOB = '*.tfrecord.zz'
 SGF_GLOB = '*.sgf'
 DONE_GLOB = '*.done'
