@@ -12,6 +12,7 @@
 #include "cc/game/game.h"
 #include "cc/mcts/gumbel.h"
 #include "cc/mcts/tree.h"
+#include "cc/nn/engine/engine_factory.h"
 #include "cc/nn/nn_interface.h"
 #include "cc/recorder/sgf_recorder.h"
 #include "cc/sgf/parse_sgf.h"
@@ -463,11 +464,11 @@ void ServiceImpl::ClearBoard() {
 
 /* static */ absl::StatusOr<std::unique_ptr<Service>> Service::CreateService(
     std::string model_path, int n, int k, bool use_puct) {
+  std::unique_ptr<nn::Engine> engine =
+      nn::CreateEngine(nn::KindFromEnginePath(model_path), model_path, 1);
   std::unique_ptr<NNInterface> nn_interface = std::make_unique<NNInterface>(
-      1 /* num_threads */, std::numeric_limits<int64_t>::max(), 16384);
-  if (!nn_interface->Initialize(std::move(model_path)).ok()) {
-    return absl::InternalError("Could not initialize neural network.");
-  }
+      1 /* num_threads */, std::numeric_limits<int64_t>::max(), 16384,
+      std::move(engine));
   std::unique_ptr<GumbelEvaluator> gumbel_evaluator =
       std::make_unique<GumbelEvaluator>(nn_interface.get(), 0);
 

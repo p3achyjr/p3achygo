@@ -53,7 +53,5 @@ build:gumbel_test --//cc:is_nn_interface_dummy
 build:gumbel_test --//cc:is_leaf_evaluator_dummy
 build:gumbel_test --//cc:is_probability_dummy
 
-build:trt --//cc:is_trt
-
 build:b19 --copt -DBOARD_LEN=19
 build:b9 --copt -DBOARD_LEN=9

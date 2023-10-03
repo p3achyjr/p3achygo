@@ -77,3 +77,36 @@ cc_library(
     strip_prefix = "indicators-2.3",
     urls = ["https://github.com/p-ranav/indicators/archive/refs/tags/v2.3.tar.gz"],
 )
+
+# Local hdf5. Will be empty if hdf5 is not installed.
+new_local_repository(
+    name = "hdf5",
+    build_file_content = """
+cc_library(
+    name = "hdf5",
+    hdrs = glob(["include/hdf5/serial/*.h"]),
+    includes = ["include/hdf5/serial/"],
+    srcs = glob(["lib/x86_64-linux-gnu/hdf5/serial/libhdf5*.so"]),
+    visibility = ["//visibility:public"],
+)
+""",
+    path = "/usr",
+)
+
+# Local CUDA 12.0, with TRT. If not installed, should be empty.
+new_local_repository(
+    name = "cuda",
+    build_file_content = """
+cc_library(
+    name = "cuda",
+    hdrs = glob(["include/x86_64-linux-gnu/*.h",
+                 "local/cuda-12.0/targets/x86_64-linux/include/*.h"]),
+    srcs = glob(["lib/x86_64-linux-gnu/libnv*.so",
+                 "local/cuda-12.0/targets/x86_64-linux/lib/*.so"]),
+    includes = ["include/x86_64-linux-gnu/",
+                "local/cuda-12.0/targets/x86_64-linux/include"],
+    visibility = ["//visibility:public"],
+)
+""",
+    path = "/usr",
+)

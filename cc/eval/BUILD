@@ -11,6 +11,7 @@ cc_binary(
         ":eval",
         "//cc/core",
         "//cc/nn",
+        "//cc/nn/engine:engine_factory",
         "@com_google_absl//absl/flags:flag",
         "@com_google_absl//absl/flags:parse",
         "@com_google_absl//absl/hash",

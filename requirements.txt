@@ -2,3 +2,6 @@ google-cloud-storage==2.7.0
 bitstring
 sgfmill
 tensorflow==2.11.0
+h5py==3.6.0
+tf2onnx
+onnxruntime-gpu

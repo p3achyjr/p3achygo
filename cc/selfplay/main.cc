@@ -16,6 +16,7 @@
 #include "absl/strings/str_format.h"
 #include "cc/constants/constants.h"
 #include "cc/core/filepath.h"
+#include "cc/nn/engine/engine_factory.h"
 #include "cc/nn/nn_interface.h"
 #include "cc/recorder/dir.h"
 #include "cc/recorder/game_recorder.h"
@@ -91,9 +92,10 @@ int main(int argc, char** argv) {
             << " threads.";
 
   // initialize NN evaluator.
+  std::unique_ptr<nn::Engine> engine = nn::CreateEngine(
+      nn::KindFromEnginePath(model_path), model_path, num_threads);
   std::unique_ptr<nn::NNInterface> nn_interface =
-      std::make_unique<nn::NNInterface>(num_threads);
-  CHECK_OK(nn_interface->Initialize(std::move(model_path)));
+      std::make_unique<nn::NNInterface>(num_threads, std::move(engine));
 
   // initialize serialization objects.
   std::unique_ptr<recorder::GameRecorder> game_recorder =

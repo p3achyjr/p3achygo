@@ -18,7 +18,7 @@ from subprocess import Popen, PIPE, STDOUT
 from threading import Thread
 
 FLAGS = flags.FLAGS
-POLL_INTERVAL_S = 10
+POLL_INTERVAL_S = 60
 
 # How many times to use each sample, on average.
 AVG_NUM_SYMMETRIES = 3

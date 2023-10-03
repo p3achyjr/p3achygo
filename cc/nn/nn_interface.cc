@@ -3,96 +3,41 @@
 #include <stdlib.h>
 
 #include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
 #include "cc/game/symmetry.h"
-#include "cc/nn/create_tensor_shape.h"
-#include "cc/nn/nn_board_utils.h"
-#include "tensorflow/cc/ops/array_ops.h"
-#include "tensorflow/cc/ops/math_ops.h"
-#include "tensorflow/cc/ops/nn_ops.h"
-#include "tensorflow/core/graph/default_device.h"
-#include "tensorflow/core/lib/core/status.h"
-#include "tensorflow/core/public/session.h"
+#include "cc/nn/engine/go_features.h"
 
 namespace nn {
 namespace {
 using namespace ::core;
 using namespace ::game;
-using namespace ::tensorflow;
 
 // 2 ** 20. Inference Result is 6kb, so this will be about ~6GB of RAM.
 static constexpr char kSavedModelTagServe[] = "serve";
 
 }  // namespace
 
-NNInterface::NNInterface(int num_threads)
-    : NNInterface(num_threads, kTimeoutUs, constants::kDefaultNNCacheSize) {}
+NNInterface::NNInterface(int num_threads, std::unique_ptr<Engine> engine)
+    : NNInterface(num_threads, kTimeoutUs, constants::kDefaultNNCacheSize,
+                  std::move(engine)) {}
 
-NNInterface::NNInterface(int num_threads, int64_t timeout, size_t cache_size)
-    : session_options_(SessionOptions()),
-      run_options_(RunOptions()),
-      is_initialized_(false),
-      num_registered_threads_(num_threads),
+NNInterface::NNInterface(int num_threads, int64_t timeout, size_t cache_size,
+                         std::unique_ptr<Engine> engine)
+    : num_registered_threads_(num_threads),
       num_threads_(num_threads),
       thread_info_(num_threads_),
       running_(true),
-      timeout_(timeout) {
+      timeout_(timeout),
+      engine_(std::move(engine)) {
   InitializeCache(cache_size);
+  if (num_threads_ > 1) {
+    infer_thread_ = std::thread(&NNInterface::InferLoop, this);
+  }
 
-  // Allow GPU memory growth.
-  ConfigProto config;
-  config.mutable_gpu_options()->set_allow_growth(true);
-  session_options_.config.MergeFrom(config);
-
-  // Allocate inference buffers.
-  nn_input_buf_ = {
-      Tensor(DataType::DT_FLOAT,
-             CreateTensorShape({num_threads_, BOARD_LEN, BOARD_LEN,
-                                constants::kNumInputFeaturePlanes})),
-      Tensor(DataType::DT_FLOAT,
-             CreateTensorShape(
-                 {num_threads_, constants::kNumInputFeatureScalars}))};
-
-  nn_input_buf_[0].flat<float>().setZero();
-  nn_input_buf_[1].flat<float>().setZero();
-
-  nn_output_buf_ = {
-      // move logits
-      Tensor(
-          DataType::DT_FLOAT,
-          CreateTensorShape({num_threads_, constants::kMaxMovesPerPosition})),
-      // q30
-      Tensor(DataType::DT_FLOAT, CreateTensorShape({num_threads_, 1})),
-      // q100
-      Tensor(DataType::DT_FLOAT, CreateTensorShape({num_threads_, 1})),
-      // q200
-      Tensor(DataType::DT_FLOAT, CreateTensorShape({num_threads_, 1})),
-      // move softmax
-      Tensor(
-          DataType::DT_FLOAT,
-          CreateTensorShape({num_threads_, constants::kMaxMovesPerPosition})),
-      // win logits
-      Tensor(DataType::DT_FLOAT,
-             CreateTensorShape({num_threads_, constants::kNumValueLogits})),
-      // win percent
-      Tensor(DataType::DT_FLOAT,
-             CreateTensorShape({num_threads_, constants::kNumValueLogits})),
-      // ownership
-      Tensor(DataType::DT_FLOAT,
-             CreateTensorShape({num_threads_, BOARD_LEN, BOARD_LEN, 1})),
-      // score logits
-      Tensor(DataType::DT_FLOAT,
-             CreateTensorShape({num_threads_, constants::kNumScoreLogits})),
-      // score probabilities
-      Tensor(DataType::DT_FLOAT,
-             CreateTensorShape({num_threads_, constants::kNumScoreLogits})),
-      // gamma, just ignore
-      Tensor(DataType::DT_FLOAT, CreateTensorShape({num_threads_, 1})),
-      // auxiliary move logits
-      Tensor(
-          DataType::DT_FLOAT,
-          CreateTensorShape({num_threads_, constants::kMaxMovesPerPosition}))};
+  LOG(INFO) << "NNInterface Initialized. Engine Type: `"
+            << KindToString(engine_->kind()) << "`";
 }
 
 NNInterface::~NNInterface() {
@@ -105,26 +50,9 @@ NNInterface::~NNInterface() {
   }
 }
 
-absl::Status NNInterface::Initialize(std::string&& model_path) {
-  auto status = LoadSavedModel(session_options_, run_options_, model_path,
-                               {kSavedModelTagServe}, &model_bundle_);
-  if (!status.ok()) {
-    return ToAbslStatus(status);
-  }
-
-  if (num_threads_ > 1) {
-    infer_thread_ = std::thread(&NNInterface::InferLoop, this);
-  }
-
-  is_initialized_ = true;
-
-  return absl::OkStatus();
-}
-
 NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
                                                Color color_to_move,
                                                Probability& probability) {
-  DCHECK(is_initialized_);
   NNKey cache_key = NNKey{
       color_to_move,
       game.board().hash(),
@@ -142,37 +70,16 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
   DCHECK(game.moves().size() >= constants::kNumLastMoves);
 
   Symmetry sym = GetRandomSymmetry(probability.prng());
-  board_utils::FillNNInput(thread_id, num_threads_, nn_input_buf_[0],
-                           nn_input_buf_[1], game, color_to_move, sym);
-
+  LoadBatch(thread_id, game, color_to_move, sym);
   SignalLoadedAndBlockUntilReady(thread_id);
 
   // Inference result is now ready.
-  const auto move_logits = nn_output_buf_[kPiLogitsIndex]
-                               .SubSlice(thread_id)
-                               .unaligned_flat<float>();
-  const auto move_probs =
-      nn_output_buf_[kPiProbsIndex].SubSlice(thread_id).unaligned_flat<float>();
-  const auto value_probs =
-      nn_output_buf_[kOutcomeIndex].SubSlice(thread_id).unaligned_flat<float>();
-  const auto score_probs = nn_output_buf_[kScoreProbsIndex]
-                               .SubSlice(thread_id)
-                               .unaligned_flat<float>();
-
-  // Need hand-rolled for loops b/c of potential alignment issues.
   NNInferResult infer_result;
-  for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
-    infer_result.move_logits[i] = move_logits(i);
-  }
-  for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
-    infer_result.move_probs[i] = move_probs(i);
-  }
-  for (int i = 0; i < constants::kNumValueLogits; ++i) {
-    infer_result.value_probs[i] = value_probs(i);
-  }
-  for (int i = 0; i < constants::kNumScoreLogits; ++i) {
-    infer_result.score_probs[i] = score_probs(i);
-  }
+  engine_->GetBatch(thread_id, infer_result);
+
+  // We have finished retrieving data. This is not lock-guarded, but it should
+  // be ok since we are not using this property in any signaling mechanisms.
+  thread_info_[thread_id].res_ready = false;
 
   // We have finished retrieving data. This should not need to be lock-guarded.
   mu_.Lock();
@@ -204,23 +111,12 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
 
 std::array<float, constants::kNumBoardLocs> NNInterface::LoadAndGetOwnership(
     int thread_id, const Game& game, Color color_to_move) {
-  DCHECK(is_initialized_);
-  board_utils::FillNNInput(thread_id, num_threads_, nn_input_buf_[0],
-                           nn_input_buf_[1], game, color_to_move,
-                           Symmetry::kIdentity);
-
+  LoadBatch(thread_id, game, color_to_move, Symmetry::kIdentity);
   SignalLoadedAndBlockUntilReady(thread_id);
 
   // Inference result is now ready.
-  const auto own_slice =
-      nn_output_buf_[kOwnIndex].SubSlice(thread_id).unaligned_flat<float>();
-
-  // Need hand-rolled for loops b/c of potential alignment issues.
-  std::array<float, BOARD_LEN * BOARD_LEN> ownership;
-  for (int i = 0; i < constants::kNumBoardLocs; ++i) {
-    ownership[i] = own_slice(i);
-  }
-
+  std::array<float, constants::kNumBoardLocs> ownership;
+  engine_->GetOwnership(thread_id, ownership);
   return ownership;
 }
 
@@ -270,6 +166,35 @@ void NNInterface::CacheInsert(int thread_id, const NNKey& key,
   thread_caches_[thread_id].Insert(key, result);
 }
 
+void NNInterface::LoadBatch(int thread_id, const game::Game& game,
+                            game::Color color_to_move, game::Symmetry sym) {
+  GoFeatures input_features;
+  input_features.bsize = BOARD_LEN;
+  input_features.color = color_to_move;
+
+  int num_moves = game.num_moves();
+  for (int i = 0; i < constants::kNumLastMoves; ++i) {
+    int mv_offset = num_moves - constants::kNumLastMoves + i;
+    if (mv_offset < 0) {
+      input_features.last_moves[i] = kNoopLoc;
+      continue;
+    }
+    input_features.last_moves[i] = ApplySymmetry(
+        sym, game.move(num_moves - constants::kNumLastMoves + i).loc,
+        BOARD_LEN);
+  }
+
+  input_features.board = ApplySymmetry(sym, game.board().position(), BOARD_LEN);
+  input_features.stones_atari =
+      ApplySymmetry(sym, game.board().GetStonesInAtari(), BOARD_LEN);
+  input_features.stones_two_liberties =
+      ApplySymmetry(sym, game.board().GetStonesWithLiberties(2), BOARD_LEN);
+  input_features.stones_three_liberties =
+      ApplySymmetry(sym, game.board().GetStonesWithLiberties(3), BOARD_LEN);
+
+  engine_->LoadBatch(thread_id, input_features);
+}
+
 void NNInterface::InferLoop() {
   CHECK(num_threads_ > 1);
   while (running_.load(std::memory_order_acquire)) {
@@ -295,10 +220,7 @@ void NNInterface::Infer() {
   }
 
   // Run Inference.
-  std::vector<std::pair<std::string, Tensor>> nn_input = {
-      {kInputNames[0], nn_input_buf_[0]}, {kInputNames[1], nn_input_buf_[1]}};
-  TF_CHECK_OK(model_bundle_.GetSession()->Run(nn_input, kOutputNames, {},
-                                              &nn_output_buf_));
+  engine_->RunInference();
 
   for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
     ThreadInfo& thread = thread_info_[thread_id];
@@ -314,10 +236,6 @@ void NNInterface::Infer() {
       //   inference gives back bogus data.
       thread.res_ready = true;
       thread.loaded_for_inference = false;
-
-      // reset input buffers for the current thread only. See above.
-      nn_input_buf_[0].SubSlice(thread_id).unaligned_flat<float>().setZero();
-      nn_input_buf_[1].SubSlice(thread_id).unaligned_flat<float>().setZero();
     }
   }
 

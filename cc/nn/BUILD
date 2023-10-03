@@ -3,7 +3,6 @@ package(default_visibility = ["//visibility:public"])
 cc_library(
     name = "nn",
     deps = [
-        ":nn_board_utils",
         ":nn_interface",
     ],
 )
@@ -35,29 +34,20 @@ cc_library(
     }),
     hdrs = ["nn_interface.h"],
     deps = [
-        ":feed_fetch_names",
         "//cc/constants",
         "//cc/core:cache",
         "//cc/game",
+        "//cc/nn/engine:engine_hdr",
+        "//cc/nn/engine:go_features",
         "//cc/tensorflow",
+        "@com_google_absl//absl/log",
         "@com_google_absl//absl/status",
     ] + select({
         "//cc:nn_interface_dummy": [],
         "//conditions:default": [
-            ":create_tensor_shape",
-            ":nn_board_utils",
             "@com_google_absl//absl/container:inlined_vector",
         ],
     }),
-)
-
-cc_library(
-    name = "feed_fetch_names",
-    srcs = select({
-        "//cc:trt": ["feed_fetch_names_trt.cc"],
-        "//conditions:default": ["feed_fetch_names.cc"],
-    }),
-    hdrs = ["feed_fetch_names.h"],
 )
 
 cc_test(

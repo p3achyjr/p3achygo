@@ -25,7 +25,7 @@ sys.stderr.reconfigure(line_buffering=True)  # pytype: disable=attribute-error
 
 FLAGS = flags.FLAGS
 
-POLL_INTERVAL_S = 10
+POLL_INTERVAL_S = 60
 BATCH_SIZE = 256
 LR = 3e-3
 EPOCHS_PER_GEN = 1

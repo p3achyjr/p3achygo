@@ -417,8 +417,8 @@ class ValueHead(tf.keras.layers.Layer):
 
     self.score_range = score_range
     self.score_min, self.score_max = -score_range // 2, score_range // 2
-    self.scores = .05 * tf.range(self.score_min + .5,
-                                 self.score_max + .5)  # [-399.5 ... 399.5]
+    # self.scores = .05 * tf.range(self.score_min + .5,
+    #                              self.score_max + .5)  # [-399.5 ... 399.5]
     self.score_identity = tf.keras.layers.Activation(
         'linear')  # need for mixed-precision
     self.score_pre = make_dense(c_val, name='score_distribution_pre')
@@ -430,7 +430,7 @@ class ValueHead(tf.keras.layers.Layer):
     self.board_len = board_len
     self.score_range = score_range
 
-  def call(self, x):
+  def call(self, x, scores):
     v = self.conv(x)
     v_pooled = self.gpool(v)
 
@@ -456,24 +456,23 @@ class ValueHead(tf.keras.layers.Layer):
     # comments assume score_range = 800
     n, _ = v_pooled.shape
 
-    # [[-399.5]
-    #   ...
-    #   399.5]]
-    scores = self.score_identity(tf.expand_dims(self.scores, axis=1))
-    # [[[-399.5]
+    #  [[[-399.5]
     #   ...
     #   399.5]]]
-    # scores = tf.expand_dims(scores, axis=0)
-    # scores = tf.tile(
-    #     scores,
-    #     [n, 1, 1])  # duplicate `batch_size` times (1, 800, 1) -> (n, 800, 1)
+    scores = tf.expand_dims(tf.expand_dims(self.score_identity(scores), axis=1),
+                            axis=0)
+    scores_shape = tf.shape(scores)
+    scores_shape = tf.concat([tf.shape(x)[0:1], scores_shape[1:]], axis=0)
+    scores = tf.broadcast_to(scores, scores_shape)
+    # scores = tf.tile(scores, tf.constant(
+    #     [n, 1, 1]))  # duplicate `batch_size` times (1, 800, 1) -> (n, 800, 1)
 
     v_pools = tf.expand_dims(v_pooled, axis=1)  # (n, k) -> (n, 1, k)
     v_pools = tf.tile(v_pools,
                       [1, self.score_range, 1])  # (n, 1, k) -> (n, 800, k)
-    # v_scores = tf.concat([v_pools, scores], axis=2)  # (n, 800, k + 1)
-    v_scores = tf.vectorized_map(lambda x: tf.concat([x, scores], axis=1),
-                                 v_pools)
+    v_scores = tf.concat([v_pools, scores], axis=2)  # (n, 800, k + 1)
+    # v_scores = tf.vectorized_map(lambda x: tf.concat([x, scores], axis=1),
+    #                              v_pools)
     v_scores = self.score_pre(v_scores)
     v_scores = tf.keras.activations.relu(v_scores)
     score_logits = self.score_output(v_scores)  # (n, 800, 1)
@@ -606,7 +605,14 @@ class P3achyGoModel(tf.keras.Model):
     self.conv_size = conv_size
     self.broadcast_interval = broadcast_interval
 
-  def call(self, board_state, game_state, training=False):
+  def call(self,
+           board_state,
+           game_state,
+           training=False,
+           scores=None):
+    if scores is None:
+      scores = .05 * tf.range(-SCORE_RANGE // 2 + .5, SCORE_RANGE // 2 + .5)
+
     x = self.init_board_conv(board_state, training=training)
     game_state_biases = self.init_game_layer(game_state)
 
@@ -622,7 +628,7 @@ class P3achyGoModel(tf.keras.Model):
     pi_logits, pi_logits_aux = self.policy_head(x, training=training)
     pi = tf.keras.activations.softmax(pi_logits)
     (outcome_logits, q30, q100, q200, ownership, score_logits,
-     gamma) = self.value_head(x)
+     gamma) = self.value_head(x, scores=scores)
     outcome_probs = tf.keras.activations.softmax(outcome_logits)
     score_probs = tf.keras.activations.softmax(score_logits)
 
@@ -729,7 +735,7 @@ class P3achyGoModel(tf.keras.Model):
                                       self.num_input_planes))
     x1 = tf.keras.layers.Input(shape=(self.num_input_features,))
     model = tf.keras.Model(inputs=[x0, x1], outputs=self.call(x0, x1))
-    return model.summary()
+    model.summary()
 
   def input_planes_shape(self):
     return [self.board_len, self.board_len, self.num_input_planes]

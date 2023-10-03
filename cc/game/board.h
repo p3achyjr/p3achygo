@@ -412,7 +412,8 @@ inline std::ostream& operator<<(std::ostream& os,
   return os;
 }
 
-inline std::ostream& operator<<(std::ostream& os, const Board& board) {
+inline std::ostream& operator<<(std::ostream& os,
+                                const Board::BoardData& board) {
   auto is_star_point = [](int i, int j) {
     return (i == 3 || i == 9 || i == 15) && (j == 3 || j == 9 || j == 15);
   };
@@ -423,14 +424,16 @@ inline std::ostream& operator<<(std::ostream& os, const Board& board) {
     else
       os << i << " ";
     for (auto j = 0; j < BOARD_LEN; j++) {
-      if (board.at(i, j) == EMPTY && is_star_point(i, j)) {
+      if (board[i * BOARD_LEN + j] == EMPTY && is_star_point(i, j)) {
         os << "+ ";
-      } else if (board.at(i, j) == EMPTY) {
+      } else if (board[i * BOARD_LEN + j] == EMPTY) {
         os << "⋅ ";
-      } else if (board.at(i, j) == BLACK) {
+      } else if (board[i * BOARD_LEN + j] == BLACK) {
         os << "○ ";
-      } else if (board.at(i, j) == WHITE) {
+      } else if (board[i * BOARD_LEN + j] == WHITE) {
         os << "● ";
+      } else {
+        os << "? ";
       }
     }
 
@@ -441,6 +444,16 @@ inline std::ostream& operator<<(std::ostream& os, const Board& board) {
      << "A B C D E F G H I J K L M N O P Q R S";
 
   return os;
+}
+
+inline std::ostream& operator<<(std::ostream& os, const Board& board) {
+  return os << board.board_;
+}
+
+inline std::string ToString(const Board::BoardData& board) {
+  std::stringstream ss;
+  ss << board;
+  return ss.str();
 }
 
 }  // namespace game

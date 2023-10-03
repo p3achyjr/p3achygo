@@ -6,6 +6,7 @@ from model import P3achyGoModel
 from model_config import ModelConfig
 from constants import *
 import trt_convert
+import proc
 
 from pathlib import Path
 
@@ -58,6 +59,25 @@ def save_trt(model: P3achyGoModel, calib_ds_path: str, local_model_dir: str,
   trt_converter.save(output_saved_model_dir=str(Path(model_path, '_trt')))
 
   return str(model_path)
+
+
+def save_onnx_trt(model: P3achyGoModel, calib_ds_path: str,
+                  local_model_dir: str, gen: int, batch_size: int,
+                  trt_convert_path: str) -> str:
+  '''
+  Saves model through ONNX -> TRT path.
+  '''
+  model_path = save(model, local_model_dir, gen)
+  logging.info('Converting to ONNX...')
+  onnx_path = trt_convert.convert_onnx(model_path)
+
+  logging.info('Converting to ONNX-TRT...')
+  cmd = (f'{trt_convert_path} --onnx_path={onnx_path}' +
+         f' --ds_path={calib_ds_path}' + f' --onnx_path={onnx_path}' +
+         f' --batch_size={batch_size}')
+
+  proc.run_proc(cmd)
+  return str(Path(model_path, '_onnx', 'engine.trt'))
 
 
 def save(model: P3achyGoModel, local_model_dir: str, gen: int) -> str:
