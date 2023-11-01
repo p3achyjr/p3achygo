@@ -11,7 +11,7 @@
 
 using namespace ::nn;
 
-ABSL_FLAG(std::string, ds_path, {}, "Path to DS for benchmarks.");
+ABSL_FLAG(std::string, ds_path, "", "Path to DS for benchmarks.");
 ABSL_FLAG(std::vector<std::string>, paths, {}, "Paths to models.");
 ABSL_FLAG(std::vector<std::string>, kinds, {},
           "Kind of each path. 0=TF, 1=TF-TRT, 2=TRT");

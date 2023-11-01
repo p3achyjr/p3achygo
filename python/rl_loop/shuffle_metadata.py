@@ -29,7 +29,7 @@ def training_window_size(num_samples_generated: int) -> int:
 
 
 def select_sample_probability(training_window_size: int, games_per_gen: int,
-                              k: int) -> float:
+                              k: float) -> float:
   '''
   Return probability with which we draw each individual sample.
 

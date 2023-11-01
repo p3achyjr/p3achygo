@@ -67,13 +67,15 @@ def main(_):
   if FLAGS.batch_num_path == '':
     logging.error('No --batch_num_path specified.')
     return
-  if FLAGS.trt and FLAGS.trt_convert_path == '':
+  if FLAGS.save_trt and FLAGS.trt_convert_path == '':
     logging.error('No --trt_convert_path specified.')
     return
 
   is_gpu = False
-  if tf.config.list_physical_devices('GPU'):
+  gpus = tf.config.list_physical_devices('GPU')
+  if gpus:
     tf.keras.mixed_precision.set_global_policy('mixed_float16')
+    tf.config.experimental.set_memory_growth(gpus[0], True)
     is_gpu = True
   else:
     logging.warning('No GPU detected.')

@@ -101,7 +101,6 @@ def main(_):
     ]
     onnx_model, _ = tf2onnx.convert.from_function(
         model_fn, input_signature=input_signature)
-    print(onnx.printer.to_text(onnx_model))
 
     Path(model_path, '_onnx').mkdir(exist_ok=True)
     onnx.save(onnx_model, onnx_path)

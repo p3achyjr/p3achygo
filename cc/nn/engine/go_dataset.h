@@ -5,7 +5,6 @@
 #include <optional>
 
 #include "cc/constants/constants.h"
-#include "cc/game/board.h"
 #include "cc/game/color.h"
 #include "cc/nn/engine/go_features.h"
 

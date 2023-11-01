@@ -174,10 +174,12 @@ void NNInterface::LoadBatch(int thread_id, const game::Game& game,
     if (mv_offset < 0) {
       input_features.last_moves[i] = kNoopLoc;
       continue;
+    } else if (game.move(mv_offset).loc == kPassLoc) {
+      input_features.last_moves[i] = kPassLoc;
+      continue;
     }
-    input_features.last_moves[i] = ApplySymmetry(
-        sym, game.move(num_moves - constants::kNumLastMoves + i).loc,
-        BOARD_LEN);
+    input_features.last_moves[i] =
+        ApplySymmetry(sym, game.move(mv_offset).loc, BOARD_LEN);
   }
 
   input_features.board = ApplySymmetry(sym, game.board().position(), BOARD_LEN);

@@ -49,8 +49,8 @@ def eval(run_id: str, eval_bin_path: str, eval_res_path: str,
          cur_model_path: str, cand_model_path: str, local_run_dir: str, k: int,
          n: int) -> EvalResult:
   '''`cur_model_path` and `cand_model_path` are the _base_ paths of the models.'''
-  cur_model_path_trt = str(Path(cur_model_path, '_trt'))
-  cand_model_path_trt = str(Path(cand_model_path, '_trt'))
+  cur_model_path_trt = str(Path(cur_model_path, '_onnx', 'engine.trt'))
+  cand_model_path_trt = str(Path(cand_model_path, '_onnx', 'engine.trt'))
 
   env = os.environ.copy()
   env['LD_PRELOAD'] = '/usr/local/lib/libmimalloc.so'
@@ -60,7 +60,8 @@ def eval(run_id: str, eval_bin_path: str, eval_res_path: str,
          f' --recorder_path={local_run_dir}' +
          f' --cache_size={EVAL_CACHE_SIZE}' +
          f' --num_games={min(NUM_EVAL_GAMES, trt_batch_size())}' +
-         f' --cur_n={n} --cur_k={k} --cand_n={n} --cand_k={k}')
+         f' --cur_n={n} --cur_k={k} --cur_noise_scaling=0' +
+         f' --cand_n={n} --cand_k={k} --cand_noise_scaling=0')
   logging.info(f'Running Eval Command:\n\'{cmd}\'')
   exit_code = proc.run_proc(cmd, env=env)
   logging.info(f'Eval Exited with Status {exit_code}')
@@ -285,7 +286,8 @@ def main(_):
 
   sp_bin_path = Path(FLAGS.bin_dir, 'cc', 'selfplay', 'main')
   eval_bin_path = Path(FLAGS.bin_dir, 'cc', 'eval', 'main')
-  build_trt_engine_path = Path(FLAGS.bin_dir, 'cc', 'nn', 'engine', 'scripts')
+  build_trt_engine_path = Path(FLAGS.bin_dir, 'cc', 'nn', 'engine', 'scripts',
+                               'build_and_run_trt_engine')
 
   val_ds_path = gcs.download_val_ds(FLAGS.local_run_dir)
   run_config = config.parse(FLAGS.run_id)

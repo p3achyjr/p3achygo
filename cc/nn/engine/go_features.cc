@@ -23,8 +23,7 @@ void LoadPlanes(float* planes_buf, std::array<int, 4> planes_shape,
     }
 
     int channel = i + 2;
-    std::array<int, 4> index = {batch_id, last_move / BOARD_LEN,
-                                last_move % BOARD_LEN, channel};
+    std::array<int, 4> index = {batch_id, last_move.i, last_move.j, channel};
     SetIndex(planes_buf, planes_shape, index, 1.0f);
   }
 }
