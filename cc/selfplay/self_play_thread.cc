@@ -28,16 +28,16 @@ using namespace ::recorder;
 static constexpr int kShouldLogShard = 8;
 
 // Probability to add any state to the seen buffer.
-static constexpr float kAddSeenStateProb = .02f;
+static constexpr float kAddSeenStateProb = .04f;
 
 // Probability of drawing a state from the visited buffer.
-static constexpr float kUseSeenStateProb = .25f;
+static constexpr float kUseSeenStateProb = .3f;
 
 // Max Number of beginning moves to sample directly.
 static constexpr int kMaxNumRawPolicyMoves = 30;
 
 // Probability of exploration.
-static constexpr float kOpeningExploreProb = .7f;
+static constexpr float kOpeningExploreProb = .95f;
 
 // Thresholds at which to compute pass-alive regions.
 static constexpr int kComputePAMoveNums[] = {175, 200, 250, 300, 350, 400};
@@ -242,7 +242,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       } else {
         gumbel_n = config.default_params.n;
         gumbel_k = config.default_params.k;
-        noise_scaling = 0.5f;
+        noise_scaling = 0.0f;
       }
 
       // NN Stats.

@@ -6,7 +6,6 @@
 #include <fstream>
 
 #include "cc/constants/constants.h"
-#include "cc/game/board.h"
 #include "cc/game/color.h"
 #include "cc/nn/engine/buf_utils.h"
 #include "cc/nn/engine/go_dataset.h"
@@ -44,7 +43,6 @@ class Int8CalibratorImpl : public Int8Calibrator {
   std::string calib_tfrec_path_;
   int batch_counter_;
   int ex_counter_;
-  int num_batches_;
   GoDataset* const go_ds_;
   GoDataset::Iterator go_ds_iterator_;
   std::string calib_cache_path_;

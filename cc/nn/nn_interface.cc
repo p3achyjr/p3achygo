@@ -77,10 +77,6 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
   NNInferResult infer_result;
   engine_->GetBatch(thread_id, infer_result);
 
-  // We have finished retrieving data. This is not lock-guarded, but it should
-  // be ok since we are not using this property in any signaling mechanisms.
-  thread_info_[thread_id].res_ready = false;
-
   // We have finished retrieving data. This should not need to be lock-guarded.
   mu_.Lock();
   thread_info_[thread_id].res_ready = false;
@@ -178,10 +174,12 @@ void NNInterface::LoadBatch(int thread_id, const game::Game& game,
     if (mv_offset < 0) {
       input_features.last_moves[i] = kNoopLoc;
       continue;
+    } else if (game.move(mv_offset).loc == kPassLoc) {
+      input_features.last_moves[i] = kPassLoc;
+      continue;
     }
-    input_features.last_moves[i] = ApplySymmetry(
-        sym, game.move(num_moves - constants::kNumLastMoves + i).loc,
-        BOARD_LEN);
+    input_features.last_moves[i] =
+        ApplySymmetry(sym, game.move(mv_offset).loc, BOARD_LEN);
   }
 
   input_features.board = ApplySymmetry(sym, game.board().position(), BOARD_LEN);

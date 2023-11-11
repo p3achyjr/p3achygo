@@ -76,7 +76,7 @@ def loop(bin_path: str,
 
   # first model is now uploaded. Get it and start run.
   model_path = gcs.download_model(run_id, str(local_models_dir), model_gen)
-  model_path = str(Path(model_path, '_trt'))
+  model_path = str(Path(model_path, '_onnx', 'engine.trt'))
 
   # most recent chunk tells us which generation we are making self-play data for.
   gen = gcs.get_most_recent_chunk(run_id)

@@ -73,8 +73,7 @@ def save_onnx_trt(model: P3achyGoModel, calib_ds_path: str,
 
   logging.info('Converting to ONNX-TRT...')
   cmd = (f'{trt_convert_path} --onnx_path={onnx_path}' +
-         f' --ds_path={calib_ds_path}' + f' --onnx_path={onnx_path}' +
-         f' --batch_size={batch_size}')
+         f' --ds_path={calib_ds_path}' +  f' --batch_size={batch_size}')
 
   proc.run_proc(cmd)
   return str(Path(model_path, '_onnx', 'engine.trt'))

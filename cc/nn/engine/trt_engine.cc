@@ -7,6 +7,7 @@
 #include <numeric>
 #include <unordered_map>
 
+#include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "cc/nn/engine/buf_utils.h"
 #include "cc/nn/engine/trt_logger.h"

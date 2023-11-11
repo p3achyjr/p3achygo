@@ -16,7 +16,7 @@ cc_library(
         ":trt_engine",
         ":trt_utils",
         "//cc/constants",
-        "//cc/game",
+        "//cc/game:hdrs",
         "//cc/tensorflow",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
@@ -44,7 +44,7 @@ cc_library(
     deps = [
         ":go_features",
         "//cc/constants",
-        "//cc/game",
+        "//cc/game:hdrs",
         "//cc/tensorflow",
     ],
 )
@@ -60,7 +60,7 @@ cc_library(
     ],
     deps = [
         "//cc/constants",
-        "//cc/game",
+        "//cc/game:hdrs",
         "//cc/tensorflow",
         "@com_google_absl//absl/status",
     ],
@@ -90,8 +90,9 @@ cc_library(
     hdrs = ["tf_engine.h"],
     deps = [
         ":engine_hdr",
-        "//cc/game",
+        "//cc/game:hdrs",
         "//cc/tensorflow",
+        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
     ],
 )
@@ -103,8 +104,10 @@ cc_library(
     deps = [
         ":engine_hdr",
         ":trt_utils",
-        "//cc/game",
+        "//cc/game:hdrs",
         "//cc/tensorflow",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
         "@cuda",
     ],
 )

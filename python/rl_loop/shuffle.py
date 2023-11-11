@@ -21,7 +21,7 @@ FLAGS = flags.FLAGS
 POLL_INTERVAL_S = 60
 
 # How many times to use each sample, on average.
-AVG_NUM_SYMMETRIES = 3
+AVG_NUM_SYMMETRIES = 2.5
 
 running = True
 
@@ -145,7 +145,7 @@ def loop(bin_path: str, run_id: str, local_run_dir: str,
   logging.info(f'Using {local_sp_chunk_dir} to store self-play chunks.')
 
   gcs_sp_chunks = set(gcs.list_sp_chunks(run_id))
-  download_chunks(local_sp_chunk_dir, gcs_sp_chunks)
+  gcs.rsync_chunks(run_id, local_sp_chunk_dir)
 
   num_samples_generated = num_samples_in_chunks(gcs_sp_chunks)
 

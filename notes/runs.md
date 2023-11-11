@@ -213,3 +213,23 @@ p3achygo-v2     78 78.00%       37 74.00%     41 82.00%    205.19
 ```
 Leela Elo: 2331
 Elo: 2551
+
+## Model 397
+## vs. Leela 111
+
+`../leelaz -g --noponder -p 1600 -t 1 -w 111.gz`
+
+`p3achygo --model_path=/tmp/p3achygo/models/model_0397 --n=1600 --k=16`
+
+```
+leela v p3achygo-v3 (100/100 games)
+board size: 19   komi: 7.5
+              wins              black         white       avg cpu
+leela           51 51.00%       23 46.00%     28 56.00%     72.53
+p3achygo-v3     49 49.00%       22 44.00%     27 54.00%   1071.10
+                                45 45.00%     55 55.00%
+```
+
+Leela Elo: 3209
+Elo: 3202
+

@@ -5,7 +5,6 @@ cc_binary(
     srcs = ["build_and_run_trt_engine.cc"],
     linkopts = ["-ldl"],
     deps = [
-        "//cc/game",
         "//cc/nn/engine:benchmark_engine",
         "//cc/nn/engine:go_features",
         "//cc/nn/engine:trt",
@@ -19,7 +18,6 @@ cc_binary(
     srcs = ["compare_engines.cc"],
     linkopts = ["-ldl"],
     deps = [
-        "//cc/game",
         "//cc/nn/engine:benchmark_engine",
         "//cc/nn/engine:engine_factory",
         "//cc/nn/engine:engine_hdr",

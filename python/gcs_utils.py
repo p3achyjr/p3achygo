@@ -148,6 +148,17 @@ def _download_chunk_file(run_id: str, local_chunk_dir: str,
 
   return _download(str(local_chunk_path), str(gcs_chunk_path))
 
+def rsync_chunks(run_id: str, local_dir: str) -> str:
+  gcs_dir = gcs_sp_chunk_dir(run_id)
+
+  if not os.path.exists(local_dir):
+    os.mkdir(local_dir)
+
+  cmd = f'gsutil -m rsync -r gs://{GCS_BUCKET}/{str(gcs_dir)} {str(local_dir)}'
+  subprocess.run(shlex.split(cmd), check=True)
+
+  return str(local_dir)
+
 
 def list_sp_chunks(run_id: str) -> list[str]:
   gcs_dir = gcs_sp_chunk_dir(run_id) + '/'

@@ -101,11 +101,6 @@ TFEngineImpl::TFEngineImpl(std::string path, Kind kind, int batch_size)
       kind_(kind),
       batch_size_(batch_size),
       path_(path) {
-  // Allow GPU memory growth.
-  ConfigProto config;
-  config.mutable_gpu_options()->set_allow_growth(true);
-  session_options_.config.MergeFrom(config);
-
   nn_input_buf_ = {
       Tensor(DataType::DT_FLOAT,
              CreateTensorShape({batch_size_, BOARD_LEN, BOARD_LEN,

@@ -1,6 +1,7 @@
 #include "cc/nn/engine/benchmark_engine.h"
 
 #include <cfloat>
+#include <sstream>
 
 #include "absl/log/log.h"
 

@@ -5,7 +5,6 @@
 #include <iostream>
 
 #include "cc/constants/constants.h"
-#include "cc/game/board.h"
 #include "cc/game/color.h"
 
 namespace nn {
