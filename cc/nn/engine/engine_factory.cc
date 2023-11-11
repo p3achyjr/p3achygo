@@ -14,19 +14,14 @@ namespace fs = std::filesystem;
 
 Engine::Kind KindFromEnginePath(std::string path) {
   // Attempts to create engine from filepath.
-  LOG(INFO) << "FILEPATH: " << path;
   fs::path filepath(path);
   if (fs::is_regular_file(filepath)) {
-    LOG(INFO) << "extension: " << filepath.extension() << " correct ? "
-              << (filepath.extension() == ".trt");
     if (filepath.extension() != ".trt") return Engine::Kind::kUnknown;
     return Engine::Kind::kTrt;
   }
 
   // Directory. Get Last Folder.
   auto last_folder = filepath.filename();
-  LOG(INFO) << "last_folder: " << last_folder << " correct ? "
-            << (last_folder == "_trt");
   if (last_folder == "_trt") {
     return Engine::Kind::kTFTrt;
   }
