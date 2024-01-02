@@ -5,7 +5,6 @@
 #include <memory>
 
 #include "absl/log/check.h"
-#include "absl/status/statusor.h"
 #include "cc/constants/constants.h"
 #include "cc/core/util.h"
 #include "cc/core/vmath.h"
@@ -58,7 +57,7 @@ float QTransform(float q, int max_b) {
 }
 
 // interpolates NN value evaluation with empirical values derived from visits.
-float VMixed(TreeNode* node) {
+float VMixed(const TreeNode* node) {
   if (SumChildrenN(node) == 0) {
     return node->init_util_est;
   }
@@ -94,7 +93,7 @@ int Argmax(std::array<float, constants::kMaxMovesPerPosition>& arr) {
 
 // Compute completedQ = {q(a) if N(a) > 0, v_mixed otherwise }.
 std::array<float, constants::kMaxMovesPerPosition> ComputeImprovedPolicy(
-    TreeNode* node) {
+    const TreeNode* node) {
   float v_mix = VMixed(node);
   int max_n = MaxN(node);
   alignas(MM_ALIGN) std::array<float, constants::kMaxMovesPerPosition>
@@ -132,6 +131,80 @@ std::array<float, constants::kMaxMovesPerPosition> ComputeRootImprovedPolicy(
 }
 
 }  // namespace
+
+Loc GumbelNonRootSearchPolicy::SelectNextAction(const TreeNode* node,
+                                                const Game& game,
+                                                Color color_to_move) const {
+  DCHECK(node->state != TreeNodeState::kNew);
+  std::array<float, constants::kMaxMovesPerPosition> policy_improved =
+      ComputeImprovedPolicy(node);
+
+  // select node with greatest disparity between expected value and visit
+  // count.
+  int selected_action = 0;
+  float max_disparity = kMinNonRootDisparity;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    TreeNode* child = node->children[a].get();
+    float disparity =
+        policy_improved[a] - (N(child) / (1 + SumChildrenN(node)));
+    if (disparity > max_disparity && game.IsValidMove(a, color_to_move)) {
+      max_disparity = disparity;
+      selected_action = a;
+    }
+  }
+
+  return game::AsLoc(selected_action);
+}
+
+PuctSearchPolicy::PuctSearchPolicy(float c_puct, float c_puct_visit_scaling)
+    : c_puct_(c_puct), c_puct_visit_scaling_(c_puct_visit_scaling) {}
+
+Loc PuctSearchPolicy::SelectNextAction(const TreeNode* node,
+                                       const game::Game& game,
+                                       game::Color color_to_move) const {
+  static constexpr float kFPU = 0.2f;
+  DCHECK(node->state != TreeNodeState::kNew);
+
+  // Scale c_puct according to visit count.
+  const float c_puct =
+      c_puct_ + c_puct_visit_scaling_ * std::log((N(node) + 500.0f) / 500.0f);
+
+  // Find total explored policy.
+  float p_explored = 0.0f;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    if (N(node->children[a].get()) > 0) {
+      p_explored += node->move_probs[a];
+    }
+  }
+
+  // Fallback V for unexplored children.
+  float v_fpu = V(node) - kFPU * std::sqrt(p_explored);
+
+  // Compute PUCT values.
+  std::array<std::pair<int, float>, constants::kMaxMovesPerPosition> pucts{};
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    TreeNode* child = node->children[a].get();
+    float u = c_puct * node->move_probs[a] *
+              (std::sqrt(N(node)) / (1 + NAction(node, a)));
+    float v = child == nullptr ? v_fpu : Q(node, a);
+    pucts[a] = {a, u + v};
+  }
+
+  // Reverse sort so the highest puct value is in front.
+  std::sort(pucts.begin(), pucts.end(), [](const auto& p0, const auto& p1) {
+    return p0.second > p1.second;
+  });
+
+  for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
+    auto [a, _] = pucts[i];
+    if (game.IsValidMove(a, color_to_move)) {
+      return game::AsLoc(a);
+    }
+  }
+
+  // No valid moves. Should never get here.
+  return game::kNoopLoc;
+}
 
 GumbelEvaluator::GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id)
     : leaf_evaluator_(nn_interface, thread_id) {}
@@ -218,10 +291,10 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
         Game search_game = game;
         search_game.PlayMove(move_info.move_loc, color_to_move);
 
-        absl::InlinedVector<TreeNode*, kMaxPathLenEst> search_path =
-            SearchNonRoot(probability, search_game, child,
-                          game::OppositeColor(color_to_move), color_to_move,
-                          root->score_est);
+        GumbelNonRootSearchPolicy search_policy;
+        absl::InlinedVector<TreeNode*, kMaxPathLenEst> search_path = Search(
+            probability, search_game, child, game::OppositeColor(color_to_move),
+            color_to_move, root->score_est, &search_policy);
 
         // update tree
         Backward(search_path);
@@ -301,77 +374,36 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
 
 // Search using PUCT to select root actions. Still uses Gumbel planning at
 // non-root nodes.
-// Gumbel non-root planning constructs a new
 GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
                                              game::Game& game, TreeNode* root,
                                              game::Color color_to_move, int n,
                                              const float c_puct) {
-  static constexpr float kFPU = 0.2f;
-  auto u = [c_puct](TreeNode* node, int action) {
-    return c_puct * node->move_probs[action] *
-           (std::sqrt(N(node)) / (1 + NAction(node, action)));
-  };
-
   if (root->state == TreeNodeState::kNew) {
     leaf_evaluator_.EvaluateRoot(probability, game, root, color_to_move);
   }
 
-  std::array<float, constants::kMaxMovesPerPosition> visit_counts{};
-  std::array<float, constants::kMaxMovesPerPosition> us{};
-  std::array<float, constants::kMaxMovesPerPosition> qs{};
-  float p_explored = 0.0f;
-  for (int mv = 0; mv < constants::kMaxMovesPerPosition; ++mv) {
-    // Populate Initial U(s, a)
-    if (!game.IsValidMove(game::AsLoc(mv), color_to_move)) {
-      us[mv] = -100000;
-      continue;
-    }
-    us[mv] = u(root, mv);
+  // Freeze visit counts, so we can reconstruct stats later.
+  std::array<float, constants::kMaxMovesPerPosition> visit_counts_pre_search;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    visit_counts_pre_search[a] = NAction(root, a);
   }
 
-  while (n > 0) {
-    std::array<float, constants::kMaxMovesPerPosition> child_utilities;
-    float v_fpu = V(root) - kFPU * std::sqrt(p_explored);
-    for (int mv = 0; mv < constants::kMaxMovesPerPosition; ++mv) {
-      // Populate Initial U(s, a) + Q(s, a)
-      child_utilities[mv] = us[mv] + (visit_counts[mv] == 0 ? v_fpu : qs[mv]);
-    }
-
-    int mv = Argmax(child_utilities);
+  // Conduct search.
+  PuctSearchPolicy search_policy(c_puct, 0.45);
+  for (size_t _ = 0; _ < n; ++_) {
     Game search_game = game;
-    search_game.PlayMove(game::AsLoc(mv), color_to_move);
-
-    if (!root->children[mv]) {
-      root->children[mv] = std::make_unique<TreeNode>();
-    }
-
-    TreeNode* child = root->children[mv].get();
-    absl::InlinedVector<TreeNode*, kMaxPathLenEst> search_path = SearchNonRoot(
-        probability, search_game, child, game::OppositeColor(color_to_move),
-        color_to_move, root->score_est);
-
-    // update tree
-    float leaf_q_mult =
-        search_path.back()->color_to_move == color_to_move ? 1.0f : -1.0f;
+    absl::InlinedVector<TreeNode*, kMaxPathLenEst> search_path =
+        Search(probability, search_game, root, color_to_move, color_to_move,
+               root->score_est, &search_policy);
     Backward(search_path);
-    SingleBackup(root, child->n, leaf_q_mult * V(search_path.back()),
-                 leaf_q_mult * VOutcome(search_path.back()));
-
-    // update PUCT U(s, a)
-    float u_new = u(root, mv);
-    float q_new = Q(root, mv);
-
-    us[mv] = u_new;
-    qs[mv] = q_new;
-    if (visit_counts[mv] == 0) {
-      p_explored += root->move_probs[mv];
-    }
-    ++visit_counts[mv];
-
-    --n;
   }
 
   // Build result.
+  std::array<float, constants::kMaxMovesPerPosition> visit_counts;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    visit_counts[a] = NAction(root, a) - visit_counts_pre_search[a];
+  }
+
   Loc raw_nn_move = game::AsLoc(Argmax(root->move_logits));
   Loc mcts_move = game::AsLoc(Argmax(visit_counts));
   absl::InlinedVector<ChildStats, 16> child_stats;
@@ -387,7 +419,7 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
         root->move_probs[mv],
         root->move_logits[mv],
         0.0f,
-        us[mv] + qs[mv],
+        0.0f,
     });
   }
   GumbelResult result = {raw_nn_move, mcts_move, visit_counts,
@@ -403,9 +435,9 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
 // `root_score_est`: Value estimate for root node. Subsequent node score
 // estimates will be centered against this value.
 absl::InlinedVector<TreeNode*, GumbelEvaluator::kMaxPathLenEst>
-GumbelEvaluator::SearchNonRoot(core::Probability& probability, Game& game,
-                               TreeNode* node, Color color_to_move,
-                               Color root_color, float root_score_est) {
+GumbelEvaluator::Search(core::Probability& probability, Game& game,
+                        TreeNode* node, Color color_to_move, Color root_color,
+                        float root_score_est, SearchPolicy* search_policy) {
   absl::InlinedVector<TreeNode*, kMaxPathLenEst> path = {node};
   if (node->state == TreeNodeState::kNew) {
     // leaf node. evaluate and return.
@@ -417,23 +449,9 @@ GumbelEvaluator::SearchNonRoot(core::Probability& probability, Game& game,
   // internal node. Trace a single path until we hit a leaf.
   while (path.back()->state != TreeNodeState::kNew &&
          !(path.back()->is_terminal) && !game.IsGameOver()) {
-    auto node = path.back();
-    std::array<float, constants::kMaxMovesPerPosition> policy_improved =
-        ComputeImprovedPolicy(node);
-
-    // select node with greatest disparity between expected value and visit
-    // count.
-    int selected_action = 0;
-    float max_disparity = kMinNonRootDisparity;
-    for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
-      TreeNode* child = node->children[i].get();
-      float disparity =
-          policy_improved[i] - (N(child) / (1 + SumChildrenN(node)));
-      if (disparity > max_disparity && game.IsValidMove(i, color_to_move)) {
-        max_disparity = disparity;
-        selected_action = i;
-      }
-    }
+    TreeNode* node = path.back();
+    Loc selected_action =
+        search_policy->SelectNextAction(node, game, color_to_move);
 
     if (!node->children[selected_action]) {
       node->children[selected_action] = std::make_unique<TreeNode>();

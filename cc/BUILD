@@ -15,6 +15,11 @@ bool_flag(
     build_setting_default = False,
 )
 
+bool_flag(
+    name = "is_cpu_only",
+    build_setting_default = False,
+)
+
 config_setting(
     name = "leaf_evaluator_dummy",
     flag_values = {":is_leaf_evaluator_dummy": "true"},
@@ -30,5 +35,11 @@ config_setting(
 config_setting(
     name = "probability_dummy",
     flag_values = {":is_probability_dummy": "true"},
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "cpu_only",
+    flag_values = {":is_cpu_only": "true"},
     visibility = ["//visibility:public"],
 )

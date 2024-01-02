@@ -3,7 +3,7 @@
 
 namespace mcts {
 
-static constexpr float kDefaultScoreWeight = .4f;
+static constexpr float kDefaultScoreWeight = .15f;
 static constexpr float kMaxQ = 1.0f + kDefaultScoreWeight;
 static constexpr float kMinQ = -1.0f - kDefaultScoreWeight;
 

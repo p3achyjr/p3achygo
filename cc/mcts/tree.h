@@ -1,11 +1,9 @@
 #ifndef MCTS_TREE_H_
 #define MCTS_TREE_H_
 
-#include <cstddef>
 #include <memory>
 
 #include "cc/constants/constants.h"
-#include "cc/game/board.h"
 #include "cc/game/color.h"
 #include "cc/mcts/constants.h"
 
@@ -52,48 +50,48 @@ struct TreeNode final {
   float init_util_est = 0;  // mix value estimate and score estimate.
 };
 
-inline float N(TreeNode* node) { return node == nullptr ? 0 : node->n; }
-inline float NAction(TreeNode* node, int action) {
+inline float N(const TreeNode* node) { return node == nullptr ? 0 : node->n; }
+inline float NAction(const TreeNode* node, int action) {
   return N(node->children[action].get());
 }
 
-inline float V(TreeNode* node) {
+inline float V(const TreeNode* node) {
   // return minimum value if node is null (init-to-loss).
   return node == nullptr ? kMinQ : node->v;
 }
 
-inline float VOutcome(TreeNode* node) {
+inline float VOutcome(const TreeNode* node) {
   // return minimum value if node is null (init-to-loss).
   return node == nullptr ? -1.0 : node->v_outcome;
 }
 
-inline float VVar(TreeNode* node) {
+inline float VVar(const TreeNode* node) {
   return node == nullptr || node->n < 3 ? kMaxQ : node->v_var;
 }
 
-inline float VOutcomeVar(TreeNode* node) {
+inline float VOutcomeVar(const TreeNode* node) {
   return node == nullptr || node->n < 3 ? 1.0f : node->v_outcome_var;
 }
 
-inline float Q(TreeNode* node, int action) {
+inline float Q(const TreeNode* node, int action) {
   // remember to flip sign.
   return !node->children[action] ? kMinQ : -node->children[action]->v;
 }
 
-inline float QOutcome(TreeNode* node, int action) {
+inline float QOutcome(const TreeNode* node, int action) {
   // remember to flip sign.
   return !node->children[action] ? -1.0 : -node->children[action]->v_outcome;
 }
 
-inline float QVar(TreeNode* node, int action) {
+inline float QVar(const TreeNode* node, int action) {
   return node == nullptr ? kMaxQ : VVar(node->children[action].get());
 }
 
-inline float QOutcomeVar(TreeNode* node, int action) {
+inline float QOutcomeVar(const TreeNode* node, int action) {
   return node == nullptr ? 1.0f : VOutcomeVar(node->children[action].get());
 }
 
-inline float MaxN(TreeNode* node) {
+inline float MaxN(const TreeNode* node) {
   if (node == nullptr) return 0;
 
   return node->max_child_n;
@@ -101,11 +99,11 @@ inline float MaxN(TreeNode* node) {
 
 // Each node is visited once when expanded, and once per search path. Thus, the
 // total visit count of its children should be N(node) - 1
-inline float SumChildrenN(TreeNode* node) {
+inline float SumChildrenN(const TreeNode* node) {
   return node == nullptr ? 0 : node->n - 1;
 }
 
-inline float ChildScore(TreeNode* node, int action) {
+inline float ChildScore(const TreeNode* node, int action) {
   return !node->children[action] ? node->score_est
                                  : -node->children[action]->score_est;
 }
