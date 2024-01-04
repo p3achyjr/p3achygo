@@ -8,7 +8,6 @@
 #include "cc/constants/constants.h"
 #include "cc/core/file_log_sink.h"
 #include "cc/core/probability.h"
-#include "cc/core/ring_buffer.h"
 #include "cc/game/game.h"
 #include "cc/mcts/gumbel.h"
 #include "cc/recorder/game_recorder.h"

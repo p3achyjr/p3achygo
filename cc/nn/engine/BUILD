@@ -99,17 +99,24 @@ cc_library(
 
 cc_library(
     name = "trt_engine",
-    srcs = ["trt_engine.cc"],
+    srcs = select({
+        "//cc:cpu_only": ["trt_engine_dummy.cc"],
+        "//conditions:default": ["trt_engine.cc"],
+    }),
     hdrs = ["trt_engine.h"],
     deps = [
         ":engine_hdr",
-        ":trt_utils",
-        "//cc/game:hdrs",
-        "//cc/tensorflow",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
-        "@cuda",
-    ],
+    ] + select({
+        "//cc:cpu_only": [],
+        "//conditions:default": [
+            ":trt_utils",
+            "//cc/game:hdrs",
+            "//cc/tensorflow",
+            "@cuda",
+        ],
+    }),
 )
 
 cc_library(

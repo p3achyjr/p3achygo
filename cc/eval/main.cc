@@ -48,12 +48,14 @@ ABSL_FLAG(int, cur_n, kDefaultGumbelN, "N for current player");
 ABSL_FLAG(int, cur_k, kDefaultGumbelK, "K for current player");
 ABSL_FLAG(float, cur_noise_scaling, 1.0f, "Cur gumbel noise scaling");
 ABSL_FLAG(bool, cur_use_puct, false, "Whether to use PUCT for cur.");
-ABSL_FLAG(float, cur_c_puct, 2.0f, "c_puct for cur.");
+ABSL_FLAG(bool, cur_use_lcb, false, "Whether to use LCB in PUCT for cur.");
+ABSL_FLAG(float, cur_c_puct, 1.0f, "c_puct for cur.");
 ABSL_FLAG(int, cand_n, kDefaultGumbelN, "N for candidate player");
 ABSL_FLAG(int, cand_k, kDefaultGumbelK, "K for candidate player");
 ABSL_FLAG(float, cand_noise_scaling, 1.0f, "Cand gumbel noise scaling");
-ABSL_FLAG(bool, cand_use_puct, false, "Whether to use PUCT for cur.");
-ABSL_FLAG(float, cand_c_puct, 2.0f, "c_puct for cand.");
+ABSL_FLAG(bool, cand_use_puct, false, "Whether to use PUCT for cand.");
+ABSL_FLAG(bool, cand_use_lcb, false, "Whether to use LCB in PUCT for cand.");
+ABSL_FLAG(float, cand_c_puct, 1.0f, "c_puct for cand.");
 
 float ConfidenceDelta(float z_score, float num_sims, float wr) {
   return z_score * std::sqrt(wr * (1 - wr) / num_sims);
@@ -158,8 +160,10 @@ int main(int argc, char** argv) {
       absl::GetFlag(FLAGS_cur_noise_scaling),
       absl::GetFlag(FLAGS_cand_noise_scaling),
       absl::GetFlag(FLAGS_cur_use_puct),
+      absl::GetFlag(FLAGS_cur_use_lcb),
       absl::GetFlag(FLAGS_cur_c_puct),
       absl::GetFlag(FLAGS_cand_use_puct),
+      absl::GetFlag(FLAGS_cand_use_lcb),
       absl::GetFlag(FLAGS_cand_c_puct),
   };
   std::vector<std::thread> threads;
