@@ -1,7 +1,7 @@
 #!/bin/bash
 
 BUILD_ARGS=(
-    "--config=dbg"
+    "--config=opt"
     "--config=mimalloc"
     "--copt=-flto"
     "--linkopt=-flto=O2"
