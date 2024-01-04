@@ -110,3 +110,24 @@ cc_library(
 """,
     path = "/usr",
 )
+
+# Boost Math
+# https://github.com/boostorg/math.git
+git_repository(
+    name = "boost_math",
+    commit = "44af29a78c85ee89ce37f7f43d532afd05c3d981",
+    remote = "https://github.com/boostorg/math.git",
+    build_file_content = """
+cc_library(
+    name = "boost_math",
+    srcs = glob([
+        "src/**/*.cpp",
+    ]),
+    hdrs = glob([
+        "include/**/*.hpp",
+    ]),
+    includes = ["include"],
+    visibility = ["//visibility:public"],
+)
+    """
+)

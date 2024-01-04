@@ -25,8 +25,10 @@ struct EvalConfig {
   const float cur_noise_scaling;
   const float cand_noise_scaling;
   const bool cur_use_puct;
+  const bool cur_use_lcb;
   const float cur_c_puct;
   const bool cand_use_puct;
+  const bool cand_use_lcb;
   const float cand_c_puct;
 };
 

@@ -377,7 +377,21 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
 GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
                                              game::Game& game, TreeNode* root,
                                              game::Color color_to_move, int n,
-                                             const float c_puct) {
+                                             const float c_puct,
+                                             const bool use_lcb) {
+  auto best_lcb_move = [&](const TreeNode* node) {
+    std::array<std::pair<int, float>, constants::kMaxMovesPerPosition>
+        move_lcbs;
+    for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+      move_lcbs[a] = {a, Lcb(node, a)};
+    }
+
+    std::sort(
+        move_lcbs.begin(), move_lcbs.end(),
+        [](const auto& p0, const auto& p1) { return p1.second < p0.second; });
+    return game::AsLoc(move_lcbs[0].first);
+  };
+
   if (root->state == TreeNodeState::kNew) {
     leaf_evaluator_.EvaluateRoot(probability, game, root, color_to_move);
   }
@@ -405,7 +419,8 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
   }
 
   Loc raw_nn_move = game::AsLoc(Argmax(root->move_logits));
-  Loc mcts_move = game::AsLoc(Argmax(visit_counts));
+  Loc mcts_move =
+      use_lcb ? best_lcb_move(root) : game::AsLoc(Argmax(visit_counts));
   absl::InlinedVector<ChildStats, 16> child_stats;
   for (int mv = 0; mv < constants::kMaxMovesPerPosition; ++mv) {
     if (visit_counts[mv] == 0) continue;

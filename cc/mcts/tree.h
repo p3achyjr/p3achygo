@@ -1,6 +1,7 @@
 #ifndef MCTS_TREE_H_
 #define MCTS_TREE_H_
 
+#include <cmath>
 #include <memory>
 
 #include "cc/constants/constants.h"
@@ -48,6 +49,14 @@ struct TreeNode final {
   float outcome_est = 0;
   float score_est = 0;
   float init_util_est = 0;  // mix value estimate and score estimate.
+
+  inline TreeNode* child(int a) const {
+    if (a < 0 || a >= constants::kMaxMovesPerPosition) {
+      return nullptr;
+    }
+
+    return children[a].get();
+  }
 };
 
 inline float N(const TreeNode* node) { return node == nullptr ? 0 : node->n; }
@@ -107,6 +116,9 @@ inline float ChildScore(const TreeNode* node, int action) {
   return !node->children[action] ? node->score_est
                                  : -node->children[action]->score_est;
 }
+
+// Returns LCB for the value of a child node.
+float Lcb(const TreeNode* node, int action);
 
 void AdvanceState(TreeNode* node);
 

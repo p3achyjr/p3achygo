@@ -4,8 +4,43 @@
 #include <sstream>
 
 #include "absl/strings/str_format.h"
+#include "boost/math/distributions/students_t.hpp"
 
 namespace mcts {
+namespace {
+
+// https://github.com/leela-zero/leela-zero/blob/next/src/Utils.cpp#L56
+static constexpr size_t kNumZEntries = 1000;
+static constexpr float kAlpha = 0.05f;
+static const std::array<float, kNumZEntries> kZTable = []() {
+  std::array<float, kNumZEntries> z_table;
+  for (int i = 1; i < kNumZEntries + 1; ++i) {
+    boost::math::students_t dist(i);
+    auto z = boost::math::quantile(boost::math::complement(
+        dist, kAlpha / 2));  // Divide by 2 for double-sided lookup.
+    z_table[i - 1] = z;
+  }
+
+  return z_table;
+}();
+
+float CachedQuantile(const int v) {
+  if (v < 1) return kZTable[0];
+  if (v < kNumZEntries) return kZTable[v - 1];
+  return kZTable.back();
+}
+
+}  // namespace
+
+float Lcb(const TreeNode* node, int action) {
+  static constexpr float kMinLcb = -1e6f;
+  float n = NAction(node, action);
+  if (!node->child(action) || n < 2) return kMinLcb + n;
+
+  float stddev = std::sqrt(QVar(node, action) / n);
+  float z = CachedQuantile(n - 1);
+  return Q(node, action) - z * stddev;
+}
 
 void AdvanceState(TreeNode* node) {
   if (node == nullptr) return;

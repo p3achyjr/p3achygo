@@ -69,6 +69,8 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
       cur_is_black ? config.cand_noise_scaling : config.cur_noise_scaling;
   bool use_puct_b = cur_is_black ? config.cur_use_puct : config.cand_use_puct;
   bool use_puct_w = cur_is_black ? config.cand_use_puct : config.cur_use_puct;
+  bool use_lcb_b = cur_is_black ? config.cur_use_lcb : config.cand_use_lcb;
+  bool use_lcb_w = cur_is_black ? config.cand_use_lcb : config.cur_use_lcb;
   float c_puct_b = cur_is_black ? config.cur_c_puct : config.cand_c_puct;
   float c_puct_w = cur_is_black ? config.cand_c_puct : config.cur_c_puct;
 
@@ -109,11 +111,12 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
     float noise_scaling =
         color_to_move == BLACK ? noise_scaling_b : noise_scaling_w;
     bool use_puct = color_to_move == BLACK ? use_puct_b : use_puct_w;
+    bool use_lcb = color_to_move == BLACK ? use_lcb_b : use_lcb_w;
     float c_puct = color_to_move == BLACK ? c_puct_b : c_puct_w;
     auto begin = std::chrono::high_resolution_clock::now();
     GumbelResult gumbel_res =
         use_puct ? gumbel.SearchRootPuct(probability, game, player_tree.get(),
-                                         color_to_move, n, c_puct)
+                                         color_to_move, n, c_puct, use_lcb)
                  : gumbel.SearchRoot(probability, game, player_tree.get(),
                                      color_to_move, n, k, noise_scaling);
     auto end = std::chrono::high_resolution_clock::now();
