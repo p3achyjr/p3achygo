@@ -422,7 +422,8 @@ GumbelResult ServiceImpl::GenMoveCommon(Color color) {
   GumbelResult search_result =
       use_puct_
           ? gumbel_evaluator_->SearchRootPuct(probability_, *game_,
-                                              current_root(), color, n_, 2.0f)
+                                              current_root(), color, n_, 1.0f,
+                                              true /* use_lcb */)
           : gumbel_evaluator_->SearchRoot(probability_, *game_, current_root(),
                                           color, n_, k_, 0.0f);
   return search_result;

@@ -8,7 +8,7 @@
 ABSL_FLAG(std::string, model_path, "", "Path to model.");
 ABSL_FLAG(int, n, 128, "Number of visits.");
 ABSL_FLAG(int, k, 8, "Number of samples to draw.");
-ABSL_FLAG(bool, puct, false, "Whether to use PUCT at root.");
+ABSL_FLAG(bool, puct, true, "Whether to use PUCT at root.");
 
 void InputLoop(gtp::Client* client) {
   while (true) {

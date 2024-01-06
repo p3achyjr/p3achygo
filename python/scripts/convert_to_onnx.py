@@ -5,7 +5,10 @@ import numpy as np
 import collections
 import transforms
 from board import GoBoard
+<<<<<<< HEAD
 
+=======
+>>>>>>> gpu broke, staging results
 from absl import app, flags, logging
 from pathlib import Path
 
@@ -57,6 +60,7 @@ def main(_):
   logging.info(f'Onnx Path: {onnx_path}')
 
   with tf.device("/cpu:0"):
+    tf.keras.mixed_precision.set_global_policy('float32')
     model = tf.keras.models.load_model(
         model_path, custom_objects=P3achyGoModel.custom_objects())
     planes_shape = model.input_planes_shape()
