@@ -18,9 +18,10 @@ class Engine {
  public:
   enum class Kind : uint8_t {
     kUnknown = 0,
-    kTF = 1,
-    kTFTrt = 2,
-    kTrt = 3,
+    kTrt = 1,
+    kTF = 2,
+    kTFTrt = 3,
+    kTFXla = 4,
   };
 
   virtual ~Engine() = default;
@@ -37,12 +38,14 @@ class Engine {
 };
 
 inline std::string KindToString(Engine::Kind kind) {
-  if (kind == Engine::Kind::kTF) {
+  if (kind == Engine::Kind::kTrt) {
+    return "TensorRT";
+  } else if (kind == Engine::Kind::kTF) {
     return "TF";
   } else if (kind == Engine::Kind::kTFTrt) {
     return "TF-TRT";
-  } else if (kind == Engine::Kind::kTrt) {
-    return "TensorRT";
+  } else if (kind == Engine::Kind::kTFXla) {
+    return "TF-XLA";
   }
 
   return "??";

@@ -55,6 +55,14 @@ const std::vector<std::string> kTrtOutputNames = {
     "PartitionedCall:9", "PartitionedCall:10", "PartitionedCall:11",
 };
 
+const std::vector<std::string> kXlaInputNames = {"board_state", "game_state"};
+
+const std::vector<std::string> kXlaOutputNames = {
+    "pi_logits",      "q30",           "q100", "q200",         "pi",
+    "outcome_logits", "outcome",       "own",  "score_logits", "score_probs",
+    "gamma",          "pi_logits_aux",
+};
+
 inline ::tensorflow::TensorShape CreateTensorShape(
     std::initializer_list<int64_t> dims) {
   ::tensorflow::TensorShape shape;
@@ -74,9 +82,18 @@ class TFEngineImpl : public TFEngine {
   ~TFEngineImpl() = default;
 
   Engine::Kind kind() override {
-    return kind_ == TFEngine::Kind::kTF ? Engine::Kind::kTF
-                                        : Engine::Kind::kTFTrt;
+    switch (kind_) {
+      case TFEngine::Kind::kTF:
+        return Engine::Kind::kTF;
+      case TFEngine::Kind::kTRT:
+        return Engine::Kind::kTFTrt;
+      case TFEngine::Kind::kXLA:
+        return Engine::Kind::kTFXla;
+      default:
+        return Engine::Kind::kUnknown;
+    }
   }
+
   std::string path() override { return path_; }
   void LoadBatch(int batch_id, const GoFeatures& features) override;
   void RunInference() override;
@@ -87,12 +104,17 @@ class TFEngineImpl : public TFEngine {
  private:
   std::vector<tensorflow::Tensor> nn_input_buf_;
   std::vector<tensorflow::Tensor> nn_output_buf_;
-  tensorflow::SavedModelBundleLite model_bundle_;
   tensorflow::SessionOptions session_options_;
   tensorflow::RunOptions run_options_;
   const Kind kind_;
   const int batch_size_;
   const std::string path_;
+
+  // Used for TF and TF-TRT models.
+  tensorflow::SavedModelBundleLite model_bundle_;
+
+  // Used for TF XLA models.
+  std::unique_ptr<tensorflow::Session> session_;
 };
 
 TFEngineImpl::TFEngineImpl(std::string path, Kind kind, int batch_size)
@@ -101,6 +123,11 @@ TFEngineImpl::TFEngineImpl(std::string path, Kind kind, int batch_size)
       kind_(kind),
       batch_size_(batch_size),
       path_(path) {
+  // Allow memory growth.
+  ConfigProto config;
+  config.mutable_gpu_options()->set_allow_growth(true);
+  session_options_.config.MergeFrom(config);
+
   nn_input_buf_ = {
       Tensor(DataType::DT_FLOAT,
              CreateTensorShape({batch_size_, BOARD_LEN, BOARD_LEN,
@@ -147,8 +174,17 @@ TFEngineImpl::TFEngineImpl(std::string path, Kind kind, int batch_size)
           DataType::DT_FLOAT,
           CreateTensorShape({batch_size_, constants::kMaxMovesPerPosition}))};
 
-  TF_CHECK_OK(LoadSavedModel(session_options_, run_options_, path,
-                             {kSavedModelTagServe}, &model_bundle_));
+  if (kind_ == TFEngine::Kind::kXLA) {
+    tensorflow::Session* session;
+    tensorflow::GraphDef graph_def;
+    TF_CHECK_OK(NewSession(session_options_, &session));
+    TF_CHECK_OK(ReadBinaryProto(tensorflow::Env::Default(), path, &graph_def));
+    TF_CHECK_OK(session->Create(graph_def));
+    session_.reset(session);
+  } else {
+    TF_CHECK_OK(LoadSavedModel(session_options_, run_options_, path,
+                               {kSavedModelTagServe}, &model_bundle_));
+  }
 }
 
 void TFEngineImpl::LoadBatch(int batch_id, const GoFeatures& features) {
@@ -203,12 +239,30 @@ void TFEngineImpl::LoadBatch(int batch_id, const GoFeatures& features) {
 }
 
 void TFEngineImpl::RunInference() {
-  const std::vector<std::string>& output_names =
-      kind_ == Kind::kTF ? kTfOutputNames : kTrtOutputNames;
+  const std::vector<std::string>& input_names =
+      kind_ == Kind::kXLA ? kXlaInputNames : kInputNames;
+  const std::vector<std::string>& output_names = [](TFEngine::Kind kind) {
+    switch (kind) {
+      case TFEngine::Kind::kTF:
+        return kTfOutputNames;
+      case TFEngine::Kind::kTRT:
+        return kTrtOutputNames;
+      case TFEngine::Kind::kXLA:
+        return kXlaOutputNames;
+      default:
+        return kTfOutputNames;
+    }
+  }(kind_);
+
   std::vector<std::pair<std::string, Tensor>> nn_input = {
-      {kInputNames[0], nn_input_buf_[0]}, {kInputNames[1], nn_input_buf_[1]}};
-  TF_CHECK_OK(model_bundle_.GetSession()->Run(nn_input, output_names, {},
-                                              &nn_output_buf_));
+      {input_names[0], nn_input_buf_[0]}, {input_names[1], nn_input_buf_[1]}};
+
+  if (kind_ == TFEngine::Kind::kXLA) {
+    TF_CHECK_OK(session_->Run(nn_input, output_names, {}, &nn_output_buf_));
+  } else {
+    TF_CHECK_OK(model_bundle_.GetSession()->Run(nn_input, output_names, {},
+                                                &nn_output_buf_));
+  }
 }
 
 void TFEngineImpl::GetBatch(int batch_id, NNInferResult& result) {

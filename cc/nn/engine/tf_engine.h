@@ -16,6 +16,7 @@ class TFEngine : public Engine {
     kUnknown = 0,
     kTF = 1,
     kTRT = 2,
+    kXLA = 3,
   };
 
   virtual ~TFEngine() = default;

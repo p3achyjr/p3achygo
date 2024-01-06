@@ -14,8 +14,8 @@ using namespace ::nn;
 ABSL_FLAG(std::string, ds_path, "", "Path to DS for benchmarks.");
 ABSL_FLAG(std::vector<std::string>, paths, {}, "Paths to models.");
 ABSL_FLAG(std::vector<std::string>, kinds, {},
-          "Kind of each path. 0=TF, 1=TF-TRT, 2=TRT");
-ABSL_FLAG(int, batch_size, 48, "Batch Size.");
+          "Kind of each path. 0=TRT, 1=TF, 2=TF-TRT, 3=TF-XLA");
+ABSL_FLAG(int, batch_size, 192, "Batch Size.");
 
 int main(int argc, char** argv) {
   absl::ParseCommandLine(argc, argv);
@@ -37,18 +37,7 @@ int main(int argc, char** argv) {
       std::make_unique<GoDataset>(batch_size, ds_path);
   for (std::unique_ptr<Engine>& engine : engines) {
     DefaultStats stats;
-    std::string kind_str = [](Engine::Kind kind) {
-      switch (kind) {
-        case Engine::Kind::kTF:
-          return "Tensorflow";
-        case Engine::Kind::kTFTrt:
-          return "TF-TRT";
-        case Engine::Kind::kTrt:
-          return "TensorRT";
-        default:
-          return "?";
-      }
-    }(engine->kind());
+    std::string kind_str = KindToString(engine->kind());
 
     LOG(INFO) << "Evaluating Engine (" << kind_str << "): " << engine->path();
     Benchmark(engine.get(), go_ds.get(), stats);
