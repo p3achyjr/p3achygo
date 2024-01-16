@@ -255,9 +255,14 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
       // Run and Profile Search.
       auto begin = std::chrono::high_resolution_clock::now();
-      GumbelResult gumbel_res = gumbel_evaluator.SearchRoot(
-          probability, game, root_node.get(), color_to_move, gumbel_n, gumbel_k,
-          noise_scaling);
+      GumbelResult gumbel_res =
+          is_move_selected_for_training || sampling_raw_policy
+              ? gumbel_evaluator.SearchRoot(probability, game, root_node.get(),
+                                            color_to_move, gumbel_n, gumbel_k,
+                                            noise_scaling)
+              : gumbel_evaluator.SearchRootPuct(
+                    probability, game, root_node.get(), color_to_move, gumbel_n,
+                    1.05, true /* use_lcb */);
       auto end = std::chrono::high_resolution_clock::now();
 
       // Post Search Statstics.
