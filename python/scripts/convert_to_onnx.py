@@ -5,10 +5,6 @@ import numpy as np
 import collections
 import transforms
 from board import GoBoard
-<<<<<<< HEAD
-
-=======
->>>>>>> gpu broke, staging results
 from absl import app, flags, logging
 from pathlib import Path
 
@@ -136,16 +132,6 @@ def main(_):
               'scores': scores,
           })
       out_tf = model(in_board_state, in_global_state)
-
-      squared_diffs = tf.square(out_ort[3] - out_tf[3])
-      mse_per_row = tf.reduce_mean(squared_diffs, axis=1)
-      max_i = tf.argmax(mse_per_row).numpy()
-      board = tf.transpose(in_board_state, (0, 3, 1, 2))  # NHWC -> NCHW
-      board = tf.cast(board[max_i][0] + (2 * board[max_i][1]), dtype=tf.int32)
-      print(
-          f'ONNX Outcome: {out_ort[3][max_i]}, TF Outcome: {out_tf[3][max_i]}, Board:'
-      )
-      print(GoBoard.to_string(board.numpy()))
       outcome_mse += np.mean(np.square(out_ort[3] - out_tf[3]))
       n += 1
       update_val_stats(stats_ort, out_ort[0], out_ort[3], out_ort[6], policy,
