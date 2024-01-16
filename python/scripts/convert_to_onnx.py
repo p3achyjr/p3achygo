@@ -4,7 +4,7 @@ import onnxruntime as ort
 import numpy as np
 import collections
 import transforms
-
+from board import GoBoard
 from absl import app, flags, logging
 from pathlib import Path
 
@@ -17,6 +17,9 @@ DUMMY_BATCH_SIZE = 32
 flags.DEFINE_string('model_path', '', 'Path to SavedModel.')
 flags.DEFINE_string('onnx_name', 'model.onnx', 'Name of ONNX model.')
 flags.DEFINE_string('val_ds', '', 'Validation DS, to verify conversion.')
+flags.DEFINE_integer('num_samples', -1,
+                     'Number of samples to collect stats on.')
+
 
 def random_inputs(planes_shape, features_shape):
   return (np.random.random([DUMMY_BATCH_SIZE] + planes_shape).astype(
@@ -53,7 +56,6 @@ def main(_):
   logging.info(f'Onnx Path: {onnx_path}')
 
   with tf.device("/cpu:0"):
-    # Load model and resave without mixed precision.
     tf.keras.mixed_precision.set_global_policy('float32')
     model = tf.keras.models.load_model(
         model_path, custom_objects=P3achyGoModel.custom_objects())
@@ -67,9 +69,9 @@ def main(_):
 
     @tf.function
     def model_fn(board_state: tf.Tensor, game_state: tf.Tensor,
-                scores: tf.Tensor):
+                 scores: tf.Tensor):
       (pi_logits, pi, outcome_logits, outcome, own, score_logits, score_probs,
-      gamma, pi_logits_aux, q30, q100, q200) = model(board_state,
+       gamma, pi_logits_aux, q30, q100, q200) = model(board_state,
                                                       game_state,
                                                       training=False,
                                                       scores=scores)
@@ -109,12 +111,18 @@ def main(_):
     val_ds = tf.data.TFRecordDataset(FLAGS.val_ds, compression_type='ZLIB')
     val_ds = val_ds.map(transforms.expand, num_parallel_calls=tf.data.AUTOTUNE)
     val_ds = val_ds.batch(48)
+    if FLAGS.num_samples != -1:
+      val_ds = val_ds.take(FLAGS.num_samples)
     val_ds = val_ds.prefetch(tf.data.AUTOTUNE)
+
     scores = (.05 *
               tf.range(-SCORE_RANGE // 2 + .5, SCORE_RANGE // 2 + .5)).numpy()
     sess = ort.InferenceSession(onnx_path, providers=['CPUExecutionProvider'])
     stats_ort, stats_tf = (collections.defaultdict(float),
                            collections.defaultdict(float))
+
+    outcome_mse = 0
+    n = 0
     for (in_board_state, in_global_state, _, _, score, _, policy, _, _, _, _,
          _) in val_ds:
       out_ort = sess.run(
@@ -124,6 +132,8 @@ def main(_):
               'scores': scores,
           })
       out_tf = model(in_board_state, in_global_state)
+      outcome_mse += np.mean(np.square(out_ort[3] - out_tf[3]))
+      n += 1
       update_val_stats(stats_ort, out_ort[0], out_ort[3], out_ort[6], policy,
                        score)
       update_val_stats(stats_tf, out_tf[0], out_tf[3], out_tf[6], policy, score)
@@ -143,6 +153,7 @@ def main(_):
 
     logging.info(f'\nORT:\n{stats_str(stats_ort)}\n\n' +
                  f'TF:\n{stats_str(stats_tf)}')
+    logging.info(f'Mean Outcome MSE: {outcome_mse / n}')
 
 
 if __name__ == '__main__':

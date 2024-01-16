@@ -389,7 +389,15 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
     std::sort(
         move_lcbs.begin(), move_lcbs.end(),
         [](const auto& p0, const auto& p1) { return p1.second < p0.second; });
-    return game::AsLoc(move_lcbs[0].first);
+
+    for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
+      auto [a, _] = move_lcbs[i];
+      if (game.IsValidMove(a, color_to_move)) {
+        return game::AsLoc(a);
+      }
+    }
+
+    return game::kPassLoc;
   };
 
   if (root->state == TreeNodeState::kNew) {
