@@ -10,9 +10,11 @@ from constants import *
 from lr_schedule import ConstantLRSchedule, CyclicLRSchedule
 from model import P3achyGoModel
 from rl_loop.config import RunConfig
+from weight_snapshot import WeightSnapshotManager
 
 EPOCHS_PER_GEN = 1
 MOMENTUM = .9
+SWA_MOMENTUM = .75
 
 
 def train_one_gen(model: P3achyGoModel,
@@ -27,6 +29,14 @@ def train_one_gen(model: P3achyGoModel,
   '''
   Trains through dataset held at `chunk_path`.
   '''
+
+  def find_num_batches(ds: tf.data.TFRecordDataset) -> int:
+    n = 0
+    for _ in ds.batch(config.batch_size):
+      n += 1
+
+    return n
+
   batch_size = config.batch_size
   lr_scale = 0.1 + 0.9 * min(1.0, model_gen / config.lr_growth_window)
   if not chunk_size:
@@ -42,10 +52,17 @@ def train_one_gen(model: P3achyGoModel,
   train.val(model, mode=train.Mode.RL, val_ds=val_ds, val_batch_num=-1)
 
   ds = tf.data.TFRecordDataset(chunk_path, compression_type='ZLIB')
+  num_batches = find_num_batches(ds)
+
   ds = ds.map(transforms.expand, num_parallel_calls=tf.data.AUTOTUNE)
   ds = ds.batch(batch_size)
   ds = ds.prefetch(tf.data.AUTOTUNE)
 
+  ss_interval = num_batches / 3
+  ss_manager = WeightSnapshotManager([
+      int(ss_interval),
+      int(ss_interval * 2),
+  ])
   prev_weights = model.get_weights()
 
   old_batch_num = batch_num
@@ -59,11 +76,14 @@ def train_one_gen(model: P3achyGoModel,
                           save_interval=None,
                           save_path=None,
                           is_gpu=is_gpu,
-                          batch_num=batch_num)
+                          batch_num=batch_num,
+                          ss_manager=ss_manager)
 
-  num_batches_in_chunk = batch_num - old_batch_num
-  new_weights = model_utils.avg_weights(prev_weights, model.get_weights(),
-                                        num_batches_in_chunk)
+  print(f'SWA Momentum: {SWA_MOMENTUM}, ' +
+        f'Num Batches in Chunk: {batch_num - old_batch_num}')
+  new_weights = model_utils.swa_avg_weights(
+      [prev_weights] + ss_manager.weights + [model.get_weights()],
+      swa_momentum=SWA_MOMENTUM)
   model.set_weights(new_weights)
 
   logging.info(f'Running validation for new model...')

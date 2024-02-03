@@ -10,7 +10,6 @@ import proc
 
 from pathlib import Path
 
-SWA_MOMENTUM = .4
 NUM_BATCHES_FULL_CHECKPOINT = 1000
 
 
@@ -22,18 +21,15 @@ def new_model(name: str, model_config='small') -> P3achyGoModel:
                               name=name)
 
 
-def avg_weights(prev_weights: list, cur_weights: list,
-                num_batches_in_chunk: int) -> list:
-  # chunk_ratio = min(1.0,
-  #                   float(num_batches_in_chunk) / NUM_BATCHES_FULL_CHECKPOINT)
-  # m_swa_new = (1 - SWA_MOMENTUM) * chunk_ratio
-  # swa_momentum = 1 - m_swa_new
-  swa_momentum = SWA_MOMENTUM
-  print('SWA Momentum:', swa_momentum, "Num Batches: ", num_batches_in_chunk)
-  return [
-      prev_layer_weights * swa_momentum + layer_weights * (1 - swa_momentum)
-      for prev_layer_weights, layer_weights in zip(prev_weights, cur_weights)
-  ]
+def swa_avg_weights(weights: list, swa_momentum: float = 0.75) -> list:
+  swa_weights = weights[0]
+  for i in range(1, len(weights), 1):
+    swa_weights = [
+        prev_layer_weights * swa_momentum + layer_weights * (1 - swa_momentum)
+        for prev_layer_weights, layer_weights in zip(swa_weights, weights[i])
+    ]
+
+  return swa_weights
 
 
 def save_trt_and_upload(model: P3achyGoModel, calib_ds_path: str,
@@ -73,7 +69,7 @@ def save_onnx_trt(model: P3achyGoModel, calib_ds_path: str,
 
   logging.info('Converting to ONNX-TRT...')
   cmd = (f'{trt_convert_path} --onnx_path={onnx_path}' +
-         f' --ds_path={calib_ds_path}' +  f' --batch_size={batch_size}')
+         f' --ds_path={calib_ds_path}' + f' --batch_size={batch_size}')
 
   proc.run_proc(cmd)
   return str(Path(model_path, '_onnx', 'engine.trt'))

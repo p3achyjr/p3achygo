@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional
 from loss_coeffs import LossCoeffs
 from enum import Enum
+from weight_snapshot import WeightSnapshotManager
 
 
 class Mode(Enum):
@@ -181,7 +182,8 @@ def train(model: P3achyGoModel,
           lr_schedule: Optional[
               tf.keras.optimizers.schedules.LearningRateSchedule] = None,
           is_gpu=False,
-          batch_num=0):
+          batch_num=0,
+          ss_manager: Optional[WeightSnapshotManager] = None):
   """
   Training through single dataset.
   """
@@ -210,6 +212,7 @@ def train(model: P3achyGoModel,
 
   losses_train = LossTracker()
   did_log_graph = False
+  local_batch_num = 0
   for _ in range(epochs):
     # train
     for (input, input_global_state, color, komi, score, score_one_hot, policy,
@@ -248,6 +251,9 @@ def train(model: P3achyGoModel,
                     optimizer.learning_rate.numpy(), losses_train, own, mode)
 
       batch_num += 1
+      local_batch_num += 1
+      if ss_manager and ss_manager.should_take_snapshot(local_batch_num):
+        ss_manager.take_snapshot(model)
 
   # log final stats
   print(f'---------- Final Stats ----------')
