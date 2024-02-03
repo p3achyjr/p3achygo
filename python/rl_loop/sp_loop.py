@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import gcs_utils as gcs
 import os, secrets, shlex, time
-import rl_loop.fs_utils as fs_utils
+import rl_loop.fs_utils as fs
 import rl_loop.config
 
 from absl import logging
@@ -26,22 +26,21 @@ def print_stdout(out: Popen.stdout):  # pytype : disable=unbound-type-param
 def update_and_upload_sp_files(run_id: str, sp_chunk_dir: str, sgf_dir: str,
                                sp_chunks: set[str],
                                sgfs: set[str]) -> Tuple[set[str], set[str]]:
-  sp_chunks, new_sp_chunks = fs_utils.file_diff(sp_chunk_dir, sp_chunks,
-                                                TFREC_GLOB)
-  sgfs, new_sgfs = fs_utils.file_diff(sgf_dir, sgfs, SGF_GLOB)
+  sp_chunks, new_sp_chunks = fs.file_diff(sp_chunk_dir, sp_chunks, TFREC_GLOB)
+  sgfs, new_sgfs = fs.file_diff(sgf_dir, sgfs, SGF_GLOB)
   for sp_chunk in new_sp_chunks:
     # wait for `done` file.
     while sp_chunk.name.split('.')[0] not in map(lambda x: x.name.split('.')[0],
                                                  sp_chunk_dir.glob(DONE_GLOB)):
       time.sleep(.5)
-    gcs.upload_sp_chunk(run_id, sp_chunk)
+    fs.upload_sp_chunk(run_id, sp_chunk)
 
   for sgf in new_sgfs:
     # wait for `done` file.
     while sgf.name.split('.')[0] not in map(lambda x: x.name.split('.')[0],
                                             sgf_dir.glob(DONE_GLOB)):
       time.sleep(.5)
-    gcs.upload_sgf(run_id, sgf)
+    fs.upload_sgf(run_id, sgf)
 
   return sp_chunks, sgfs
 
@@ -55,7 +54,7 @@ def loop(bin_path: str,
   Starts self-play binary and runs until told to stop.
   '''
   (local_models_dir, _, local_sp_chunk_dir,
-   local_sgf_dir) = fs_utils.ensure_local_dirs(local_run_dir)
+   local_sgf_dir) = fs.ensure_local_dirs(local_run_dir)
 
   worker_id = secrets.token_hex(5)
 
@@ -68,18 +67,18 @@ def loop(bin_path: str,
   # wait for first model.
   # !! We do not do TRT conversion here. This assumes that all GPUs in the cluster
   # are running the same compute capability.
-  model_gen = gcs.get_most_recent_model(run_id)
+  model_gen = fs.get_most_recent_model(run_id)
   while model_gen < 0:
     logging.warning(f'No model found. Sleeping for {POLL_INTERVAL_S}s')
     time.sleep(POLL_INTERVAL_S)
-    model_gen = gcs.get_most_recent_model(run_id)
+    model_gen = fs.get_most_recent_model(run_id)
 
   # first model is now uploaded. Get it and start run.
-  model_path = gcs.download_model(run_id, str(local_models_dir), model_gen)
+  model_path = fs.download_model(run_id, str(local_models_dir), model_gen)
   model_path = str(Path(model_path, '_onnx', 'engine.trt'))
 
   # most recent chunk tells us which generation we are making self-play data for.
-  gen = gcs.get_most_recent_chunk(run_id)
+  gen = fs.get_most_recent_chunk(run_id)
   while True:
 
     def get_gumbel_params():
@@ -134,17 +133,17 @@ def loop(bin_path: str,
                                                    sgfs)
 
       # Shut down loop if no more self-play games are needed.
-      if gcs.get_most_recent_chunk(run_id) >= config.num_generations:
+      if fs.get_most_recent_chunk(run_id) >= config.num_generations:
         logging.info('No more self-play needed. Shutting down...')
         is_done = True
         break
 
       # If new golden model, download and restart process.
-      next_model_gen = gcs.get_most_recent_model(run_id)
+      next_model_gen = fs.get_most_recent_model(run_id)
       if next_model_gen > model_gen:
         logging.info('Found new model. Fetching and reloading self-play.')
         model_gen = next_model_gen
-        model_path = gcs.download_model(run_id, str(local_run_dir), model_gen)
+        model_path = fs.download_model(run_id, str(local_run_dir), model_gen)
         model_path = str(Path(model_path, '_trt'))
         break
 

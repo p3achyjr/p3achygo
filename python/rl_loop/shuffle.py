@@ -9,7 +9,7 @@ from __future__ import annotations
 import os, shlex, signal, sys, time
 import gcs_utils as gcs
 import rl_loop.config as config
-import rl_loop.fs_utils as fs_utils
+import rl_loop.fs_utils as fs
 import rl_loop.shuffle_metadata as shuffle_metadata
 
 from absl import app, flags, logging
@@ -29,6 +29,7 @@ flags.DEFINE_string('bin_path', '', 'Local path to shuffler binary.')
 flags.DEFINE_string('run_id', '', 'ID corresponding to the current run.')
 flags.DEFINE_string('local_run_dir', '/tmp/p3achygo',
                     'Local path for training data')
+flags.DEFINE_string('local_only', False, 'Whether to run RL loop locally.')
 
 
 def handle_shutdown(signum, _):
@@ -43,6 +44,8 @@ def print_stdout(out: Popen.stdout):  # pytype : disable=unbound-type-param
 
 
 def download_chunks(local_sp_chunk_dir: str, sp_chunks: set[str]):
+  if FLAGS.local_only:
+    return
   for sp_chunk in sp_chunks:
     chunk_filename = str(Path(sp_chunk).name)
     local_chunk_path = str(Path(local_sp_chunk_dir, chunk_filename))
@@ -119,7 +122,7 @@ def loop(bin_path: str, run_id: str, local_run_dir: str,
 
       if in_continuous_mode:
         # download new chunks
-        gcs_sp_chunks_now = set(gcs.list_sp_chunks(run_id))
+        gcs_sp_chunks_now = set(fs.list_sp_chunks(run_id))
         gcs_sp_chunks, new_sp_chunks = gcs_sp_chunks_now, gcs_sp_chunks_now.difference(
             gcs_sp_chunks)
 
@@ -132,24 +135,24 @@ def loop(bin_path: str, run_id: str, local_run_dir: str,
     logging.info(f'Shuffler exited with status {shuf_proc.poll()}')
 
     # Upload chunk.
-    gcs.upload_chunk(run_id, gcs.local_chunk_dir(local_sp_chunk_dir), chunk_gen)
-    gcs.upload_chunk_size(run_id, gcs.local_chunk_dir(local_sp_chunk_dir),
-                          chunk_gen)
+    fs.upload_chunk(run_id, fs.local_chunk_dir(local_sp_chunk_dir), chunk_gen)
+    fs.upload_chunk_size(run_id, fs.local_chunk_dir(local_sp_chunk_dir),
+                         chunk_gen)
     logging.info(f'Uploaded chunk gen {chunk_gen} to gs://p3achygo/{run_id}')
-    gcs.remove_local_chunk(gcs.local_chunk_dir(local_sp_chunk_dir), chunk_gen)
+    fs.remove_local_chunk(fs.local_chunk_dir(local_sp_chunk_dir), chunk_gen)
     logging.info(f'Removed local chunk {chunk_gen} from disk.')
 
     return num_new_samples, gcs_sp_chunks
 
-  (_, _, local_sp_chunk_dir, _) = fs_utils.ensure_local_dirs(local_run_dir)
+  (_, _, local_sp_chunk_dir, _) = fs.ensure_local_dirs(local_run_dir)
   logging.info(f'Using {local_sp_chunk_dir} to store self-play chunks.')
 
-  gcs_sp_chunks = set(gcs.list_sp_chunks(run_id))
-  gcs.rsync_chunks(run_id, local_sp_chunk_dir)
+  gcs_sp_chunks = set(fs.list_sp_chunks(run_id))
+  fs.rsync_chunks(run_id, local_sp_chunk_dir)
 
   num_samples_generated = num_samples_in_chunks(gcs_sp_chunks)
 
-  chunk_gen = gcs.get_most_recent_chunk(run_id) + 1
+  chunk_gen = fs.get_most_recent_chunk(run_id) + 1
   while chunk_gen <= config.num_generations:
     # calculate metadata.
     train_window_size = shuffle_metadata.training_window_size(

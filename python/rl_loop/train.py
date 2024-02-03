@@ -80,7 +80,8 @@ def train_one_gen(model: P3achyGoModel,
                           ss_manager=ss_manager)
 
   print(f'SWA Momentum: {SWA_MOMENTUM}, ' +
-        f'Num Batches in Chunk: {batch_num - old_batch_num}')
+        f'Num Batches in Chunk: {batch_num - old_batch_num}, ' +
+        f'Num Snapshots: {len(ss_manager.snapshots)}')
   new_weights = model_utils.swa_avg_weights(
       [prev_weights] + ss_manager.weights + [model.get_weights()],
       swa_momentum=SWA_MOMENTUM)

@@ -1,6 +1,7 @@
 from absl import logging
 
 import gcs_utils as gcs
+import rl_loop.fs_utils as fs
 
 from model import P3achyGoModel
 from model_config import ModelConfig
@@ -36,7 +37,7 @@ def save_trt_and_upload(model: P3achyGoModel, calib_ds_path: str,
                         local_model_dir: str, gen: int, run_id: str,
                         batch_size: int) -> str:
   model_path = save_trt(model, calib_ds_path, local_model_dir, gen, batch_size)
-  gcs.upload_model(run_id, str(local_model_dir), gen)
+  fs.upload_model(run_id, str(local_model_dir), gen)
 
   return model_path
 

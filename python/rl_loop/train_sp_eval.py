@@ -34,6 +34,7 @@ flags.DEFINE_string('eval_bin_path', '', 'Local path to eval binary.')
 flags.DEFINE_string('run_id', '', 'ID corresponding to the current run.')
 flags.DEFINE_string('local_run_dir', '/tmp/p3achygo',
                     'Local path for temporary storage')
+flags.DEFINE_string('local_only', False, 'Whether to run RL loop locally.')
 
 
 @dataclass

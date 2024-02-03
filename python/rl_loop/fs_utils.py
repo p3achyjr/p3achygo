@@ -115,6 +115,18 @@ def download_val_ds(local_dir: str) -> str:
   return gcs.download_val_ds(local_dir)
 
 
+def rsync_chunks(run_id: str, local_dir: str):
+  if MODE == 'gcs':
+    gcs.rsync_chunks(run_id, local_dir)
+
+
+def list_sp_chunks(run_id: str) -> list[str]:
+  if MODE == 'gcs':
+    return gcs.list_sp_chunks(run_id)
+
+  return list(Path(LOCAL_PATH, gcs.SP_CHUNK_DIR))
+
+
 def is_done(run_id: str, local_run_dir: str) -> bool:
   if MODE == 'gcs':
     return gcs.is_done(run_id)
