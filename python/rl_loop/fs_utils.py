@@ -115,6 +115,25 @@ def download_val_ds(local_dir: str) -> str:
   return gcs.download_val_ds(local_dir)
 
 
+def is_done(run_id: str, local_run_dir: str) -> bool:
+  if MODE == 'gcs':
+    return gcs.is_done(run_id)
+
+  for path in Path(local_run_dir):
+    if path.parent.name == gcs.DONE_PREFIX and path.name == gcs.DONE_FILENAME:
+      return True
+
+  return False
+
+
+def signal_done(run_id: str, local_run_dir: str):
+  if MODE == 'gcs':
+    gcs.signal_done(run_id)
+
+  path = Path(local_run_dir, gcs.DONE_PREFIX, gcs.DONE_FILENAME)
+  path.touch(exist_ok=True)
+
+
 def ensure_local_dirs(local_run_dir: str) -> Tuple[Path, Path, Path, Path]:
   local_models_dir = Path(local_run_dir, gcs.MODELS_DIR)
   local_golden_chunk_dir = Path(local_run_dir, gcs.GOLDEN_CHUNK_DIR)

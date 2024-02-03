@@ -8,7 +8,7 @@ import gcs_utils as gcs
 import os, sys, time
 import rl_loop.config as config
 import rl_loop.sp_loop as sp
-import rl_loop.fs_utils as fs_utils
+import rl_loop.fs_utils as fs
 import proc
 
 from absl import app, flags, logging
@@ -67,10 +67,10 @@ def eval(run_id: str, eval_bin_path: str, eval_res_path: str,
   logging.info(f'Eval Exited with Status {exit_code}')
 
   # Upload Eval SGFs. This is safe because the process has terminated.
-  _, _, _, local_sgf_dir = fs_utils.ensure_local_dirs(local_run_dir)
+  _, _, _, local_sgf_dir = fs.ensure_local_dirs(local_run_dir)
   eval_sgfs = local_sgf_dir.glob("*EVAL*.sgf")
   for sgf in eval_sgfs:
-    gcs.upload_sgf(run_id, sgf)
+    fs.upload_sgf(run_id, sgf)
 
   with open(eval_res_path) as f:
     cand_rel_elo = float(f.read())
@@ -116,7 +116,7 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
 
   def eval_new_model(run_id: str, next_model_gen: int, eval_res_path: str):
     # Play against current _best_ model.
-    current_golden_gen = gcs.get_most_recent_model(run_id)
+    current_golden_gen = fs.get_most_recent_model(run_id)
     cur_model_path = str(
         Path(local_models_dir, gcs.MODEL_FORMAT.format(current_golden_gen)))
     cand_model_path = str(
@@ -124,7 +124,7 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
 
     # Upload as new model candidate, in case we are pre-empted.
     logging.info(f'Uploading model candidate {cand_model_path}.')
-    gcs.upload_model_cand(run_id, local_models_dir, next_model_gen)
+    fs.upload_model_cand(run_id, local_models_dir, next_model_gen)
 
     # Run eval.
     eval_result = eval(run_id, eval_bin_path, eval_res_path, cur_model_path,
@@ -133,7 +133,7 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
     if eval_result.winner == EvalResult.CAND:
       # The cand model is stronger. Upload it as new golden.
       logging.info(f'Uploading model {cand_model_path} as new golden')
-      gcs.upload_model(run_id, local_models_dir, next_model_gen)
+      fs.upload_model(run_id, local_models_dir, next_model_gen)
 
     with open(eval_history_path, 'a') as f:
       f.write(f'Elo: {eval_result.rel_elo}' +
@@ -144,19 +144,19 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
                               local_golden_chunk_dir: str):
     logging.info(
         f'Training from existing run {existing_run_id} for run {run_id}')
-    model_gen = gcs.get_most_recent_model_cand(run_id)
+    model_gen = fs.get_most_recent_model_cand(run_id)
     while True:
-      latest_chunk_gen = gcs.get_most_recent_chunk(existing_run_id)
+      latest_chunk_gen = fs.get_most_recent_chunk(existing_run_id)
       next_model_gen = model_gen + 1
       if next_model_gen > latest_chunk_gen:
         break
 
-      chunk_path = gcs.download_golden_chunk(existing_run_id,
-                                             local_golden_chunk_dir,
-                                             next_model_gen)
-      chunk_size_path = gcs.download_golden_chunk_size(existing_run_id,
-                                                       local_golden_chunk_dir,
-                                                       next_model_gen)
+      chunk_path = fs.download_golden_chunk(existing_run_id,
+                                            local_golden_chunk_dir,
+                                            next_model_gen)
+      chunk_size_path = fs.download_golden_chunk_size(existing_run_id,
+                                                      local_golden_chunk_dir,
+                                                      next_model_gen)
       train(run_id,
             model_gen,
             next_model_gen,
@@ -165,13 +165,13 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
             chunk_size_path,
             batch_num_path,
             save_trt=False)
-      gcs.upload_model_cand(run_id, local_models_dir, next_model_gen)
-      gcs.remove_local_chunk(local_golden_chunk_dir, next_model_gen)
+      fs.upload_model_cand(run_id, local_models_dir, next_model_gen)
+      fs.remove_local_chunk(local_golden_chunk_dir, next_model_gen)
       model_gen = next_model_gen
 
   # populate local dirs
   (local_models_dir, local_golden_chunk_dir, _,
-   _) = fs_utils.ensure_local_dirs(local_run_dir)
+   _) = fs.ensure_local_dirs(local_run_dir)
 
   eval_history_path = Path(local_run_dir, 'elo_history.txt')
   batch_num_path = str(Path(local_run_dir, 'batch_num.txt'))
@@ -180,7 +180,7 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
       f.write('0')
 
   # fetch or create first model
-  model_gen = gcs.get_most_recent_model_cand(run_id)
+  model_gen = fs.get_most_recent_model_cand(run_id)
   if model_gen < 0:
     # make new model.
     model_gen = 0
@@ -197,10 +197,10 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
     # proc.run_proc(cmd)
 
     # upload to GCS.
-    gcs.upload_model_cand(run_id, local_models_dir, model_gen)
-    gcs.upload_model(run_id, local_models_dir, model_gen)
+    fs.upload_model_cand(run_id, local_models_dir, model_gen)
+    fs.upload_model(run_id, local_models_dir, model_gen)
   else:
-    gcs.download_model_cand(run_id, local_models_dir, model_gen)
+    fs.download_model_cand(run_id, local_models_dir, model_gen)
 
   if config.from_existing_run:
     train_from_existing_run(run_id, config.from_existing_run, local_models_dir,
@@ -218,10 +218,10 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
     sp_thread.start()
 
     # Poll GCS to check for the availability of a new golden chunk.
-    latest_chunk_gen = gcs.get_most_recent_chunk(run_id)
+    latest_chunk_gen = fs.get_most_recent_chunk(run_id)
     while latest_chunk_gen <= model_gen:
       time.sleep(POLL_INTERVAL_S)
-      latest_chunk_gen = gcs.get_most_recent_chunk(run_id)
+      latest_chunk_gen = fs.get_most_recent_chunk(run_id)
 
     # Found new chunk.
     logging.info(f'Found training chunk {latest_chunk_gen}.' +
@@ -230,15 +230,15 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
     sp_thread.join()
 
     next_model_gen = model_gen + 1
-    chunk_path = gcs.download_golden_chunk(run_id, local_golden_chunk_dir,
-                                           next_model_gen)
-    chunk_size_path = gcs.download_golden_chunk_size(run_id,
-                                                     local_golden_chunk_dir,
-                                                     next_model_gen)
+    chunk_path = fs.download_golden_chunk(run_id, local_golden_chunk_dir,
+                                          next_model_gen)
+    chunk_size_path = fs.download_golden_chunk_size(run_id,
+                                                    local_golden_chunk_dir,
+                                                    next_model_gen)
     train(run_id, model_gen, next_model_gen, local_models_dir, chunk_path,
           chunk_size_path, batch_num_path)
     eval_new_model(run_id, next_model_gen, eval_res_path)
-    gcs.remove_local_chunk(local_golden_chunk_dir, next_model_gen)
+    fs.remove_local_chunk(local_golden_chunk_dir, next_model_gen)
     model_gen = next_model_gen
     logging.info('Eval finished. Restarting self-play -> train -> eval loop.')
 
@@ -249,31 +249,31 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
   # data. Shuffler is responsible for notifying when there are no more chunks.
   while model_gen < config.num_generations + config.extra_train_gens:
     # Wait for chunk.
-    latest_chunk_gen = gcs.get_most_recent_chunk(run_id)
+    latest_chunk_gen = fs.get_most_recent_chunk(run_id)
     while latest_chunk_gen <= model_gen:
       time.sleep(POLL_INTERVAL_S)
-      latest_chunk_gen = gcs.get_most_recent_chunk(run_id)
+      latest_chunk_gen = fs.get_most_recent_chunk(run_id)
 
     # Found new chunk.
     logging.info(f'Found training chunk {latest_chunk_gen}.' +
                  f' Current generation is {model_gen}.')
     next_model_gen = model_gen + 1
-    chunk_path = gcs.download_golden_chunk(run_id, local_golden_chunk_dir,
-                                           next_model_gen)
-    chunk_size_path = gcs.download_golden_chunk_size(run_id,
-                                                     local_golden_chunk_dir,
-                                                     next_model_gen)
+    chunk_path = fs.download_golden_chunk(run_id, local_golden_chunk_dir,
+                                          next_model_gen)
+    chunk_size_path = fs.download_golden_chunk_size(run_id,
+                                                    local_golden_chunk_dir,
+                                                    next_model_gen)
     train(model_gen, next_model_gen, local_models_dir, chunk_path,
           chunk_size_path, batch_num_path)
     eval_new_model(next_model_gen, eval_res_path)
 
-    gcs.remove_local_chunk(local_golden_chunk_dir, next_model_gen)
+    fs.remove_local_chunk(local_golden_chunk_dir, next_model_gen)
 
     model_gen = next_model_gen
     logging.info('Eval finished. Waiting for next chunk...')
 
   logging.info('Run is finished. Shutting down...')
-  gcs.signal_done(run_id)
+  fs.signal_done(run_id, local_run_dir)
 
 
 def main(_):
@@ -289,7 +289,7 @@ def main(_):
   build_trt_engine_path = Path(FLAGS.bin_dir, 'cc', 'nn', 'engine', 'scripts',
                                'build_and_run_trt_engine')
 
-  val_ds_path = gcs.download_val_ds(FLAGS.local_run_dir)
+  val_ds_path = fs.download_val_ds(FLAGS.local_run_dir)
   run_config = config.parse(FLAGS.run_id)
   run_id = FLAGS.run_id
 
