@@ -24,7 +24,7 @@ namespace shuffler {
  */
 class TfRecordWatcher final {
  public:
-  TfRecordWatcher(std::string dir, int train_window_size);
+  TfRecordWatcher(std::string dir, int train_window_size, bool is_local);
   ~TfRecordWatcher() = default;
 
   // Disable Copy
@@ -37,12 +37,14 @@ class TfRecordWatcher final {
 
  private:
   absl::flat_hash_set<std::string> GlobFiles();
+  absl::flat_hash_set<std::string> GlobDones();
   void PopulateInitialTrainingWindow(int train_window_size);
 
   std::string dir_;
   absl::flat_hash_set<std::string> files_;
   absl::flat_hash_set<std::string> excluded_files_;
   int num_new_games_;
+  const bool is_local_;
 };
 }  // namespace shuffler
 

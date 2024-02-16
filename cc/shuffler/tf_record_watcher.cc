@@ -2,11 +2,14 @@
 
 #include <filesystem>  // make sure to compile with gcc 9+
 #include <iterator>
+#include <regex>
 
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "absl/strings/str_format.h"
 #include "cc/core/util.h"
+#include "cc/data/filename_format.h"
 #include "cc/shuffler/constants.h"
 
 namespace shuffler {
@@ -14,8 +17,9 @@ namespace fs = std::filesystem;
 
 using namespace ::core;
 
-TfRecordWatcher::TfRecordWatcher(std::string dir, int train_window_size)
-    : dir_(dir), num_new_games_(0) {
+TfRecordWatcher::TfRecordWatcher(std::string dir, int train_window_size,
+                                 bool is_local)
+    : dir_(dir), num_new_games_(0), is_local_(is_local) {
   PopulateInitialTrainingWindow(train_window_size);
 }
 
@@ -48,9 +52,17 @@ std::vector<std::string> TfRecordWatcher::UpdateAndGetNew() {
 int TfRecordWatcher::NumGamesSinceInit() { return num_new_games_; }
 
 absl::flat_hash_set<std::string> TfRecordWatcher::GlobFiles() {
-  auto dir_it = fs::recursive_directory_iterator(dir_);
+  auto convert_to_done_filename = [](const ChunkInfo& chunk_info) {
+    return absl::StrFormat(data::kChunkDoneFormat, chunk_info.gen,
+                           chunk_info.batch, chunk_info.num_games,
+                           chunk_info.num_examples, chunk_info.timestamp,
+                           chunk_info.worker_id);
+  };
+
+  auto dones = is_local_ ? GlobDones() : absl::flat_hash_set<std::string>();
+
   absl::flat_hash_set<std::string> files;
-  for (const auto& dir_entry : dir_it) {
+  for (const auto& dir_entry : fs::recursive_directory_iterator(dir_)) {
     if (!dir_entry.is_regular_file()) {
       continue;
     }
@@ -61,7 +73,32 @@ absl::flat_hash_set<std::string> TfRecordWatcher::GlobFiles() {
       continue;
     }
 
+    if (is_local_ && !dones.contains(convert_to_done_filename(*chunk_info))) {
+      continue;
+    }
+
     files.insert(dir_entry.path());
+  }
+
+  return files;
+}
+
+absl::flat_hash_set<std::string> TfRecordWatcher::GlobDones() {
+  static const std::regex re(data::kChunkDoneRegex);
+
+  absl::flat_hash_set<std::string> files;
+  for (const auto& dir_entry : fs::recursive_directory_iterator(dir_)) {
+    if (!dir_entry.is_regular_file()) {
+      continue;
+    }
+
+    std::string filename = dir_entry.path().filename();
+    std::smatch match;
+    if (!std::regex_match(filename, match, re)) {
+      continue;
+    }
+
+    files.insert(filename);
   }
 
   return files;
@@ -84,7 +121,9 @@ void TfRecordWatcher::PopulateInitialTrainingWindow(int train_window_size) {
   // reverse sort.
   std::sort(file_data.begin(), file_data.end(),
             [](const ChunkData& f0, const ChunkData& f1) {
-              return f0.info.timestamp > f1.info.timestamp;
+              return f0.info.gen > f1.info.gen ||
+                     (f0.info.gen == f1.info.gen &&
+                      f0.info.timestamp > f1.info.timestamp);
             });
 
   // iterate through all files, adding each file to a buffer until we consume

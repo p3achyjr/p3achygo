@@ -29,7 +29,6 @@ using ::tensorflow::io::compression::kZlib;
 
 static constexpr size_t kDefaultChunkSize = 2048000;
 static constexpr int kDefaultPollIntervalS = 30;
-static constexpr int kLoggingInterval = 1000000;
 
 void WriteChunkToDisk(std::string filename, const std::vector<tstring>& chunk) {
   std::unique_ptr<tensorflow::WritableFile> file;
@@ -50,7 +49,8 @@ void WriteChunkToDisk(std::string filename, const std::vector<tstring>& chunk) {
 }  // namespace
 
 ChunkManager::ChunkManager(std::string dir, int gen, float p, int games_per_gen,
-                           int train_window_size, bool is_continuous)
+                           int train_window_size, bool is_continuous,
+                           bool is_local)
     : dir_(dir),
       gen_(gen),
       p_(p),
@@ -58,7 +58,7 @@ ChunkManager::ChunkManager(std::string dir, int gen, float p, int games_per_gen,
       poll_interval_s_(kDefaultPollIntervalS),
       games_per_gen_(games_per_gen),
       is_continuous_(is_continuous),
-      watcher_(dir_, train_window_size),
+      watcher_(dir_, train_window_size, is_local),
       fbuffer_(watcher_.GetFiles()),
       running_(true) {
   fs_thread_ = std::thread(&ChunkManager::FsThread, this);
@@ -76,9 +76,9 @@ ChunkManager::~ChunkManager() {
 
 void ChunkManager::CreateChunk() {
   if (is_continuous_) {
-    LOG(INFO) << "Creating Chunk (Continuous Mode)...";
+    LOG(INFO) << "Creating Chunk (Continuous Mode)... Dir: " << dir_;
   } else {
-    LOG(INFO) << "Creating Chunk (Finite Task Mode)...";
+    LOG(INFO) << "Creating Chunk (Finite Task Mode)... Dir: " << dir_;
   }
 
   int num_scanned = 0;
@@ -133,17 +133,12 @@ void ChunkManager::ShuffleAndFlush() {
             << "s. Chunk contains " << golden_chunk.size() << " elements.";
 
   // create directory
-  std::string chunk_dir = fs::path(dir_) / kGoldenChunkDirname;
+  std::string chunk_dir = fs::path(dir_).parent_path() / kGoldenChunkDirname;
   std::string chunk_filename =
       fs::path(chunk_dir) / absl::StrFormat(kGoldenChunkFormat, gen_);
   std::string chunk_size_filename =
       fs::path(chunk_dir) / absl::StrFormat(kGoldenChunkSizeFormat, gen_);
   fs::create_directory(chunk_dir);
-
-  // write number of examples in batch.
-  FILE* const file = fopen(chunk_size_filename.c_str(), "w");
-  absl::FPrintF(file, "%d", golden_chunk.size());
-  fclose(file);
 
   // write to disk.
   start = std::chrono::steady_clock::now();
@@ -151,6 +146,11 @@ void ChunkManager::ShuffleAndFlush() {
   end = std::chrono::steady_clock::now();
   elapsed = end - start;
   LOG(INFO) << "Writing chunk took " << elapsed.count() << "s.";
+
+  // write number of examples in batch.
+  FILE* const file = fopen(chunk_size_filename.c_str(), "w");
+  absl::FPrintF(file, "%d", golden_chunk.size());
+  fclose(file);
 }
 
 void ChunkManager::SignalStop() {

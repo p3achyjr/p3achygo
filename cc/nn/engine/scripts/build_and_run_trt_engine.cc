@@ -155,7 +155,8 @@ int main(int argc, char** argv) {
                            nv::Dims2(batch_size, 7));
 
     nvinfer1::IBuilderConfig* config = builder->createBuilderConfig();
-    config->setMemoryPoolLimit(nv::MemoryPoolType::kWORKSPACE, 1 << 30);
+    config->setMemoryPoolLimit(nv::MemoryPoolType::kWORKSPACE,
+                               static_cast<size_t>(1) << 32);
     config->addOptimizationProfile(profile);
     std::unique_ptr<nn::trt::Int8Calibrator> calibrator =
         nn::trt::Int8Calibrator::Create(batch_size, go_ds.get(),

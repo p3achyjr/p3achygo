@@ -36,7 +36,7 @@ namespace shuffler {
 class ChunkManager final {
  public:
   ChunkManager(std::string dir, int gen, float p, int games_per_gen,
-               int train_window_size, bool is_continuous);
+               int train_window_size, bool is_continuous, bool is_local);
   ~ChunkManager();
 
   // Disable Copy

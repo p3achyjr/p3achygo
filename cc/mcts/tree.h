@@ -61,7 +61,7 @@ struct TreeNode final {
 
 inline float N(const TreeNode* node) { return node == nullptr ? 0 : node->n; }
 inline float NAction(const TreeNode* node, int action) {
-  return N(node->children[action].get());
+  return node->children[action] ? N(node->children[action].get()) : 0;
 }
 
 inline float V(const TreeNode* node) {

@@ -22,6 +22,11 @@ ABSL_FLAG(float, p, .01f,
           "training.");
 ABSL_FLAG(bool, run_continuously, true,
           "Whether to run the shuffler in continuous mode.");
+ABSL_FLAG(bool, is_local, false,
+          "Whether self-play loop is running locally. In this case, the "
+          "shuffler will ensure that data chunks are fully written out to disk "
+          "before reading. It does this by checking for the presence of a "
+          "`.DONE` file, written by the self-play process.");
 
 void WaitForSignal(shuffler::ChunkManager* chunk_manager) {
   // any line from stdin is a shutdown signal.
@@ -60,13 +65,16 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  bool is_local = absl::GetFlag(FLAGS_is_local);
+
   float p = absl::GetFlag(FLAGS_p);
   LOG(INFO) << "Using Training Window of n=" << train_window_size
-            << " samples and p=" << p << " sample draw probability.";
+            << " samples and p=" << p
+            << " sample draw probability. is_local=" << is_local;
 
-  shuffler::ChunkManager chunk_manager(data_path, gen, p, games_this_gen,
-                                       train_window_size,
-                                       absl::GetFlag(FLAGS_run_continuously));
+  shuffler::ChunkManager chunk_manager(
+      data_path, gen, p, games_this_gen, train_window_size,
+      absl::GetFlag(FLAGS_run_continuously), is_local);
   std::thread wait_thread(WaitForSignal, &chunk_manager);
 
   // CreateChunk blocks until we receive a signal, or play `games_per_gen`

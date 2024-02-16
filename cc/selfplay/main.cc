@@ -48,6 +48,7 @@ void WaitForSignal() {
   std::string signal;
   std::getline(std::cin, signal);
 
+  LOG(INFO) << "Self-Play received shutdown signal. Shutting down...";
   selfplay::SignalStop();
 }
 

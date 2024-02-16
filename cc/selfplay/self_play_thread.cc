@@ -262,7 +262,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
                                             noise_scaling)
               : gumbel_evaluator.SearchRootPuct(
                     probability, game, root_node.get(), color_to_move, gumbel_n,
-                    1.05, true /* use_lcb */);
+                    1.05f, 0.28f, PuctKind::kVisitCountSample);
       auto end = std::chrono::high_resolution_clock::now();
 
       // Post Search Statstics.
@@ -347,6 +347,10 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       search_dur_avg = (search_dur_avg * (game.num_moves() - 1) + search_dur) /
                        game.num_moves();
 
+      auto mv_to_string = [](const game::Loc& move) {
+        return ("ABCDEFGHIJKLMNOPQRS"[move.j]) + std::to_string(move.i);
+      };
+
       auto log_fn = [&]() {
         std::string root_color = ToString(OppositeColor(color_to_move));
         std::stringstream s;
@@ -366,15 +370,14 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
           << "\n  Q: " << q_pre << "\n  Q_z: " << qz_pre << "\n";
         s << "(" << root_color << ") Post-Search Stats :\n  N: " << n_post
           << "\n  Q: " << q_post << "\n  Q_z: " << root_q_outcome << "\n";
-        s << "Raw NN Move: " << nn_move << "\n  n: " << nn_move_n
+        s << "Raw NN Move: " << mv_to_string(nn_move) << "\n  n: " << nn_move_n
           << "\n  q: " << nn_move_q << "\n  qz: " << nn_move_qz << "\n";
-        s << "Gumbel Move: " << move << "\n  n: " << move_n
+        s << "Gumbel Move: " << mv_to_string(move) << "\n  n: " << move_n
           << "\n  q: " << move_q << "\n  qz: " << move_qz << "\n";
         if (!gumbel_res.child_stats.empty()) {
           s << "Considered Moves:\n";
           for (const ChildStats& mv_stats : gumbel_res.child_stats) {
-            s << "  " << ("ABCDEFGHIJKLMNOPQRS"[mv_stats.move.j])
-              << mv_stats.move.i
+            s << "  " << mv_to_string(mv_stats.move)
               << ", p: " << absl::StrFormat("%.3f", mv_stats.prob)
               << ", n: " << absl::StrFormat("%d", mv_stats.n)
               << ", q: " << absl::StrFormat("%.3f", mv_stats.q)

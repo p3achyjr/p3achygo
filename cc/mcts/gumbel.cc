@@ -20,8 +20,8 @@ using ::game::Game;
 using ::game::Loc;
 
 static constexpr float kSmallLogit =
-    -1000;  // Not sure how extreme values impact std::exp, so keeping it
-            // relatively small.
+    -10000;  // Not sure how extreme values impact std::exp, so keeping it
+             // relatively small.
 static constexpr float kMinNonRootDisparity = -100000;
 static constexpr int kVisit = 50;
 static constexpr float kValueScale = 1.0;
@@ -378,7 +378,8 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
                                              game::Game& game, TreeNode* root,
                                              game::Color color_to_move, int n,
                                              const float c_puct,
-                                             const bool use_lcb) {
+                                             const float c_puct_scaling,
+                                             const PuctKind puct_kind) {
   auto best_lcb_move = [&](const TreeNode* node) {
     std::array<std::pair<int, float>, constants::kMaxMovesPerPosition>
         move_lcbs;
@@ -400,6 +401,29 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
     return game::kPassLoc;
   };
 
+  auto sample_action_from_visits =
+      [&probability](const std::array<float, constants::kMaxMovesPerPosition>&
+                         visit_counts) {
+        float total_visits = core::SumV(visit_counts);
+        float p = probability.Uniform();
+        int ratio = static_cast<int>(std::round(p * (total_visits - 1)));
+
+        int n = 0;
+        for (int a = 0; a < visit_counts.size(); ++a) {
+          if (visit_counts[a] == 0) continue;
+
+          // Use half-open interval.
+          if (ratio >= n && ratio < n + visit_counts[a]) {
+            return a;
+          }
+
+          n += visit_counts[a];
+        }
+
+        // Should never reach here.
+        CHECK(false) << "Could not find viable candidate to sample.";
+      };
+
   if (root->state == TreeNodeState::kNew) {
     leaf_evaluator_.EvaluateRoot(probability, game, root, color_to_move);
   }
@@ -411,7 +435,7 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
   }
 
   // Conduct search.
-  PuctSearchPolicy search_policy(c_puct, 0.45);
+  PuctSearchPolicy search_policy(c_puct, c_puct_scaling);
   for (size_t _ = 0; _ < n; ++_) {
     Game search_game = game;
     absl::InlinedVector<TreeNode*, kMaxPathLenEst> search_path =
@@ -427,8 +451,20 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
   }
 
   Loc raw_nn_move = game::AsLoc(Argmax(root->move_logits));
-  Loc mcts_move =
-      use_lcb ? best_lcb_move(root) : game::AsLoc(Argmax(visit_counts));
+  Loc mcts_move = [&visit_counts, &best_lcb_move, puct_kind, root,
+                   &sample_action_from_visits]() {
+    switch (puct_kind) {
+      case kVisitCount:
+        return game::AsLoc(Argmax(visit_counts));
+      case kLcb:
+        return best_lcb_move(root);
+      case kVisitCountSample:
+        return game::AsLoc(sample_action_from_visits(visit_counts));
+    }
+
+    return game::AsLoc(Argmax(visit_counts));
+  }();
+
   absl::InlinedVector<ChildStats, 16> child_stats;
   for (int mv = 0; mv < constants::kMaxMovesPerPosition; ++mv) {
     if (visit_counts[mv] == 0) continue;
@@ -493,6 +529,8 @@ GumbelEvaluator::Search(core::Probability& probability, Game& game,
   if (leaf_node->state == TreeNodeState::kNew) {
     leaf_evaluator_.EvaluateLeaf(probability, game, leaf_node, color_to_move,
                                  root_color, root_score_est);
+  } else {
+    leaf_node->n += 1;
   }
 
   if (game.IsGameOver() && !leaf_node->is_terminal) {

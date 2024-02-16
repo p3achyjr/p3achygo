@@ -10,6 +10,12 @@
 
 namespace mcts {
 
+enum PuctKind {
+  kVisitCount = 0,
+  kLcb = 1,
+  kVisitCountSample = 2,
+};
+
 struct ChildStats {
   game::Loc move;
   int n;
@@ -96,14 +102,8 @@ class GumbelEvaluator final {
   // at non-root nodes, as described in the Gumbel paper.
   GumbelResult SearchRootPuct(core::Probability& probability, game::Game& game,
                               TreeNode* root, game::Color color_to_move, int n,
-                              const float c_puct, const bool use_lcb);
-  inline GumbelResult SearchRootPuct(core::Probability& probability,
-                                     game::Game& game, TreeNode* root,
-                                     game::Color color_to_move, int n,
-                                     const float c_puct) {
-    return SearchRootPuct(probability, game, root, color_to_move, n, c_puct,
-                          false /* use_ucb */);
-  }
+                              const float c_puct, const float c_puct_scaling,
+                              const PuctKind puct_kind);
 
  private:
   static constexpr int kMaxPathLenEst = 128;

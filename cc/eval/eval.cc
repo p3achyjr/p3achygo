@@ -115,8 +115,10 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
     float c_puct = color_to_move == BLACK ? c_puct_b : c_puct_w;
     auto begin = std::chrono::high_resolution_clock::now();
     GumbelResult gumbel_res =
-        use_puct ? gumbel.SearchRootPuct(probability, game, player_tree.get(),
-                                         color_to_move, n, c_puct, use_lcb)
+        use_puct ? gumbel.SearchRootPuct(
+                       probability, game, player_tree.get(), color_to_move, n,
+                       c_puct, 0.45f,
+                       use_lcb ? PuctKind::kLcb : PuctKind::kVisitCount)
                  : gumbel.SearchRoot(probability, game, player_tree.get(),
                                      color_to_move, n, k, noise_scaling);
     auto end = std::chrono::high_resolution_clock::now();
