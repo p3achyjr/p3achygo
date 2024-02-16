@@ -29,7 +29,7 @@ flags.DEFINE_string('bin_path', '', 'Local path to shuffler binary.')
 flags.DEFINE_string('run_id', '', 'ID corresponding to the current run.')
 flags.DEFINE_string('local_run_dir', '/tmp/p3achygo',
                     'Local path for training data')
-flags.DEFINE_string('local_only', False, 'Whether to run RL loop locally.')
+flags.DEFINE_bool('local_only', False, 'Whether to run RL loop locally.')
 
 
 def handle_shutdown(signum, _):
@@ -107,7 +107,8 @@ def loop(bin_path: str, run_id: str, local_run_dir: str,
         f' --games_this_gen={num_games_to_play}' +
         f' --train_window_size={train_window_size}' +
         f' --p={select_sample_prob}' +
-        f' --run_continuously={"true" if in_continuous_mode else "false"}')
+        f' --run_continuously={"true" if in_continuous_mode else "false"}' +
+        f' --is_local={FLAGS.local_only}')
     shuf_proc = Popen(cmd,
                       stdin=PIPE,
                       stdout=PIPE,
@@ -138,13 +139,17 @@ def loop(bin_path: str, run_id: str, local_run_dir: str,
     fs.upload_chunk(run_id, fs.local_chunk_dir(local_sp_chunk_dir), chunk_gen)
     fs.upload_chunk_size(run_id, fs.local_chunk_dir(local_sp_chunk_dir),
                          chunk_gen)
-    logging.info(f'Uploaded chunk gen {chunk_gen} to gs://p3achygo/{run_id}')
-    fs.remove_local_chunk(fs.local_chunk_dir(local_sp_chunk_dir), chunk_gen)
-    logging.info(f'Removed local chunk {chunk_gen} from disk.')
+    logging.info(
+        f'Uploaded chunk gen {chunk_gen} to ' +
+        f'{fs.local_chunk_dir(local_sp_chunk_dir) if FLAGS.local_only else "gs://p3achygo/" + run_id}'
+    )
+    if not FLAGS.local_only:
+      fs.remove_local_chunk(fs.local_chunk_dir(local_sp_chunk_dir), chunk_gen)
+      logging.info(f'Removed local chunk {chunk_gen} from disk.')
 
     return num_new_samples, gcs_sp_chunks
 
-  (_, _, local_sp_chunk_dir, _) = fs.ensure_local_dirs(local_run_dir)
+  (_, _, _, local_sp_chunk_dir, _) = fs.ensure_local_dirs(local_run_dir)
   logging.info(f'Using {local_sp_chunk_dir} to store self-play chunks.')
 
   gcs_sp_chunks = set(fs.list_sp_chunks(run_id))
@@ -153,7 +158,7 @@ def loop(bin_path: str, run_id: str, local_run_dir: str,
   num_samples_generated = num_samples_in_chunks(gcs_sp_chunks)
 
   chunk_gen = fs.get_most_recent_chunk(run_id) + 1
-  while chunk_gen <= config.num_generations:
+  while running and chunk_gen <= config.num_generations:
     # calculate metadata.
     train_window_size = shuffle_metadata.training_window_size(
         num_samples_generated)
@@ -182,7 +187,7 @@ def loop(bin_path: str, run_id: str, local_run_dir: str,
   num_samples_per_gen_est = config.games_per_gen * 75
   total_gens = config.num_generations + config.extra_train_gens
   extra_gen = 0
-  while chunk_gen <= total_gens:
+  while running and chunk_gen <= total_gens:
     # pretend as if we have actually played `extra_gen` number of generations, to
     # calculate sample window. Then subtract `extra_gen * num_samples_per_gen_est` to
     # get the actual sample window from our training data.
@@ -218,6 +223,9 @@ def main(_):
   if FLAGS.run_id == '':
     logging.error('No --run_id specified.')
     return
+
+  fs_mode = 'local' if FLAGS.local_only else 'gcs'
+  fs.configure_fs(mode=fs_mode, local_path=FLAGS.local_run_dir)
 
   run_config = config.parse(FLAGS.run_id)
   loop(FLAGS.bin_path, FLAGS.run_id, FLAGS.local_run_dir, run_config)

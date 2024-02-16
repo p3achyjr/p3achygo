@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gcs_utils as gcs
+import shutil
 
 from pathlib import Path
 from typing import Tuple, Callable
@@ -34,20 +35,25 @@ def configure_fs(mode='gcs', local_path=''):
 def get_most_recent_model(run_id: str) -> int:
   if MODE == 'gcs':
     return gcs.get_most_recent_model(run_id)
-  return _get_most_recent(gcs.gcs_models_dir(run_id), gcs._get_model_num, -1)
+  return _get_most_recent(str(Path(gcs.MODELS_DIR)), gcs._get_model_num, -1)
 
 
 def get_most_recent_model_cand(run_id: str) -> int:
   if MODE == 'gcs':
     return gcs.get_most_recent_model_cand(run_id)
-  return _get_most_recent(gcs.gcs_model_cands_dir(run_id), gcs._get_model_num,
+  return _get_most_recent(str(Path(gcs.MODEL_CANDS_DIR)), gcs._get_model_num,
                           -1)
 
 
 def get_most_recent_chunk(run_id: str) -> int:
   if MODE == 'gcs':
     return gcs.get_most_recent_chunk(run_id)
-  return _get_most_recent(gcs.gcs_chunk_dir(run_id), gcs._get_chunk_num, 0)
+
+  # Shuffler will write the size file after the chunk. We can use this as an
+  # indicator for when the golden chunk is fully flushed.
+  return _get_most_recent(
+      str(Path(gcs.GOLDEN_CHUNK_DIR)),
+      lambda blob_path: gcs._get_num(blob_path, gcs.GOLDEN_CHUNK_SIZE_RE), 0)
 
 
 def upload_chunk(run_id: str, local_chunk_dir: str, gen: int):
@@ -69,6 +75,12 @@ def remove_local_chunk(local_chunk_dir: str, gen: int):
 def upload_model(run_id: str, local_models_dir: str, gen: int):
   if MODE == 'gcs':
     gcs.upload_model(run_id, local_models_dir, gen)
+    return
+
+  model_cand_path = Path(LOCAL_PATH, gcs.MODEL_CANDS_DIR,
+                         gcs.MODEL_FORMAT.format(gen))
+  model_path = Path(LOCAL_PATH, gcs.MODELS_DIR, gcs.MODEL_FORMAT.format(gen))
+  shutil.copytree(model_cand_path, model_path)
 
 
 def upload_model_cand(run_id: str, local_models_dir: str, gen: int):
@@ -124,7 +136,19 @@ def list_sp_chunks(run_id: str) -> list[str]:
   if MODE == 'gcs':
     return gcs.list_sp_chunks(run_id)
 
-  return list(Path(LOCAL_PATH, gcs.SP_CHUNK_DIR))
+  return [
+      str(path)
+      for path in Path(LOCAL_PATH, gcs.SP_CHUNK_DIR).glob('*')
+      if gcs.SP_CHUNK_RE.fullmatch(path.name)
+  ]
+
+
+def local_models_dir(model_dir: str) -> str:
+  return str(Path(model_dir, gcs.MODELS_DIR))
+
+
+def local_chunk_dir(data_dir: str) -> str:
+  return str(Path(data_dir, gcs.GOLDEN_CHUNK_DIR))
 
 
 def is_done(run_id: str, local_run_dir: str) -> bool:
@@ -146,19 +170,22 @@ def signal_done(run_id: str, local_run_dir: str):
   path.touch(exist_ok=True)
 
 
-def ensure_local_dirs(local_run_dir: str) -> Tuple[Path, Path, Path, Path]:
+def ensure_local_dirs(
+    local_run_dir: str) -> Tuple[Path, Path, Path, Path, Path]:
   local_models_dir = Path(local_run_dir, gcs.MODELS_DIR)
+  local_model_cands_dir = Path(local_run_dir, gcs.MODEL_CANDS_DIR)
   local_golden_chunk_dir = Path(local_run_dir, gcs.GOLDEN_CHUNK_DIR)
   local_sp_chunk_dir = Path(local_run_dir, gcs.SP_CHUNK_DIR)
   local_sgf_dir = Path(local_run_dir, gcs.SGF_DIR)
 
   local_models_dir.mkdir(exist_ok=True)
+  local_model_cands_dir.mkdir(exist_ok=True)
   local_golden_chunk_dir.mkdir(exist_ok=True)
   local_sp_chunk_dir.mkdir(exist_ok=True)
   local_sgf_dir.mkdir(exist_ok=True)
 
-  return (local_models_dir, local_golden_chunk_dir, local_sp_chunk_dir,
-          local_sgf_dir)
+  return (local_models_dir, local_model_cands_dir, local_golden_chunk_dir,
+          local_sp_chunk_dir, local_sgf_dir)
 
 
 def file_diff(dir: Path, files: set(Path),

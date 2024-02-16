@@ -148,6 +148,7 @@ def _download_chunk_file(run_id: str, local_chunk_dir: str,
 
   return _download(str(local_chunk_path), str(gcs_chunk_path))
 
+
 def rsync_chunks(run_id: str, local_dir: str) -> str:
   gcs_dir = gcs_sp_chunk_dir(run_id)
 
@@ -165,14 +166,6 @@ def list_sp_chunks(run_id: str) -> list[str]:
 
   blobs = GCS_CLIENT.list_blobs(GCS_BUCKET, prefix=gcs_dir)
   return [f.name for f in filter(lambda f: f.name != gcs_dir, blobs)]
-
-
-def local_models_dir(model_dir: str) -> str:
-  return str(Path(model_dir, MODELS_DIR))
-
-
-def local_chunk_dir(data_dir: str) -> str:
-  return str(Path(data_dir, GOLDEN_CHUNK_DIR))
 
 
 def gcs_models_dir(run_id: str) -> str:

@@ -75,7 +75,9 @@ def main(_):
   gpus = tf.config.list_physical_devices('GPU')
   if gpus:
     tf.keras.mixed_precision.set_global_policy('mixed_float16')
-    tf.config.experimental.set_memory_growth(gpus[0], True)
+    gpus = tf.config.experimental.list_physical_devices('GPU')
+    for gpu in gpus:
+      tf.config.experimental.set_memory_growth(gpu, True)
     is_gpu = True
   else:
     logging.warning('No GPU detected.')

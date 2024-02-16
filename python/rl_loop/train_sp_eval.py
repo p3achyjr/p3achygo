@@ -9,7 +9,10 @@ import os, sys, time
 import rl_loop.config as config
 import rl_loop.sp_loop as sp
 import rl_loop.fs_utils as fs
+import rl_loop.model_utils as model_utils
+import numpy as np
 import proc
+import tensorflow as tf
 
 from absl import app, flags, logging
 from constants import *
@@ -30,11 +33,10 @@ flags.DEFINE_string(
     'from_existing_run', '',
     'Existing run from which to use SP chunks to train a new model from.')
 flags.DEFINE_string('bin_dir', '', 'Local path to bazel-bin dir.')
-flags.DEFINE_string('eval_bin_path', '', 'Local path to eval binary.')
 flags.DEFINE_string('run_id', '', 'ID corresponding to the current run.')
 flags.DEFINE_string('local_run_dir', '/tmp/p3achygo',
                     'Local path for temporary storage')
-flags.DEFINE_string('local_only', False, 'Whether to run RL loop locally.')
+flags.DEFINE_bool('local_only', False, 'Whether to run RL loop locally.')
 
 
 @dataclass
@@ -61,14 +63,14 @@ def eval(run_id: str, eval_bin_path: str, eval_res_path: str,
          f' --recorder_path={local_run_dir}' +
          f' --cache_size={EVAL_CACHE_SIZE}' +
          f' --num_games={min(NUM_EVAL_GAMES, trt_batch_size())}' +
-         f' --cur_n={n} --cur_k={k} --cur_noise_scaling=0' +
-         f' --cand_n={n} --cand_k={k} --cand_noise_scaling=0')
+         f' --cur_n={n} --cur_use_puct=1 --cur_use_lcb=1' +
+         f' --cand_n={n} --cand_use_puct=1 --cand_use_lcb=1')
   logging.info(f'Running Eval Command:\n\'{cmd}\'')
   exit_code = proc.run_proc(cmd, env=env)
   logging.info(f'Eval Exited with Status {exit_code}')
 
   # Upload Eval SGFs. This is safe because the process has terminated.
-  _, _, _, local_sgf_dir = fs.ensure_local_dirs(local_run_dir)
+  _, _, _, _, local_sgf_dir = fs.ensure_local_dirs(local_run_dir)
   eval_sgfs = local_sgf_dir.glob("*EVAL*.sgf")
   for sgf in eval_sgfs:
     fs.upload_sgf(run_id, sgf)
@@ -98,7 +100,7 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
   def train(run_id: str,
             model_gen: int,
             next_model_gen: int,
-            local_models_dir: str,
+            local_model_cands_dir: str,
             chunk_path: str,
             chunk_size_path: str,
             batch_num_path: str,
@@ -107,7 +109,7 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
       logging.info(f'Training model {next_model_gen}...')
       chunk_size = int(f.read())
       cmd = (f'python -m python.rl_loop.train_one_gen' + f' --run_id={run_id}' +
-             f' --models_dir={local_models_dir}' + f' --gen={model_gen}' +
+             f' --models_dir={local_model_cands_dir}' + f' --gen={model_gen}' +
              f' --next_gen={next_model_gen}' + f' --chunk_path={chunk_path}' +
              f' --chunk_size={chunk_size}' + f' --val_ds_path={val_ds_path}' +
              f' --batch_num_path={batch_num_path}' + f' --save_trt={save_trt}' +
@@ -119,13 +121,14 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
     # Play against current _best_ model.
     current_golden_gen = fs.get_most_recent_model(run_id)
     cur_model_path = str(
-        Path(local_models_dir, gcs.MODEL_FORMAT.format(current_golden_gen)))
+        Path(local_model_cands_dir,
+             gcs.MODEL_FORMAT.format(current_golden_gen)))
     cand_model_path = str(
-        Path(local_models_dir, gcs.MODEL_FORMAT.format(next_model_gen)))
+        Path(local_model_cands_dir, gcs.MODEL_FORMAT.format(next_model_gen)))
 
     # Upload as new model candidate, in case we are pre-empted.
     logging.info(f'Uploading model candidate {cand_model_path}.')
-    fs.upload_model_cand(run_id, local_models_dir, next_model_gen)
+    fs.upload_model_cand(run_id, local_model_cands_dir, next_model_gen)
 
     # Run eval.
     eval_result = eval(run_id, eval_bin_path, eval_res_path, cur_model_path,
@@ -141,7 +144,7 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
               f' Cur: {current_golden_gen}, Cand: {next_model_gen}\n')
 
   def train_from_existing_run(run_id, existing_run_id: str,
-                              local_models_dir: str,
+                              local_model_cands_dir: str,
                               local_golden_chunk_dir: str):
     logging.info(
         f'Training from existing run {existing_run_id} for run {run_id}')
@@ -161,17 +164,17 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
       train(run_id,
             model_gen,
             next_model_gen,
-            local_models_dir,
+            local_model_cands_dir,
             chunk_path,
             chunk_size_path,
             batch_num_path,
             save_trt=False)
-      fs.upload_model_cand(run_id, local_models_dir, next_model_gen)
+      fs.upload_model_cand(run_id, local_model_cands_dir, next_model_gen)
       fs.remove_local_chunk(local_golden_chunk_dir, next_model_gen)
       model_gen = next_model_gen
 
   # populate local dirs
-  (local_models_dir, local_golden_chunk_dir, _,
+  (local_models_dir, local_model_cands_dir, local_golden_chunk_dir, _,
    _) = fs.ensure_local_dirs(local_run_dir)
 
   eval_history_path = Path(local_run_dir, 'elo_history.txt')
@@ -185,27 +188,38 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
   if model_gen < 0:
     # make new model.
     model_gen = 0
-    model_path = str(Path(local_models_dir, 'model_0000'))
-    cmd = (f'python -m python.rl_loop.make_new_model' +
-           f' --model_path={model_path}' +
-           f' --model_config={config.model_config}')
-    proc.run_proc(cmd)
+    model_path = str(Path(local_model_cands_dir, 'model_0000'))
+    with tf.device('/cpu:0'):
+      batch_size = trt_batch_size()
+      model = model_utils.new_model(name=f'p3achygo',
+                                    model_config=config.model_config)
+      model(
+          tf.convert_to_tensor(np.random.random([batch_size] +
+                                                model.input_planes_shape()),
+                               dtype=tf.float32),
+          tf.convert_to_tensor(np.random.random([batch_size] +
+                                                model.input_features_shape()),
+                               dtype=tf.float32))
+      model.summary()
+      model.save(model_path)
 
-    # # convert to TRT.
-    # cmd = (f'python -m python.scripts.convert_to_trt' +
-    #        f' --model_path={model_path}' + f' --calib_ds={val_ds_path}' +
-    #        f' --batch_size={trt_batch_size()}')
-    # proc.run_proc(cmd)
+      # convert to TRT.
+      model_utils.save_onnx_trt(model,
+                                val_ds_path,
+                                local_model_cands_dir,
+                                model_gen,
+                                batch_size=trt_batch_size(),
+                                trt_convert_path=build_trt_engine_path)
 
     # upload to GCS.
-    fs.upload_model_cand(run_id, local_models_dir, model_gen)
-    fs.upload_model(run_id, local_models_dir, model_gen)
+    fs.upload_model_cand(run_id, local_model_cands_dir, model_gen)
+    fs.upload_model(run_id, local_model_cands_dir, model_gen)
   else:
-    fs.download_model_cand(run_id, local_models_dir, model_gen)
+    fs.download_model_cand(run_id, local_model_cands_dir, model_gen)
 
   if config.from_existing_run:
-    train_from_existing_run(run_id, config.from_existing_run, local_models_dir,
-                            local_golden_chunk_dir)
+    train_from_existing_run(run_id, config.from_existing_run,
+                            local_model_cands_dir, local_golden_chunk_dir)
     return
 
   eval_res_path = str(Path(local_run_dir, 'eval_res.txt'))
@@ -236,7 +250,7 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
     chunk_size_path = fs.download_golden_chunk_size(run_id,
                                                     local_golden_chunk_dir,
                                                     next_model_gen)
-    train(run_id, model_gen, next_model_gen, local_models_dir, chunk_path,
+    train(run_id, model_gen, next_model_gen, local_model_cands_dir, chunk_path,
           chunk_size_path, batch_num_path)
     eval_new_model(run_id, next_model_gen, eval_res_path)
     fs.remove_local_chunk(local_golden_chunk_dir, next_model_gen)
@@ -264,7 +278,7 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
     chunk_size_path = fs.download_golden_chunk_size(run_id,
                                                     local_golden_chunk_dir,
                                                     next_model_gen)
-    train(model_gen, next_model_gen, local_models_dir, chunk_path,
+    train(run_id, model_gen, next_model_gen, local_model_cands_dir, chunk_path,
           chunk_size_path, batch_num_path)
     eval_new_model(next_model_gen, eval_res_path)
 
@@ -294,6 +308,8 @@ def main(_):
   run_config = config.parse(FLAGS.run_id)
   run_id = FLAGS.run_id
 
+  fs_mode = 'local' if FLAGS.local_only else 'gcs'
+  fs.configure_fs(mode=fs_mode, local_path=FLAGS.local_run_dir)
   loop(run_id, run_config, sp_bin_path, eval_bin_path, val_ds_path,
        build_trt_engine_path, FLAGS.local_run_dir)
 

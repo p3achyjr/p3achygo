@@ -53,7 +53,7 @@ def loop(bin_path: str,
   '''
   Starts self-play binary and runs until told to stop.
   '''
-  (local_models_dir, _, local_sp_chunk_dir,
+  (_, local_model_cands_dir, _, local_sp_chunk_dir,
    local_sgf_dir) = fs.ensure_local_dirs(local_run_dir)
 
   worker_id = secrets.token_hex(5)
@@ -74,7 +74,7 @@ def loop(bin_path: str,
     model_gen = fs.get_most_recent_model(run_id)
 
   # first model is now uploaded. Get it and start run.
-  model_path = fs.download_model(run_id, str(local_models_dir), model_gen)
+  model_path = fs.download_model(run_id, str(local_model_cands_dir), model_gen)
   model_path = str(Path(model_path, '_onnx', 'engine.trt'))
 
   # most recent chunk tells us which generation we are making self-play data for.

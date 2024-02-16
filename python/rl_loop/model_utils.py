@@ -33,6 +33,21 @@ def swa_avg_weights(weights: list, swa_momentum: float = 0.75) -> list:
   return swa_weights
 
 
+def avg_weights(prev_weights: list,
+                cur_weights: list,
+                num_batches_in_chunk: int,
+                swa_momentum: float = 0.4) -> list:
+  # chunk_ratio = min(1.0,
+  #                   float(num_batches_in_chunk) / NUM_BATCHES_FULL_CHECKPOINT)
+  # m_swa_new = (1 - SWA_MOMENTUM) * chunk_ratio
+  # swa_momentum = 1 - m_swa_new
+  print('SWA Momentum:', swa_momentum, "Num Batches: ", num_batches_in_chunk)
+  return [
+      prev_layer_weights * swa_momentum + layer_weights * (1 - swa_momentum)
+      for prev_layer_weights, layer_weights in zip(prev_weights, cur_weights)
+  ]
+
+
 def save_trt_and_upload(model: P3achyGoModel, calib_ds_path: str,
                         local_model_dir: str, gen: int, run_id: str,
                         batch_size: int) -> str:

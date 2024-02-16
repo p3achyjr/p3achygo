@@ -17,20 +17,17 @@ C_L2 = 1e-4
 
 
 def make_conv(output_channels: int, kernel_size: int, name=None):
-  return tf.keras.layers.Conv2D(
-      output_channels,
-      kernel_size,
-      activation=None,
-      kernel_initializer=tf.keras.initializers.he_normal,
-      kernel_regularizer=L2(C_L2),
-      padding='same',
-      name=name)
+  return tf.keras.layers.Conv2D(output_channels,
+                                kernel_size,
+                                activation=None,
+                                kernel_regularizer=L2(C_L2),
+                                padding='same',
+                                name=name)
 
 
 def make_dense(output_dim: int, name=None):
   return tf.keras.layers.Dense(
       output_dim,
-      kernel_initializer=tf.keras.initializers.he_normal,
       kernel_regularizer=L2(C_L2),
       name=name,
   )
@@ -605,11 +602,7 @@ class P3achyGoModel(tf.keras.Model):
     self.conv_size = conv_size
     self.broadcast_interval = broadcast_interval
 
-  def call(self,
-           board_state,
-           game_state,
-           training=False,
-           scores=None):
+  def call(self, board_state, game_state, training=False, scores=None):
     if scores is None:
       scores = .05 * tf.range(-SCORE_RANGE // 2 + .5, SCORE_RANGE // 2 + .5)
 

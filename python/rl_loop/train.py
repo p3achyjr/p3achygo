@@ -17,6 +17,15 @@ MOMENTUM = .9
 SWA_MOMENTUM = .75
 
 
+def get_ss_timestamps(num_batches):
+  TARGET_INTERVAL = 1000
+  if num_batches < 1500:
+    return []
+  num_snapshots = (num_batches - 501) // TARGET_INTERVAL
+  interval = int(num_batches / (num_snapshots + 1))
+  return [(i + 1) * interval for i in range(num_snapshots)]
+
+
 def train_one_gen(model: P3achyGoModel,
                   model_gen: int,
                   chunk_path: str,
@@ -37,14 +46,20 @@ def train_one_gen(model: P3achyGoModel,
 
     return n
 
+  def get_ss_timestamps(num_batches: int) -> list[int]:
+    TARGET_INTERVAL = 1000
+    if num_batches < 1500:
+      return []
+    num_snapshots = (num_batches - 501) // TARGET_INTERVAL
+    interval = int(num_batches / (num_snapshots + 1))
+    return [(i + 1) * interval for i in range(num_snapshots)]
+
   batch_size = config.batch_size
   lr_scale = 0.1 + 0.9 * min(1.0, model_gen / config.lr_growth_window)
-  if not chunk_size:
-    lr_schedule = ConstantLRSchedule(config.lr * lr_scale)
-  else:
-    num_batches = chunk_size // batch_size
-    lr_schedule = CyclicLRSchedule(config.min_lr * lr_scale,
-                                   config.max_lr * lr_scale, num_batches)
+  lr_schedule = ConstantLRSchedule(config.lr * lr_scale)
+  num_batches = chunk_size // batch_size
+  # lr_schedule = CyclicLRSchedule(config.min_lr * lr_scale,
+  #                                config.max_lr * lr_scale, num_batches)
 
   logging.info(f'Batch Size: {batch_size}')
   logging.info(f'Learning Rate Schedule: {lr_schedule.info()}')
@@ -58,11 +73,7 @@ def train_one_gen(model: P3achyGoModel,
   ds = ds.batch(batch_size)
   ds = ds.prefetch(tf.data.AUTOTUNE)
 
-  ss_interval = num_batches / 3
-  ss_manager = WeightSnapshotManager([
-      int(ss_interval),
-      int(ss_interval * 2),
-  ])
+  ss_manager = WeightSnapshotManager(get_ss_timestamps(num_batches))
   prev_weights = model.get_weights()
 
   old_batch_num = batch_num
@@ -81,9 +92,13 @@ def train_one_gen(model: P3achyGoModel,
 
   print(f'SWA Momentum: {SWA_MOMENTUM}, ' +
         f'Num Batches in Chunk: {batch_num - old_batch_num}, ' +
-        f'Num Snapshots: {len(ss_manager.snapshots)}')
+        f'Num Snapshots: {len(ss_manager.snapshots)}, ' +
+        f'Snapshots: {get_ss_timestamps(num_batches)}')
+  # num_batches_in_chunk = batch_num - old_batch_num
+  # new_weights = model_utils.avg_weights(prev_weights, model.get_weights(),
+  #                                       num_batches_in_chunk)
   new_weights = model_utils.swa_avg_weights(
-      [prev_weights] + ss_manager.weights + [model.get_weights()],
+      [prev_weights] + ss_manager.snapshots + [model.get_weights()],
       swa_momentum=SWA_MOMENTUM)
   model.set_weights(new_weights)
 
