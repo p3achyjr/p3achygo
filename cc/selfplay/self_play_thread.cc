@@ -30,7 +30,7 @@ static constexpr int kShouldLogShard = 8;
 static constexpr float kAddSeenStateProb = .04f;
 
 // Probability of drawing a state from the visited buffer.
-static constexpr float kUseSeenStateProb = .3f;
+static constexpr float kUseSeenStateProb = .25f;
 
 // Max Number of beginning moves to sample directly.
 static constexpr int kMaxNumRawPolicyMoves = 30;

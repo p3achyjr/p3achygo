@@ -9,11 +9,14 @@ build --enable_platform_specific_config
 build --verbose_failures=true
 build --genrule_strategy=local
 
-build --action_env CC="/usr/bin/gcc-9"
-
 # Linker toggle.
 # build --linkopt=-fuse-ld=lld
 build --linkopt=-fuse-ld=gold
+build --copt -Iexternal/cuda/local/cuda-12.1/targets/x86_64-linux/include
+
+build:cuda12.0 --copt=-isystem/usr/local/cuda-12.0/targets/x86_64-linux/include
+build:cuda12.1 --copt=-isystem/usr/local/cuda-12.1/targets/x86_64-linux/include
+build:cuda12.2 --copt=-isystem/usr/local/cuda-12.2/targets/x86_64-linux/include
 
 build:linux --cpu=k8
 

@@ -18,7 +18,7 @@ RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] http://packages.c
 # Install LLVM.
 RUN wget https://apt.llvm.org/llvm.sh && \
   chmod +x llvm.sh && \
-  ./llvm.sh 12 && \
+  ./llvm.sh 16 && \
   rm llvm.sh
 
 # Install Bazel.
@@ -46,13 +46,3 @@ ENV LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
 ENV PATH=/usr/lib/llvm-12/bin:$PATH
 
 WORKDIR /app
-
-COPY requirements.txt /app
-
-RUN pip install --upgrade pip && pip install -r /app/requirements.txt
-
-COPY . /app
-
-RUN cp /usr/local/lib/python3.8/dist-packages/tensorflow/libtensorflow_cc.so.2 /app/cc/tensorflow/ && \
-  cp /usr/local/lib/python3.8/dist-packages/tensorflow/libtensorflow_framework.so.2 /app/cc/tensorflow/ && \
-  cp -r /usr/local/lib/python3.8/dist-packages/tensorflow/include /app/cc/tensorflow/
