@@ -224,6 +224,7 @@ void GroupTracker::CalculatePassAliveRegions(Zobrist::Hash hash) {
     pass_alive_ = benson_cache.Get(hash).value();
   }
 
+  std::fill(pass_alive_.begin(), pass_alive_.end(), EMPTY);
   CalculatePassAliveRegionForColor(BLACK);
   CalculatePassAliveRegionForColor(WHITE);
   benson_cache.Insert(hash, pass_alive_);
@@ -499,6 +500,13 @@ bool Board::IsValidMove(Loc loc, Color color) const {
 }
 
 bool Board::IsGameOver() const { return consecutive_passes_ == 2; }
+
+bool Board::IsAllPassAlive() {
+  CalculatePassAliveRegions();
+  return std::all_of(group_tracker_.pass_alive().begin(),
+                     group_tracker_.pass_alive().end(),
+                     [](Color c) { return c != EMPTY; });
+}
 
 MoveStatus Board::PlayBlack(int i, int j) { return PlayMove(Loc{i, j}, BLACK); }
 MoveStatus Board::PlayWhite(int i, int j) { return PlayMove(Loc{i, j}, WHITE); }

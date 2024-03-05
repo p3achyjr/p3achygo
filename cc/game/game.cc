@@ -40,9 +40,9 @@ bool Game::IsValidMove(Loc loc, Color color) const {
   return board_.IsValidMove(loc, color);
 }
 
-bool Game::PlayMove(Loc loc, Color color) {
+bool Game::PlayMove(Loc loc, Color color, bool record) {
   bool ok = MoveOk(board_.PlayMove(loc, color));
-  if (ok) {
+  if (ok && record) {
     moves_.emplace_back(game::Move{color, loc});
   }
 

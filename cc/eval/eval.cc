@@ -73,6 +73,10 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
   bool use_lcb_w = cur_is_black ? config.cand_use_lcb : config.cur_use_lcb;
   float c_puct_b = cur_is_black ? config.cur_c_puct : config.cand_c_puct;
   float c_puct_w = cur_is_black ? config.cand_c_puct : config.cur_c_puct;
+  float var_scale_cpuct_b =
+      cur_is_black ? config.cur_var_scale_cpuct : config.cand_var_scale_cpuct;
+  float var_scale_cpuct_w =
+      cur_is_black ? config.cand_var_scale_cpuct : config.cur_var_scale_cpuct;
 
   Game game;
   std::unique_ptr<TreeNode> btree = std::make_unique<TreeNode>();
@@ -113,12 +117,15 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
     bool use_puct = color_to_move == BLACK ? use_puct_b : use_puct_w;
     bool use_lcb = color_to_move == BLACK ? use_lcb_b : use_lcb_w;
     float c_puct = color_to_move == BLACK ? c_puct_b : c_puct_w;
+    bool var_scale_cpuct =
+        color_to_move == BLACK ? var_scale_cpuct_b : var_scale_cpuct_w;
     auto begin = std::chrono::high_resolution_clock::now();
     GumbelResult gumbel_res =
         use_puct ? gumbel.SearchRootPuct(
                        probability, game, player_tree.get(), color_to_move, n,
                        c_puct, 0.45f,
-                       use_lcb ? PuctKind::kLcb : PuctKind::kVisitCount)
+                       use_lcb ? PuctKind::kLcb : PuctKind::kVisitCount,
+                       var_scale_cpuct)
                  : gumbel.SearchRoot(probability, game, player_tree.get(),
                                      color_to_move, n, k, noise_scaling);
     auto end = std::chrono::high_resolution_clock::now();
@@ -163,7 +170,8 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
       std::stringstream s;
       s << "\n----- Move Num: " << game.num_moves() << " -----\n";
       s << "N: " << n << ", K: " << k << ", Noise Scaling: " << noise_scaling
-        << ", PUCT: " << use_puct << "\n";
+        << ", PUCT: " << use_puct << ", LCB: " << use_lcb
+        << ", cPUCT Var Scaling: " << var_scale_cpuct << "\n";
       s << "Gumbel Move: " << move << ", q: " << move_q << "\n";
       s << "Last 5 Moves: " << game.move(game.num_moves() - 5) << ", "
         << game.move(game.num_moves() - 4) << ", "

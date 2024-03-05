@@ -240,6 +240,10 @@ class GroupTracker final {
     return pass_alive_[loc] == color;
   }
 
+  inline const std::array<Color, BOARD_LEN * BOARD_LEN>& pass_alive() {
+    return pass_alive_;
+  }
+
   friend std::ostream& operator<<(std::ostream& os,
                                   const GroupTracker& group_tracker);
 
@@ -257,9 +261,9 @@ class GroupTracker final {
 
   groupid EmplaceGroup(Loc root_loc, GroupInfo group_info);
 
-  std::array<groupid, BOARD_LEN * BOARD_LEN> groups_;
-  std::array<GroupInfo, BOARD_LEN * BOARD_LEN> group_info_map_;
-  std::array<Color, BOARD_LEN * BOARD_LEN> pass_alive_;
+  std::array<groupid, BOARD_LEN * BOARD_LEN> groups_{};
+  std::array<GroupInfo, BOARD_LEN * BOARD_LEN> group_info_map_{};
+  std::array<Color, BOARD_LEN * BOARD_LEN> pass_alive_{};
 };
 
 /*
@@ -294,6 +298,7 @@ class Board final {
 
   bool IsValidMove(Loc loc, Color color) const;
   bool IsGameOver() const;
+  bool IsAllPassAlive();
 
   MoveStatus PlayBlack(int i, int j);
   MoveStatus PlayWhite(int i, int j);

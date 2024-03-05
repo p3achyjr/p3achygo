@@ -49,12 +49,13 @@ class Game final {
   bool IsGameOver() const;
   bool IsValidMove(int index, Color color) const;
   bool IsValidMove(Loc loc, Color color) const;
-  bool PlayMove(Loc loc, Color color);
+  bool PlayMove(Loc loc, Color color, bool record = true);
   bool Pass(Color color);
   inline void SetKomi(float komi) { board_.SetKomi(komi); }
   inline void CalculatePassAliveRegions() {
     board_.CalculatePassAliveRegions();
   }
+  inline bool IsAllPassAlive() { return board_.IsAllPassAlive(); }
 
   Scores GetScores();
   void WriteResult();

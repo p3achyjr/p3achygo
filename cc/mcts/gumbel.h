@@ -63,13 +63,15 @@ class GumbelNonRootSearchPolicy : public SearchPolicy {
  */
 class PuctSearchPolicy : public SearchPolicy {
  public:
-  PuctSearchPolicy(float c_puct, float c_puct_visit_scaling);
+  PuctSearchPolicy(float c_puct, float c_puct_visit_scaling,
+                   bool enable_var_scaling = false);
   game::Loc SelectNextAction(const TreeNode* node, const game::Game& game,
                              game::Color color_to_move) const override;
 
  private:
   const float c_puct_;
   const float c_puct_visit_scaling_;
+  const bool enable_var_scaling_;
 };
 
 /*
@@ -91,7 +93,8 @@ class GumbelEvaluator final {
   // If n == 1, we will sample a move directly from the policy.
   GumbelResult SearchRoot(core::Probability& probability, game::Game& game,
                           TreeNode* root, game::Color color_to_move, int n,
-                          int k, float noise_scaling);
+                          int k, float noise_scaling,
+                          const bool disable_pass = false);
   inline GumbelResult SearchRoot(core::Probability& probability,
                                  game::Game& game, TreeNode* root,
                                  game::Color color_to_move, int n, int k) {
@@ -103,7 +106,8 @@ class GumbelEvaluator final {
   GumbelResult SearchRootPuct(core::Probability& probability, game::Game& game,
                               TreeNode* root, game::Color color_to_move, int n,
                               const float c_puct, const float c_puct_scaling,
-                              const PuctKind puct_kind);
+                              const PuctKind puct_kind,
+                              const bool var_scale_cpuct = false);
 
  private:
   static constexpr int kMaxPathLenEst = 128;

@@ -401,6 +401,64 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       }
     }
 
+    // Cleanup Phase.
+    while (!game.IsAllPassAlive()) {
+      auto begin = std::chrono::high_resolution_clock::now();
+      GumbelResult gumbel_res = gumbel_evaluator.SearchRoot(
+          probability, game, root_node.get(), color_to_move,
+          std::min(80, config.default_params.n),
+          std::min(8, config.default_params.k), 0.0f, /*disable_pass=*/true);
+      auto end = std::chrono::high_resolution_clock::now();
+      auto search_dur =
+          std::chrono::duration_cast<std::chrono::microseconds>(end - begin)
+              .count();
+
+      // Do not pass unless it is the only legal move.
+      game::Loc move = gumbel_res.mcts_move;
+      if (gumbel_res.mcts_move == kPassLoc) {
+        std::sort(gumbel_res.child_stats.begin(), gumbel_res.child_stats.end(),
+                  [&root_node](const ChildStats& c0, const ChildStats& c1) {
+                    return NAction(root_node.get(), c0.move) >
+                           NAction(root_node.get(), c1.move);
+                  });
+        for (const auto& c : gumbel_res.child_stats) {
+          if (c.move != kPassLoc) {
+            move = c.move;
+            break;
+          }
+        }
+      }
+
+      game.PlayMove(move, color_to_move, /*record=*/false);
+      color_to_move = game::OppositeColor(color_to_move);
+      root_node = root_node->children[move]
+                      ? std::move(root_node->children[move])
+                      : std::make_unique<TreeNode>();
+
+      auto mv_to_string = [](const game::Loc& move) {
+        return ("ABCDEFGHIJKLMNOPQRS"[move.j]) + std::to_string(move.i);
+      };
+
+      std::stringstream s;
+      s << "\n----- Cleanup -----\n";
+      s << "Move: " << mv_to_string(move) << "\n";
+      if (!gumbel_res.child_stats.empty()) {
+        s << "Considered Moves:\n";
+        for (const ChildStats& mv_stats : gumbel_res.child_stats) {
+          s << "  " << mv_to_string(mv_stats.move)
+            << ", p: " << absl::StrFormat("%.3f", mv_stats.prob)
+            << ", n: " << absl::StrFormat("%d", mv_stats.n)
+            << ", q: " << absl::StrFormat("%.3f", mv_stats.q)
+            << ", qz: " << absl::StrFormat("%.3f", mv_stats.qz)
+            << ", score: " << absl::StrFormat("%.3f", mv_stats.score) << "\n";
+        }
+      }
+      s << "Board:\n" << game.board() << "\n";
+      s << "Cleanup took " << search_dur << "us.";
+
+      LOG_TO_SINK(INFO, sink) << s.str();
+    }
+
     nn_interface->UnregisterThread(thread_id);
     if (!IsRunning()) break;
 

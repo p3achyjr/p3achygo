@@ -6,6 +6,29 @@
 
 namespace game {
 
+game::Board ParseBoard(const std::string& s) {
+  game::Board board;
+  for (int idx = 0; idx < constants::kNumBoardLocs; ++idx) {
+    game::Loc loc = game::AsLoc(idx);
+    switch (s[idx]) {
+      case 'X':
+        board.PlayMove(loc, BLACK);
+        break;
+      case 'O':
+        board.PlayMove(loc, WHITE);
+        break;
+      case '.':
+      case '+':
+        continue;
+      default:
+        std::cerr << "Invalid Character: " << s[idx] << "\n";
+        std::abort();
+    }
+  }
+
+  return board;
+}
+
 TEST_CASE("BoardTest") {
   SUBCASE("NewBoardIsEmpty") {
     game::Board board;
@@ -775,6 +798,31 @@ TEST_CASE("PassAliveTest") {
 
     absl::flat_hash_set<Loc> pa_region = {};
     CHECK(PaRegionsMatch(group_tracker, std::move(pa_region), BLACK));
+  }
+
+  SUBCASE("CleanupBug") {
+    const std::string s =
+        "OOOOO.OOOOXXXX.XXXO"
+        "XOXO.O.OXXXOX.XXXOO"
+        "XOXO..OOOXXOXXOOO.O"
+        "XXXO..OXXXXOOO.O.OO"
+        "X.XOOOOOOOO.O.OOOO."
+        ".XOXXO...O...O..O.O"
+        "XOOOX.O.OOOOO.OOXOO"
+        "XXXOOO.OOX.OOOOOXXO"
+        ".XXOO.O.OOOXXOOXX.X"
+        "XOOOXO.O.OOXXXOOXX."
+        "XXOXXXOOOXXXXXXXX.X"
+        "XOOXOOOXOOOOOXX.OX."
+        "XXXXXXXXOXOOX.XOXXX"
+        "XOOXXOOOOXXXX.XX..X"
+        "XOXX.XXOOX.X.X.XXXX"
+        "OOOXXXOOOX..X.X+..."
+        "OOOOXXOXXX.XXXXXXX."
+        "OOOOOXOOXX...XXXX.X"
+        "OO.XXXXOOX.XXX.XXXX";
+    auto board = ParseBoard(s);
+    CHECK(board.IsAllPassAlive());
   }
 }
 

@@ -156,8 +156,11 @@ Loc GumbelNonRootSearchPolicy::SelectNextAction(const TreeNode* node,
   return game::AsLoc(selected_action);
 }
 
-PuctSearchPolicy::PuctSearchPolicy(float c_puct, float c_puct_visit_scaling)
-    : c_puct_(c_puct), c_puct_visit_scaling_(c_puct_visit_scaling) {}
+PuctSearchPolicy::PuctSearchPolicy(float c_puct, float c_puct_visit_scaling,
+                                   bool enable_var_scaling)
+    : c_puct_(c_puct),
+      c_puct_visit_scaling_(c_puct_visit_scaling),
+      enable_var_scaling_(enable_var_scaling) {}
 
 Loc PuctSearchPolicy::SelectNextAction(const TreeNode* node,
                                        const game::Game& game,
@@ -166,8 +169,18 @@ Loc PuctSearchPolicy::SelectNextAction(const TreeNode* node,
   DCHECK(node->state != TreeNodeState::kNew);
 
   // Scale c_puct according to visit count.
-  const float c_puct =
+  float c_puct =
       c_puct_ + c_puct_visit_scaling_ * std::log((N(node) + 500.0f) / 500.0f);
+  if (enable_var_scaling_ && N(node) > 3) {
+    static constexpr float kLowVar = 0.01f;
+    static constexpr float kHighVar = 0.04f;
+    float var = VVar(node);
+    if (var < kLowVar) {
+      c_puct *= std::sqrt(var) / (kLowVar * kLowVar);
+    } else if (var > kHighVar) {
+      c_puct *= std::sqrt(var) / (kHighVar * kHighVar);
+    }
+  }
 
   // Find total explored policy.
   float p_explored = 0.0f;
@@ -216,7 +229,8 @@ GumbelEvaluator::GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id)
 GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
                                          Game& game, TreeNode* const root,
                                          Color color_to_move, int n, int k,
-                                         float noise_scaling) {
+                                         float noise_scaling,
+                                         bool disable_pass) {
   DCHECK(root);
   int num_rounds = std::max(log2(k), 1);
 
@@ -231,7 +245,8 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
       masked_logits;  // Logits that zero-out probability for illegal moves.
   GumbelMoveInfo gmove_info[num_moves];
   for (int i = 0; i < num_moves; ++i) {
-    if (!game.IsValidMove(i, color_to_move)) {
+    if ((disable_pass && i == constants::kPassMoveEncoding) ||
+        !game.IsValidMove(i, color_to_move)) {
       // ignore move henceforth
       masked_logits[i] = kSmallLogit;
       gmove_info[i].logit = kSmallLogit;
@@ -379,7 +394,8 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
                                              game::Color color_to_move, int n,
                                              const float c_puct,
                                              const float c_puct_scaling,
-                                             const PuctKind puct_kind) {
+                                             const PuctKind puct_kind,
+                                             const bool var_scale_cpuct) {
   auto best_lcb_move = [&](const TreeNode* node) {
     std::array<std::pair<int, float>, constants::kMaxMovesPerPosition>
         move_lcbs;
@@ -435,7 +451,7 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
   }
 
   // Conduct search.
-  PuctSearchPolicy search_policy(c_puct, c_puct_scaling);
+  PuctSearchPolicy search_policy(c_puct, c_puct_scaling, var_scale_cpuct);
   for (size_t _ = 0; _ < n; ++_) {
     Game search_game = game;
     absl::InlinedVector<TreeNode*, kMaxPathLenEst> search_path =
