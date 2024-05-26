@@ -26,6 +26,19 @@ def get_ss_timestamps(num_batches):
   return [(i + 1) * interval for i in range(num_snapshots)]
 
 
+def get_lr(config: RunConfig, model_gen: int) -> float:
+  lr_scale = 0.1 + 0.9 * min(1.0, model_gen / config.lr_growth_window)
+  lr = config.lr
+  if config.lr_schedule is not None:
+    for gen, gen_lr in config.lr_schedule:
+      if gen > model_gen:
+        break
+
+      lr = gen_lr
+
+  return lr_scale * lr
+
+
 def train_one_gen(model: P3achyGoModel,
                   model_gen: int,
                   chunk_path: str,
@@ -55,16 +68,15 @@ def train_one_gen(model: P3achyGoModel,
     return [(i + 1) * interval for i in range(num_snapshots)]
 
   batch_size = config.batch_size
-  lr_scale = 0.1 + 0.9 * min(1.0, model_gen / config.lr_growth_window)
-  lr_schedule = ConstantLRSchedule(config.lr * lr_scale)
+  lr_schedule = ConstantLRSchedule(get_lr(config, model_gen))
   num_batches = chunk_size // batch_size
   # lr_schedule = CyclicLRSchedule(config.min_lr * lr_scale,
   #                                config.max_lr * lr_scale, num_batches)
 
   logging.info(f'Batch Size: {batch_size}')
   logging.info(f'Learning Rate Schedule: {lr_schedule.info()}')
-  logging.info(f'Running initial validation...')
-  train.val(model, mode=train.Mode.RL, val_ds=val_ds, val_batch_num=-1)
+  # logging.info(f'Running initial validation...')
+  # train.val(model, mode=train.Mode.RL, val_ds=val_ds, val_batch_num=-1)
 
   ds = tf.data.TFRecordDataset(chunk_path, compression_type='ZLIB')
   num_batches = find_num_batches(ds)

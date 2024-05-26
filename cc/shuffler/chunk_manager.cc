@@ -76,9 +76,11 @@ ChunkManager::~ChunkManager() {
 
 void ChunkManager::CreateChunk() {
   if (is_continuous_) {
-    LOG(INFO) << "Creating Chunk (Continuous Mode)... Dir: " << dir_;
+    LOG(INFO) << "Creating Chunk " << gen_
+              << " (Continuous Mode)... Dir: " << dir_;
   } else {
-    LOG(INFO) << "Creating Chunk (Finite Task Mode)... Dir: " << dir_;
+    LOG(INFO) << "Creating Chunk " << gen_
+              << " (Finite Task Mode)... Dir: " << dir_;
   }
 
   int num_scanned = 0;

@@ -16,7 +16,7 @@ tensorflow::Feature MakeBytesFeature(const std::array<T, N>& data) {
   return feature;
 }
 
-tensorflow::Example MakeTfExample(
+inline tensorflow::Example MakeTfExample(
     const std::array<game::Color, BOARD_LEN * BOARD_LEN>& board,
     const std::array<int16_t, constants::kNumLastMoves>& last_moves,
     const std::array<game::Color, BOARD_LEN * BOARD_LEN>& stones_atari,

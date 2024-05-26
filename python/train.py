@@ -262,6 +262,11 @@ def train(model: P3achyGoModel,
   print(f'Min Train Outcome Loss: {losses_train.min_losses["outcome"]}')
   print(f'Min Train Ownership Loss: {losses_train.min_losses["own"]}')
   print(f'Min Train Score PDF Loss: {losses_train.min_losses["score_pdf"]}')
+  print(f'Avg Train Loss: {losses_train.avg_losses["loss"]}')
+  print(f'Avg Train Policy Loss: {losses_train.avg_losses["policy"]}')
+  print(f'Avg Train Outcome Loss: {losses_train.avg_losses["outcome"]}')
+  print(f'Avg Train Ownership Loss: {losses_train.avg_losses["own"]}')
+  print(f'Avg Train Score PDF Loss: {losses_train.avg_losses["score_pdf"]}')
 
   return batch_num
 
@@ -320,31 +325,23 @@ def log_train(batch_num: int, model_input: tf.Tensor, pi_logits: tf.Tensor,
   print(f'---------- Batch {batch_num} -----------')
   log('Learning Rate', lr)
   log('Loss', losses.losses[-1]["loss"])
-  log('Min Loss', losses.min_losses["loss"])
+  log('Avg Loss', losses.min_losses["loss"])
 
   print(f'===== POLICY LOSSES =====')
   log('Policy Loss', losses.losses[-1]["policy"])
-  log('Min Policy Loss', losses.min_losses["policy"])
   log('Policy Aux Loss', losses.losses[-1]["policy_aux"])
-  log('Min Policy Aux Loss', losses.min_losses["policy_aux"])
 
   print(f'===== Q/Z LOSSES =====')
   log('Outcome Loss', losses.losses[-1]["outcome"])
-  log('Min Outcome Loss', losses.min_losses["outcome"])
   log('q30 Loss', losses.losses[-1]["q30"])
-  log('Min q30 Loss', losses.min_losses["q30"])
   log('q100 Loss', losses.losses[-1]["q100"])
-  log('Min q100 Loss', losses.min_losses["q100"])
   log('q200 Loss', losses.losses[-1]["q200"])
-  log('Min q200 Loss', losses.min_losses["q200"])
 
   print(f'===== SCORE LOSSES =====')
   log('Score PDF Loss', losses.losses[-1]["score_pdf"])
-  log('Min Score PDF Loss', losses.min_losses["score_pdf"])
 
   print(f'===== OWNERSHIP LOSSES =====')
   log('Own Loss', losses.losses[-1]["own"])
-  log('Min Own Loss', losses.min_losses["own"])
 
   print(f'===== POLICY INFO =====')
   print(f'Predicted Top 5 Moves:', f'{[move(mv) for mv in top_policy_indices]}',

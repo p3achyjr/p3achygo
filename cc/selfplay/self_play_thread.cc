@@ -402,38 +402,25 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     }
 
     // Cleanup Phase.
-    while (!game.IsAllPassAlive()) {
+    int num_cleanup_moves = 0;
+    while (IsRunning() && num_cleanup_moves < 30 && !game.IsAllPassAlive()) {
       auto begin = std::chrono::high_resolution_clock::now();
       GumbelResult gumbel_res = gumbel_evaluator.SearchRoot(
           probability, game, root_node.get(), color_to_move,
           std::min(80, config.default_params.n),
-          std::min(8, config.default_params.k), 0.0f, /*disable_pass=*/true);
+          std::min(8, config.default_params.k), 0.0f);
       auto end = std::chrono::high_resolution_clock::now();
       auto search_dur =
           std::chrono::duration_cast<std::chrono::microseconds>(end - begin)
               .count();
 
-      // Do not pass unless it is the only legal move.
       game::Loc move = gumbel_res.mcts_move;
-      if (gumbel_res.mcts_move == kPassLoc) {
-        std::sort(gumbel_res.child_stats.begin(), gumbel_res.child_stats.end(),
-                  [&root_node](const ChildStats& c0, const ChildStats& c1) {
-                    return NAction(root_node.get(), c0.move) >
-                           NAction(root_node.get(), c1.move);
-                  });
-        for (const auto& c : gumbel_res.child_stats) {
-          if (c.move != kPassLoc) {
-            move = c.move;
-            break;
-          }
-        }
-      }
-
       game.PlayMove(move, color_to_move, /*record=*/false);
       color_to_move = game::OppositeColor(color_to_move);
       root_node = root_node->children[move]
                       ? std::move(root_node->children[move])
                       : std::make_unique<TreeNode>();
+      ++num_cleanup_moves;
 
       auto mv_to_string = [](const game::Loc& move) {
         return ("ABCDEFGHIJKLMNOPQRS"[move.j]) + std::to_string(move.i);

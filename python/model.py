@@ -22,6 +22,7 @@ def make_conv(output_channels: int, kernel_size: int, name=None):
                                 activation=None,
                                 kernel_regularizer=L2(C_L2),
                                 padding='same',
+                                use_bias=False,
                                 name=name)
 
 
@@ -108,6 +109,36 @@ class ResidualBlock(tf.keras.layers.Layer):
     return self.activation(res + x)
 
 
+class ClassicResidualBlock(ResidualBlock):
+  '''
+  Residual block found in AlphaGo, KataGo, and Leela.
+  '''
+
+  def __init__(self,
+               output_channels: int,
+               conv_size: int,
+               stack_size=2,
+               name=None):
+    blocks = []
+    for i in range(stack_size):
+      blocks.append(
+          ConvBlock(output_channels, conv_size, name=f'res_id_inner_{i}'))
+    super(ClassicResidualBlock, self).__init__(blocks, name=name)
+
+    # save for serialization
+    self.output_channels = output_channels
+    self.conv_size = conv_size
+    self.stack_size = stack_size
+
+  def get_config(self):
+    return {
+        'output_channels': self.output_channels,
+        'conv_size': self.conv_size,
+        'stack_size': self.stack_size,
+        'name': self.name,
+    }
+
+
 class BottleneckResidualConvBlock(ResidualBlock):
   '''
   Bottleneck block that reduces dimension, performs inner convolutions, and
@@ -148,6 +179,45 @@ class BottleneckResidualConvBlock(ResidualBlock):
         'bottleneck_channels': self.bottleneck_channels,
         'conv_size': self.conv_size,
         'stack_size': self.stack_size,
+        'name': self.name,
+    }
+
+
+class NbtResidualBlock(ResidualBlock):
+  '''
+  Nested Bottleneck Residual Block, a. la. KataGo.
+  '''
+
+  def __init__(self,
+               output_channels: int,
+               bottleneck_channels: int,
+               conv_size: int,
+               name=None):
+    blocks = []
+    blocks.append(ConvBlock(bottleneck_channels, 1, name=f'nbt_reduce_dim'))
+    blocks.append(
+        ClassicResidualBlock(bottleneck_channels,
+                             conv_size,
+                             2,
+                             name=f'nbt_res0'))
+    blocks.append(
+        ClassicResidualBlock(bottleneck_channels,
+                             conv_size,
+                             2,
+                             name=f'nbt_res1'))
+    blocks.append(ConvBlock(output_channels, 1, name=f'nbt_expand_dim'))
+    super(NbtResidualBlock, self).__init__(blocks, name=name)
+
+    # save for serialization
+    self.output_channels = output_channels
+    self.bottleneck_channels = bottleneck_channels
+    self.conv_size = conv_size
+
+  def get_config(self):
+    return {
+        'output_channels': self.output_channels,
+        'bottleneck_channels': self.bottleneck_channels,
+        'conv_size': self.conv_size,
         'name': self.name,
     }
 
@@ -547,6 +617,7 @@ class P3achyGoModel(tf.keras.Model):
                bottleneck_length,
                conv_size,
                broadcast_interval,
+               trunk_block_type='btl',
                name=None):
     assert (num_blocks > 1)
 
@@ -566,12 +637,24 @@ class P3achyGoModel(tf.keras.Model):
                                    activation=tf.keras.activations.relu,
                                    name=f'broadcast_res_{i}'))
       else:
-        self.blocks.append(
-            BottleneckResidualConvBlock(num_channels,
-                                        num_bottleneck_channels,
-                                        conv_size,
-                                        stack_size=bottleneck_length,
-                                        name=f'bottleneck_res_{i}'))
+        if trunk_block_type == 'btl':
+          self.blocks.append(
+              BottleneckResidualConvBlock(num_channels,
+                                          num_bottleneck_channels,
+                                          conv_size,
+                                          stack_size=bottleneck_length,
+                                          name=f'bottleneck_res_{i}'))
+        elif trunk_block_type == 'classic':
+          self.blocks.append(
+              ClassicResidualBlock(num_channels,
+                                   conv_size,
+                                   name=f"classic_res_{i}"))
+        elif trunk_block_type == 'nbt':
+          self.blocks.append(
+              NbtResidualBlock(num_channels,
+                               num_bottleneck_channels,
+                               conv_size,
+                               name=f'nbt_res_{i}'))
 
     self.policy_head = PolicyHead(channels=num_head_channels,
                                   board_len=board_len,
@@ -601,6 +684,7 @@ class P3achyGoModel(tf.keras.Model):
     self.bottleneck_length = bottleneck_length
     self.conv_size = conv_size
     self.broadcast_interval = broadcast_interval
+    self.trunk_block_type = trunk_block_type
 
   def call(self, board_state, game_state, training=False, scores=None):
     if scores is None:
@@ -720,6 +804,7 @@ class P3achyGoModel(tf.keras.Model):
         'bottleneck_length': self.bottleneck_length,
         'conv_size': self.conv_size,
         'broadcast_interval': self.broadcast_interval,
+        'trunk_block_type': self.trunk_block_type,
         'name': self.name,
     }
 
@@ -750,6 +835,7 @@ class P3achyGoModel(tf.keras.Model):
                          config.kInnerBottleneckLayers + 2,
                          config.kConvSize,
                          config.kBroadcastInterval,
+                         config.kTrunkBlockType,
                          name=name)
 
   @staticmethod

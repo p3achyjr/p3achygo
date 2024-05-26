@@ -5,6 +5,7 @@ import json
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import List, Tuple
 
 
 @dataclass
@@ -19,6 +20,7 @@ class RunConfig(object):
   batch_size: int
   use_cyclic_lr: bool
   lr: float
+  lr_schedule: List[Tuple[int, float]]
   min_lr: float
   max_lr: float
   extra_train_gens: int
@@ -52,6 +54,10 @@ def parse(run_id: str) -> RunConfig:
     games_first_gen = obj.get('games_first_gen', games_per_gen)
     batch_size = obj.get('batch_size', 256)
     lr = obj.get('lr', 1e-2)
+    lr_schedule = obj.get('lr_schedule', None)
+    if lr_schedule is not None:
+      lr_schedule = [(int(t[0]), float(t[1])) for t in lr_schedule]
+
     min_lr = obj.get('min_lr', lr)
     max_lr = obj.get('max_lr', lr)
     use_cyclic_lr = min_lr != max_lr
@@ -71,11 +77,10 @@ def parse(run_id: str) -> RunConfig:
     eval_k = obj.get('eval_k', 8)
     eval_n = obj.get('eval_n', 128)
 
-    return RunConfig(from_existing_run, model_config, num_generations,
-                     games_first_gen, games_per_gen, batch_size, use_cyclic_lr,
-                     lr, min_lr, max_lr, extra_train_gens, lr_growth_window,
-                     min_train_selected_k, min_train_selected_n,
-                     max_train_selected_k, max_train_selected_n,
-                     min_train_default_k, min_train_default_n,
-                     max_train_default_k, max_train_default_n, n_growth_window,
-                     k_growth_window, eval_k, eval_n)
+    return RunConfig(
+        from_existing_run, model_config, num_generations, games_first_gen,
+        games_per_gen, batch_size, use_cyclic_lr, lr, lr_schedule, min_lr,
+        max_lr, extra_train_gens, lr_growth_window, min_train_selected_k,
+        min_train_selected_n, max_train_selected_k, max_train_selected_n,
+        min_train_default_k, min_train_default_n, max_train_default_k,
+        max_train_default_n, n_growth_window, k_growth_window, eval_k, eval_n)
