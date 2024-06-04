@@ -394,7 +394,7 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
                                              game::Color color_to_move, int n,
                                              const float c_puct,
                                              const float c_puct_scaling,
-                                             const PuctKind puct_kind,
+                                             const PuctParams puct_params,
                                              const bool var_scale_cpuct) {
   auto best_lcb_move = [&](const TreeNode* node) {
     std::array<std::pair<int, float>, constants::kMaxMovesPerPosition>
@@ -419,21 +419,39 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
 
   auto sample_action_from_visits =
       [&probability](const std::array<float, constants::kMaxMovesPerPosition>&
-                         visit_counts) {
-        float total_visits = core::SumV(visit_counts);
-        float p = probability.Uniform();
-        int ratio = static_cast<int>(std::round(p * (total_visits - 1)));
+                         visit_counts,
+                     float tau) {
+        std::array<float, constants::kMaxMovesPerPosition> policy;
 
-        int n = 0;
+        // Compute empirical policy.
+        float total_visits = core::SumV(visit_counts);
+        for (int a = 0; a < policy.size(); ++a) {
+          policy[a] = visit_counts[a] / total_visits;
+        }
+
+        // Exponentiate policy.
+        float total_mass = 0.0f;
+        for (int a = 0; a < policy.size(); ++a) {
+          policy[a] = std::pow(policy[a], 1 / tau);
+          total_mass += policy[a];
+        }
+
+        // Normalize policy.
+        for (int a = 0; a < policy.size(); ++a) {
+          policy[a] /= total_mass;
+        }
+
+        float p = probability.Uniform();
+        float mass = 0.0f;
         for (int a = 0; a < visit_counts.size(); ++a) {
-          if (visit_counts[a] == 0) continue;
+          if (policy[a] == 0) continue;
 
           // Use half-open interval.
-          if (ratio >= n && ratio < n + visit_counts[a]) {
+          if (p >= mass && p < mass + policy[a]) {
             return a;
           }
 
-          n += visit_counts[a];
+          mass += policy[a];
         }
 
         // Should never reach here.
@@ -467,15 +485,16 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
   }
 
   Loc raw_nn_move = game::AsLoc(Argmax(root->move_logits));
-  Loc mcts_move = [&visit_counts, &best_lcb_move, puct_kind, root,
+  Loc mcts_move = [&visit_counts, &best_lcb_move, &puct_params, root,
                    &sample_action_from_visits]() {
-    switch (puct_kind) {
-      case kVisitCount:
+    switch (puct_params.kind) {
+      case PuctKind::kVisitCount:
         return game::AsLoc(Argmax(visit_counts));
-      case kLcb:
+      case PuctKind::kLcb:
         return best_lcb_move(root);
-      case kVisitCountSample:
-        return game::AsLoc(sample_action_from_visits(visit_counts));
+      case PuctKind::kVisitCountSample:
+        return game::AsLoc(
+            sample_action_from_visits(visit_counts, puct_params.tau));
     }
 
     return game::AsLoc(Argmax(visit_counts));

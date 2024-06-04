@@ -141,13 +141,13 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     int num_consecutive_down_bad_moves = 0;
 
     // Whether to log full MCTS search trees.
-    bool log_mcts_trees = probability.Uniform() < kLogFullTreeProb;
+    bool const log_mcts_trees = probability.Uniform() < kLogFullTreeProb;
 
     // Tree roots throughout game (if logging full trees).
     std::vector<std::unique_ptr<TreeNode>> search_roots;
 
     // Number of moves for which to sample directly from the policy.
-    auto num_moves_raw_policy =
+    int const num_moves_raw_policy =
         probability.Uniform() < kOpeningExploreProb
             ? RandRange(probability.prng(), 0, kMaxNumRawPolicyMoves)
             : 0;
@@ -160,13 +160,13 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       // Choose n, k = 1 if we have not reached `num_moves_raw_policy` number of
       // moves.
       // Choose n, k = kDownBadParams if we are down bad.
-      bool sampling_raw_policy = game.num_moves() < num_moves_raw_policy;
-      bool is_either_down_bad =
+      bool const sampling_raw_policy = game.num_moves() < num_moves_raw_policy;
+      bool const is_either_down_bad =
           num_consecutive_down_bad_moves >= kNumDownBadMovesThreshold;
 
       // How down bad our root q is, from [0, 1]. 0 is max, 1 is min (i.e.)
       // down_bad_coeff(-1) = 0, down_bad_coeff(|q| < .9) = 0.
-      float down_bad_coeff = [&root_node]() {
+      float const down_bad_coeff = [&root_node]() {
         if (!root_node) {
           return 1.0f;
         }
@@ -191,8 +191,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       // `kMoveSelectedForTrainingProb`. If we are down bad, then we anneal our
       // selection probability by down_bad_coeff^2. So if V(root) = -.95,
       // down_bad_coeff = .5, and our probability is annealed by .5 * .5 = .25.
-      float select_move_prob = [sampling_raw_policy, is_either_down_bad,
-                                down_bad_coeff]() {
+      float const select_move_prob = [sampling_raw_policy, is_either_down_bad,
+                                      down_bad_coeff]() {
         if (sampling_raw_policy) {
           return 0.0f;
         }
@@ -214,8 +214,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       // (1 - down_bad_coeff) * default_n + down_bad_coeff * default_n. We
       // anneal k linearly according to where n falls on the scale [default_n,
       // training_n].
-      GumbelParams trainable_gumbel_params = [&config, is_either_down_bad,
-                                              down_bad_coeff]() {
+      GumbelParams const trainable_gumbel_params = [&config, is_either_down_bad,
+                                                    down_bad_coeff]() {
         if (!is_either_down_bad) {
           // return defaults.
           return config.selected_params;
@@ -227,22 +227,38 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         return GumbelParams{n, k};
       }();
 
-      bool is_move_selected_for_training =
+      bool const is_move_selected_for_training =
           probability.Uniform() < select_move_prob;
+      auto const [gumbel_n, gumbel_k, noise_scaling] = [&]() {
+        int gumbel_n, gumbel_k;
+        float noise_scaling = 1.0f;
+        if (sampling_raw_policy) {
+          gumbel_n = 1;
+          gumbel_k = 1;
+        } else if (is_move_selected_for_training) {
+          gumbel_n = trainable_gumbel_params.n;
+          gumbel_k = trainable_gumbel_params.k;
+        } else {
+          gumbel_n = config.default_params.n;
+          gumbel_k = config.default_params.k;
+          noise_scaling = 0.0f;
+        }
 
-      int gumbel_n, gumbel_k;
-      float noise_scaling = 1.0f;
-      if (sampling_raw_policy) {
-        gumbel_n = 1;
-        gumbel_k = 1;
-      } else if (is_move_selected_for_training) {
-        gumbel_n = trainable_gumbel_params.n;
-        gumbel_k = trainable_gumbel_params.k;
-      } else {
-        gumbel_n = config.default_params.n;
-        gumbel_k = config.default_params.k;
-        noise_scaling = 0.0f;
-      }
+        return std::make_tuple(gumbel_n, gumbel_k, noise_scaling);
+      }();
+
+      float const tau = [&game, num_moves_raw_policy]() {
+        static constexpr float kMaxTau = 0.8f;
+        static constexpr float kMinTau = 0.2f;
+        static constexpr int kHalfLife = 19;
+        int const num_non_sample_moves =
+            game.num_moves() - num_moves_raw_policy;
+        float const lambda = std::log(2) / kHalfLife;
+        return std::min(
+            std::max(kMaxTau * std::exp(-lambda * num_non_sample_moves),
+                     kMinTau),
+            kMaxTau);
+      }();
 
       // NN Stats.
       float qz_nn = root_node->outcome_est;
@@ -262,7 +278,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
                                             noise_scaling)
               : gumbel_evaluator.SearchRootPuct(
                     probability, game, root_node.get(), color_to_move, gumbel_n,
-                    1.05f, 0.28f, PuctKind::kVisitCountSample);
+                    1.05f, 0.28f, PuctParams(PuctKind::kVisitCountSample, tau));
       auto end = std::chrono::high_resolution_clock::now();
 
       // Post Search Statstics.
@@ -351,7 +367,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         return ("ABCDEFGHIJKLMNOPQRS"[move.j]) + std::to_string(move.i);
       };
 
-      auto log_fn = [&]() {
+      if (thread_id % kShouldLogShard == 0) {
         std::string root_color = ToString(OppositeColor(color_to_move));
         std::stringstream s;
         s << "\n----- Move Num: " << game.num_moves() << " -----\n";
@@ -394,10 +410,6 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
           << "us. Average For Game: " << search_dur_avg << "us.\n";
 
         LOG_TO_SINK(INFO, sink) << s.str();
-      };
-
-      if (thread_id % kShouldLogShard == 0) {
-        log_fn();
       }
     }
 

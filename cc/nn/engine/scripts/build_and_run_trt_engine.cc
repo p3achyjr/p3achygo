@@ -128,7 +128,7 @@ int main(int argc, char** argv) {
 
     for (int i = 0; i < network->getNbInputs(); ++i) {
       nv::ITensor* tensor = network->getInput(i);
-      std::cout << "Tensor " << i << ": " << static_cast<int>(tensor->getType())
+      LOG(INFO) << "Tensor " << i << ": " << static_cast<int>(tensor->getType())
                 << ", " << tensor->getName()
                 << ", formats: " << tensor->getAllowedFormats() << std::endl;
     }
@@ -156,7 +156,7 @@ int main(int argc, char** argv) {
 
     nvinfer1::IBuilderConfig* config = builder->createBuilderConfig();
     config->setMemoryPoolLimit(nv::MemoryPoolType::kWORKSPACE,
-                               static_cast<size_t>(1) << 32);
+                               static_cast<size_t>(20) << 32);
     config->addOptimizationProfile(profile);
     std::unique_ptr<nn::trt::Int8Calibrator> calibrator =
         nn::trt::Int8Calibrator::Create(batch_size, go_ds.get(),

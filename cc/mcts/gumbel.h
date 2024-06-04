@@ -10,10 +10,18 @@
 
 namespace mcts {
 
-enum PuctKind {
+enum class PuctKind : uint8_t {
   kVisitCount = 0,
   kLcb = 1,
   kVisitCountSample = 2,
+};
+
+struct PuctParams {
+  PuctKind kind;
+  float tau = 1.0f;
+
+  PuctParams(PuctKind k) : kind(k) {}
+  PuctParams(PuctKind k, float tau) : kind(k), tau(tau) {}
 };
 
 struct ChildStats {
@@ -93,20 +101,14 @@ class GumbelEvaluator final {
   // If n == 1, we will sample a move directly from the policy.
   GumbelResult SearchRoot(core::Probability& probability, game::Game& game,
                           TreeNode* root, game::Color color_to_move, int n,
-                          int k, float noise_scaling,
+                          int k, float noise_scaling = 1.0f,
                           const bool disable_pass = false);
-  inline GumbelResult SearchRoot(core::Probability& probability,
-                                 game::Game& game, TreeNode* root,
-                                 game::Color color_to_move, int n, int k) {
-    return SearchRoot(probability, game, root, color_to_move, n, k, 1.0f);
-  }
 
-  // Uses PUCT formula to select actions at the root, but uses Q-based planning
-  // at non-root nodes, as described in the Gumbel paper.
+  // Performs a full PUCT search.
   GumbelResult SearchRootPuct(core::Probability& probability, game::Game& game,
                               TreeNode* root, game::Color color_to_move, int n,
                               const float c_puct, const float c_puct_scaling,
-                              const PuctKind puct_kind,
+                              const PuctParams puct_params,
                               const bool var_scale_cpuct = false);
 
  private:
