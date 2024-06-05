@@ -11,6 +11,7 @@
 #include "cc/game/game.h"
 #include "cc/mcts/gumbel.h"
 #include "cc/recorder/game_recorder.h"
+#include "cc/selfplay/book.h"
 #include "cc/selfplay/go_exploit_buffer.h"
 
 #define LOG_TO_SINK(severity, sink) LOG(severity).ToSinkOnly(&sink)
@@ -36,7 +37,10 @@ static constexpr float kUseSeenStateProb = .25f;
 static constexpr int kMaxNumRawPolicyMoves = 30;
 
 // Probability of exploration.
-static constexpr float kOpeningExploreProb = .95f;
+static constexpr float kOpeningExploreProb = 1.0f;
+
+// Probability of playing from opening book.
+static constexpr float kPlayFromBookProb = .02f;
 
 // Thresholds at which to compute pass-alive regions.
 static constexpr int kComputePAMoveNums[] = {175, 200, 250, 300, 350, 400};
@@ -81,18 +85,36 @@ void AddNewInitState(GoExploitBuffer* buffer, const Game& game,
 }
 
 InitState GetInitState(Probability& probability, GoExploitBuffer* buffer) {
-  InitState s_0 = InitState{
+  InitState s0 = InitState{
       Board(), {kNoopMove, kNoopMove, kNoopMove, kNoopMove, kNoopMove}, BLACK};
-  if (probability.Uniform() <= kUseSeenStateProb) {
+  float p = probability.Uniform();
+  if (p <= kPlayFromBookProb) {
+    const int index = probability.Uniform() * kOpeningBook.size();
+    const int num_moves =
+        std::round(probability.Uniform() * kOpeningBook[index].size());
+    s0.last_moves.clear();
+    for (int i = 0; i < constants::kNumLastMoves - num_moves; ++i) {
+      s0.last_moves.emplace_back(kNoopMove);
+    }
+
+    for (int i = 0; i < num_moves; ++i) {
+      const auto loc = kOpeningBook[index][i];
+      s0.board.PlayMove(loc, s0.color_to_move);
+      s0.last_moves.emplace_back(Move{s0.color_to_move, loc});
+      s0.color_to_move = game::OppositeColor(s0.color_to_move);
+    }
+
+    return s0;
+  } else if (p <= kPlayFromBookProb + kUseSeenStateProb) {
     std::optional<InitState> seen_state = buffer->Get();
     if (!seen_state) {
-      return s_0;
+      return s0;
     }
 
     return seen_state.value();
   }
 
-  return s_0;
+  return s0;
 }
 
 std::string ToString(const Color& color) {
