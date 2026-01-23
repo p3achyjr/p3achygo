@@ -49,7 +49,8 @@ def loop(bin_path: str,
          run_id: str,
          local_run_dir: str,
          num_threads: int,
-         queue: Queue | None = None):
+         queue: Queue | None = None,
+         gpu_device: int | None = None):
   '''
   Starts self-play binary and runs until told to stop.
   '''
@@ -113,6 +114,8 @@ def loop(bin_path: str,
     logging.info(f'Running Self-Play Command:\n\'{cmd_str}\'')
     env = os.environ.copy()
     env['LD_PRELOAD'] = '/usr/local/lib/libmimalloc.so'
+    if gpu_device is not None:
+      env['CUDA_VISIBLE_DEVICES'] = str(gpu_device)
     cmd = shlex.split(cmd_str)
     selfplay_proc = Popen(cmd,
                           stdin=PIPE,

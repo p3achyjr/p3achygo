@@ -19,7 +19,7 @@ from constants import *
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Queue
-from rl_loop.trt_batch_size import trt_batch_size
+from rl_loop.constants import SELFPLAY_BATCH_SIZE
 from subprocess import Popen, PIPE, STDOUT
 from threading import Thread
 
@@ -62,7 +62,7 @@ def eval(run_id: str, eval_bin_path: str, eval_res_path: str,
          f' --res_write_path={eval_res_path}' +
          f' --recorder_path={local_run_dir}' +
          f' --cache_size={EVAL_CACHE_SIZE}' +
-         f' --num_games={min(NUM_EVAL_GAMES, trt_batch_size())}' +
+         f' --num_games={min(NUM_EVAL_GAMES, SELFPLAY_BATCH_SIZE)}' +
          f' --cur_n={n} --cur_use_puct=1 --cur_use_lcb=1' +
          f' --cand_n={n} --cand_use_puct=1 --cand_use_lcb=1')
   logging.info(f'Running Eval Command:\n\'{cmd}\'')
@@ -77,7 +77,7 @@ def eval(run_id: str, eval_bin_path: str, eval_res_path: str,
 
   with open(eval_res_path) as f:
     cand_rel_elo = float(f.read())
-    winner = EvalResult.CUR if cand_rel_elo < 0 else EvalResult.CAND
+    winner = EvalResult.CUR if cand_rel_elo < 30 else EvalResult.CAND
     logging.info(f'Winner: {winner}, Cand Elo: {cand_rel_elo}')
 
     return EvalResult(winner, cand_rel_elo)
@@ -190,7 +190,7 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
     model_gen = 0
     model_path = str(Path(local_model_cands_dir, 'model_0000'))
     with tf.device('/cpu:0'):
-      batch_size = trt_batch_size()
+      batch_size = SELFPLAY_BATCH_SIZE
       model = model_utils.new_model(name=f'p3achygo',
                                     model_config=config.model_config)
       model(
@@ -208,7 +208,7 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
                                 val_ds_path,
                                 local_model_cands_dir,
                                 model_gen,
-                                batch_size=trt_batch_size(),
+                                batch_size=SELFPLAY_BATCH_SIZE,
                                 trt_convert_path=build_trt_engine_path)
 
     # upload to GCS.
@@ -229,7 +229,7 @@ def loop(run_id: str, config: config.RunConfig, sp_bin_path: str,
     sp_queue = Queue()
     sp_thread = Thread(target=sp.loop,
                        args=(sp_bin_path, run_id, local_run_dir,
-                             trt_batch_size(), sp_queue))
+                             SELFPLAY_BATCH_SIZE, sp_queue))
     sp_thread.start()
 
     # Poll GCS to check for the availability of a new golden chunk.
