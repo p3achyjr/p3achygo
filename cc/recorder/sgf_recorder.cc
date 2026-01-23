@@ -40,7 +40,7 @@ void PopulateTree(SgfNode* sgf_node, TreeNode* node, Color color) {
   std::vector<std::pair<int, TreeNode*>> visited_children;
   for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
     if (node->children[i] && node->children[i]->n > 0) {
-      visited_children.emplace_back(i, node->children[i].get());
+      visited_children.emplace_back(i, node->children[i]);
     }
   }
 
@@ -70,9 +70,9 @@ void PopulateTree(SgfNode* sgf_node, TreeNode* node, Color color) {
   }
 }
 
-std::unique_ptr<SgfNode> ToSgfNode(
-    const Game& game, const std::string& b_name, const std::string& w_name,
-    const std::vector<std::unique_ptr<mcts::TreeNode>>& roots) {
+std::unique_ptr<SgfNode> ToSgfNode(const Game& game, const std::string& b_name,
+                                   const std::string& w_name,
+                                   const std::vector<TreeNode*>& roots) {
   std::unique_ptr<SgfNode> root_node = std::make_unique<SgfNode>();
   PopulateHeader(root_node.get(), game.komi(), game.result(), b_name, w_name);
 
@@ -90,7 +90,7 @@ std::unique_ptr<SgfNode> ToSgfNode(
     SgfNode* tmp = child.get();
     current_node->AddChild(std::move(child));
 
-    if (!roots.empty()) PopulateTree(current_node, roots[i].get(), move.color);
+    if (!roots.empty()) PopulateTree(current_node, roots[i], move.color);
 
     current_node = tmp;
   }
@@ -112,10 +112,12 @@ class SgfRecorderImpl final : public SgfRecorder {
   SgfRecorderImpl& operator=(SgfRecorderImpl&&) = delete;
 
   // Recorder Impl.
-  void RecordGame(
-      int thread_id, const game::Game& game, std::string b_name,
-      std::string w_name,
-      std::vector<std::unique_ptr<mcts::TreeNode>>&& roots) override;
+  void RecordGame(int thread_id, const game::Game& game, std::string b_name,
+                  std::string w_name,
+                  const std::vector<mcts::TreeNode*>& roots) override;
+  void RecordEvalGame(int thread_id, const game::Game& game, std::string b_name,
+                      std::string w_name,
+                      const std::vector<mcts::TreeNode*>& roots) override;
   void Flush() override;
 
  private:
@@ -126,8 +128,14 @@ class SgfRecorderImpl final : public SgfRecorder {
     std::string w_name;
 
     // Root node for each move of the game.
-    // The child actually played at each root should be moved from.
+    // Owns cloned copies of the trees to keep them alive until flush.
     std::vector<std::unique_ptr<TreeNode>> roots;
+
+    ~Record() {
+      for (auto& root : roots) {
+        mcts::DeleteClonedTree(root.release());
+      }
+    }
   };
 
   const std::string path_;
@@ -147,15 +155,35 @@ SgfRecorderImpl::SgfRecorderImpl(std::string path, int num_threads, int gen,
       worker_id_(worker_id),
       batch_num_(0) {}
 
-void SgfRecorderImpl::RecordGame(
-    int thread_id, const game::Game& game, std::string b_name,
-    std::string w_name, std::vector<std::unique_ptr<mcts::TreeNode>>&& roots) {
+void SgfRecorderImpl::RecordGame(int thread_id, const game::Game& game,
+                                 std::string b_name, std::string w_name,
+                                 const std::vector<mcts::TreeNode*>& roots) {
   CHECK(game.has_result());
 
+  // Deep copy the trees to keep them alive until flush (only if non-empty)
+  std::vector<std::unique_ptr<TreeNode>> cloned_roots;
+  if (!roots.empty()) {
+    cloned_roots.reserve(roots.size());
+    for (TreeNode* root : roots) {
+      cloned_roots.push_back(mcts::CloneTree(root));
+    }
+  }
+
   std::vector<std::unique_ptr<Record>>& thread_records = records_[thread_id];
-  std::unique_ptr<Record> record = std::make_unique<Record>(
-      Record{game, 0, b_name, w_name, std::move(roots)});
+  auto record =
+      std::unique_ptr<Record>(new Record{.game = game,
+                                         .first_move = 0,
+                                         .b_name = std::move(b_name),
+                                         .w_name = std::move(w_name),
+                                         .roots = std::move(cloned_roots)});
   thread_records.push_back(std::move(record));
+}
+
+void SgfRecorderImpl::RecordEvalGame(
+    int thread_id, const game::Game& game, std::string b_name,
+    std::string w_name, const std::vector<mcts::TreeNode*>& roots) {
+  // Eval games always log with trees - same as RecordGame
+  RecordGame(thread_id, game, b_name, w_name, roots);
 }
 
 // Only one thread can call this function. Additionally, no thread can call
@@ -176,8 +204,16 @@ void SgfRecorderImpl::Flush() {
       int& game_counter =
           record->roots.empty() ? games_in_batch : games_with_trees_in_batch;
       std::string& sgf_string = record->roots.empty() ? sgfs : sgfs_with_trees;
+
+      // Convert unique_ptr vector to raw pointer vector
+      std::vector<TreeNode*> raw_roots;
+      raw_roots.reserve(record->roots.size());
+      for (const auto& root : record->roots) {
+        raw_roots.push_back(root.get());
+      }
+
       sgf_string += serializer.Serialize(
-          ToSgfNode(record->game, record->b_name, record->w_name, record->roots)
+          ToSgfNode(record->game, record->b_name, record->w_name, raw_roots)
               .get());
       sgf_string += "\n";
       ++game_counter;
@@ -198,7 +234,7 @@ void SgfRecorderImpl::Flush() {
     fclose(lock_file);
   };
 
-  if (!(sgfs == "")) {
+  if (sgfs != "") {
     // Flush regular SGFs.
     std::string path =
         FilePath(path_) / absl::StrFormat(data::kSgfFormat, gen_, batch_num_,
@@ -210,7 +246,7 @@ void SgfRecorderImpl::Flush() {
     flush(path, done_filename, sgfs);
   }
 
-  if (!(sgfs_with_trees == "")) {
+  if (sgfs_with_trees != "") {
     // Flush full SGFs.
     std::string path_fulls =
         FilePath(path_) / absl::StrFormat(data::kSgfFullFormat, gen_,
@@ -232,9 +268,8 @@ void SgfRecorderImpl::Flush() {
   return std::make_unique<SgfRecorderImpl>(path, num_threads, gen, worker_id);
 }
 
-bool RecordSingleSgfWithTrees(
-    std::string path, const game::Game& game,
-    const std::vector<std::unique_ptr<mcts::TreeNode>>& roots) {
+bool RecordSingleSgfWithTrees(std::string path, const game::Game& game,
+                              const std::vector<mcts::TreeNode*>& roots) {
   FILE* const sgf_file = fopen(path.c_str(), "w");
   if (sgf_file == nullptr) {
     return false;

@@ -6,6 +6,7 @@
 
 #include "cc/constants/constants.h"
 #include "cc/game/color.h"
+#include "cc/game/zobrist.h"
 #include "cc/mcts/constants.h"
 
 namespace mcts {
@@ -17,9 +18,10 @@ enum class TreeNodeState {
 };
 
 struct TreeNode final {
-  TreeNode() = default;
+  TreeNode(game::Zobrist::Hash board_hash) : board_hash(board_hash) {};
   ~TreeNode() = default;
 
+  const game::Zobrist::Hash board_hash;
   TreeNodeState state = TreeNodeState::kNew;
   bool is_terminal = false;
   game::Color color_to_move;
@@ -40,8 +42,8 @@ struct TreeNode final {
 
   int max_child_n = 0;
 
-  std::array<std::unique_ptr<TreeNode>, constants::kMaxMovesPerPosition>
-      children{};
+  std::array<TreeNode*, constants::kMaxMovesPerPosition> children{};
+  std::array<int, constants::kMaxMovesPerPosition> child_visits{};
 
   // write-once
   std::array<float, constants::kMaxMovesPerPosition> move_logits{};
@@ -55,13 +57,13 @@ struct TreeNode final {
       return nullptr;
     }
 
-    return children[a].get();
+    return children[a];
   }
 };
 
 inline float N(const TreeNode* node) { return node == nullptr ? 0 : node->n; }
 inline float NAction(const TreeNode* node, int action) {
-  return node->children[action] ? N(node->children[action].get()) : 0;
+  return node->child_visits[action];
 }
 
 inline float V(const TreeNode* node) {
@@ -93,11 +95,11 @@ inline float QOutcome(const TreeNode* node, int action) {
 }
 
 inline float QVar(const TreeNode* node, int action) {
-  return node == nullptr ? kMaxQ : VVar(node->children[action].get());
+  return node == nullptr ? kMaxQ : VVar(node->children[action]);
 }
 
 inline float QOutcomeVar(const TreeNode* node, int action) {
-  return node == nullptr ? 1.0f : VOutcomeVar(node->children[action].get());
+  return node == nullptr ? 1.0f : VOutcomeVar(node->children[action]);
 }
 
 inline float MaxN(const TreeNode* node) {
@@ -121,6 +123,16 @@ inline float ChildScore(const TreeNode* node, int action) {
 float Lcb(const TreeNode* node, int action);
 
 void AdvanceState(TreeNode* node);
+
+// Deep copies a tree node and all its visited children.
+// Returns nullptr if the input is nullptr.
+// If the underlying structure was originally a DAG, converts it to a tree.
+std::unique_ptr<TreeNode> CloneTree(const TreeNode* node);
+
+// Recursively deletes a cloned tree and all its children.
+// Only use this for trees created by CloneTree, NOT for trees owned by
+// NodeTable.
+void DeleteClonedTree(TreeNode* node);
 
 #ifdef V_CATEGORICAL
 std::string VCategoricalHistogram(TreeNode* node);

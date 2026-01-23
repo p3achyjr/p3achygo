@@ -10,6 +10,7 @@
 #include "cc/core/probability.h"
 #include "cc/game/game.h"
 #include "cc/mcts/gumbel.h"
+#include "cc/mcts/node_table.h"
 #include "cc/recorder/game_recorder.h"
 #include "cc/selfplay/book.h"
 #include "cc/selfplay/go_exploit_buffer.h"
@@ -147,8 +148,11 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     Game game(init_state.board, init_state.last_moves);
     Color color_to_move = init_state.color_to_move;
 
+    // Node table for MCTS.
+    std::unique_ptr<NodeTable> node_table = std::make_unique<MctsNodeTable>();
+
     // Search Tree.
-    std::unique_ptr<TreeNode> root_node = std::make_unique<TreeNode>();
+    TreeNode* root_node = node_table->GetOrCreate(game.board().hash());
 
     // Completed Q-values for each timestep.
     std::vector<std::array<float, constants::kMaxMovesPerPosition>> mcts_pis;
@@ -159,6 +163,9 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     // Whether the i'th move is trainable.
     std::vector<uint8_t> move_trainables;
 
+    // The KLD of the i'th move from the prior.
+    std::vector<float> klds;
+
     // Number of consecutive moves at which we are beneath kDownBadThreshold.
     int num_consecutive_down_bad_moves = 0;
 
@@ -166,7 +173,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     bool const log_mcts_trees = probability.Uniform() < kLogFullTreeProb;
 
     // Tree roots throughout game (if logging full trees).
-    std::vector<std::unique_ptr<TreeNode>> search_roots;
+    std::vector<TreeNode*> search_roots;
 
     // Number of moves for which to sample directly from the policy.
     int const num_moves_raw_policy =
@@ -193,7 +200,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
           return 1.0f;
         }
 
-        float root_v = VOutcome(root_node.get());
+        float root_v = VOutcome(root_node);
         if (root_v > kDownBadThreshold && root_v < -kDownBadThreshold) {
           // We are not down bad.
           return 1.0f;
@@ -287,54 +294,48 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       float score_nn = root_node->score_est;
 
       // Pre Search Stats.
-      int n_pre = N(root_node.get());
-      float q_pre = V(root_node.get());
-      float qz_pre = VOutcome(root_node.get());
+      int n_pre = N(root_node);
+      float q_pre = V(root_node);
+      float qz_pre = VOutcome(root_node);
 
       // Run and Profile Search.
       auto begin = std::chrono::high_resolution_clock::now();
       GumbelResult gumbel_res =
           is_move_selected_for_training || sampling_raw_policy
-              ? gumbel_evaluator.SearchRoot(probability, game, root_node.get(),
-                                            color_to_move, gumbel_n, gumbel_k,
-                                            noise_scaling)
+              ? gumbel_evaluator.SearchRoot(probability, game, node_table.get(),
+                                            root_node, color_to_move, gumbel_n,
+                                            gumbel_k, noise_scaling)
               : gumbel_evaluator.SearchRootPuct(
-                    probability, game, root_node.get(), color_to_move, gumbel_n,
-                    1.05f, 0.28f, PuctParams(PuctKind::kVisitCountSample, tau));
+                    probability, game, node_table.get(), root_node,
+                    color_to_move, gumbel_n, 1.05f, 0.28f,
+                    PuctParams(PuctKind::kVisitCountSample, tau));
       auto end = std::chrono::high_resolution_clock::now();
 
       // Post Search Statstics.
-      int n_post = N(root_node.get());
-      float q_post = V(root_node.get());
-      float root_q_outcome = VOutcome(root_node.get());
+      int n_post = N(root_node);
+      float q_post = V(root_node);
+      float root_q_outcome = VOutcome(root_node);
 
       Loc nn_move = gumbel_res.nn_move;
       Loc move = gumbel_res.mcts_move;
 
-      int nn_move_n = NAction(root_node.get(), nn_move);
-      float nn_move_q = Q(root_node.get(), nn_move);
-      float nn_move_qz = QOutcome(root_node.get(), nn_move);
+      int nn_move_n = NAction(root_node, nn_move);
+      float nn_move_q = Q(root_node, nn_move);
+      float nn_move_qz = QOutcome(root_node, nn_move);
 
-      int move_n = NAction(root_node.get(), move);
-      float move_q = Q(root_node.get(), move);
-      float move_qz = QOutcome(root_node.get(), move);
+      int move_n = NAction(root_node, move);
+      float move_q = Q(root_node, move);
+      float move_qz = QOutcome(root_node, move);
 
       // Update tracking data structures.
       mcts_pis.push_back(gumbel_res.pi_improved);
       move_trainables.push_back(is_move_selected_for_training);
       root_q_outcomes.push_back(root_q_outcome);
+      klds.push_back(gumbel_res.kld);
       if (-std::abs(root_q_outcome) < kDownBadThreshold) {
         ++num_consecutive_down_bad_moves;
       } else {
         num_consecutive_down_bad_moves = 0;
-      }
-
-      // Need to store this temporarily so we do not accidentally invoke the
-      // destructor.
-      std::unique_ptr<TreeNode> next_root =
-          std::move(root_node->children[move]);
-      if (log_mcts_trees) {
-        search_roots.emplace_back(std::move(root_node));
       }
 
       // Play move, and calculate PA regions if we hit a checkpoint.
@@ -345,12 +346,27 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       }
       color_to_move = OppositeColor(color_to_move);
 
-      root_node = std::move(next_root);
-      if (!root_node) {
+      // Advance to next root.
+      TreeNode* next_root = root_node->children[move];
+      if (!next_root) {
         // this is possible if we draw directly from policy, or if pass is the
         // only legal move found in search.
-        root_node = std::make_unique<TreeNode>();
+        next_root = node_table->GetOrCreate(game.board().hash());
       }
+
+      // Store root for tree logging if enabled.
+      int num_nodes_reaped = 0, reap_time_us = 0;
+      if (log_mcts_trees) {
+        search_roots.emplace_back(root_node);
+      } else {
+        auto reap_begin = std::chrono::steady_clock::now();
+        num_nodes_reaped = node_table->Reap(next_root);
+        auto reap_end = std::chrono::steady_clock::now();
+        reap_time_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                           reap_end - reap_begin)
+                           .count();
+      }
+      root_node = next_root;
 
       // Add to seen state buffer.
       float add_init_state_prob = [](float root_q) {
@@ -428,6 +444,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
           << " Value: " << root_node->v << " Outcome: " << root_node->v_outcome
           << " Score: " << root_node->score_est << "\n";
         s << "Board:\n" << game.board() << "\n";
+        s << "Nodes Reaped: " << num_nodes_reaped
+          << ", Reap Time: " << reap_time_us << "\n";
         s << "Search Took " << search_dur
           << "us. Average For Game: " << search_dur_avg << "us.\n";
 
@@ -440,7 +458,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     while (IsRunning() && num_cleanup_moves < 30 && !game.IsAllPassAlive()) {
       auto begin = std::chrono::high_resolution_clock::now();
       GumbelResult gumbel_res = gumbel_evaluator.SearchRoot(
-          probability, game, root_node.get(), color_to_move,
+          probability, game, node_table.get(), root_node, color_to_move,
           std::min(80, config.default_params.n),
           std::min(8, config.default_params.k), 0.0f);
       auto end = std::chrono::high_resolution_clock::now();
@@ -451,9 +469,12 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       game::Loc move = gumbel_res.mcts_move;
       game.PlayMove(move, color_to_move, /*record=*/false);
       color_to_move = game::OppositeColor(color_to_move);
-      root_node = root_node->children[move]
-                      ? std::move(root_node->children[move])
-                      : std::make_unique<TreeNode>();
+
+      TreeNode* next_root = root_node->children[move];
+      if (!next_root) {
+        next_root = node_table->GetOrCreate(game.board().hash());
+      }
+      root_node = next_root;
       ++num_cleanup_moves;
 
       auto mv_to_string = [](const game::Loc& move) {
@@ -490,8 +511,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
     auto begin = std::chrono::high_resolution_clock::now();
     game_recorder->RecordGame(thread_id, init_state.board, game, mcts_pis,
-                              move_trainables, root_q_outcomes,
-                              std::move(search_roots));
+                              move_trainables, root_q_outcomes, klds,
+                              search_roots);
     auto end = std::chrono::high_resolution_clock::now();
 
     LOG_TO_SINK(INFO, sink)

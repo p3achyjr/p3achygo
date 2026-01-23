@@ -6,6 +6,7 @@
 #include "absl/strings/str_format.h"
 #include "cc/constants/constants.h"
 #include "cc/core/filepath.h"
+#include "cc/core/probability.h"
 #include "cc/data/filename_format.h"
 #include "cc/game/board.h"
 #include "cc/game/color.h"
@@ -46,7 +47,8 @@ class TfRecorderImpl final : public TfRecorder {
   void RecordGame(int thread_id, const game::Board& init_board,
                   const Game& game, const ImprovedPolicies& mcts_pis,
                   const std::vector<uint8_t>& move_trainables,
-                  const std::vector<float>& root_qs) override;
+                  const std::vector<float>& root_qs,
+                  const std::vector<float>& klds) override;
   void Flush() override;
 
  private:
@@ -56,6 +58,7 @@ class TfRecorderImpl final : public TfRecorder {
     ImprovedPolicies mcts_pis;
     std::vector<uint8_t> move_trainables;
     std::vector<float> root_qs;
+    std::vector<float> klds;
   };
 
   const std::string path_;
@@ -66,6 +69,7 @@ class TfRecorderImpl final : public TfRecorder {
   std::array<std::vector<Record>, constants::kMaxNumThreads> thread_records_;
   std::array<int, constants::kMaxNumThreads> thread_game_counts_;
   int batch_num_;
+  core::Probability probability_;
 };
 
 TfRecorderImpl::TfRecorderImpl(std::string path, int num_threads, int gen,
@@ -81,11 +85,14 @@ void TfRecorderImpl::RecordGame(int thread_id, const Board& init_board,
                                 const Game& game,
                                 const ImprovedPolicies& mcts_pis,
                                 const std::vector<uint8_t>& move_trainables,
-                                const std::vector<float>& root_qs) {
+                                const std::vector<float>& root_qs,
+                                const std::vector<float>& klds) {
   CHECK(game.has_result());
-  CHECK(game.num_moves() == mcts_pis.size());
+  CHECK(game.num_moves() == mcts_pis.size() &&
+        game.num_moves() == move_trainables.size() &&
+        game.num_moves() == root_qs.size() && game.num_moves() == klds.size());
   thread_records_[thread_id].emplace_back(
-      Record{init_board, game, mcts_pis, move_trainables, root_qs});
+      Record{init_board, game, mcts_pis, move_trainables, root_qs, klds});
   ++thread_game_counts_[thread_id];
 }
 
@@ -141,6 +148,13 @@ void TfRecorderImpl::Flush() {
       const ImprovedPolicies& mcts_pis = record.mcts_pis;
       const std::vector<uint8_t>& move_trainables = record.move_trainables;
       const std::vector<float>& root_qs = record.root_qs;
+      const size_t num_trainable_moves =
+          std::accumulate(move_trainables.begin(), move_trainables.end(), 0,
+                          [](size_t x, size_t y) { return x + y; });
+      const float avg_kld =
+          std::accumulate(record.klds.begin(), record.klds.end(), 0.0F,
+                          std::plus<float>()) /
+          num_trainable_moves;
       Board board = record.init_board;
       for (int move_num = 0; move_num < game.num_moves(); ++move_num) {
         // Populate last moves as indices.
@@ -175,7 +189,18 @@ void TfRecorderImpl::Flush() {
               game.komi(), BOARD_LEN);
           std::string data;
           example.SerializeToString(&data);
-          TF_CHECK_OK(writer.WriteRecord(data));
+
+          // Policy surprise weighting.
+          const float freq_weight =
+              0.5F + 0.5F * (record.klds[move_num] / avg_kld);
+          for (int i = 0; i < std::floor(freq_weight); ++i) {
+            TF_CHECK_OK(writer.WriteRecord(data));
+          }
+
+          if (probability_.Uniform() <
+              (freq_weight - std::floor(freq_weight))) {
+            TF_CHECK_OK(writer.WriteRecord(data));
+          }
         }
 
         // Play next move.

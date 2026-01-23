@@ -18,6 +18,16 @@ namespace {
 namespace nv = ::nvinfer1;
 using namespace ::nn;
 
+#define CUDA_OK(call)                                               \
+  do {                                                              \
+    cudaError_t _e = (call);                                        \
+    if (_e != cudaSuccess) {                                        \
+      fprintf(stderr, "CUDA error %s:%d: %s\n", __FILE__, __LINE__, \
+              cudaGetErrorString(_e));                              \
+      std::abort();                                                 \
+    }                                                               \
+  } while (0)
+
 class TrtEngineImpl : public TrtEngine {
  public:
   TrtEngineImpl(std::string path, int batch_size);
@@ -99,8 +109,8 @@ TrtEngineImpl::TrtEngineImpl(std::string path, int batch_size)
     BufferHandle buf_handle;
     buf_handle.size = num_bytes;
     buf_handle.dims = dims;
-    cudaMallocHost(&buf_handle.host_buf, num_bytes);
-    cudaMalloc(&buf_handle.device_buf, num_bytes);
+    CUDA_OK(cudaMallocHost(&buf_handle.host_buf, num_bytes));
+    CUDA_OK(cudaMalloc(&buf_handle.device_buf, num_bytes));
     exec_context_->setTensorAddress(name, buf_handle.device_buf);
 
     buf_map_[name] = buf_handle;

@@ -31,12 +31,13 @@ class GameRecorder {
       int thread_id, const game::Board& init_board, const game::Game& game,
       const ImprovedPolicies& mcts_pis,
       const std::vector<uint8_t>& move_trainables,
-      const std::vector<float>& root_qs,
-      std::vector<std::unique_ptr<mcts::TreeNode>>&& roots) = 0;
+      const std::vector<float>& root_qs, const std::vector<float>& klds,
+      const std::vector<mcts::TreeNode*>& roots) = 0;
 
   virtual void RecordEvalGame(int thread_id, const game::Game& game,
                               const std::string& b_name,
-                              const std::string& w_name) = 0;
+                              const std::string& w_name,
+                              const std::vector<mcts::TreeNode*>& roots) = 0;
 
   static std::unique_ptr<GameRecorder> Create(std::string path, int num_threads,
                                               int flush_interval, int gen,

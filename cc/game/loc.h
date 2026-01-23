@@ -40,7 +40,7 @@ inline bool operator==(const Loc& x, const Loc& y) {
 }
 
 inline std::ostream& operator<<(std::ostream& os, const Loc& loc) {
-  return os << "Loc(" << loc.i << ", " << loc.j << ")";
+  return os << "(" << loc.i << ", " << loc.j << ")";
 }
 
 static constexpr Loc kNoopLoc = Loc{-1, -1};

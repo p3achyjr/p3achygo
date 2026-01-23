@@ -5,6 +5,8 @@
 
 #include "absl/log/check.h"
 #include "cc/core/util.h"
+#include "cc/game/color.h"
+#include "cc/game/loc.h"
 
 namespace game {
 namespace {
@@ -359,15 +361,7 @@ RegionMap GroupTracker::BensonSolver::GetRegionMap(Color color) {
 void GroupTracker::BensonSolver::PopulateAdjacentRegions(
     GroupMap& group_map, RegionMap& region_map) {
   for (auto& [region_id, region_info] : region_map) {
-    // find empty points
-    absl::InlinedVector<Loc, BOARD_LEN * BOARD_LEN> empty_locs;
-    for (auto& loc : region_info.locs) {
-      if (group_tracker_->LocIsEmpty(loc)) {
-        empty_locs.emplace_back(loc);
-      }
-    }
-
-    for (const auto& loc : empty_locs) {
+    for (const auto& loc : region_info.locs) {
       // check that set of groups this is adjacent to match vital_groups.
       // Any group in vital_groups that is not found is removed.
       for (const auto& nloc : Adjacent(loc)) {
@@ -624,9 +618,9 @@ MoveResult Board::PlayMoveDry(Loc loc, Color color) const {
 Scores Board::GetScores() {
   // (re) calculate PA regions for score accuracy.
   group_tracker_.CalculatePassAliveRegions(hash_);
-  std::pair<float, std::array<Color, BOARD_LEN* BOARD_LEN>> bscore_ownership =
+  std::pair<float, std::array<Color, BOARD_LEN * BOARD_LEN>> bscore_ownership =
       ScoreAndOwnership(BLACK);
-  std::pair<float, std::array<Color, BOARD_LEN* BOARD_LEN>> wscore_ownership =
+  std::pair<float, std::array<Color, BOARD_LEN * BOARD_LEN>> wscore_ownership =
       ScoreAndOwnership(WHITE);
 
   std::array<Color, BOARD_LEN * BOARD_LEN> ownership;
@@ -660,6 +654,233 @@ Board::BoardData Board::GetStonesWithLiberties(const int liberties) const {
       for (const auto& loc : group_locs) {
         seen[loc.i][loc.j] = true;
         data[loc] = board_[loc];
+      }
+    }
+  }
+
+  return data;
+}
+
+Board::BoardData Board::GetLadderedStones() const {
+  struct Solver {
+    friend Board;
+    std::pair<Loc, Loc> FindTwoLiberties(Board& board, groupid gid) {
+      const auto& g_tracker = board.group_tracker_;
+      Loc l0 = kNoopLoc, l1 = kNoopLoc;
+      const GroupTracker::GroupInfo& g_info = g_tracker.GroupInfoAt(gid);
+      const Loc root = g_info.root;
+
+      LocVisitor visitor(root);
+      while (!visitor.Done()) {
+        Loc loc = visitor.Next();
+        if (board.AtLoc(loc) == EMPTY) {
+          if (l0 == kNoopLoc) {
+            l0 = loc;
+          } else if (l1 == kNoopLoc) {
+            l1 = loc;
+          } else {
+            CHECK(false) << "More than 2 liberties";
+          }
+        }
+        if (g_tracker.GroupAt(loc) == gid) {
+          for (const Loc& nloc : Adjacent(loc)) {
+            if (g_tracker.GroupAt(nloc) == gid || board.AtLoc(nloc) == EMPTY) {
+              visitor.Visit(nloc);
+            }
+          }
+        }
+      }
+
+      return {l0, l1};
+    }
+
+    Loc FindLiberty(Board& board, groupid gid) {
+      const auto& g_tracker = board.group_tracker_;
+      const GroupTracker::GroupInfo& g_info = g_tracker.GroupInfoAt(gid);
+      const Loc root = g_info.root;
+
+      LocVisitor visitor(root);
+      while (!visitor.Done()) {
+        Loc loc = visitor.Next();
+        if (board.AtLoc(loc) == EMPTY) {
+          return loc;
+        }
+        if (g_tracker.GroupAt(loc) == gid) {
+          for (const Loc& nloc : Adjacent(loc)) {
+            if (g_tracker.GroupAt(nloc) == gid || board.AtLoc(nloc) == EMPTY) {
+              visitor.Visit(nloc);
+            }
+          }
+        }
+      }
+
+      CHECK(false) << "No liberty found\n";
+    }
+
+    absl::InlinedVector<groupid, 16> FindSurroundingStonesInAtari(Board& board,
+                                                                  groupid gid) {
+      const auto& g_tracker = board.group_tracker_;
+      const GroupTracker::GroupInfo& g_info = g_tracker.GroupInfoAt(gid);
+      const Loc root = g_info.root;
+      const Color g_color = board.AtLoc(g_info.root);
+      absl::InlinedVector<groupid, 16> in_atari;
+
+      LocVisitor visitor(root);
+      while (!visitor.Done()) {
+        Loc loc = visitor.Next();
+        if (board.AtLoc(loc) == OppositeColor(g_color)) {
+          const auto n_gid = g_tracker.GroupAt(loc);
+          if (g_tracker.LibertiesForGroupAt(loc) == 1 &&
+              !InlinedVecContains(in_atari, n_gid)) {
+            in_atari.push_back(n_gid);
+          }
+        }
+        if (g_tracker.GroupAt(loc) == gid) {
+          for (const Loc& nloc : Adjacent(loc)) {
+            visitor.Visit(nloc);
+          }
+        }
+      }
+
+      return in_atari;
+    }
+
+    bool Solve(Board& board, groupid gid, Color g_color, Color color_to_move,
+               const Loc group_root, Loc last_move, size_t call_depth) {
+      if (call_depth > 300) {
+        return false;
+      }
+
+      // std::cerr << "<<axlui>> Solve. " << gid << ", " << (int)color_to_move
+      //           << ", " << last_move << "\n";
+      // std::cerr << board.board_ << "\n";
+
+      MoveStatus last_move_status =
+          board.PlayMove(last_move, OppositeColor(color_to_move));
+      if (last_move_status != MoveStatus::kValid) {
+        // std::cerr << "<<axlui>> invalid_move. can capture: "
+        //           << (g_color != color_to_move) << "\n";
+        return g_color != color_to_move;
+      }
+      // std::cerr << board.board_ << "\n";
+
+      if (color_to_move != g_color) {
+        // last move may have coalesced groups.
+        gid = board.group_tracker_.GroupAt(group_root);
+      }
+      const auto liberties = board.group_tracker_.LibertiesForGroup(gid);
+
+      const auto continuation = [&](Loc l) {
+        Board board_copy = board;
+        return Solve(board_copy, gid, g_color, OppositeColor(color_to_move),
+                     group_root, l, call_depth + 1);
+      };
+
+      if (g_color != color_to_move) {
+        // Try to capture.
+        if (liberties > 2) {
+          // we can no longer capture
+          // std::cerr << "<<axlui>> cannot capture\n";
+          return false;
+        } else if (liberties <= 1) {
+          // std::cerr << "<<axlui>> can capture\n";
+          // already captured, or capture on next turn
+          return true;
+        }
+
+        // did the last move put any of my stones in atari?
+        // for (const auto nloc : Adjacent(last_move)) {
+        //   if (board.AtLoc(nloc) == color_to_move &&
+        //       board.group_tracker_.LibertiesForGroupAt(nloc) == 1) {
+        //     return false;
+        //   }
+        // }
+
+        // exactly 2 liberties. find liberties and try both refutations.
+        const auto [l0, l1] = FindTwoLiberties(board, gid);
+        return continuation(l0) || continuation(l1);
+      } else {
+        // Try to refute.
+        if (liberties > 1) {
+          // already refuted.
+          // std::cerr << "<<axlui>> successful refutation\n";
+          return false;
+        }
+
+        // try playing at the liberty.
+        Loc l = FindLiberty(board, gid);
+        if (!continuation(l)) {
+          // Successful refutation
+          return false;
+        }
+
+        // may still be able to weasle out by capturing a stone.
+        const auto in_atari = FindSurroundingStonesInAtari(board, gid);
+        for (const groupid n_gid : in_atari) {
+          const auto l = FindLiberty(board, n_gid);
+          const bool can_refute = !continuation(l);
+          if (can_refute) {
+            return false;
+          }
+        }
+
+        // could not refute.
+        return true;
+      }
+    }
+
+    bool IsLaddered(const Board& board, groupid gid, LocVec& stones,
+                    Color g_color) {
+      // first sanity check to avoid unnecessary copies.
+      const auto find_liberty = [&]() {
+        for (const Loc stone : stones) {
+          for (const Loc l : Adjacent(stone)) {
+            if (board.AtLoc(l) == EMPTY) {
+              return l;
+            }
+          }
+        }
+
+        CHECK(false) << "Trying to solve for non-atari group";
+      };
+
+      Loc liberty = find_liberty();
+      if (board.group_tracker_.LibertiesAt(liberty) >= 3) {
+        return false;
+      }
+
+      // Naive case covered. Solve.
+      const Loc group_root = board.group_tracker_.GroupInfoAt(gid).root;
+      Board board_copy = board;
+      return Solve(board_copy, gid, g_color, OppositeColor(g_color), group_root,
+                   liberty, 0);
+    }
+  };
+
+  BoardData data = {};
+  absl::InlinedVector<groupid, BOARD_LEN * BOARD_LEN> groups_in_atari;
+  for (auto enc = 0; enc < BOARD_LEN * BOARD_LEN; ++enc) {
+    const Loc loc = AsLoc(enc);
+    const groupid gid = group_tracker_.GroupAt(loc);
+    const auto gid_exists = [&](const groupid gid) {
+      return std::find(groups_in_atari.begin(), groups_in_atari.end(), gid) !=
+             groups_in_atari.end();
+    };
+    if (group_tracker_.LibertiesForGroup(gid) == 1 && !gid_exists(gid)) {
+      groups_in_atari.push_back(gid);
+    }
+  }
+
+  if (groups_in_atari.empty()) {
+    return data;
+  }
+
+  for (const auto gid : groups_in_atari) {
+    LocVec stones = group_tracker_.ExpandGroup(gid);
+    Color g_color = AtLoc(stones[0]);
+    if (Solver{}.IsLaddered(*this, gid, stones, g_color)) {
+      for (const Loc stone : stones) {
+        data[int16_t(stone)] = g_color;
       }
     }
   }

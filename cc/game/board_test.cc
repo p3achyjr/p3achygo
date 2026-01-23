@@ -2,6 +2,7 @@
 
 #include "absl/container/flat_hash_set.h"
 #include "cc/core/doctest_include.h"
+#include "cc/game/board_dsl.h"
 #include "cc/game/zobrist.h"
 
 namespace game {
@@ -1133,4 +1134,839 @@ TEST_CASE("ScoreTest") {
   }
 }
 
+#if 0
+auto board = ParseBoardDSL(R"(
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . + . . . . . + . . . . . + . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . + . . . . . + . . . . . + . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . + . . . . . + . . . . . + . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+    )");
+#endif
+TEST_CASE("BoardDSLTest") {
+  using game::BoardToDSL;
+  using game::ParseBoardDSL;
+  using game::ParseBoardGrid;
+
+  SUBCASE("SimplePattern") {
+    // Test a simple pattern using the DSL
+    auto board = ParseBoardDSL(R"(
+      . . x . x o . . . . . . . . . . . . .
+      . . x x o . o . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+    )");
+
+    CHECK(board.at(0, 2) == BLACK);
+    CHECK(board.at(0, 4) == BLACK);
+    CHECK(board.at(1, 2) == BLACK);
+    CHECK(board.at(1, 3) == BLACK);
+    CHECK(board.at(0, 5) == WHITE);
+    CHECK(board.at(1, 4) == WHITE);
+    CHECK(board.at(1, 6) == WHITE);
+  }
+
+  SUBCASE("#879") {
+    // Real game position from p3achygo vs katago
+    // Testing P17 (2, 14) and T19 (0, 18) playability
+    // Note: Y-coordinates are flipped (row 0 is displayed as row 19)
+    auto board = ParseBoardDSL(R"(
+      . . . . . . . x x o o o o x . x x x .
+      o x x . . . x . x o x x x x x x x o x
+      . o x x . x x x o o o o x o . x o o o
+      . o o x x o o o x x x o o o x x o x o
+      o o x o . o . x . x . x o o o o o x x
+      . o x . o x . . . x x . x x x x x x .
+      o x x x x o o o o o x x o o x o o o .
+      . o x o x x o . x x o o . o x o x o .
+      . o o . o o o . o o . o o o o o x . .
+      . . . o . . . . . x o . o x o x . x .
+      . o . . . . . . . x o o x x o x x . .
+      o x x x o . . . . . x x o x x o o x .
+      o x . x o . . . o . x o o x . . . . .
+      . x x o o . x x o . o x . x . o o . .
+      x . x x x x o o x . x o o x . o x . .
+      x x o . . o o o x x x o x x o . x . .
+      x o o o . o o x x o x x o x o x . . .
+      o x o . . . . . x o o o o o x . x . .
+      . . . . . . . . . . . . . . . x . . .
+    )");
+
+    // P17 is at (2, 14) - should be playable for BLACK but NOT for WHITE
+    // (self-capture)
+    CHECK(MoveOk(board.PlayMoveDry(Loc{2, 14}, BLACK)));
+    CHECK_FALSE(MoveOk(board.PlayMoveDry(Loc{2, 14}, WHITE)));
+
+    // T19 is at (0, 18) - should be playable for both colors
+    CHECK(MoveOk(board.PlayMoveDry(Loc{0, 18}, BLACK)));
+    CHECK(MoveOk(board.PlayMoveDry(Loc{0, 18}, WHITE)));
+
+    // Check that the chain at (2, 18) has exactly 1 liberty (is in atari)
+    Board::BoardData in_atari = board.GetStonesInAtari();
+    CHECK(in_atari[Loc{2, 18}] != EMPTY);  // Stone at (2,18) is in atari
+
+    // Check that the chain at (0, 17) has exactly 3 liberties
+    Board::BoardData three_libs = board.GetStonesWithLiberties(3);
+    CHECK(three_libs[Loc{0, 17}] != EMPTY);  // Stone at (0,17) has 3 liberties
+
+    // Run Benson solver (pass-alive calculation)
+    bool all_pass_alive = board.IsAllPassAlive();
+
+    CHECK(MoveOk(board.PlayMoveDry(Loc{2, 14}, BLACK)));
+    CHECK_FALSE(MoveOk(board.PlayMoveDry(Loc{2, 14}, WHITE)));
+
+    // T19 is at (0, 18) - should be playable for both colors
+    CHECK(MoveOk(board.PlayMoveDry(Loc{0, 18}, BLACK)));
+    CHECK(MoveOk(board.PlayMoveDry(Loc{0, 18}, WHITE)));
+  }
+
+  SUBCASE("#276") {
+    // Real game position from p3achygo vs katago
+    // Testing P17 (2, 14) and T19 (0, 18) playability
+    // Note: Y-coordinates are flipped (row 0 is displayed as row 19)
+    auto board = ParseBoardDSL(R"(
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . o . o . . . . . . . . . . . . .
+      . . o . . . . . . . o x x x x x x x .
+      . . o x . o . . . o x o o x o x o . o
+      . . x x o x o . . . x x o o . o o o x
+      . x . o o . x x x . x x x o o o . x .
+      . o o o x x x . . x x . x o . x o . .
+      . . x x o o o x x . . x x o . x o o .
+      . . x o x . . x x . x o o . . x o x .
+      . . . o x o o x . . x . . o o x x x x
+      . . . o x . . x x . x . x x o o x o o
+      . . . o x o o . o x o . . x x o o x .
+      . . o x . x o o . . . . o o o x o x x
+      . . o x . . . . . o o . . o x x o x x
+      . . o x . . . . x x . . o x x o x o .
+      . o . o x . . . . . . x . x . o x o o
+      . . o o x . . . . . . . . . x x x o o
+      . . . . . . . . . . . . . . . x x x x
+    )");
+
+    CHECK(MoveOk(board.PlayMoveDry(Loc{15, 18}, BLACK)));
+    CHECK_FALSE(MoveOk(board.PlayMoveDry(Loc{15, 18}, WHITE)));
+
+    Board::BoardData in_atari = board.GetStonesInAtari();
+    CHECK(in_atari[Loc{16, 18}] != EMPTY);
+
+    Board::BoardData two_libs = board.GetStonesWithLiberties(2);
+    CHECK(two_libs[Loc{14, 18}] != EMPTY);
+
+    bool all_pass_alive = board.IsAllPassAlive();
+
+    CHECK(MoveOk(board.PlayMoveDry(Loc{15, 18}, BLACK)));
+    CHECK_FALSE(MoveOk(board.PlayMoveDry(Loc{15, 18}, WHITE)));
+  }
+
+  SUBCASE("#589") {
+    auto board = ParseBoardDSL(R"(
+      . o o o o x x . x . x x x . . . . . .
+      x o x o . o x x x . x o x o o o . . .
+      x x x o o o x o o x x o o x . x . . .
+      o o o x x x . . . o o o . x . . . . .
+      x o o . x . x o o x x o o o . . o . .
+      . x o . x o o . . x . x x . . o x . .
+      . x x x . . . o . x x . . . . . o . .
+      o x . . o . . . . . o o x . . x . . .
+      . o . o . . . . . o . . x . . . . . .
+      . . . . . . . . . . x . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . o . . . . . . .
+      . . x x . . . . . . . x o o x . . . .
+      . o o x . . . . . o o x o x x x x . .
+      . . x . . . . o o . x o o o x o x . .
+      . . o x x . o . o . x x . o o o x . .
+      . o x x o o . o x x . . . o x x . . .
+      . . . . o x x x . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+    )");
+
+    CHECK(MoveOk(board.PlayMoveDry(Loc{0, 0}, WHITE)));
+    bool all_pass_alive = board.IsAllPassAlive();
+    CHECK(MoveOk(board.PlayMoveDry(Loc{0, 0}, WHITE)));
+  }
+
+  SUBCASE("#20") {
+    auto board = ParseBoardDSL(R"(
+      . x . o o x x x x o . . . . . . . . .
+      . o o . o o . . o o . . . . . . . . .
+      o . o o x x x x o . . . o o o o . . .
+      x o o x x o o x o o o o x o x x o . .
+      x x o x . o . o o x o x x x . x o o .
+      . x x x . o o . o x o o o x . x x o o
+      . . . . x x o x x x x o . x x . . x o
+      . . . . . . x . . . x o o o x x x . x
+      . o o x . . . . . . x o x o x . x . .
+      . x x . x . . . . x o o x o o x x x x
+      . x o x o . . . . x o . x o . o o o x
+      . o o x x . . . . x o . x x o o o . o
+      . o . o . x . . x o o x x . x x x o .
+      x . o o o x . . x o o o o x . x o . o
+      o o x x x o x x x x . x x x o x o o .
+      o x x x o o o o o x . x o o o x o . .
+      . o x x x o . o x x x x . o x o x . .
+      o o x . x x o x o x o x o o x o o . .
+      . o o o x x x x o o o o o . x o . . .
+    )");
+
+    CHECK(MoveOk(board.PlayMoveDry(Loc{16, 6}, BLACK)));
+    CHECK(MoveOk(board.PlayMoveDry(Loc{17, 3}, WHITE)));
+    bool all_pass_alive = board.IsAllPassAlive();
+    CHECK(MoveOk(board.PlayMoveDry(Loc{16, 6}, BLACK)));
+    CHECK(MoveOk(board.PlayMoveDry(Loc{17, 3}, WHITE)));
+  }
+}
+
+TEST_CASE("LadderTest") {
+  using game::BoardToDSL;
+  using game::ParseBoardDSL;
+  using game::ParseBoardGrid;
+
+  SUBCASE("SimpleLadder") {
+    // Test a simple pattern using the DSL
+    auto board = ParseBoardDSL(R"(
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . x . . . . . . . . . . . . . . . . .
+      . x o x . . . . . . . . . . . . . . .
+      . . x . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+    )");
+
+    auto board_copy = board;
+    auto start = std::chrono::steady_clock::now();
+    auto laddered_stones = board.GetLadderedStones();
+    auto end = std::chrono::steady_clock::now();
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start)
+                  .count();
+    MESSAGE("SimpleLadder took " << us << " us\n");
+    CHECK(laddered_stones[AsIndex(Loc{16, 2}, BOARD_LEN)] == WHITE);
+    CHECK_EQ(board, board_copy);
+  }
+
+  SUBCASE("SimpleBrokenLadder") {
+    // Test a simple pattern using the DSL
+    auto board = ParseBoardDSL(R"(
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . o . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . x . . . . . . . . . . . . . . . . .
+      . x o x . . . . . . . . . . . . . . .
+      . . x . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+    )");
+
+    auto board_copy = board;
+    auto start = std::chrono::steady_clock::now();
+    auto laddered_stones = board.GetLadderedStones();
+    auto end = std::chrono::steady_clock::now();
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start)
+                  .count();
+    MESSAGE("SimpleBrokenLadder took " << us << " us\n");
+    CHECK(laddered_stones[AsIndex(Loc{16, 2}, BOARD_LEN)] == EMPTY);
+    CHECK_EQ(board, board_copy);
+  }
+
+  SUBCASE("AtariBrokenLadder") {
+    // Test a simple pattern using the DSL
+    auto board = ParseBoardDSL(R"(
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . o . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . x . . . . . . . . . . . . . . . . .
+      . x o x . . . . . . . . . . . . . . .
+      . . x . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+    )");
+
+    auto board_copy = board;
+
+    auto start = std::chrono::steady_clock::now();
+    auto laddered_stones = board.GetLadderedStones();
+    auto end = std::chrono::steady_clock::now();
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start)
+                  .count();
+    MESSAGE("AtariBrokenLadder took " << us << " us\n");
+    CHECK(laddered_stones[AsIndex(Loc{16, 2}, BOARD_LEN)] == EMPTY);
+    CHECK_EQ(board, board_copy);
+  }
+
+  SUBCASE("DirectionLadder") {
+    // Test a simple pattern using the DSL
+    auto board = ParseBoardDSL(R"(
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . o . . . . . . . . . . . .
+      . . . . o . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . x . . . x x x . . . . . . . . . .
+      . x o o x . . . . . . . . . . . . . .
+      . . x x . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+    )");
+
+    auto board_copy = board;
+    auto start = std::chrono::steady_clock::now();
+    auto laddered_stones = board.GetLadderedStones();
+    auto end = std::chrono::steady_clock::now();
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start)
+                  .count();
+    MESSAGE("DirectionLadder took " << us << " us\n");
+    CHECK(laddered_stones[AsIndex(Loc{5, 2}, BOARD_LEN)] == WHITE);
+    CHECK(laddered_stones[AsIndex(Loc{5, 3}, BOARD_LEN)] == WHITE);
+    CHECK_EQ(board, board_copy);
+  }
+
+  SUBCASE("DoubleLadder") {
+    // Test a simple pattern using the DSL
+    auto board = ParseBoardDSL(R"(
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . o . . .
+      . . . . . . . . . . . . . . o x o . .
+      . . . . . . . . . . . . . . . . o . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . x . . . . . . . . . . . . . . . . .
+      . x o x . . . . . . . . . . . . . . .
+      . . x . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+    )");
+
+    auto board_copy = board;
+    auto start = std::chrono::steady_clock::now();
+    auto laddered_stones = board.GetLadderedStones();
+    auto end = std::chrono::steady_clock::now();
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start)
+                  .count();
+    MESSAGE("DoubleLadder took " << us << " us\n");
+    CHECK(laddered_stones[AsIndex(Loc{16, 2}, BOARD_LEN)] == WHITE);
+    CHECK(laddered_stones[AsIndex(Loc{8, 15}, BOARD_LEN)] == BLACK);
+    CHECK_EQ(board, board_copy);
+  }
+
+  SUBCASE("NoLadder") {
+    // Test a simple pattern using the DSL
+    auto board = ParseBoardDSL(R"(
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . o . . .
+      . . . . . . . . . . . . . . o x o . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . x o x . . . . . . . . . . . . . . .
+      . . x . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+    )");
+
+    auto board_copy = board;
+    auto start = std::chrono::steady_clock::now();
+    auto laddered_stones = board.GetLadderedStones();
+    auto end = std::chrono::steady_clock::now();
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start)
+                  .count();
+    MESSAGE("NoLadder took " << us << " us\n");
+    CHECK(laddered_stones[AsIndex(Loc{16, 2}, BOARD_LEN)] == EMPTY);
+    CHECK(laddered_stones[AsIndex(Loc{8, 15}, BOARD_LEN)] == EMPTY);
+    CHECK_EQ(board, board_copy);
+  }
+
+  SUBCASE("EdgeLadder") {
+    // Test a simple pattern using the DSL
+    auto board = ParseBoardDSL(R"(
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . o o . . . . . . . . . .
+      . . . . . . o x x . . . . . . . . . .
+    )");
+
+    auto board_copy = board;
+    auto start = std::chrono::steady_clock::now();
+    auto laddered_stones = board.GetLadderedStones();
+    auto end = std::chrono::steady_clock::now();
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start)
+                  .count();
+    MESSAGE("EdgeLadder took " << us << " us\n");
+    CHECK(laddered_stones[AsIndex(Loc{18, 7}, BOARD_LEN)] == BLACK);
+    CHECK(laddered_stones[AsIndex(Loc{18, 8}, BOARD_LEN)] == BLACK);
+    CHECK_EQ(board, board_copy);
+  }
+
+  SUBCASE("LadderSenseis1") {
+    // Test a simple pattern using the DSL
+    auto board = ParseBoardDSL(R"(
+      . . . . . . . . . . . . . . . . . . .
+      . . . . x o x . . . . . . . . . . . .
+      . x x x o x . . . . . . . . . . . . .
+      . x o o o . . . . + . . . . . + . . .
+      . o o . . . . . . . . . . . . . . . .
+      . . x . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . o . . . . . .
+      . . . . . . . . . . o x x o . . . . .
+      . . . + . . . . . + . o o . . + . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . + . . . . . + . . . . . + . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+    )");
+
+    auto board_copy = board;
+    auto start = std::chrono::steady_clock::now();
+    auto laddered_stones = board.GetLadderedStones();
+    auto end = std::chrono::steady_clock::now();
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start)
+                  .count();
+    MESSAGE("LadderSenseis1 took " << us << " us\n");
+    CHECK(laddered_stones[AsIndex(Loc{8, 11}, BOARD_LEN)] == BLACK);
+    CHECK(laddered_stones[AsIndex(Loc{8, 12}, BOARD_LEN)] == BLACK);
+    CHECK_EQ(board, board_copy);
+  }
+
+  SUBCASE("LadderSenseis3") {
+    // Test a simple pattern using the DSL
+    auto board = ParseBoardDSL(R"(
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . x x . . . . . .
+      . . . x . . . . . + x o o x . + . . .
+      . . . . . . . . . . . . x . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . + . . . . . + . . . . . + . . .
+      . . . . o . . . . . . . . . . . . . .
+      . . x . x . . . . . . . . . . . . . .
+      . . . . x . . . . . . . . . . o . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . o o . .
+      . . . + . . . . . + . . . . x + x x .
+      . . . . . . . . . x . . o . . x . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+    )");
+
+    auto board_copy = board;
+    auto start = std::chrono::steady_clock::now();
+    auto laddered_stones = board.GetLadderedStones();
+    auto end = std::chrono::steady_clock::now();
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start)
+                  .count();
+    MESSAGE("LadderSenseis3 took " << us << " us\n");
+    CHECK(laddered_stones[AsIndex(Loc{3, 11}, BOARD_LEN)] == WHITE);
+    CHECK(laddered_stones[AsIndex(Loc{3, 12}, BOARD_LEN)] == WHITE);
+    CHECK_EQ(board, board_copy);
+  }
+
+  SUBCASE("LadderOdnihs") {
+    // Test a simple pattern using the DSL
+    auto board = ParseBoardDSL(R"(
+      . . o . . . . o . . . . . . . . . . .
+      . o . o x x o x o . . . . . . . . . .
+      . . o x . . x x x o . . o o o o x . .
+      . o . x x x x x . + o o x x x o x . .
+      . . x . . . . . . . . . . . o x . . .
+      . . . . . . . . . . . . x . x x . . .
+      . . . . . . . . . . . . . o . . . . .
+      . . . . . . . . . . . . . . x x . . .
+      . . . . . . . . . . . . . . o o . . .
+      . . . + . . . . . + . . . . x o . . .
+      . . . . . . . . . . . . . o x o . . .
+      . . . . . . . . . . . . . . o . . . .
+      . . . . . . . . . . . . . . . o . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . + . . . . . + . . . . . + . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+    )");
+
+    auto board_copy = board;
+    auto start = std::chrono::steady_clock::now();
+    auto laddered_stones = board.GetLadderedStones();
+    auto end = std::chrono::steady_clock::now();
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start)
+                  .count();
+    MESSAGE("LadderOdnihs took " << us << " us\n");
+    CHECK(laddered_stones[AsIndex(Loc{9, 14}, BOARD_LEN)] == BLACK);
+    CHECK(laddered_stones[AsIndex(Loc{10, 14}, BOARD_LEN)] == BLACK);
+    CHECK_EQ(board, board_copy);
+  }
+
+  SUBCASE("BrokenLadderOdnihs") {
+    // Test a simple pattern using the DSL
+    auto board = ParseBoardDSL(R"(
+      . . o . . . . o . . . . . . . . . . .
+      . o . o x x o x o . . . . . . . . . .
+      . . o x . . x x x o . . o o o o x . .
+      . o . x x x x x . + o o x x x o x . .
+      . . x . . . . . . . . . . x . x . . .
+      . . . . . . . . . . . . x . x x . . .
+      . . . . . . . . . . . . . o . . . . .
+      . . . . . . . . . . . . . . x x . . .
+      . . . . . . . . . . . . . . o o . . .
+      . . . + . . . . . + . . . . x o . . .
+      . . . . . . . . . . . . . o x o . . .
+      . . . . . . . . . . . . . . o . . . .
+      . . . . . . . . . . . . . . . o . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . + . . . . . + . . . . . + . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+    )");
+
+    auto board_copy = board;
+    auto start = std::chrono::steady_clock::now();
+    auto laddered_stones = board.GetLadderedStones();
+    auto end = std::chrono::steady_clock::now();
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start)
+                  .count();
+    MESSAGE("BrokenLadderOdnihs took " << us << " us\n");
+    CHECK(laddered_stones[AsIndex(Loc{9, 14}, BOARD_LEN)] == EMPTY);
+    CHECK(laddered_stones[AsIndex(Loc{10, 14}, BOARD_LEN)] == EMPTY);
+    CHECK_EQ(board, board_copy);
+  }
+
+  SUBCASE("BrokenLadderSenseis1") {
+    // Test a simple pattern using the DSL
+    auto board = ParseBoardDSL(R"(
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . + . . . . . + . . . . . + . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . + . . . . . + . . . . . + . . .
+      . . . . . . . . . . . . . . . . . . x
+      . . . . . . . . . . . . . . . . . . x
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . o
+      . . . . . . . . . o o . . . . . . . .
+      . . . + . . . . o x x o x . . + . . .
+      . . . . . . . . o o x . x x o . . . .
+      . . . . . . . . . . o o o o . . . . .
+      . . . . . . . . . . . . . . . . . . .
+    )");
+
+    auto board_copy = board;
+    auto start = std::chrono::steady_clock::now();
+    auto laddered_stones = board.GetLadderedStones();
+    auto end = std::chrono::steady_clock::now();
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start)
+                  .count();
+    MESSAGE("BrokenLadderSenseis1 took " << us << " us\n");
+    CHECK(laddered_stones[AsIndex(Loc{16, 9}, BOARD_LEN)] == EMPTY);
+    CHECK(laddered_stones[AsIndex(Loc{16, 10}, BOARD_LEN)] == EMPTY);
+    CHECK(laddered_stones[AsIndex(Loc{17, 10}, BOARD_LEN)] == EMPTY);
+    CHECK_EQ(board, board_copy);
+  }
+
+  SUBCASE("LadderSenseis2") {
+    auto board = ParseBoardDSL(R"(
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . + . . . . . + . . . . . + . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . x . . . . . .
+      . . . . . . . . . . . x o x . . . . .
+      . . . . . . . . o . x o . x . . . . .
+      . . . + . . . . . + . . . . . + . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . o . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . o o . . . . . . .
+      . . . o . . . . . x . x . . . . . . .
+      . . o + . . . . . + . x . . . + . . .
+      . . . . x . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+    )");
+
+    auto board_copy = board;
+    auto start = std::chrono::steady_clock::now();
+    auto laddered_stones = board.GetLadderedStones();
+    auto end = std::chrono::steady_clock::now();
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start)
+                  .count();
+    MESSAGE("LadderSenseis2 took " << us << " us\n");
+    CHECK(laddered_stones[AsIndex(Loc{7, 12}, BOARD_LEN)] == WHITE);
+    CHECK_EQ(board, board_copy);
+  }
+
+  SUBCASE("NakayamaLadder") {
+    auto board = ParseBoardDSL(R"(
+      . . . . o . . . . . . . . . . . . . .
+      o . . . . . . . . . . . . . . . . . o
+      . . . . . . . . . . . . . . . . . . o
+      . . . o o x o . . + . . . . . + . . .
+      o . . . o x o o o o . o . . . . . o .
+      o x x x x x x x x x o . . . . . . . .
+      x o o o . x . . . . x . . . . . . . o
+      x . o o o x . . . . x o . . . . . . .
+      x o o o o x . . . . x . . . . . . . .
+      o x x x x x x x x x o . . . . + . . o
+      o o . . . x o . . o . . . . . . . . .
+      . o . o . x . o . . . . . . . . . . .
+      . . . . . . o . . . . . . . . . . . .
+      . . . . o . . . . x . . . . . . . . .
+      o . . . . x . . . x . . . x o . . . .
+      . . . + . x . . . x . . . x . + . . .
+      . . . . . x . . . x . . . x . . . . .
+      . . . . o . x x x x x x x o . . . o .
+      . o . . . x o o o o o o o . o . . . .
+    )");
+
+    auto board_copy = board;
+    auto start = std::chrono::steady_clock::now();
+    auto laddered_stones = board.GetLadderedStones();
+    auto end = std::chrono::steady_clock::now();
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start)
+                  .count();
+    MESSAGE("NakayamaLadder took " << us << " us\n");
+    CHECK(laddered_stones[AsIndex(Loc{18, 6}, BOARD_LEN)] == WHITE);
+    CHECK(laddered_stones[AsIndex(Loc{18, 7}, BOARD_LEN)] == WHITE);
+    CHECK(laddered_stones[AsIndex(Loc{18, 8}, BOARD_LEN)] == WHITE);
+    CHECK(laddered_stones[AsIndex(Loc{18, 9}, BOARD_LEN)] == WHITE);
+    CHECK(laddered_stones[AsIndex(Loc{18, 10}, BOARD_LEN)] == WHITE);
+    CHECK(laddered_stones[AsIndex(Loc{18, 11}, BOARD_LEN)] == WHITE);
+    CHECK(laddered_stones[AsIndex(Loc{18, 12}, BOARD_LEN)] == WHITE);
+    CHECK_EQ(board, board_copy);
+  }
+
+  SUBCASE("BrokenLadderSenseis1") {
+    // Test a simple pattern using the DSL
+    auto board = ParseBoardDSL(R"(
+      . . . . . . . . . . . . . . . . . . .
+      . . . . x o x . . . . . . . . . . . .
+      . x x x o x . . x . . . . . . . . . .
+      . x o o o . . . . + . . . . . + . . .
+      . o o . . . . . . . . . . . . . . . .
+      . . x . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . o . . . . . .
+      . . . . . . . . . . o x x o . . . . .
+      . . . + . . . . . + . o o . . + . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . + . . . . . + . . . . . + . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+    )");
+
+    auto board_copy = board;
+    auto start = std::chrono::steady_clock::now();
+    auto laddered_stones = board.GetLadderedStones();
+    auto end = std::chrono::steady_clock::now();
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start)
+                  .count();
+    MESSAGE("BrokenLadderSenseis1 took " << us << " us\n");
+    CHECK(laddered_stones[AsIndex(Loc{8, 11}, BOARD_LEN)] == EMPTY);
+    CHECK(laddered_stones[AsIndex(Loc{8, 12}, BOARD_LEN)] == EMPTY);
+    CHECK_EQ(board, board_copy);
+  }
+
+  SUBCASE("NakayamaLadderBroken") {
+    auto board = ParseBoardDSL(R"(
+      . . . . o . . . . . . . . . . . . . .
+      o . . . . . . . . . . . . . . . . . o
+      . . . . . . . . . . . . . . . . . . o
+      . . . o o x o . . + . . . . . + . . .
+      o . . . o x o o o o . o . . . . . o .
+      o x x x x x x x x x o . . . . . . . .
+      x o o o . x . . . . x . . . . . . o o
+      x . o o o x . . . . x o . . . . . . .
+      x o o o o x . . . . x . . . . . . . .
+      o x x x x x x x x x o . . . . + . . o
+      o o . . . x o . . o . . . . . . . . .
+      . o . o . x . o . . . . . . . . . . .
+      . . . . . . o . . . . . . . . . . . .
+      . . . . o . . . . x . . . . . . . . .
+      o . . . . x . . . x . . . x o . . . .
+      . . . + . x . . . x . . . x . + . . .
+      . . . . . x . . . x . . . x . . . . .
+      . . . . o . x x x x x x x o . . . o .
+      . o . . . x o o o o o o o . o . . . .
+    )");
+
+    auto board_copy = board;
+    auto start = std::chrono::steady_clock::now();
+    auto laddered_stones = board.GetLadderedStones();
+    auto end = std::chrono::steady_clock::now();
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start)
+                  .count();
+    MESSAGE("NakayamaLadderBroken took " << us << " us\n");
+    CHECK(laddered_stones[AsIndex(Loc{18, 6}, BOARD_LEN)] == EMPTY);
+    CHECK(laddered_stones[AsIndex(Loc{18, 7}, BOARD_LEN)] == EMPTY);
+    CHECK(laddered_stones[AsIndex(Loc{18, 8}, BOARD_LEN)] == EMPTY);
+    CHECK(laddered_stones[AsIndex(Loc{18, 9}, BOARD_LEN)] == EMPTY);
+    CHECK(laddered_stones[AsIndex(Loc{18, 10}, BOARD_LEN)] == EMPTY);
+    CHECK(laddered_stones[AsIndex(Loc{18, 11}, BOARD_LEN)] == EMPTY);
+    CHECK(laddered_stones[AsIndex(Loc{18, 12}, BOARD_LEN)] == EMPTY);
+    CHECK_EQ(board, board_copy);
+  }
+
+  SUBCASE("BrokenLadderSenseis2") {
+    auto board = ParseBoardDSL(R"(
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . + . . . . . + . . . . . + . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . x . . . . . .
+      . . . . . . . . . . . x o x . . . . .
+      . . . . . . . . o . x o . x . . . . .
+      . . . + . . . . . + . . . . . + . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . o . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . o o . . . . . . .
+      . . . o . . . . . x . x . . . . . . .
+      . . o + . . . . . + . x . . . + . . .
+      . . . . x . o . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+    )");
+
+    auto board_copy = board;
+    auto start = std::chrono::steady_clock::now();
+    auto laddered_stones = board.GetLadderedStones();
+    auto end = std::chrono::steady_clock::now();
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start)
+                  .count();
+    MESSAGE("BrokenLadderSenseis2 took " << us << " us\n");
+    CHECK(laddered_stones[AsIndex(Loc{7, 12}, BOARD_LEN)] == EMPTY);
+    CHECK_EQ(board, board_copy);
+  }
+}
 }  // namespace game

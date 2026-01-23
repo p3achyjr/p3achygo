@@ -8,6 +8,7 @@
 #include "cc/core/probability.h"
 #include "cc/game/game.h"
 #include "cc/mcts/gumbel.h"
+#include "cc/mcts/node_table.h"
 
 #define LOG_TO_SINK(severity, sink) LOG(severity).ToSinkOnly(&sink)
 
@@ -77,22 +78,42 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
       cur_is_black ? config.cur_var_scale_cpuct : config.cand_var_scale_cpuct;
   float var_scale_cpuct_w =
       cur_is_black ? config.cand_var_scale_cpuct : config.cur_var_scale_cpuct;
+  bool use_mcgs_b = cur_is_black ? config.cur_use_mcgs : config.cand_use_mcgs;
+  bool use_mcgs_w = cur_is_black ? config.cand_use_mcgs : config.cur_use_mcgs;
+  bool const log_mcts_trees = true;
 
   Game game;
-  std::unique_ptr<TreeNode> btree = std::make_unique<TreeNode>();
-  std::unique_ptr<TreeNode> wtree = std::make_unique<TreeNode>();
+  std::unique_ptr<NodeTable> node_table_b;
+  if (use_mcgs_b) {
+    node_table_b = std::make_unique<McgsNodeTable>();
+  } else {
+    node_table_b = std::make_unique<MctsNodeTable>();
+  }
+  std::unique_ptr<NodeTable> node_table_w;
+  if (use_mcgs_w) {
+    node_table_w = std::make_unique<McgsNodeTable>();
+  } else {
+    node_table_w = std::make_unique<MctsNodeTable>();
+  }
+  TreeNode* btree = node_table_b->GetOrCreate(game.board().hash());
+  TreeNode* wtree = node_table_w->GetOrCreate(game.board().hash());
   Color player_resigned = EMPTY;
+
+  // Track root history for tree logging
+  std::vector<TreeNode*> root_history;
 
   GumbelEvaluator gumbel_b(black_nn, thread_id);
   GumbelEvaluator gumbel_w(white_nn, thread_id);
   auto color_to_move = BLACK;
   while (!game.IsGameOver()) {
-    std::unique_ptr<TreeNode>& player_tree =
-        color_to_move == BLACK ? btree : wtree;
-    std::unique_ptr<TreeNode>& opp_tree =
-        color_to_move == BLACK ? wtree : btree;
-    std::unique_ptr<TreeNode>& cur_tree = cur_is_black ? btree : wtree;
-    std::unique_ptr<TreeNode>& cand_tree = cur_is_black ? wtree : btree;
+    TreeNode*& player_tree = color_to_move == BLACK ? btree : wtree;
+    TreeNode*& opp_tree = color_to_move == BLACK ? wtree : btree;
+    TreeNode* cur_tree = cur_is_black ? btree : wtree;
+    TreeNode* cand_tree = cur_is_black ? wtree : btree;
+    NodeTable* player_table =
+        color_to_move == BLACK ? node_table_b.get() : node_table_w.get();
+    NodeTable* opp_table =
+        color_to_move == BLACK ? node_table_w.get() : node_table_b.get();
     GumbelEvaluator& gumbel = color_to_move == BLACK ? gumbel_b : gumbel_w;
 
     // NN statistics.
@@ -102,12 +123,12 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
     float cand_score_est_nn = cand_tree->score_est;
 
     // Pre-search statistics.
-    float cur_n_pre = N(cur_tree.get());
-    float cur_q_pre = V(cur_tree.get());
-    float cur_q_outcome_pre = VOutcome(cur_tree.get());
-    float cand_n_pre = N(cand_tree.get());
-    float cand_q_pre = V(cand_tree.get());
-    float cand_q_outcome_pre = VOutcome(cand_tree.get());
+    float cur_n_pre = N(cur_tree);
+    float cur_q_pre = V(cur_tree);
+    float cur_q_outcome_pre = VOutcome(cur_tree);
+    float cand_n_pre = N(cand_tree);
+    float cand_q_pre = V(cand_tree);
+    float cand_q_outcome_pre = VOutcome(cand_tree);
 
     // Search.
     int n = color_to_move == BLACK ? n_b : n_w;
@@ -119,42 +140,64 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
     float c_puct = color_to_move == BLACK ? c_puct_b : c_puct_w;
     bool var_scale_cpuct =
         color_to_move == BLACK ? var_scale_cpuct_b : var_scale_cpuct_w;
+    bool use_mcgs = color_to_move == BLACK ? use_mcgs_b : use_mcgs_w;
     auto begin = std::chrono::high_resolution_clock::now();
     GumbelResult gumbel_res =
-        use_puct ? gumbel.SearchRootPuct(
-                       probability, game, player_tree.get(), color_to_move, n,
-                       c_puct, 0.45f,
-                       use_lcb ? PuctKind::kLcb : PuctKind::kVisitCount,
-                       var_scale_cpuct)
-                 : gumbel.SearchRoot(probability, game, player_tree.get(),
-                                     color_to_move, n, k, noise_scaling);
+        use_puct
+            ? gumbel.SearchRootPuct(
+                  probability, game, player_table, player_tree, color_to_move,
+                  n, c_puct, 0.45f,
+                  use_lcb ? PuctKind::kLcb : PuctKind::kVisitCount,
+                  var_scale_cpuct)
+            : gumbel.SearchRoot(probability, game, player_table, player_tree,
+                                color_to_move, n, k, noise_scaling);
     auto end = std::chrono::high_resolution_clock::now();
-    if (VOutcome(player_tree.get()) < kResignThreshold) {
-      LOG_TO_SINK(INFO, sink)
-          << "Player " << ToString(color_to_move)
-          << " Resigned. Qz: " << VOutcome(player_tree.get());
+    if (VOutcome(player_tree) < kResignThreshold) {
+      LOG_TO_SINK(INFO, sink) << "Player " << ToString(color_to_move)
+                              << " Resigned. Qz: " << VOutcome(player_tree);
       player_resigned = color_to_move;
       break;
     }
 
     // Post-search statistics.
-    float cur_n_post = N(cur_tree.get());
-    float cur_q_post = V(cur_tree.get());
-    float cur_q_outcome_post = VOutcome(cur_tree.get());
-    float cand_n_post = N(cand_tree.get());
-    float cand_q_post = V(cand_tree.get());
-    float cand_q_outcome_post = VOutcome(cand_tree.get());
+    float cur_n_post = N(cur_tree);
+    float cur_q_post = V(cur_tree);
+    float cur_q_outcome_post = VOutcome(cur_tree);
+    float cand_n_post = N(cand_tree);
+    float cand_q_post = V(cand_tree);
+    float cand_q_outcome_post = VOutcome(cand_tree);
 
     // Commit move changes.
     Loc move = gumbel_res.mcts_move;
-    float move_q = Q(player_tree.get(), move);
+    float move_q = Q(player_tree, move);
     game.PlayMove(move, color_to_move);
     color_to_move = OppositeColor(color_to_move);
 
-    player_tree = std::move(player_tree->children[move]);
-    opp_tree = std::move(opp_tree->children[move]);
-    if (!player_tree) player_tree = std::make_unique<TreeNode>();
-    if (!opp_tree) opp_tree = std::make_unique<TreeNode>();
+    // Advance to next roots.
+    TreeNode* next_player = player_tree->children[move];
+    TreeNode* next_opp = opp_tree->children[move];
+    if (!next_player) {
+      next_player = player_table->GetOrCreate(game.board().hash());
+    }
+    if (!next_opp) {
+      next_opp = opp_table->GetOrCreate(game.board().hash());
+    }
+
+    int num_nodes_reaped = 0, reap_time_us = 0;
+    if (log_mcts_trees) {
+      root_history.emplace_back(player_tree);
+    } else {
+      auto reap_begin = std::chrono::steady_clock::now();
+      num_nodes_reaped += player_table->Reap(next_player);
+      num_nodes_reaped += opp_table->Reap(next_opp);
+      auto reap_end = std::chrono::steady_clock::now();
+      reap_time_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                         reap_end - reap_begin)
+                         .count();
+    }
+
+    player_tree = next_player;
+    opp_tree = next_opp;
 
     // Time.
     auto search_dur =
@@ -171,7 +214,8 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
       s << "\n----- Move Num: " << game.num_moves() << " -----\n";
       s << "N: " << n << ", K: " << k << ", Noise Scaling: " << noise_scaling
         << ", PUCT: " << use_puct << ", LCB: " << use_lcb
-        << ", cPUCT Var Scaling: " << var_scale_cpuct << "\n";
+        << ", cPUCT Var Scaling: " << var_scale_cpuct << ", MCGS: " << use_mcgs
+        << "\n";
       s << "Gumbel Move: " << move << ", q: " << move_q << "\n";
       s << "Last 5 Moves: " << game.move(game.num_moves() - 5) << ", "
         << game.move(game.num_moves() - 4) << ", "
@@ -203,6 +247,8 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
                                    : (cur_is_black ? "CAND" : "CUR"))
         << "\n";
       s << "Board:\n" << game.board() << "\n";
+      s << "Nodes Reaped: " << num_nodes_reaped
+        << ", Reap Time: " << reap_time_us << "\n";
       s << "Search Took " << search_dur << "us. Search EMA: " << search_dur_ema
         << "us.\n";
 
@@ -244,6 +290,6 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
 
   const std::string& b_name = cur_is_black ? cur_name : cand_name;
   const std::string& w_name = cur_is_black ? cand_name : cur_name;
-  recorder->RecordEvalGame(thread_id, game, b_name, w_name);
+  recorder->RecordEvalGame(thread_id, game, b_name, w_name, root_history);
   result.set_value(EvalResult{winner, game.num_moves()});
 }
