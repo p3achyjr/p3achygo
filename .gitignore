@@ -16,3 +16,7 @@ cc/tensorflow/**
 !cc/tensorflow/BUILD
 .trunk
 .clangd
+build/
+*.log
+*.txt
+!CMakeLists.txt
