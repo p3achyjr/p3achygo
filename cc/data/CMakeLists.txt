@@ -1,10 +1,13 @@
 # Data library - dataset creation from SGF files
-# NOTE: worker.cc uses TensorFlow headers, so dataset_creator requires TensorFlow
+
+# TFRecord reader/writer (minimal port from TensorFlow)
+add_subdirectory(tfrecord)
 
 # Filename format - header-only
 add_library(data_filename_format INTERFACE)
 target_sources(data_filename_format INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/filename_format.h)
 
+# Dataset creator (uses standalone protobuf, not TensorFlow)
 add_library(dataset_creator
     coordinator.cc
     coordinator.h
@@ -14,8 +17,10 @@ add_library(dataset_creator
 target_link_libraries(dataset_creator PUBLIC
     game
     make_tf_example
+    tfrecord
     sgf
     filename_buffer
+    absl::check
     absl::str_format
     absl::synchronization
     indicators::indicators
@@ -33,4 +38,3 @@ if(BUILD_BINARIES)
     )
     set_target_properties(data_main PROPERTIES OUTPUT_NAME "dataset_creator")
 endif()
-

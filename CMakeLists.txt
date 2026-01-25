@@ -4,6 +4,8 @@ project(p3achygo LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_CXX_VISIBILITY_PRESET hidden)
+set(CMAKE_VISIBILITY_INLINES_HIDDEN YES)
 
 # Place all executables in the top-level build directory
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
@@ -13,17 +15,23 @@ option(BUILD_TESTS "Build tests" ON)
 option(BUILD_BENCHMARKS "Build benchmarks" OFF)
 option(BUILD_BINARIES "Build binary executables" ON)
 option(BOARD_SIZE_9 "Use 9x9 board" OFF)
-option(USE_CUDA "Enable CUDA support" OFF)
+option(USE_CUDA "Enable CUDA support" ON)
+option(USE_TENSORFLOW "Enable TensorFlow support" OFF)
 option(USE_TENSORRT "Enable TensorRT support" OFF)
-
-# TensorFlow is required for this project
-set(USE_TENSORFLOW ON)
+option(USE_ASAN "Enable AddressSanitizer" OFF)
 
 # Set board size
 if(BOARD_SIZE_9)
     add_compile_definitions(BOARD_LEN=9)
 else()
     add_compile_definitions(BOARD_LEN=19)
+endif()
+
+# AddressSanitizer configuration
+if(USE_ASAN)
+    message(STATUS "Enabling AddressSanitizer (ASan)")
+    add_compile_options(-fsanitize=address -fno-omit-frame-pointer -g)
+    add_link_options(-fsanitize=address)
 endif()
 
 # Find packages
@@ -41,6 +49,18 @@ FetchContent_Declare(
 )
 set(ABSL_PROPAGATE_CXX_STD ON)
 FetchContent_MakeAvailable(absl)
+
+# Protobuf - v21.9 corresponds to protobuf 3.21.9 (TensorFlow 2.16 version)
+FetchContent_Declare(
+    protobuf
+    GIT_REPOSITORY https://github.com/protocolbuffers/protobuf.git
+    GIT_TAG v21.9
+    GIT_SUBMODULES ""
+)
+set(protobuf_BUILD_TESTS OFF CACHE BOOL "Disable protobuf tests")
+set(protobuf_BUILD_SHARED_LIBS OFF CACHE BOOL "Build static protobuf")
+set(protobuf_WITH_ZLIB OFF CACHE BOOL "Disable zlib in protobuf")
+FetchContent_MakeAvailable(protobuf)
 
 # Doctest (for testing)
 if(BUILD_TESTS)
@@ -127,6 +147,7 @@ add_subdirectory(cc/constants)
 add_subdirectory(cc/core)
 add_subdirectory(cc/game)
 add_subdirectory(cc/sgf)
+add_subdirectory(cc/proto)
 add_subdirectory(cc/tensorflow)
 add_subdirectory(cc/nn)
 add_subdirectory(cc/mcts)
@@ -151,7 +172,11 @@ message(STATUS "Build tests: ${BUILD_TESTS}")
 message(STATUS "Build benchmarks: ${BUILD_BENCHMARKS}")
 message(STATUS "Build binaries: ${BUILD_BINARIES}")
 message(STATUS "CUDA support: ${USE_CUDA}")
+message(STATUS "TensorFlow support: ${USE_TENSORFLOW}")
 message(STATUS "TensorRT support: ${USE_TENSORRT}")
-message(STATUS "========================================")
-message(STATUS "Note: TensorFlow is required and expected in cc/tensorflow/")
-message(STATUS "========================================")
+message(STATUS "AddressSanitizer: ${USE_ASAN}")
+if (USE_TENSORFLOW)
+    message(STATUS "========================================")
+    message(STATUS "Note: TensorFlow is required and expected in cc/tensorflow/")
+    message(STATUS "========================================")
+endif()

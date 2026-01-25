@@ -4,14 +4,7 @@
 add_library(recorder_dir INTERFACE)
 target_sources(recorder_dir INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/dir.h)
 
-add_library(make_tf_example INTERFACE)
-target_sources(make_tf_example INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/make_tf_example.h)
-target_link_libraries(make_tf_example INTERFACE
-    game
-    tensorflow
-)
-
-# SGF recorder
+# SGF recorder (no TensorFlow dependency)
 add_library(sgf_recorder
     sgf_recorder.cc
     sgf_recorder.h
@@ -27,16 +20,24 @@ target_link_libraries(sgf_recorder PUBLIC
     absl::strings
 )
 
+# TF Example proto (uses standalone protobuf, not TensorFlow)
+add_library(make_tf_example INTERFACE)
+target_sources(make_tf_example INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/make_tf_example.h)
+target_link_libraries(make_tf_example INTERFACE
+    game
+    tf_example_proto
+)
+
 add_library(tf_recorder
     tf_recorder.cc
     tf_recorder.h
 )
 target_link_libraries(tf_recorder PUBLIC
     make_tf_example
+    tfrecord
     constants
     core_filepath
     game
-    tensorflow
     absl::check
     absl::status
     absl::strings

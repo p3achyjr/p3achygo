@@ -6,7 +6,6 @@ add_library(filename_buffer
 target_link_libraries(filename_buffer PUBLIC
     constants
     core_impl
-    tensorflow
     absl::flat_hash_set
 )
 
@@ -22,9 +21,9 @@ add_library(shuffler
 )
 target_link_libraries(shuffler PUBLIC
     filename_buffer
+    tfrecord
     core_impl
     data_filename_format
-    tensorflow
     absl::flat_hash_set
     absl::log
     absl::check

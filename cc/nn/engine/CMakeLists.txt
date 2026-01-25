@@ -9,20 +9,22 @@ add_library(go_features
 target_link_libraries(go_features PUBLIC
     constants
     game_hdrs
-    tensorflow
     absl::status
 )
 
 
+# go_dataset (uses standalone protobuf, not TensorFlow)
 add_library(go_dataset
     go_dataset.cc
     go_dataset.h
 )
 target_link_libraries(go_dataset PUBLIC
     go_features
+    tfrecord
+    tf_example_proto
     constants
     game_hdrs
-    tensorflow
+    absl::check
 )
 
 # Engine header-only interface
@@ -45,13 +47,14 @@ if(USE_TENSORFLOW)
     )
 else()
     # Dummy tf_engine for non-TensorFlow builds
-    add_library(tf_engine INTERFACE)
-    target_sources(tf_engine INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/tf_engine.h)
-    target_link_libraries(tf_engine INTERFACE
+    add_library(tf_engine
+        tf_engine_dummy.cc
+        tf_engine.h
+    )
+    target_link_libraries(tf_engine PUBLIC
         engine_hdr
         game_hdrs
-        tensorflow
-        absl::flat_hash_map
+        absl::log
         absl::status
     )
 endif()
@@ -69,10 +72,15 @@ if(USE_CUDA AND (USE_TENSORRT_RTX OR USE_TENSORRT))
     )
 
     # Add TensorRT include directories
-    target_include_directories(trt_utils PUBLIC
-        /opt/tensorrt-rtx/include
-        /opt/tensorrt/include
-    )
+    if (USE_TENSORRT_RTX)
+        target_include_directories(trt_utils PUBLIC
+            /opt/tensorrt-rtx/include
+        )
+    else()
+        target_include_directories(trt_utils PUBLIC
+            /opt/tensorrt/include
+        )
+    endif()
 
     add_library(trt_engine
         trt_engine.cc
@@ -102,7 +110,6 @@ if(USE_CUDA AND (USE_TENSORRT_RTX OR USE_TENSORRT))
             trt_utils
             constants
             game_hdrs
-            tensorflow
             CUDA::cudart
             absl::log
             absl::check

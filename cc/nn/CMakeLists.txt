@@ -29,7 +29,6 @@ else()
         create_tensor_shape
         constants
         game
-        tensorflow
         absl::status
     )
 endif()
@@ -50,8 +49,6 @@ target_link_libraries(nn_interface
     absl::log
     absl::status
     absl::inlined_vector
-  PRIVATE
-    tensorflow
 )
 
 # NN umbrella library
