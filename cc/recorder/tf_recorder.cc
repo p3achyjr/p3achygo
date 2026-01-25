@@ -8,19 +8,19 @@
 #include "cc/core/filepath.h"
 #include "cc/core/probability.h"
 #include "cc/data/filename_format.h"
+#include "cc/data/tfrecord/record_writer.h"
 #include "cc/game/board.h"
 #include "cc/game/color.h"
 #include "cc/recorder/make_tf_example.h"
-#include "tensorflow/core/example/example.pb.h"
-#include "tensorflow/core/lib/io/record_writer.h"
+#include "example.pb.h"
 
 namespace recorder {
 namespace {
 
 using namespace ::game;
 
-using ::tensorflow::io::RecordWriter;
-using ::tensorflow::io::RecordWriterOptions;
+using ::data::RecordWriter;
+using ::data::RecordWriterOptions;
 
 using ::core::FilePath;
 
@@ -48,6 +48,7 @@ class TfRecorderImpl final : public TfRecorder {
                   const Game& game, const ImprovedPolicies& mcts_pis,
                   const std::vector<uint8_t>& move_trainables,
                   const std::vector<float>& root_qs,
+                  const std::vector<float>& root_scores,
                   const std::vector<float>& klds) override;
   void Flush() override;
 
@@ -58,6 +59,7 @@ class TfRecorderImpl final : public TfRecorder {
     ImprovedPolicies mcts_pis;
     std::vector<uint8_t> move_trainables;
     std::vector<float> root_qs;
+    std::vector<float> root_scores;
     std::vector<float> klds;
   };
 
@@ -86,13 +88,16 @@ void TfRecorderImpl::RecordGame(int thread_id, const Board& init_board,
                                 const ImprovedPolicies& mcts_pis,
                                 const std::vector<uint8_t>& move_trainables,
                                 const std::vector<float>& root_qs,
+                                const std::vector<float>& root_scores,
                                 const std::vector<float>& klds) {
   CHECK(game.has_result());
   CHECK(game.num_moves() == mcts_pis.size() &&
         game.num_moves() == move_trainables.size() &&
-        game.num_moves() == root_qs.size() && game.num_moves() == klds.size());
-  thread_records_[thread_id].emplace_back(
-      Record{init_board, game, mcts_pis, move_trainables, root_qs, klds});
+        game.num_moves() == root_qs.size() &&
+        game.num_moves() == root_scores.size() &&
+        game.num_moves() == klds.size());
+  thread_records_[thread_id].emplace_back(Record{
+      init_board, game, mcts_pis, move_trainables, root_qs, root_scores, klds});
   ++thread_game_counts_[thread_id];
 }
 
@@ -125,14 +130,12 @@ void TfRecorderImpl::Flush() {
       FilePath(path_) / absl::StrFormat(data::kChunkFormat, gen_, batch_num_,
                                         num_games, num_records, timestamp,
                                         worker_id_);
-  std::unique_ptr<tensorflow::WritableFile> file;
-  TF_CHECK_OK(tensorflow::Env::Default()->NewWritableFile(path, &file));
 
-  // Create Writer.
-  RecordWriterOptions options;
-  options.compression_type = RecordWriterOptions::ZLIB_COMPRESSION;
+  // Create Writer with zlib compression.
+  RecordWriterOptions options = RecordWriterOptions::Zlib();
   options.zlib_options.compression_level = 2;
-  RecordWriter writer(file.get(), options);
+  RecordWriter writer(path, options);
+  CHECK(writer.Init().ok()) << "Failed to initialize RecordWriter";
 
   // Flush each thread.
   for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
@@ -148,6 +151,7 @@ void TfRecorderImpl::Flush() {
       const ImprovedPolicies& mcts_pis = record.mcts_pis;
       const std::vector<uint8_t>& move_trainables = record.move_trainables;
       const std::vector<float>& root_qs = record.root_qs;
+      const std::vector<float>& root_scores = record.root_scores;
       const size_t num_trainable_moves =
           std::accumulate(move_trainables.begin(), move_trainables.end(), 0,
                           [](size_t x, size_t y) { return x + y; });
@@ -176,17 +180,37 @@ void TfRecorderImpl::Flush() {
               mcts_pis[move_num];
           Color color = move.color;
           float z = game.result().winner == color ? 1.0 : -1.0;
-          float q30 =
-              move_num + 6 < game.num_moves() ? root_qs[move_num + 6] : z;
-          float q100 =
-              move_num + 16 < game.num_moves() ? root_qs[move_num + 16] : z;
-          float q200 =
-              move_num + 50 < game.num_moves() ? root_qs[move_num + 50] : z;
+          const auto exp_weighted_short_term_value_score =
+              [&](const float lambda,
+                  const int horizon) -> std::pair<float, float> {
+            float N = 0;
+            for (int i = 0; i <= horizon; ++i) {
+              N += std::pow(lambda, i);
+            }
+
+            float q_short_term = 0, score_short_term = 0;
+            for (int i = 0; i <= horizon; ++i) {
+              float v_mult = (i % 2 == 0) ? 1.0f : -1.0f;  // turn multiplier
+              q_short_term +=
+                  v_mult * std::pow(lambda, i) * root_qs[move_num + i];
+              score_short_term +=
+                  v_mult * std::pow(lambda, i) * root_scores[move_num + i];
+            }
+
+            return {q_short_term / N, score_short_term / N};
+          };
+          const auto [q6, q6_score] = exp_weighted_short_term_value_score(
+              5.0f / 6.0f, std::min(6, game.num_moves() - move_num - 1));
+          const auto [q16, q16_score] = exp_weighted_short_term_value_score(
+              15.0f / 16.0f, std::min(16, game.num_moves() - move_num - 1));
+          const auto [q50, q50_score] = exp_weighted_short_term_value_score(
+              49.0f / 50.0f, std::min(50, game.num_moves() - move_num - 1));
           tensorflow::Example example = MakeTfExample(
               board.position(), last_moves, board.GetStonesInAtari(),
               board.GetStonesWithLiberties(2), board.GetStonesWithLiberties(3),
-              pi, next_move.loc, game.result(), q30, q100, q200, move.color,
-              game.komi(), BOARD_LEN);
+              board.GetLadderedStones(), pi, next_move.loc, game.result(), q6,
+              q16, q50, q6_score, q16_score, q50_score, move.color, game.komi(),
+              BOARD_LEN);
           std::string data;
           example.SerializeToString(&data);
 
@@ -194,12 +218,12 @@ void TfRecorderImpl::Flush() {
           const float freq_weight =
               0.5F + 0.5F * (record.klds[move_num] / avg_kld);
           for (int i = 0; i < std::floor(freq_weight); ++i) {
-            TF_CHECK_OK(writer.WriteRecord(data));
+            CHECK(writer.WriteRecord(data).ok());
           }
 
           if (probability_.Uniform() <
               (freq_weight - std::floor(freq_weight))) {
-            TF_CHECK_OK(writer.WriteRecord(data));
+            CHECK(writer.WriteRecord(data).ok());
           }
         }
 
@@ -212,8 +236,7 @@ void TfRecorderImpl::Flush() {
   }
 
   // Close file.
-  TF_CHECK_OK(writer.Close());
-  TF_CHECK_OK(file->Close());
+  CHECK(writer.Close().ok());
 
   // Write .done file to indicate that we are done writing.
   std::string done_filename =

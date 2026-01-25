@@ -132,7 +132,7 @@ class GumbelEvaluator final {
 
   // Single Backward Step.
   void SingleBackup(TreeNode* node, TreeNode* child, game::Loc action,
-                    float leaf_q, float leaf_q_outcome,
+                    float leaf_q, float leaf_q_outcome, float leaf_score,
                     bool is_idempotent = false);
 
   // Leaf Evaluation module.

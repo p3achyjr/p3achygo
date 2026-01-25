@@ -80,7 +80,6 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
       cur_is_black ? config.cand_var_scale_cpuct : config.cur_var_scale_cpuct;
   bool use_mcgs_b = cur_is_black ? config.cur_use_mcgs : config.cand_use_mcgs;
   bool use_mcgs_w = cur_is_black ? config.cand_use_mcgs : config.cur_use_mcgs;
-  bool const log_mcts_trees = true;
 
   Game game;
   std::unique_ptr<NodeTable> node_table_b;
@@ -95,8 +94,9 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
   } else {
     node_table_w = std::make_unique<MctsNodeTable>();
   }
-  TreeNode* btree = node_table_b->GetOrCreate(game.board().hash());
-  TreeNode* wtree = node_table_w->GetOrCreate(game.board().hash());
+  // Both trees start at the empty board with BLACK to move
+  TreeNode* btree = node_table_b->GetOrCreate(game.board().hash(), BLACK);
+  TreeNode* wtree = node_table_w->GetOrCreate(game.board().hash(), BLACK);
   Color player_resigned = EMPTY;
 
   // Track root history for tree logging
@@ -117,18 +117,20 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
     GumbelEvaluator& gumbel = color_to_move == BLACK ? gumbel_b : gumbel_w;
 
     // NN statistics.
-    float cur_qz_nn = cur_tree->outcome_est;
-    float cur_score_est_nn = cur_tree->score_est;
-    float cand_qz_nn = cand_tree->outcome_est;
-    float cand_score_est_nn = cand_tree->score_est;
+    float cur_qz_nn = cur_tree->init_outcome_est;
+    float cur_score_est_nn = cur_tree->init_score_est;
+    float cand_qz_nn = cand_tree->init_outcome_est;
+    float cand_score_est_nn = cand_tree->init_score_est;
 
     // Pre-search statistics.
     float cur_n_pre = N(cur_tree);
     float cur_q_pre = V(cur_tree);
     float cur_q_outcome_pre = VOutcome(cur_tree);
+    float cur_score_pre = Score(cur_tree);
     float cand_n_pre = N(cand_tree);
     float cand_q_pre = V(cand_tree);
     float cand_q_outcome_pre = VOutcome(cand_tree);
+    float cand_score_pre = Score(cand_tree);
 
     // Search.
     int n = color_to_move == BLACK ? n_b : n_w;
@@ -163,9 +165,11 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
     float cur_n_post = N(cur_tree);
     float cur_q_post = V(cur_tree);
     float cur_q_outcome_post = VOutcome(cur_tree);
+    float cur_score_post = Score(cur_tree);
     float cand_n_post = N(cand_tree);
     float cand_q_post = V(cand_tree);
     float cand_q_outcome_post = VOutcome(cand_tree);
+    float cand_score_post = Score(cand_tree);
 
     // Commit move changes.
     Loc move = gumbel_res.mcts_move;
@@ -177,24 +181,22 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
     TreeNode* next_player = player_tree->children[move];
     TreeNode* next_opp = opp_tree->children[move];
     if (!next_player) {
-      next_player = player_table->GetOrCreate(game.board().hash());
+      // After the move, it's the opponent's turn (color_to_move was already flipped)
+      next_player = player_table->GetOrCreate(game.board().hash(), color_to_move);
     }
     if (!next_opp) {
-      next_opp = opp_table->GetOrCreate(game.board().hash());
+      // After the move, it's the opponent's turn (color_to_move was already flipped)
+      next_opp = opp_table->GetOrCreate(game.board().hash(), color_to_move);
     }
 
     int num_nodes_reaped = 0, reap_time_us = 0;
-    if (log_mcts_trees) {
-      root_history.emplace_back(player_tree);
-    } else {
-      auto reap_begin = std::chrono::steady_clock::now();
-      num_nodes_reaped += player_table->Reap(next_player);
-      num_nodes_reaped += opp_table->Reap(next_opp);
-      auto reap_end = std::chrono::steady_clock::now();
-      reap_time_us = std::chrono::duration_cast<std::chrono::microseconds>(
-                         reap_end - reap_begin)
-                         .count();
-    }
+    auto reap_begin = std::chrono::steady_clock::now();
+    num_nodes_reaped += player_table->Reap(next_player);
+    num_nodes_reaped += opp_table->Reap(next_opp);
+    auto reap_end = std::chrono::steady_clock::now();
+    reap_time_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                       reap_end - reap_begin)
+                       .count();
 
     player_tree = next_player;
     opp_tree = next_opp;
@@ -229,26 +231,29 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
         << "\n  Score: " << cur_score_est_nn << "\n";
       s << "(" << root_color
         << ") Cur Tree Stats, Pre-Search :\n  N: " << cur_n_pre
-        << "\n  Q: " << cur_q_pre << "\n  Q_z: " << cur_q_outcome_pre << "\n";
+        << "\n  Q: " << cur_q_pre << "\n  Q_z: " << cur_q_outcome_pre
+        << "\n  Score: " << cur_score_pre << "\n";
       s << "(" << root_color
         << ") Cur Tree Stats, Post-Search :\n  N: " << cur_n_post
-        << "\n  Q: " << cur_q_post << "\n  Q_z: " << cur_q_outcome_post << "\n";
+        << "\n  Q: " << cur_q_post << "\n  Q_z: " << cur_q_outcome_post
+        << "\n  Score: " << cur_score_post << "\n";
       s << "(" << root_color << ") Cand Tree NN Stat:\n  Q_z: " << cand_qz_nn
         << "\n  Score: " << cand_score_est_nn << "\n";
       s << "(" << root_color
         << ") Cand Tree Stats, Pre-Search :\n  N: " << cand_n_pre
-        << "\n  Q: " << cand_q_pre << "\n  Q_z: " << cand_q_outcome_pre << "\n";
+        << "\n  Q: " << cand_q_pre << "\n  Q_z: " << cand_q_outcome_pre
+        << "\n  Score: " << cand_score_pre << "\n";
       s << "(" << root_color
         << ") Cand Tree Stats, Post-Search :\n  N: " << cand_n_post
         << "\n  Q: " << cand_q_post << "\n  Q_z: " << cand_q_outcome_post
-        << "\n";
+        << "\n  Score: " << cand_score_post << "\n";
       s << "Player to Move: " << ToString(color_to_move) << ", "
         << (color_to_move == BLACK ? (cur_is_black ? "CUR" : "CAND")
                                    : (cur_is_black ? "CAND" : "CUR"))
         << "\n";
       s << "Board:\n" << game.board() << "\n";
       s << "Nodes Reaped: " << num_nodes_reaped
-        << ", Reap Time: " << reap_time_us << "\n";
+        << ", Reap Time: " << reap_time_us << "us\n";
       s << "Search Took " << search_dur << "us. Search EMA: " << search_dur_ema
         << "us.\n";
 
@@ -290,6 +295,6 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
 
   const std::string& b_name = cur_is_black ? cur_name : cand_name;
   const std::string& w_name = cur_is_black ? cand_name : cur_name;
-  recorder->RecordEvalGame(thread_id, game, b_name, w_name, root_history);
+  recorder->RecordEvalGame(thread_id, game, b_name, w_name);
   result.set_value(EvalResult{winner, game.num_moves()});
 }

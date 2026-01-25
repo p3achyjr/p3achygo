@@ -11,7 +11,6 @@
 #include "cc/core/probability.h"
 #include "cc/shuffler/filename_buffer.h"
 #include "cc/shuffler/tf_record_watcher.h"
-#include "tensorflow/core/platform/tstring.h"
 
 namespace shuffler {
 
@@ -49,7 +48,7 @@ class ChunkManager final {
 
  private:
   std::optional<std::string> PopFile();
-  void AppendToChunk(::tensorflow::tstring&& proto);
+  void AppendToChunk(std::string&& proto);
   void FsThread();  // runs in `fs_thread_`.
 
   const std::string dir_;
@@ -66,7 +65,7 @@ class ChunkManager final {
   absl::Mutex mu_;
   absl::CondVar cv_;
 
-  std::deque<::tensorflow::tstring> chunk_;
+  std::deque<std::string> chunk_;
 
   // thread to scan and update file list.
   std::atomic<bool> running_;

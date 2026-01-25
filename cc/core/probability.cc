@@ -29,4 +29,11 @@ float Probability::Uniform() {
   return res - 1.0f;
 }
 
+float Probability::Gaussian() {
+  const float u0 = Uniform();
+  const float u1 = Uniform();
+  const float z = std::sqrt(-2 * std::log(u0)) * std::sin(2 * M_PI * u1);
+  return z;
+}
+
 }  // namespace core

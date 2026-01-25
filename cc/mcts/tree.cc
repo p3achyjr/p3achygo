@@ -56,56 +56,6 @@ void AdvanceState(TreeNode* node) {
   }
 }
 
-std::unique_ptr<TreeNode> CloneTree(const TreeNode* node) {
-  if (node == nullptr) {
-    return nullptr;
-  }
-
-  // Create a new node with the same board hash
-  auto cloned = std::make_unique<TreeNode>(node->board_hash);
-
-  // Copy all scalar fields
-  cloned->state = node->state;
-  cloned->is_terminal = node->is_terminal;
-  cloned->color_to_move = node->color_to_move;
-  cloned->n = node->n;
-  cloned->w = node->w;
-  cloned->v = node->v;
-#ifdef V_CATEGORICAL
-  cloned->v_categorical = node->v_categorical;
-#endif
-  cloned->w_outcome = node->w_outcome;
-  cloned->v_outcome = node->v_outcome;
-  cloned->v_outcome_var = node->v_outcome_var;
-  cloned->max_child_n = node->max_child_n;
-  cloned->child_visits = node->child_visits;
-  cloned->move_logits = node->move_logits;
-  cloned->move_probs = node->move_probs;
-  cloned->outcome_est = node->outcome_est;
-  cloned->score_est = node->score_est;
-  cloned->init_util_est = node->init_util_est;
-
-  // Recursively clone children that have been visited (n > 0)
-  for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
-    if (node->children[i] != nullptr && node->child_visits[i] > 0) {
-      cloned->children[i] = CloneTree(node->children[i]).release();
-    }
-  }
-
-  return cloned;
-}
-
-void DeleteClonedTree(TreeNode* node) {
-  if (node == nullptr) {
-    return;
-  }
-  for (int a = 0; a < node->children.size(); ++a) {
-    TreeNode* child = node->children[a];
-    DeleteClonedTree(child);
-  }
-  delete node;
-}
-
 #ifdef V_CATEGORICAL
 std::string VCategoricalHistogram(TreeNode* node) {
   if (node == nullptr) return "";

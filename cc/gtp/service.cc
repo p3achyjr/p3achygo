@@ -147,7 +147,7 @@ ServiceImpl::ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
       k_(k),
       use_puct_(use_puct),
       analysis_running_(false) {
-  root_history_.emplace_back(node_table_->GetOrCreate(game_->board().hash()));
+  root_history_.emplace_back(node_table_->GetOrCreate(game_->board().hash(), current_color_));
 }
 
 Response<int> ServiceImpl::GtpProtocolVersion(std::optional<int> id) {
@@ -297,7 +297,8 @@ Response<std::string> ServiceImpl::GtpPlayDbg(std::optional<int> id,
   dbg_str += "\nTree Stats:\n  N: " +
              std::to_string(static_cast<int>(N(current_root()))) +
              "\n  V: " + std::to_string(V(current_root())) +
-             "\n  Score: " + std::to_string(current_root()->score_est) + "\n";
+             "\n  Score: " + std::to_string(current_root()->init_score_est) +
+             "\n";
 
   MakeMove(move.color, move.loc);
   dbg_str += "\n" + GtpBoardString(game_->board());
@@ -324,7 +325,8 @@ Response<std::string> ServiceImpl::GtpGenMoveDbg(std::optional<int> id,
       "\n  V StdDev: " + std::to_string(std::sqrt(VVar(current_root()))) +
       "\n  V_z StdDev: " +
       std::to_string(std::sqrt(VOutcomeVar(current_root()))) + "\n  Score: " +
-      std::to_string(current_root() ? current_root()->score_est : 0.0f) + "\n";
+      std::to_string(current_root() ? current_root()->init_score_est : 0.0f) +
+      "\n";
 
   dbg_str += "Top Policy Moves:\n";
   for (const auto& move : top_policy_moves) {
@@ -417,7 +419,8 @@ GumbelResult ServiceImpl::GenMoveCommon(Color color) {
     game_->PlayMove(kPassLoc, current_color_);
     TreeNode* next_root = root_history_.back()->children[kPassLoc];
     if (!next_root) {
-      next_root = node_table_->GetOrCreate(game_->board().hash());
+      // After the pass, it's the opponent's (color's) turn
+      next_root = node_table_->GetOrCreate(game_->board().hash(), color);
     }
 
     root_history_.emplace_back(next_root);
@@ -456,7 +459,7 @@ void ServiceImpl::MakeMove(Color color, Loc loc) {
 
   TreeNode* next_root = root_history_.back()->children[loc];
   if (!next_root) {
-    next_root = node_table_->GetOrCreate(game_->board().hash());
+    next_root = node_table_->GetOrCreate(game_->board().hash(), current_color_);
   }
   root_history_.emplace_back(next_root);
 }
@@ -464,8 +467,9 @@ void ServiceImpl::MakeMove(Color color, Loc loc) {
 void ServiceImpl::ClearBoard() {
   game_ = std::make_unique<Game>(false /* prohibit_pass_alive */);
   node_table_ = std::make_unique<MctsNodeTable>();
+  current_color_ = BLACK;
   root_history_.clear();
-  root_history_.emplace_back(node_table_->GetOrCreate(game_->board().hash()));
+  root_history_.emplace_back(node_table_->GetOrCreate(game_->board().hash(), current_color_));
 }
 }  // namespace
 

@@ -281,8 +281,9 @@ class GroupTracker final {
 class Board final {
  public:
   using BoardData = std::array<Color, BOARD_LEN * BOARD_LEN>;
-  Board();
-  Board(bool prohibit_pass_alive);
+  Board(float komi = 7.5);
+  Board(int handicap, float komi);
+  Board(bool prohibit_pass_alive, float komi = 7.5);
   ~Board() = default;
 
   inline int at(int i, int j) const { return board_[i * BOARD_LEN + j]; }

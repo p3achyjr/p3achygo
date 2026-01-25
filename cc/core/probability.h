@@ -27,6 +27,9 @@ class Probability final {
   // returns a sample x ~ Uniform(0, 1)
   float Uniform();
 
+  // returns a sample x ~ Gaussian(0, 1)
+  float Gaussian();
+
  private:
   PRng prng_;
 };

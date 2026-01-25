@@ -39,17 +39,18 @@ struct TreeNode final {
   float w_outcome = 0;
   float v_outcome = 0;
   float v_outcome_var = 0;
+  float score = 0;
 
   int max_child_n = 0;
 
   std::array<TreeNode*, constants::kMaxMovesPerPosition> children{};
   std::array<int, constants::kMaxMovesPerPosition> child_visits{};
 
-  // write-once
+  // initial evaluation (conceptual write-once)
   std::array<float, constants::kMaxMovesPerPosition> move_logits{};
   std::array<float, constants::kMaxMovesPerPosition> move_probs{};
-  float outcome_est = 0;
-  float score_est = 0;
+  float init_outcome_est = 0;
+  float init_score_est = 0;
   float init_util_est = 0;  // mix value estimate and score estimate.
 
   inline TreeNode* child(int a) const {
@@ -102,6 +103,10 @@ inline float QOutcomeVar(const TreeNode* node, int action) {
   return node == nullptr ? 1.0f : VOutcomeVar(node->children[action]);
 }
 
+inline float Score(const TreeNode* node) {
+  return node == nullptr ? 0 : node->score;
+}
+
 inline float MaxN(const TreeNode* node) {
   if (node == nullptr) return 0;
 
@@ -115,24 +120,14 @@ inline float SumChildrenN(const TreeNode* node) {
 }
 
 inline float ChildScore(const TreeNode* node, int action) {
-  return !node->children[action] ? node->score_est
-                                 : -node->children[action]->score_est;
+  return !node->children[action] ? node->init_score_est
+                                 : -node->children[action]->init_score_est;
 }
 
 // Returns LCB for the value of a child node.
 float Lcb(const TreeNode* node, int action);
 
 void AdvanceState(TreeNode* node);
-
-// Deep copies a tree node and all its visited children.
-// Returns nullptr if the input is nullptr.
-// If the underlying structure was originally a DAG, converts it to a tree.
-std::unique_ptr<TreeNode> CloneTree(const TreeNode* node);
-
-// Recursively deletes a cloned tree and all its children.
-// Only use this for trees created by CloneTree, NOT for trees owned by
-// NodeTable.
-void DeleteClonedTree(TreeNode* node);
 
 #ifdef V_CATEGORICAL
 std::string VCategoricalHistogram(TreeNode* node);

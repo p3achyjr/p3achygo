@@ -43,11 +43,14 @@ static constexpr float kOpeningExploreProb = 1.0f;
 // Probability of playing from opening book.
 static constexpr float kPlayFromBookProb = .02f;
 
-// Thresholds at which to compute pass-alive regions.
-static constexpr int kComputePAMoveNums[] = {175, 200, 250, 300, 350, 400};
+// Probability of handicap game.
+static constexpr float kHandicapGame = .05f;
 
-// Probability that game is selected for full tree logging.
-static constexpr float kLogFullTreeProb = .002;
+// Thresholds at which to compute pass-alive regions.
+static constexpr int kComputePAMoveNums[] = {200, 250, 300, 350, 400};
+
+// Probability that game is selected for full tree logging (currently broken).
+static constexpr float kLogFullTreeProb = 0.0f;  // .002;
 
 // Probability that we pick a move for training.
 static constexpr float kMoveSelectedForTrainingProb = .25;
@@ -86,8 +89,12 @@ void AddNewInitState(GoExploitBuffer* buffer, const Game& game,
 }
 
 InitState GetInitState(Probability& probability, GoExploitBuffer* buffer) {
-  InitState s0 = InitState{
-      Board(), {kNoopMove, kNoopMove, kNoopMove, kNoopMove, kNoopMove}, BLACK};
+  const float komi =
+      std::round(14 + probability.Gaussian() * 6) / 2.0f;  // Normal(7, 1)
+  InitState s0 =
+      InitState{Board(komi),
+                {kNoopMove, kNoopMove, kNoopMove, kNoopMove, kNoopMove},
+                BLACK};
   float p = probability.Uniform();
   if (p <= kPlayFromBookProb) {
     const int index = probability.Uniform() * kOpeningBook.size();
@@ -113,6 +120,12 @@ InitState GetInitState(Probability& probability, GoExploitBuffer* buffer) {
     }
 
     return seen_state.value();
+  } else if (p <= kPlayFromBookProb + kUseSeenStateProb + kHandicapGame) {
+    int handicap = std::floor(probability.Uniform() * 3 + 2);
+    float komi = (handicap - 2) * 14 + 20;  // katago ;)
+    return InitState{Board(handicap, komi),
+                     {kNoopMove, kNoopMove, kNoopMove, kNoopMove, kNoopMove},
+                     WHITE};
   }
 
   return s0;
@@ -152,13 +165,16 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     std::unique_ptr<NodeTable> node_table = std::make_unique<MctsNodeTable>();
 
     // Search Tree.
-    TreeNode* root_node = node_table->GetOrCreate(game.board().hash());
+    TreeNode* root_node = node_table->GetOrCreate(game.board().hash(), color_to_move);
 
     // Completed Q-values for each timestep.
     std::vector<std::array<float, constants::kMaxMovesPerPosition>> mcts_pis;
 
     // Root Q values for each timestep (outcome only).
     std::vector<float> root_q_outcomes;
+
+    // Root Score values for each timestep.
+    std::vector<float> root_scores;
 
     // Whether the i'th move is trainable.
     std::vector<uint8_t> move_trainables;
@@ -290,8 +306,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       }();
 
       // NN Stats.
-      float qz_nn = root_node->outcome_est;
-      float score_nn = root_node->score_est;
+      float qz_nn = root_node->init_outcome_est;
+      float score_nn = root_node->init_score_est;
 
       // Pre Search Stats.
       int n_pre = N(root_node);
@@ -315,6 +331,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       int n_post = N(root_node);
       float q_post = V(root_node);
       float root_q_outcome = VOutcome(root_node);
+      float root_score = Score(root_node);
 
       Loc nn_move = gumbel_res.nn_move;
       Loc move = gumbel_res.mcts_move;
@@ -331,6 +348,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       mcts_pis.push_back(gumbel_res.pi_improved);
       move_trainables.push_back(is_move_selected_for_training);
       root_q_outcomes.push_back(root_q_outcome);
+      root_scores.push_back(root_score);
       klds.push_back(gumbel_res.kld);
       if (-std::abs(root_q_outcome) < kDownBadThreshold) {
         ++num_consecutive_down_bad_moves;
@@ -351,7 +369,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       if (!next_root) {
         // this is possible if we draw directly from policy, or if pass is the
         // only legal move found in search.
-        next_root = node_table->GetOrCreate(game.board().hash());
+        next_root = node_table->GetOrCreate(game.board().hash(), color_to_move);
       }
 
       // Store root for tree logging if enabled.
@@ -442,7 +460,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         s << "(" << ToString(root_node->color_to_move)
           << ") Next Root Visits: " << root_node->n
           << " Value: " << root_node->v << " Outcome: " << root_node->v_outcome
-          << " Score: " << root_node->score_est << "\n";
+          << " Score: " << root_node->init_score_est << "\n";
         s << "Board:\n" << game.board() << "\n";
         s << "Nodes Reaped: " << num_nodes_reaped
           << ", Reap Time: " << reap_time_us << "\n";
@@ -454,6 +472,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     }
 
     // Cleanup Phase.
+#if 0
     int num_cleanup_moves = 0;
     while (IsRunning() && num_cleanup_moves < 30 && !game.IsAllPassAlive()) {
       auto begin = std::chrono::high_resolution_clock::now();
@@ -472,8 +491,15 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
       TreeNode* next_root = root_node->children[move];
       if (!next_root) {
-        next_root = node_table->GetOrCreate(game.board().hash());
+        next_root = node_table->GetOrCreate(game.board().hash(), color_to_move);
       }
+      int num_nodes_reaped = 0, reap_time_us = 0;
+      auto reap_begin = std::chrono::steady_clock::now();
+      num_nodes_reaped = node_table->Reap(next_root);
+      auto reap_end = std::chrono::steady_clock::now();
+      reap_time_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                         reap_end - reap_begin)
+                         .count();
       root_node = next_root;
       ++num_cleanup_moves;
 
@@ -500,6 +526,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
       LOG_TO_SINK(INFO, sink) << s.str();
     }
+#endif
 
     nn_interface->UnregisterThread(thread_id);
     if (!IsRunning()) break;
@@ -511,8 +538,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
     auto begin = std::chrono::high_resolution_clock::now();
     game_recorder->RecordGame(thread_id, init_state.board, game, mcts_pis,
-                              move_trainables, root_q_outcomes, klds,
-                              search_roots);
+                              move_trainables, root_q_outcomes, root_scores,
+                              klds, search_roots);
     auto end = std::chrono::high_resolution_clock::now();
 
     LOG_TO_SINK(INFO, sink)

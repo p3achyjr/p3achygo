@@ -31,17 +31,17 @@ class GameRecorderImpl final : public GameRecorder {
   GameRecorderImpl(GameRecorderImpl&&) = delete;
   GameRecorderImpl& operator=(GameRecorderImpl&&) = delete;
 
-  void RecordGame(
-      int thread_id, const game::Board& init_board, const game::Game& game,
-      const ImprovedPolicies& mcts_pis,
-      const std::vector<uint8_t>& move_trainables,
-      const std::vector<float>& root_qs, const std::vector<float>& klds,
-      const std::vector<mcts::TreeNode*>& roots) override;
+  void RecordGame(int thread_id, const game::Board& init_board,
+                  const game::Game& game, const ImprovedPolicies& mcts_pis,
+                  const std::vector<uint8_t>& move_trainables,
+                  const std::vector<float>& root_qs,
+                  const std::vector<float>& root_scores,
+                  const std::vector<float>& klds,
+                  const std::vector<mcts::TreeNode*>& roots) override;
 
   void RecordEvalGame(int thread_id, const game::Game& game,
                       const std::string& b_name,
-                      const std::string& w_name,
-                      const std::vector<mcts::TreeNode*>& roots) override;
+                      const std::string& w_name) override;
 
   static std::unique_ptr<GameRecorderImpl> Create(std::string path,
                                                   int num_threads,
@@ -96,12 +96,14 @@ GameRecorderImpl::~GameRecorderImpl() {
   }
 }
 
-void GameRecorderImpl::RecordGame(
-    int thread_id, const game::Board& init_board, const game::Game& game,
-    const ImprovedPolicies& mcts_pis,
-    const std::vector<uint8_t>& is_move_trainable,
-    const std::vector<float>& root_qs, const std::vector<float>& klds,
-    const std::vector<mcts::TreeNode*>& roots) {
+void GameRecorderImpl::RecordGame(int thread_id, const game::Board& init_board,
+                                  const game::Game& game,
+                                  const ImprovedPolicies& mcts_pis,
+                                  const std::vector<uint8_t>& is_move_trainable,
+                                  const std::vector<float>& root_qs,
+                                  const std::vector<float>& root_scores,
+                                  const std::vector<float>& klds,
+                                  const std::vector<mcts::TreeNode*>& roots) {
   if (path_.empty()) {
     return;
   }
@@ -112,7 +114,7 @@ void GameRecorderImpl::RecordGame(
                               roots);
   }
   tf_recorder_->RecordGame(thread_id, init_board, game, mcts_pis,
-                           is_move_trainable, root_qs, klds);
+                           is_move_trainable, root_qs, root_scores, klds);
   thread_mus_[thread_id].Unlock();
 
   absl::MutexLock lock(&mu_);
@@ -124,15 +126,14 @@ void GameRecorderImpl::RecordGame(
 
 void GameRecorderImpl::RecordEvalGame(int thread_id, const game::Game& game,
                                       const std::string& b_name,
-                                      const std::string& w_name,
-                                      const std::vector<mcts::TreeNode*>& roots) {
+                                      const std::string& w_name) {
   if (path_.empty()) {
     return;
   }
 
   // Only log to SGF recorder. We also rely on flush-on-exit to flush SGFs.
   absl::MutexLock l(&thread_mus_[thread_id]);
-  sgf_recorder_->RecordEvalGame(thread_id, game, b_name, w_name, roots);
+  sgf_recorder_->RecordEvalGame(thread_id, game, b_name, w_name);
 }
 
 void GameRecorderImpl::IoThread() {

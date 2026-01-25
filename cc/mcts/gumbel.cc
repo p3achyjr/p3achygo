@@ -8,6 +8,7 @@
 #include "cc/constants/constants.h"
 #include "cc/core/util.h"
 #include "cc/core/vmath.h"
+#include "cc/game/board.h"
 #include "cc/game/game.h"
 #include "cc/game/loc.h"
 #include "cc/mcts/node_table.h"
@@ -302,15 +303,16 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
 
         // This branch should only trigger once in this search.
         if (!root->children[move_info.move_encoding]) {
-          root->children[move_info.move_encoding] =
-              node_table->GetOrCreate(search_game.board().hash());
+          // After the move, it's the opponent's turn
+          root->children[move_info.move_encoding] = node_table->GetOrCreate(
+              search_game.board().hash(), game::OppositeColor(color_to_move));
         }
         TreeNode* child = root->children[move_info.move_encoding];
         GumbelNonRootSearchPolicy search_policy;
         SearchPath search_path =
             Search(probability, search_game, node_table, child,
                    game::OppositeColor(color_to_move), color_to_move,
-                   root->score_est, &search_policy);
+                   root->init_score_est, &search_policy);
 
         // update tree
         Backward(search_path,
@@ -335,11 +337,13 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
   Loc raw_nn_move = game::AsLoc(Argmax(root->move_logits));
   GumbelResult result = {raw_nn_move, gmove_info[0].move_loc, {}};
 
+#if 0
+  result.pi_improved[gmove_info[0].move_encoding] = 1.0f;  // one-hot.
+#endif
+
   // Get improved policy from completed-Q values.
   result.pi_improved =
       ComputeRootImprovedPolicy(root, masked_logits, top_k_actions);
-
-  // result.pi_improved[gmove_info[0].move_encoding] = 1.0f;  // one-hot.
 
   // Populate stats for visited children.
   for (int i = 0; i < m; ++i) {
@@ -489,7 +493,7 @@ GumbelResult GumbelEvaluator::SearchRootPuct(
     Game search_game = game;
     SearchPath search_path =
         Search(probability, search_game, node_table, root, color_to_move,
-               color_to_move, root->score_est, &search_policy);
+               color_to_move, root->init_score_est, &search_policy);
     Backward(search_path, /*use_idempotent_updates=*/node_table->is_graph());
   }
 
@@ -560,10 +564,19 @@ GumbelEvaluator::SearchPath GumbelEvaluator::Search(
     auto& [action, node] = path.back();
     Loc selected_action =
         search_policy->SelectNextAction(node, game, color_to_move);
-    game.PlayMove(selected_action, color_to_move);
+    CHECK(game.PlayMove(selected_action, color_to_move));
+    if (game.IsGameOver()) {
+      // prevent cycles.
+      action = selected_action;
+      AdvanceState(node);
+      break;
+    }
     if (!node->children[selected_action]) {
-      node->children[selected_action] =
-          node_table->GetOrCreate(game.board().hash());
+      // After the move, it's the opponent's turn
+      Color next_color = game::OppositeColor(color_to_move);
+      TreeNode* child =
+          node_table->GetOrCreate(game.board().hash(), next_color);
+      node->children[selected_action] = child;
     }
     action = selected_action;
     path.push_back({game::kNoopLoc, node->children[selected_action]});
@@ -595,6 +608,7 @@ void GumbelEvaluator::Backward(SearchPath& path, bool use_idempotent_updates) {
   auto [_, leaf] = path.back();
   float leaf_q = leaf->v;
   float leaf_q_outcome = leaf->v_outcome;
+  float leaf_score = leaf->init_score_est;
 
   for (int i = path.size() - 2; i >= 0; --i) {
     auto [parent_action, parent] = path[i];
@@ -603,37 +617,45 @@ void GumbelEvaluator::Backward(SearchPath& path, bool use_idempotent_updates) {
         leaf->color_to_move == parent->color_to_move ? 1.0f : -1.0f;
 
     SingleBackup(parent, child, parent_action, leaf_q_mult * leaf_q,
-                 leaf_q_mult * leaf_q_outcome, use_idempotent_updates);
+                 leaf_q_mult * leaf_q_outcome, leaf_q_mult * leaf_score,
+                 leaf_q_mult * use_idempotent_updates);
   }
 }
 
 void GumbelEvaluator::SingleBackup(TreeNode* node, TreeNode* child,
                                    game::Loc action, float leaf_q,
-                                   float leaf_q_outcome, bool is_idempotent) {
+                                   float leaf_q_outcome, float leaf_score,
+                                   bool is_idempotent) {
   const int a = game::AsIndex(action, BOARD_LEN);
   float v_old = node->v, v_outcome_old = node->v_outcome, n_old = node->n;
   node->n += 1;
   node->child_visits[a] += 1;
   if (is_idempotent) {
     // recompute.
-    float w = 0, w_outcome = 0;
+    float w = node->init_util_est, w_outcome = node->init_outcome_est,
+          total_score = node->init_score_est;
     for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
       // flip signs.
       w -= (node->child_visits[a] * V(node->child(a)));
       w_outcome -= (node->child_visits[a] * VOutcome(node->child(a)));
+      total_score -= (node->child_visits[a] * Score(node->child(a)));
     }
     float v = w / node->n;
     float v_outcome = w_outcome / node->n;
+    float score = total_score / node->n;
     node->w = w;
     node->w_outcome = w_outcome;
     node->v = v;
     node->v_outcome = v_outcome;
+    node->score = score;
   } else {
     // incremental
     node->w += leaf_q;
     node->w_outcome += leaf_q_outcome;
     node->v = node->w / node->n;
     node->v_outcome = node->w_outcome / node->n;
+    node->score = leaf_score * (1.0f / N(node)) +
+                  node->score * ((N(node) - 1.0f) / N(node));
   }
   int child_n = node->child_visits[a];
   if (child_n > node->max_child_n) {

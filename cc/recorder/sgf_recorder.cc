@@ -27,6 +27,84 @@ using ::core::FilePath;
 using ::mcts::TreeNode;
 
 static constexpr int kMaxNumProperties = 32;
+static constexpr int kMaxCallDepth = 32;
+
+// Currently broken for MCGS
+#if 0
+TreeNode* CloneTree(const TreeNode* node, std::optional<int> blocked_action,
+                    int call_depth = 0) {
+  if (node == nullptr) {
+    return nullptr;
+  }
+
+  // Create a new node with the same board hash
+  auto cloned = new TreeNode(node->board_hash);
+
+  // Copy all scalar fields
+  cloned->state = node->state;
+  cloned->is_terminal = node->is_terminal;
+  cloned->color_to_move = node->color_to_move;
+  cloned->n = node->n;
+  cloned->w = node->w;
+  cloned->v = node->v;
+#ifdef V_CATEGORICAL
+  cloned->v_categorical = node->v_categorical;
+#endif
+  cloned->w_outcome = node->w_outcome;
+  cloned->v_outcome = node->v_outcome;
+  cloned->v_outcome_var = node->v_outcome_var;
+  cloned->max_child_n = node->max_child_n;
+  cloned->child_visits = node->child_visits;
+  cloned->move_logits = node->move_logits;
+  cloned->move_probs = node->move_probs;
+  cloned->init_outcome_est = node->init_outcome_est;
+  cloned->init_score_est = node->init_score_est;
+  cloned->init_util_est = node->init_util_est;
+
+  // Recursively clone children that have been visited (n > 0)
+  for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
+    if (node->children[i] != nullptr && node->child_visits[i] > 0 &&
+        i != blocked_action.value_or(-1)) {
+      cloned->children[i] =
+          CloneTree(node->children[i], std::nullopt, call_depth + 1);
+    }
+  }
+
+  return cloned;
+}
+
+void DeleteClonedTree(TreeNode* node) {
+  if (node == nullptr) {
+    return;
+  }
+  for (int a = 0; a < node->children.size(); ++a) {
+    TreeNode* child = node->children[a];
+    DeleteClonedTree(child);
+  }
+  delete node;
+}
+
+std::vector<TreeNode*> ReconstructRoots(
+    const game::Game& game, const std::vector<mcts::TreeNode*>& roots) {
+  if (roots.empty()) return {};
+  std::vector<TreeNode*> cloned_roots;
+  Loc last_move = kNoopLoc;
+  for (int move_num = 0; move_num < game.num_moves(); ++move_num) {
+    game::Move move = game.move(move_num);
+    TreeNode* root = CloneTree(roots[move_num], move.loc);
+    if (!cloned_roots.empty()) {
+      if (last_move >= 0) {
+        CHECK(cloned_roots.back()->children[last_move] == nullptr);
+      }
+      cloned_roots.back()->children[move.loc] = root;
+      last_move = move.loc;
+    }
+    cloned_roots.push_back(root);
+  }
+
+  return cloned_roots;
+}
+#endif
 
 void PopulateHeader(SgfNode* root, float komi, game::Game::Result result,
                     const std::string& b_name, const std::string& w_name) {
@@ -53,7 +131,7 @@ void PopulateTree(SgfNode* sgf_node, TreeNode* node, Color color) {
       "Root Color: %s, N: %d, Q: %f, Q_z: %f, nn_outcome_est: %f, "
       "nn_score_est: %f",
       color == BLACK ? "B" : "W", node->n, node->v, node->v_outcome,
-      node->outcome_est, node->score_est);
+      node->init_outcome_est, node->init_score_est);
 
   sgf_node->AddProperty(std::make_unique<SgfCommentProp>(comment_string));
   for (const auto& [mv_index, child] : visited_children) {
@@ -116,8 +194,7 @@ class SgfRecorderImpl final : public SgfRecorder {
                   std::string w_name,
                   const std::vector<mcts::TreeNode*>& roots) override;
   void RecordEvalGame(int thread_id, const game::Game& game, std::string b_name,
-                      std::string w_name,
-                      const std::vector<mcts::TreeNode*>& roots) override;
+                      std::string w_name) override;
   void Flush() override;
 
  private:
@@ -128,13 +205,15 @@ class SgfRecorderImpl final : public SgfRecorder {
     std::string w_name;
 
     // Root node for each move of the game.
-    // Owns cloned copies of the trees to keep them alive until flush.
-    std::vector<std::unique_ptr<TreeNode>> roots;
+    // These are cloned and local to the recorder.
+    std::vector<TreeNode*> roots;
 
     ~Record() {
-      for (auto& root : roots) {
-        mcts::DeleteClonedTree(root.release());
+#if 0
+      if (!roots.empty()) {
+        DeleteClonedTree(roots.front());
       }
+#endif
     }
   };
 
@@ -161,13 +240,12 @@ void SgfRecorderImpl::RecordGame(int thread_id, const game::Game& game,
   CHECK(game.has_result());
 
   // Deep copy the trees to keep them alive until flush (only if non-empty)
-  std::vector<std::unique_ptr<TreeNode>> cloned_roots;
+  std::vector<TreeNode*> cloned_roots;
+#if 0
   if (!roots.empty()) {
-    cloned_roots.reserve(roots.size());
-    for (TreeNode* root : roots) {
-      cloned_roots.push_back(mcts::CloneTree(root));
-    }
+    cloned_roots = ReconstructRoots(game, roots);
   }
+#endif
 
   std::vector<std::unique_ptr<Record>>& thread_records = records_[thread_id];
   auto record =
@@ -179,11 +257,9 @@ void SgfRecorderImpl::RecordGame(int thread_id, const game::Game& game,
   thread_records.push_back(std::move(record));
 }
 
-void SgfRecorderImpl::RecordEvalGame(
-    int thread_id, const game::Game& game, std::string b_name,
-    std::string w_name, const std::vector<mcts::TreeNode*>& roots) {
-  // Eval games always log with trees - same as RecordGame
-  RecordGame(thread_id, game, b_name, w_name, roots);
+void SgfRecorderImpl::RecordEvalGame(int thread_id, const game::Game& game,
+                                     std::string b_name, std::string w_name) {
+  RecordGame(thread_id, game, b_name, w_name, /*roots=*/{});
 }
 
 // Only one thread can call this function. Additionally, no thread can call
@@ -204,16 +280,8 @@ void SgfRecorderImpl::Flush() {
       int& game_counter =
           record->roots.empty() ? games_in_batch : games_with_trees_in_batch;
       std::string& sgf_string = record->roots.empty() ? sgfs : sgfs_with_trees;
-
-      // Convert unique_ptr vector to raw pointer vector
-      std::vector<TreeNode*> raw_roots;
-      raw_roots.reserve(record->roots.size());
-      for (const auto& root : record->roots) {
-        raw_roots.push_back(root.get());
-      }
-
       sgf_string += serializer.Serialize(
-          ToSgfNode(record->game, record->b_name, record->w_name, raw_roots)
+          ToSgfNode(record->game, record->b_name, record->w_name, record->roots)
               .get());
       sgf_string += "\n";
       ++game_counter;

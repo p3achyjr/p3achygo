@@ -1,18 +1,17 @@
 #include "cc/nn/engine/go_dataset.h"
 
-#include "tensorflow/core/example/example.pb.h"
-#include "tensorflow/core/example/feature_util.h"
-#include "tensorflow/core/lib/io/compression.h"
-#include "tensorflow/core/lib/io/record_reader.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "cc/data/tfrecord/record_reader.h"
+#include "cc/proto/feature_util.h"
+#include "example.pb.h"
 
 namespace nn {
 namespace {
+using ::data::RecordReaderOptions;
+using ::data::SequentialRecordReader;
 using ::tensorflow::Example;
 using ::tensorflow::GetFeatureValues;
-using ::tensorflow::tstring;
-using ::tensorflow::io::RecordReaderOptions;
-using ::tensorflow::io::SequentialRecordReader;
-using ::tensorflow::io::compression::kZlib;
 
 template <typename T>
 T ParseScalar(const std::string& s) {
@@ -31,10 +30,8 @@ std::array<T, N> ParseSequence(const std::string& s) {
 
 GoDataset::GoDataset(size_t batch_size, std::string ds_path)
     : index_(0), batch_size_(batch_size) {
-  std::unique_ptr<tensorflow::RandomAccessFile> file;
-  TF_CHECK_OK(tensorflow::Env::Default()->NewRandomAccessFile(ds_path, &file));
-  SequentialRecordReader reader(
-      file.get(), RecordReaderOptions::CreateRecordReaderOptions(kZlib));
+  SequentialRecordReader reader(ds_path, RecordReaderOptions::Zlib());
+  CHECK(reader.Init().ok()) << "Failed to initialize reader for: " << ds_path;
 
   int num_examples = 0;
   while (true) {
@@ -42,9 +39,9 @@ GoDataset::GoDataset(size_t batch_size, std::string ds_path)
     batch.resize(batch_size_);
     bool is_last_batch = false;
     for (int i = 0; i < batch_size_; ++i) {
-      tstring record;
+      std::string record;
       auto status = reader.ReadRecord(&record);
-      if (status.code() == tensorflow::error::OUT_OF_RANGE) {
+      if (absl::IsOutOfRange(status)) {
         is_last_batch = true;
         break;  // EOF reached
       } else if (!status.ok()) {

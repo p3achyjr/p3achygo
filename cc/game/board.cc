@@ -462,15 +462,43 @@ void GroupTracker::BensonSolver::RunBenson(GroupMap& group_map,
   }
 }
 
-Board::Board() : Board::Board(true /* prohibit_pass_alive */) {}
-Board::Board(bool prohibit_pass_alive)
+Board::Board(float komi) : Board::Board(true /* prohibit_pass_alive */, komi) {}
+Board::Board(int handicap, float komi)
+    : Board::Board(true /* prohibit_pass_alive */, komi) {
+  if (handicap < 2 || handicap > 4) {
+    return;
+  }
+
+  Zobrist::Hash hash = 0;
+  for (auto i = 0; i < BOARD_LEN; i++) {
+    for (auto j = 0; j < BOARD_LEN; j++) {
+      hash ^= zobrist_.hash_at(i, j, ZobristState(EMPTY));
+    }
+  }
+
+  constexpr std::array<Loc, 4> kHandicapStones = {Loc{16, 3}, Loc{3, 16},
+                                                  Loc{3, 3}, Loc{16, 16}};
+  for (int i = 0; i < handicap; ++i) {
+    const Loc stone = kHandicapStones[i];
+    SetLoc(stone, BLACK);
+    group_tracker_.Move(stone, BLACK);
+    hash ^= zobrist_.hash_at(stone.i, stone.j, ZobristState(EMPTY));
+    hash ^= zobrist_.hash_at(stone.i, stone.j, ZobristState(BLACK));
+  }
+
+  hash_ = hash;
+  seen_states_.clear();
+  seen_states_.insert(hash_);
+}
+
+Board::Board(bool prohibit_pass_alive, float komi)
     : zobrist_(Zobrist::get()),
       board_(),
       move_count_(0),
       prohibit_pass_alive_(prohibit_pass_alive),
       consecutive_passes_(0),
       passes_(0),
-      komi_(7.5),
+      komi_(komi),
       num_b_prisoners_(0),
       num_w_prisoners_(0),
       group_tracker_() {
@@ -751,18 +779,11 @@ Board::BoardData Board::GetLadderedStones() const {
         return false;
       }
 
-      // std::cerr << "<<axlui>> Solve. " << gid << ", " << (int)color_to_move
-      //           << ", " << last_move << "\n";
-      // std::cerr << board.board_ << "\n";
-
       MoveStatus last_move_status =
           board.PlayMove(last_move, OppositeColor(color_to_move));
       if (last_move_status != MoveStatus::kValid) {
-        // std::cerr << "<<axlui>> invalid_move. can capture: "
-        //           << (g_color != color_to_move) << "\n";
         return g_color != color_to_move;
       }
-      // std::cerr << board.board_ << "\n";
 
       if (color_to_move != g_color) {
         // last move may have coalesced groups.
@@ -780,21 +801,11 @@ Board::BoardData Board::GetLadderedStones() const {
         // Try to capture.
         if (liberties > 2) {
           // we can no longer capture
-          // std::cerr << "<<axlui>> cannot capture\n";
           return false;
         } else if (liberties <= 1) {
-          // std::cerr << "<<axlui>> can capture\n";
           // already captured, or capture on next turn
           return true;
         }
-
-        // did the last move put any of my stones in atari?
-        // for (const auto nloc : Adjacent(last_move)) {
-        //   if (board.AtLoc(nloc) == color_to_move &&
-        //       board.group_tracker_.LibertiesForGroupAt(nloc) == 1) {
-        //     return false;
-        //   }
-        // }
 
         // exactly 2 liberties. find liberties and try both refutations.
         const auto [l0, l1] = FindTwoLiberties(board, gid);
@@ -803,7 +814,6 @@ Board::BoardData Board::GetLadderedStones() const {
         // Try to refute.
         if (liberties > 1) {
           // already refuted.
-          // std::cerr << "<<axlui>> successful refutation\n";
           return false;
         }
 

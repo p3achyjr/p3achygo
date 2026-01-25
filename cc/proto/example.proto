@@ -1,0 +1,26 @@
+// Protocol messages for describing input data Examples for machine learning
+// model training or inference.
+//
+// Ported from TensorFlow for standalone use.
+syntax = "proto3";
+
+package tensorflow;
+
+import "feature.proto";
+
+option cc_enable_arenas = true;
+
+// An Example is a mostly-normalized data format for storing data for
+// training and inference. It contains a key-value store (features); where
+// each key (string) maps to a Feature message (which is oneof packed BytesList,
+// FloatList, or Int64List).
+message Example {
+  Features features = 1;
+}
+
+// A SequenceExample is an Example representing one or more sequences, and
+// some context.
+message SequenceExample {
+  Features context = 1;
+  FeatureLists feature_lists = 2;
+}

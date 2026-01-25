@@ -5,16 +5,14 @@
 #include <deque>
 #include <fstream>
 
+#include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "cc/constants/constants.h"
 #include "cc/game/color.h"
 #include "cc/nn/engine/buf_utils.h"
 #include "cc/nn/engine/go_dataset.h"
 #include "cc/nn/engine/go_features.h"
 #include "cc/nn/engine/trt_names.h"
-#include "tensorflow/core/example/example.pb.h"
-#include "tensorflow/core/example/feature_util.h"
-#include "tensorflow/core/lib/io/compression.h"
-#include "tensorflow/core/lib/io/record_reader.h"
 
 namespace nn {
 namespace trt {
