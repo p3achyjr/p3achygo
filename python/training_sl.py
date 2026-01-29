@@ -8,6 +8,11 @@ from __future__ import annotations
 
 import tensorflow as tf
 
+# Enable memory growth to prevent TF from allocating all GPU memory at once
+gpus = tf.config.experimental.list_physical_devices("GPU")
+for gpu in gpus:
+    tf.config.experimental.set_memory_growth(gpu, True)
+
 import sys
 import transforms
 import train
@@ -15,7 +20,7 @@ import trt_convert
 
 from absl import app, flags, logging
 from constants import *
-from lr_schedule import CyclicLRDecaySchedule
+from lr_schedule import CyclicLRDecaySchedule, ConstantLRSchedule
 from model import P3achyGoModel
 from model_config import ModelConfig, CONFIG_OPTIONS
 from pathlib import Path
@@ -50,6 +55,7 @@ flags.DEFINE_integer(
 flags.DEFINE_string("dataset_dir", "", "Directory to datasets.")
 flags.DEFINE_string("tensorboard_logdir", "/tmp/logs", "Tensorboard log directory.")
 flags.DEFINE_enum("model_config", "small", CONFIG_OPTIONS, "Model Config/Size.")
+flags.DEFINE_integer("version", 1, "Model Version")
 
 
 def main(_):
@@ -72,21 +78,22 @@ def main(_):
     tensorboard_log_dir = FLAGS.tensorboard_logdir
 
     lr, momentum, epochs = FLAGS.learning_rate, FLAGS.momentum, FLAGS.epochs
+    config = ModelConfig.from_str(FLAGS.model_config)
+    config.kVersion = FLAGS.version
     model = P3achyGoModel.create(
-        config=ModelConfig.from_str(FLAGS.model_config),
+        config=config,
         board_len=BOARD_LEN,
-        num_input_planes=NUM_INPUT_PLANES,
-        num_input_features=NUM_INPUT_FEATURES,
+        num_input_planes=num_input_planes(FLAGS.version),
+        num_input_features=num_input_features(FLAGS.version),
         name="p3achygo_sl",
     )
-
-    # Select expand function based on model version
-    expand_fn = transforms.expand_v1 if model.version == 1 else transforms.expand_v0
 
     # setup train ds.
     train_ds = tf.data.Dataset.from_tensor_slices(train_shards)
     train_ds = train_ds.interleave(
-        lambda x: tf.data.TFRecordDataset(x, compression_type="ZLIB").map(expand_fn),
+        lambda x: tf.data.TFRecordDataset(x, compression_type="ZLIB").map(
+            transforms.expand
+        ),
         cycle_length=64,
         block_length=16,
         num_parallel_calls=tf.data.AUTOTUNE,
@@ -97,7 +104,7 @@ def main(_):
 
     # setup validation dataset
     val_ds = tf.data.TFRecordDataset(val_shard, compression_type="ZLIB")
-    val_ds = val_ds.map(expand_fn)
+    val_ds = val_ds.map(transforms.expand)
     val_ds = val_ds.batch(batch_size)
     lr_schedule = CyclicLRDecaySchedule(lr, lr * 10, ds_len * epochs)
     print(lr_schedule.info())
@@ -117,7 +124,7 @@ def main(_):
         is_gpu = True
 
     logging.info(f"Running initial validation...")
-    train.val(model, mode=train.Mode.SL, val_ds=val_ds, val_batch_num=0)
+    train.val(model, mode=train.Mode.SL, val_ds=val_ds, batch_num=0)
 
     logging.info(f"Starting Training...")
     train.train(
@@ -132,12 +139,14 @@ def main(_):
         tensorboard_log_dir=tensorboard_log_dir,
         lr_schedule=lr_schedule,
         is_gpu=is_gpu,
+        val_ds=val_ds,
+        num_val_batches=10,
     )
 
     logging.info(f"Running final validation...")
-    train.val(model, mode=train.Mode.SL, val_ds=val_ds, val_batch_num=1)
+    train.val(model, mode=train.Mode.SL, val_ds=val_ds, batch_num=1)
 
-    model_path = str(Path(FLAGS.model_save_path, "p3achygo_sl"))
+    model_path = str(Path(FLAGS.model_save_path, "p3achygo_sl.keras"))
     model.save(model_path)
 
 

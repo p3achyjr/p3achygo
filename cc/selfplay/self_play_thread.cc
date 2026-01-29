@@ -165,7 +165,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     std::unique_ptr<NodeTable> node_table = std::make_unique<MctsNodeTable>();
 
     // Search Tree.
-    TreeNode* root_node = node_table->GetOrCreate(game.board().hash(), color_to_move);
+    TreeNode* root_node = node_table->GetOrCreate(
+        game.board().hash(), color_to_move, /*is_terminal=*/false);
 
     // Completed Q-values for each timestep.
     std::vector<std::array<float, constants::kMaxMovesPerPosition>> mcts_pis;
@@ -369,7 +370,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       if (!next_root) {
         // this is possible if we draw directly from policy, or if pass is the
         // only legal move found in search.
-        next_root = node_table->GetOrCreate(game.board().hash(), color_to_move);
+        next_root = node_table->GetOrCreate(game.board().hash(), color_to_move,
+                                            game.IsGameOver());
       }
 
       // Store root for tree logging if enabled.
@@ -491,7 +493,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
       TreeNode* next_root = root_node->children[move];
       if (!next_root) {
-        next_root = node_table->GetOrCreate(game.board().hash(), color_to_move);
+        next_root = node_table->GetOrCreate(game.board().hash(), color_to_move,
+                                            game.IsGameOver());
       }
       int num_nodes_reaped = 0, reap_time_us = 0;
       auto reap_begin = std::chrono::steady_clock::now();

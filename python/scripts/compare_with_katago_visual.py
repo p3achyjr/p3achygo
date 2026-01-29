@@ -86,7 +86,7 @@ def load_examples(tfrecord_path: str, num_examples: int):
     """Load training examples from TFRecord file."""
     print(f"Loading examples from {tfrecord_path}")
     ds = tf.data.TFRecordDataset(tfrecord_path, compression_type="ZLIB")
-    ds = ds.map(transforms.expand_v0)
+    ds = ds.map(transforms.expand)
     ds = ds.take(num_examples)
     print(f"Dataset loaded successfully!")
     return ds

@@ -83,8 +83,7 @@ def train_one_gen(
     ds = tf.data.TFRecordDataset(chunk_path, compression_type="ZLIB")
     num_batches = find_num_batches(ds)
 
-    expand_fn = transforms.expand_v1 if model.version == 1 else transforms.expand_v0
-    ds = ds.map(expand_fn, num_parallel_calls=tf.data.AUTOTUNE)
+    ds = ds.map(transforms.expand, num_parallel_calls=tf.data.AUTOTUNE)
     ds = ds.batch(batch_size)
     ds = ds.prefetch(tf.data.AUTOTUNE)
 

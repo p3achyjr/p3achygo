@@ -8,8 +8,9 @@
 namespace nn {
 
 Engine::Kind KindFromEnginePath(std::string path);
+int GetVersionFromModelPath(std::string path);
 std::unique_ptr<Engine> CreateEngine(Engine::Kind kind, std::string path,
-                                     int batch_size);
+                                     int batch_size, int version);
 
 }  // namespace nn
 

@@ -215,6 +215,7 @@ Loc PuctSearchPolicy::SelectNextAction(const TreeNode* node,
   }
 
   // No valid moves. Should never get here.
+  CHECK(false) << "No valid moves in PUCT selection.";
   return game::kNoopLoc;
 }
 
@@ -305,7 +306,8 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
         if (!root->children[move_info.move_encoding]) {
           // After the move, it's the opponent's turn
           root->children[move_info.move_encoding] = node_table->GetOrCreate(
-              search_game.board().hash(), game::OppositeColor(color_to_move));
+              search_game.board().hash(), game::OppositeColor(color_to_move),
+              search_game.IsGameOver());
         }
         TreeNode* child = root->children[move_info.move_encoding];
         GumbelNonRootSearchPolicy search_policy;
@@ -437,9 +439,9 @@ GumbelResult GumbelEvaluator::SearchRootPuct(
   };
 
   auto sample_action_from_visits =
-      [&probability](const std::array<float, constants::kMaxMovesPerPosition>&
-                         visit_counts,
-                     float tau) {
+      [&](const std::array<float, constants::kMaxMovesPerPosition>&
+              visit_counts,
+          float tau) {
         std::array<float, constants::kMaxMovesPerPosition> policy;
 
         // Compute empirical policy.
@@ -504,8 +506,7 @@ GumbelResult GumbelEvaluator::SearchRootPuct(
   }
 
   Loc raw_nn_move = game::AsLoc(Argmax(root->move_logits));
-  Loc mcts_move = [&visit_counts, &best_lcb_move, &puct_params, root,
-                   &sample_action_from_visits]() {
+  Loc mcts_move = [&]() {
     switch (puct_params.kind) {
       case PuctKind::kVisitCount:
         return game::AsLoc(Argmax(visit_counts));
@@ -565,17 +566,11 @@ GumbelEvaluator::SearchPath GumbelEvaluator::Search(
     Loc selected_action =
         search_policy->SelectNextAction(node, game, color_to_move);
     CHECK(game.PlayMove(selected_action, color_to_move));
-    if (game.IsGameOver()) {
-      // prevent cycles.
-      action = selected_action;
-      AdvanceState(node);
-      break;
-    }
     if (!node->children[selected_action]) {
       // After the move, it's the opponent's turn
       Color next_color = game::OppositeColor(color_to_move);
-      TreeNode* child =
-          node_table->GetOrCreate(game.board().hash(), next_color);
+      TreeNode* child = node_table->GetOrCreate(game.board().hash(), next_color,
+                                                game.IsGameOver());
       node->children[selected_action] = child;
     }
     action = selected_action;

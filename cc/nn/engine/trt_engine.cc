@@ -9,6 +9,7 @@
 
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "cc/constants/constants.h"
 #include "cc/nn/engine/buf_utils.h"
 #include "cc/nn/engine/trt_logger.h"
 #include "cc/nn/engine/trt_names.h"
@@ -30,7 +31,7 @@ using namespace ::nn;
 
 class TrtEngineImpl : public TrtEngine {
  public:
-  TrtEngineImpl(std::string path, int batch_size);
+  TrtEngineImpl(std::string path, int batch_size, int version);
   ~TrtEngineImpl();
 
   Engine::Kind kind() override { return Engine::Kind::kTrt; }
@@ -58,6 +59,7 @@ class TrtEngineImpl : public TrtEngine {
   std::vector<float> scores_;
   const int batch_size_;
   const std::string path_;
+  const int version_;
 
   const std::array<int, 4> planes_shape_;
   const std::array<int, 2> feats_shape_;
@@ -66,12 +68,16 @@ class TrtEngineImpl : public TrtEngine {
   const std::array<int, 2> score_shape_;
 };
 
-TrtEngineImpl::TrtEngineImpl(std::string path, int batch_size)
+TrtEngineImpl::TrtEngineImpl(std::string path, int batch_size, int version)
     : batch_size_(batch_size),
       path_(path),
+      version_(version),
       planes_shape_{batch_size_, BOARD_LEN, BOARD_LEN,
-                    constants::kNumInputFeaturePlanes},
-      feats_shape_{batch_size_, constants::kNumInputFeatureScalars},
+                    version_ == 0 ? constants::kNumInputFeaturePlanesV0
+                                  : constants::kNumInputFeaturePlanesV1},
+      feats_shape_{batch_size_, version_ == 0
+                                    ? constants::kNumInputFeatureScalarsV0
+                                    : constants::kNumInputFeatureScalarsV1},
       pi_shape_{batch_size_, constants::kMaxMovesPerPosition},
       outcome_shape_{batch_size_, constants::kNumValueLogits},
       score_shape_{batch_size_, constants::kNumScoreLogits} {
@@ -94,8 +100,6 @@ TrtEngineImpl::TrtEngineImpl(std::string path, int batch_size)
 
   // Create stream.
   cudaStreamCreate(&stream_);
-
-  // Allocate buffers.
   for (int i = 0; i < engine_->getNbIOTensors(); ++i) {
     const char* name = engine_->getIOTensorName(i);
     nv::Dims dims = engine_->getTensorShape(name);
@@ -116,15 +120,6 @@ TrtEngineImpl::TrtEngineImpl(std::string path, int batch_size)
     buf_map_[name] = buf_handle;
   }
 
-  // Set scores as constant.
-  for (int i = 0; i < constants::kNumScoreLogits; ++i) {
-    float score =
-        0.05f *
-        (static_cast<float>(i - constants::kScoreInflectionPoint) + 0.5f);
-    static_cast<float*>(buf_map_[nn::trt::input::kScoresName].host_buf)[i] =
-        score;
-  }
-
   // Need to do this first according to API.
   exec_context_->setOptimizationProfileAsync(0, cudaStreamPerThread);
   cudaStreamSynchronize(stream_);
@@ -132,11 +127,23 @@ TrtEngineImpl::TrtEngineImpl(std::string path, int batch_size)
   // Configure inputs for execution context.
   BufferHandle input_planes = buf_map_[nn::trt::input::kPlanesName];
   BufferHandle input_features = buf_map_[nn::trt::input::kFeaturesName];
-  BufferHandle input_scores = buf_map_[nn::trt::input::kScoresName];
   exec_context_->setInputShape(nn::trt::input::kPlanesName, input_planes.dims);
   exec_context_->setInputShape(nn::trt::input::kFeaturesName,
                                input_features.dims);
-  exec_context_->setInputShape(nn::trt::input::kScoresName, input_scores.dims);
+
+  if (version_ == 0) {
+    // Set scores as constant.
+    for (int i = 0; i < constants::kNumScoreLogits; ++i) {
+      float score =
+          0.05f *
+          (static_cast<float>(i - constants::kScoreInflectionPoint) + 0.5f);
+      static_cast<float*>(buf_map_[nn::trt::input::kScoresName].host_buf)[i] =
+          score;
+    }
+    BufferHandle input_scores = buf_map_[nn::trt::input::kScoresName];
+    exec_context_->setInputShape(nn::trt::input::kScoresName,
+                                 input_scores.dims);
+  }
 }
 
 TrtEngineImpl::~TrtEngineImpl() {
@@ -159,7 +166,7 @@ void TrtEngineImpl::LoadBatch(int batch_id, const GoFeatures& features) {
   std::fill(feats_buf + batch_id * feats_slice_size,
             feats_buf + (batch_id + 1) * feats_slice_size, 0);
   LoadGoFeatures(planes_buf, feats_buf, planes_shape_, feats_shape_, features,
-                 batch_id);
+                 batch_id, version_);
 }
 
 void TrtEngineImpl::RunInference() {
@@ -236,8 +243,9 @@ void TrtEngineImpl::GetOwnership(
 }  // namespace
 
 /* static */ std::unique_ptr<TrtEngine> TrtEngine::Create(std::string path,
-                                                          int batch_size) {
-  return std::make_unique<TrtEngineImpl>(path, batch_size);
+                                                          int batch_size,
+                                                          int version) {
+  return std::make_unique<TrtEngineImpl>(path, batch_size, version);
 }
 
 }  // namespace nn

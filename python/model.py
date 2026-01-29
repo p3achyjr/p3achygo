@@ -5,6 +5,7 @@ Amalgamation of different layers types from various AlphaZero reproductions.
 """
 
 from __future__ import annotations
+from typing import NamedTuple, Optional
 
 import tensorflow as tf
 import keras
@@ -17,24 +18,123 @@ L2 = keras.regularizers.L2
 C_L2 = 1e-4
 
 
-def make_conv(output_channels: int, kernel_size: int, name=None):
+class ModelPredictions(NamedTuple):
+    """Model prediction outputs."""
+
+    pi_logits: tf.Tensor
+    pi_logits_aux: tf.Tensor
+    game_outcome: tf.Tensor
+    score_logits: tf.Tensor
+    own_pred: tf.Tensor
+    q6_pred: tf.Tensor
+    q16_pred: tf.Tensor
+    q50_pred: tf.Tensor
+    gamma: tf.Tensor
+    # v1 predictions (optional)
+    q6_err_pred: Optional[tf.Tensor] = None
+    q16_err_pred: Optional[tf.Tensor] = None
+    q50_err_pred: Optional[tf.Tensor] = None
+    q6_score_pred: Optional[tf.Tensor] = None
+    q16_score_pred: Optional[tf.Tensor] = None
+    q50_score_pred: Optional[tf.Tensor] = None
+    q6_score_err_pred: Optional[tf.Tensor] = None
+    q16_score_err_pred: Optional[tf.Tensor] = None
+    q50_score_err_pred: Optional[tf.Tensor] = None
+    pi_logits_soft: Optional[tf.Tensor] = None
+    pi_logits_optimistic: Optional[tf.Tensor] = None
+
+
+class GroundTruth(NamedTuple):
+    """Ground truth labels for training."""
+
+    policy: tf.Tensor
+    policy_aux: tf.Tensor
+    score: tf.Tensor
+    score_one_hot: tf.Tensor
+    own: tf.Tensor
+    q6: tf.Tensor
+    q16: tf.Tensor
+    q50: tf.Tensor
+    # v1 labels (optional)
+    q6_score: Optional[tf.Tensor] = None
+    q16_score: Optional[tf.Tensor] = None
+    q50_score: Optional[tf.Tensor] = None
+
+
+class LossWeights(NamedTuple):
+    """Weights for different loss components."""
+
+    w_pi: float
+    w_pi_aux: float
+    w_val: float
+    w_outcome: float
+    w_score: float
+    w_own: float
+    w_q6: float
+    w_q16: float
+    w_q50: float
+    w_gamma: float
+    # v1 weights
+    w_q_err: float = 0.0
+    w_q_score: float = 0.0
+    w_q_score_err: float = 0.0
+    w_pi_soft: float = 0.0
+    w_pi_optimistic: float = 0.0
+
+
+def make_conv(
+    output_channels: int,
+    kernel_size: int,
+    init="glorot_uniform",
+    use_bias=False,
+    name=None,
+):
     return keras.layers.Conv2D(
         output_channels,
         kernel_size,
         activation=None,
         kernel_regularizer=L2(C_L2),
         padding="same",
-        use_bias=False,
+        use_bias=use_bias,
+        kernel_initializer=init,
         name=name,
     )
 
 
-def make_dense(output_dim: int, name=None):
+def make_dense(output_dim: int, kern_init="glorot_uniform", name=None):
     return keras.layers.Dense(
         output_dim,
+        kernel_initializer=kern_init,
         kernel_regularizer=L2(C_L2),
         name=name,
     )
+
+
+def make_v1_dense(
+    output_dim: int,
+    activation=keras.activations.mish,
+    name=None,
+):
+    """Dense layer with He initialization scaled by gamma for the given activation."""
+    kern_init = keras.initializers.VarianceScaling(
+        scale=gamma(activation) ** 2,
+        mode="fan_in",
+        distribution="truncated_normal",
+    )
+    return keras.layers.Dense(
+        output_dim,
+        kernel_initializer=kern_init,
+        kernel_regularizer=L2(C_L2),
+        name=name,
+    )
+
+
+def gamma(act):
+    if act == keras.activations.relu:
+        return 1.712
+    elif act == keras.activations.mish:
+        return 1.592
+    return 2.0**0.5
 
 
 class ConvBlock(keras.layers.Layer):
@@ -47,42 +147,103 @@ class ConvBlock(keras.layers.Layer):
         output_channels: int,
         conv_size: int,
         activation=keras.activations.relu,
+        use_var_norm=True,
+        variance=1.0,
+        version=1,
         name=None,
     ):
         super(ConvBlock, self).__init__(name=name)
-        self.conv = make_conv(output_channels, kernel_size=conv_size)
-        self.batch_norm = keras.layers.BatchNormalization(
-            scale=False, momentum=0.999, epsilon=1e-3
+        kern_init = (
+            keras.initializers.VarianceScaling(
+                scale=gamma(activation) ** 2,
+                mode="fan_in",
+                distribution="truncated_normal",
+            )
+            if use_var_norm
+            else "glorot_uniform"
+        )
+        self.conv = make_conv(output_channels, kernel_size=conv_size, init=kern_init)
+        self.norm_layer = (
+            keras.layers.Rescaling(scale=float(1.0 / (variance**0.5)), offset=0.0)
+            if use_var_norm
+            else keras.layers.BatchNormalization(
+                scale=False, momentum=0.999, epsilon=1e-3
+            )
         )
         self.activation = activation
+        self.variance = variance
+        self.version = version
 
         # save for serialization
         self.output_channels = output_channels
         self.conv_size = conv_size
+        self.use_var_norm = use_var_norm
 
     def call(self, x, training=False):
-        x = self.conv(x)
-        x = self.batch_norm(x, training=training)
-        x = self.activation(x)
-
-        return x
+        raise Exception("Do not call directly")
 
     def get_config(self):
         return {
             "output_channels": self.output_channels,
             "conv_size": self.conv_size,
             "activation": keras.activations.serialize(self.activation),
+            "use_var_norm": self.use_var_norm,
+            "variance": self.variance,
+            "version": self.version,
             "name": self.name,
         }
 
     @classmethod
     def from_config(cls, config):
-        cls(
-            config["output_channels"],
-            config["conv_size"],
-            keras.activations.deserialize(config["activation"]),
-            name=config["name"],
+        return cls(
+            output_channels=config["output_channels"],
+            conv_size=config["conv_size"],
+            activation=keras.activations.deserialize(config["activation"]),
+            use_var_norm=config.get("use_var_norm", True),
+            variance=config.get("variance", 1.0),
+            version=config.get("version", 1),
+            name=config.get("name"),
         )
+
+
+class ConvPostActivation(ConvBlock):
+    def call(self, x, training=False):
+        x = self.conv(x)
+        x = self.norm_layer(x, training=training)
+        x = self.activation(x)
+        return x
+
+
+class ConvPreActivation(ConvBlock):
+    def call(self, x, training=False):
+        x = self.norm_layer(x, training=training)
+        x = self.activation(x)
+        x = self.conv(x)
+        return x
+
+
+def make_v0_conv_block(output_channels: int, conv_size: int, name=None):
+    return ConvPostActivation(
+        output_channels=output_channels,
+        conv_size=conv_size,
+        activation=keras.activations.relu,
+        use_var_norm=False,
+        variance=1.0,
+        version=0,
+        name=name,
+    )
+
+
+def make_v1_conv_block(output_channels: int, conv_size: int, variance=1.0, name=None):
+    return ConvPreActivation(
+        output_channels=output_channels,
+        conv_size=conv_size,
+        activation=keras.activations.mish,
+        use_var_norm=True,
+        variance=variance,
+        version=1,
+        name=name,
+    )
 
 
 class ResidualBlock(keras.layers.Layer):
@@ -123,24 +284,46 @@ class ClassicResidualBlock(ResidualBlock):
     Residual block found in AlphaGo, KataGo, and Leela.
     """
 
-    def __init__(self, output_channels: int, conv_size: int, stack_size=2, name=None):
+    def __init__(
+        self,
+        output_channels: int,
+        conv_size: int,
+        stack_size=2,
+        version=0,
+        incoming_var=1.0,
+        name=None,
+    ):
         blocks = []
         for i in range(stack_size):
-            blocks.append(
-                ConvBlock(output_channels, conv_size, name=f"res_id_inner_{i}")
-            )
+            variance = incoming_var if i == 0 else 1.0
+            if version == 0:
+                block = make_v0_conv_block(
+                    output_channels, conv_size, name=f"res_id_inner_{i}"
+                )
+            else:
+                block = make_v1_conv_block(
+                    output_channels,
+                    conv_size,
+                    variance=variance,
+                    name=f"res_id_inner_{i}",
+                )
+            blocks.append(block)
         super(ClassicResidualBlock, self).__init__(blocks, name=name)
 
         # save for serialization
         self.output_channels = output_channels
         self.conv_size = conv_size
         self.stack_size = stack_size
+        self.version = version
+        self.incoming_var = incoming_var
 
     def get_config(self):
         return {
             "output_channels": self.output_channels,
             "conv_size": self.conv_size,
             "stack_size": self.stack_size,
+            "version": self.version,
+            "incoming_var": self.incoming_var,
             "name": self.name,
         }
 
@@ -164,25 +347,44 @@ class BottleneckResidualConvBlock(ResidualBlock):
         bottleneck_channels: int,
         conv_size: int,
         stack_size=3,
-        act=keras.activations.relu,
+        version=0,
+        incoming_var=1.0,
         name=None,
     ):
         blocks = []
-        blocks.append(
-            ConvBlock(
-                bottleneck_channels, 1, activation=act, name=f"res_id_reduce_dim_begin"
-            )
-        )
-        for i in range(stack_size - 2):
+        if version == 0:
             blocks.append(
-                ConvBlock(
-                    bottleneck_channels,
-                    conv_size,
-                    activation=act,
-                    name=f"res_id_inner_{i}",
+                make_v0_conv_block(
+                    bottleneck_channels, 1, name="res_id_reduce_dim_begin"
                 )
             )
-        blocks.append(ConvBlock(output_channels, 1, name=f"res_id_expand_dim_end"))
+            for i in range(stack_size - 2):
+                blocks.append(
+                    make_v0_conv_block(
+                        bottleneck_channels, conv_size, name=f"res_id_inner_{i}"
+                    )
+                )
+            blocks.append(
+                make_v0_conv_block(output_channels, 1, name="res_id_expand_dim_end")
+            )
+        else:
+            blocks.append(
+                make_v1_conv_block(
+                    bottleneck_channels,
+                    1,
+                    variance=incoming_var,
+                    name="res_id_reduce_dim_begin",
+                )
+            )
+            for i in range(stack_size - 2):
+                blocks.append(
+                    make_v1_conv_block(
+                        bottleneck_channels, conv_size, name=f"res_id_inner_{i}"
+                    )
+                )
+            blocks.append(
+                make_v1_conv_block(output_channels, 1, name="res_id_expand_dim_end")
+            )
         super(BottleneckResidualConvBlock, self).__init__(blocks, name=name)
 
         # save for serialization
@@ -190,7 +392,8 @@ class BottleneckResidualConvBlock(ResidualBlock):
         self.bottleneck_channels = bottleneck_channels
         self.conv_size = conv_size
         self.stack_size = stack_size
-        self.act = act
+        self.version = version
+        self.incoming_var = incoming_var
 
     def get_config(self):
         return {
@@ -198,7 +401,8 @@ class BottleneckResidualConvBlock(ResidualBlock):
             "bottleneck_channels": self.bottleneck_channels,
             "conv_size": self.conv_size,
             "stack_size": self.stack_size,
-            "act": self.act,
+            "version": self.version,
+            "incoming_var": self.incoming_var,
             "name": self.name,
         }
 
@@ -209,29 +413,69 @@ class NbtResidualBlock(ResidualBlock):
     """
 
     def __init__(
-        self, output_channels: int, bottleneck_channels: int, conv_size: int, name=None
+        self,
+        output_channels: int,
+        bottleneck_channels: int,
+        conv_size: int,
+        version=0,
+        incoming_var=1.0,
+        name=None,
     ):
         blocks = []
-        blocks.append(ConvBlock(bottleneck_channels, 1, name=f"nbt_reduce_dim"))
+        if version == 0:
+            blocks.append(
+                make_v0_conv_block(bottleneck_channels, 1, name="nbt_reduce_dim")
+            )
+        else:
+            blocks.append(
+                make_v1_conv_block(
+                    bottleneck_channels, 1, variance=incoming_var, name="nbt_reduce_dim"
+                )
+            )
         blocks.append(
-            ClassicResidualBlock(bottleneck_channels, conv_size, 2, name=f"nbt_res0")
+            ClassicResidualBlock(
+                bottleneck_channels,
+                conv_size,
+                2,
+                version=version,
+                incoming_var=1.0,
+                name="nbt_res0",
+            )
         )
         blocks.append(
-            ClassicResidualBlock(bottleneck_channels, conv_size, 2, name=f"nbt_res1")
+            ClassicResidualBlock(
+                bottleneck_channels,
+                conv_size,
+                2,
+                version=version,
+                incoming_var=2.0,
+                name="nbt_res1",
+            )
         )
-        blocks.append(ConvBlock(output_channels, 1, name=f"nbt_expand_dim"))
+        if version == 0:
+            blocks.append(make_v0_conv_block(output_channels, 1, name="nbt_expand_dim"))
+        else:
+            blocks.append(
+                make_v1_conv_block(
+                    output_channels, 1, variance=3.0, name="nbt_expand_dim"
+                )
+            )
         super(NbtResidualBlock, self).__init__(blocks, name=name)
 
         # save for serialization
         self.output_channels = output_channels
         self.bottleneck_channels = bottleneck_channels
         self.conv_size = conv_size
+        self.version = version
+        self.incoming_var = incoming_var
 
     def get_config(self):
         return {
             "output_channels": self.output_channels,
             "bottleneck_channels": self.bottleneck_channels,
             "conv_size": self.conv_size,
+            "version": self.version,
+            "incoming_var": self.incoming_var,
             "name": self.name,
         }
 
@@ -258,13 +502,24 @@ class BroadcastResidualBlock(ResidualBlock):
         """
 
         def __init__(
-            self, c: int, h: int, w: int, act=keras.activations.relu, name=None
+            self,
+            c: int,
+            h: int,
+            w: int,
+            act=keras.activations.relu,
+            version=0,
+            name=None,
         ):
             super(BroadcastResidualBlock.Broadcast, self).__init__(name=name)
             self.channel_flatten = keras.layers.Reshape(
                 (c, h * w), name="broadcast_flatten"
             )
-            self.dense = make_dense(h * w, name="broadcast_linear")
+            if version == 0:
+                self.dense = make_dense(h * w, name="broadcast_linear")
+            else:
+                self.dense = make_v1_dense(
+                    h * w, activation=act, name="broadcast_linear"
+                )
             self.channel_expand = keras.layers.Reshape(
                 (c, h, w), name="broadcast_expand"
             )
@@ -272,10 +527,35 @@ class BroadcastResidualBlock(ResidualBlock):
             # save for serialization
             self.c, self.h, self.w = c, h, w
             self.act = act
+            self.version = version
 
         def call(self, x, training=False):
+            raise Exception("Do not call directly")
+
+        def get_config(self):
+            return {
+                "c": self.c,
+                "h": self.h,
+                "w": self.w,
+                "act": keras.activations.serialize(self.act),
+                "version": self.version,
+                "name": self.name,
+            }
+
+        @classmethod
+        def from_config(cls, config):
+            return cls(
+                c=config["c"],
+                h=config["h"],
+                w=config["w"],
+                act=keras.activations.deserialize(config["act"]),
+                version=config.get("version", 0),
+                name=config.get("name"),
+            )
+
+    class BroadcastPostAct(Broadcast):
+        def call(self, x, training=False):
             assert len(x.shape) == 4
-            n, h, w, c = x.shape
 
             x = keras.ops.transpose(x, axes=(0, 3, 1, 2))  # NHWC -> NCHW
             x = self.channel_flatten(x)
@@ -286,47 +566,77 @@ class BroadcastResidualBlock(ResidualBlock):
 
             return x
 
-        def get_config(self):
-            return {
-                "c": self.c,
-                "h": self.h,
-                "w": self.w,
-                "act": keras.activations.serialize(self.act),
-                "name": self.name,
-            }
+    class BroadcastPreAct(Broadcast):
+        def call(self, x, training=False):
+            assert len(x.shape) == 4
+
+            x = keras.ops.transpose(x, axes=(0, 3, 1, 2))  # NHWC -> NCHW
+            x = self.act(x)
+            x = self.channel_flatten(x)
+            x = self.dense(x)  # mix
+            x = self.channel_expand(x)
+            x = keras.ops.transpose(x, axes=(0, 2, 3, 1))  # NCHW -> NHWC
+
+            return x
 
     def __init__(
         self,
         output_channels: int,
         board_len: int,
-        activation=keras.activations.linear,
-        broadcast_act=keras.activations.relu,
+        version=0,
+        incoming_var=1.0,
         name=None,
     ):
+        broadcast_act = (
+            keras.activations.relu if version == 0 else keras.activations.mish
+        )
+        if version == 0:
+            conv_first = make_v0_conv_block(
+                output_channels, 1, name="broadcast_conv_first"
+            )
+            conv_last = make_v0_conv_block(
+                output_channels, 1, name="broadcast_conv_last"
+            )
+        else:
+            conv_first = make_v1_conv_block(
+                output_channels, 1, variance=incoming_var, name="broadcast_conv_first"
+            )
+            conv_last = make_v1_conv_block(
+                output_channels, 1, name="broadcast_conv_last"
+            )
+
+        broadcast_fn = (
+            BroadcastResidualBlock.BroadcastPreAct
+            if version >= 1
+            else BroadcastResidualBlock.BroadcastPostAct
+        )
         blocks = [
-            ConvBlock(output_channels, 1, name="broadcast_conv_first"),
-            BroadcastResidualBlock.Broadcast(
+            conv_first,
+            broadcast_fn(
                 output_channels,
                 board_len,
                 board_len,
                 act=broadcast_act,
+                version=version,
                 name="broadcast_mix",
             ),
-            ConvBlock(output_channels, 1, name="broadcast_conv_last"),
+            conv_last,
         ]
 
-        super(BroadcastResidualBlock, self).__init__(
-            blocks, activation=activation, name=name
-        )
+        super(BroadcastResidualBlock, self).__init__(blocks, name=name)
 
         # save for serialization
         self.output_channels = output_channels
-        self.activation_serialized = keras.activations.serialize(activation)
+        self.board_len = board_len
+        self.version = version
+        self.incoming_var = incoming_var
 
     def get_config(self):
         return {
             "output_channels": self.output_channels,
-            "activation": self.activation_serialized,
+            "board_len": self.board_len,
+            "version": self.version,
+            "incoming_var": self.incoming_var,
             "name": self.name,
         }
 
@@ -334,7 +644,9 @@ class BroadcastResidualBlock(ResidualBlock):
     def from_config(cls, config):
         return cls(
             config["output_channels"],
-            keras.activations.deserialize(config["activation"]),
+            config["board_len"],
+            config["version"],
+            config["incoming_var"],
             config["name"],
         )
 
@@ -345,29 +657,17 @@ class GlobalPool(keras.layers.Layer):
     outputs a tensor of shape (n, 2c).
     """
 
-    def __init__(self, c: int, h: int, w: int, name=None):
+    def __init__(self, name=None):
         super(GlobalPool, self).__init__(name=name)
-        self.channel_flatten = keras.layers.Reshape((c, h * w), name="gpool_flatten")
 
-        # save parameters for serialization
-        self.c, self.h, self.w = c, h, w
-
-    def call(self, x, training=False):
-        assert len(x.shape) == 4
-        n, h, w, c = x.shape
-
-        x = keras.ops.transpose(x, axes=(0, 3, 1, 2))  # NHWC -> NCHW
-        x = self.channel_flatten(x)  # flatten
-        x_mean = keras.ops.mean(x, axis=2)
-        x_max = keras.ops.max(x, axis=2)
-
-        return keras.ops.concatenate([x_mean, x_max], axis=1)
+    def call(self, x):
+        # Reduce over spatial dims (h, w)
+        x_mean = keras.ops.mean(x, axis=(1, 2))  # (batch, c)
+        x_max = keras.ops.max(x, axis=(1, 2))  # (batch, c)
+        return keras.ops.concatenate([x_mean, x_max], axis=-1)  # (batch, 2c)
 
     def get_config(self):
         return {
-            "c": self.c,
-            "h": self.h,
-            "w": self.w,
             "name": self.name,
         }
 
@@ -380,37 +680,64 @@ class GlobalPoolBias(keras.layers.Layer):
     works).
     """
 
-    def __init__(self, channels: int, board_len=BOARD_LEN, name=None):
+    def __init__(
+        self,
+        channels: int,
+        act=keras.activations.relu,
+        use_var_norm=True,
+        incoming_var=1.0,
+        name=None,
+    ):
         super(GlobalPoolBias, self).__init__(name=name)
-        self.batch_norm_g = keras.layers.BatchNormalization(
-            scale=False, momentum=0.999, epsilon=1e-3, name="batch_norm_gpool"
+        self.g_norm_layer = (
+            keras.layers.Identity()  # scaling done already
+            if use_var_norm
+            else keras.layers.BatchNormalization(
+                scale=False, momentum=0.999, epsilon=1e-3, name="batch_norm_gpool"
+            )
         )
-        self.gpool = GlobalPool(channels, board_len, board_len, name="gpool")
-        self.dense = make_dense(channels)
+        self.gpool = GlobalPool(name="gpool")
+        self.dense = make_dense(
+            channels, kern_init=keras.initializers.VarianceScaling(1.0)
+        )
 
         # save for serialization
         self.channels = channels
+        self.use_var_norm = use_var_norm
+        self.incoming_var = incoming_var
+        self.act = act
 
     def call(self, x, g, training=False):
         assert x.shape == g.shape
         assert len(x.shape) == 4
         assert x.shape[3] == g.shape[3]
 
-        g = self.batch_norm_g(g, training=training)
-        g = keras.activations.relu(g)
+        g = self.g_norm_layer(g, training=training)
+        g = self.act(g)
         g_pooled = self.gpool(g)
         g_biases = self.dense(g_pooled)  # shape = (N, C)
-
-        x = keras.ops.transpose(x, axes=(1, 2, 0, 3))  # NHWC -> HWNC
-
-        x = x + g_biases
-
-        x = keras.ops.transpose(x, axes=(2, 0, 1, 3))  # HWNC -> NHWC
+        x = x + g_biases[:, None, None, :]
 
         return (x, g_pooled)
 
     def get_config(self):
-        return {"channels": self.channels, "name": self.name}
+        return {
+            "channels": self.channels,
+            "act": keras.activations.serialize(self.act),
+            "use_var_norm": self.use_var_norm,
+            "incoming_var": self.incoming_var,
+            "name": self.name,
+        }
+
+    @classmethod
+    def from_config(cls, config):
+        return cls(
+            channels=config["channels"],
+            act=keras.activations.deserialize(config["act"]),
+            use_var_norm=config.get("use_var_norm", True),
+            incoming_var=config.get("incoming_var", 1.0),
+            name=config.get("name"),
+        )
 
 
 class PolicyHead(keras.layers.Layer):
@@ -428,18 +755,39 @@ class PolicyHead(keras.layers.Layer):
     4) An FC layer from gpool to pass logit.
     """
 
-    def __init__(self, channels=32, board_len=BOARD_LEN, version=0, name=None):
+    def __init__(
+        self,
+        channels=32,
+        version=0,
+        use_var_norm=True,
+        incoming_var=1.0,
+        name=None,
+    ):
         super(PolicyHead, self).__init__(name=name)
         self.conv_p = make_conv(channels, kernel_size=1, name="policy_conv_p")
         self.conv_g = make_conv(channels, kernel_size=1, name="policy_conv_g")
-        self.gpool = GlobalPoolBias(channels, board_len=board_len)
-        self.batch_norm = keras.layers.BatchNormalization(
-            scale=False, momentum=0.999, epsilon=1e-3, name="policy_bn"
+        self.gpool = GlobalPoolBias(
+            channels,
+            act=keras.activations.mish if version >= 1 else keras.activations.relu,
+            use_var_norm=use_var_norm,
+            incoming_var=incoming_var,
+            name="policy_gpool",
+        )
+        self.norm_layer = (
+            keras.layers.Rescaling(
+                scale=float(1.0 / (incoming_var**0.5)),
+                offset=0.0,
+                name="policy_rescale",
+            )
+            if use_var_norm
+            else keras.layers.Identity()
         )
         self.flatten = keras.layers.Flatten()
         self.output_moves = make_conv(2, kernel_size=1, name="policy_output_moves")
         self.output_pass = make_dense(2, name="policy_output_pass")
         self.act = keras.activations.mish if version > 0 else keras.activations.relu
+        self.use_var_norm = use_var_norm
+        self.incoming_var = incoming_var
 
         if version == 0:
             self.soft_policy_moves = None
@@ -458,15 +806,14 @@ class PolicyHead(keras.layers.Layer):
 
         # save parameters for serialization
         self.channels = channels
-        self.board_len = board_len
         self.version = version
 
     def call(self, x, training=False):
+        x = self.norm_layer(x, training=training)
         p = self.conv_p(x)
         g = self.conv_g(x)
 
         (p, g_pooled) = self.gpool(p, g)
-        p = self.batch_norm(p, training=training)
         p = self.act(p)
 
         pi = self.output_moves(p)
@@ -484,8 +831,6 @@ class PolicyHead(keras.layers.Layer):
             return (
                 keras.ops.concatenate([pi, pass_logit], axis=1),
                 keras.ops.concatenate([pi_aux, pass_logit_aux], axis=1),
-                None,
-                None,
             )
         else:
             pi_soft = self.flatten(self.soft_policy_moves(p))
@@ -503,7 +848,9 @@ class PolicyHead(keras.layers.Layer):
     def get_config(self):
         return {
             "channels": self.channels,
-            "board_len": self.board_len,
+            "use_var_norm": self.use_var_norm,
+            "incoming_var": self.incoming_var,
+            "version": self.version,
             "name": self.name,
         }
 
@@ -527,9 +874,9 @@ class ValueHead(keras.layers.Layer):
         self,
         channels=32,
         c_val=64,
-        board_len=BOARD_LEN,
         score_range=SCORE_RANGE,
         version=0,
+        incoming_var=1.0,
         name=None,
     ):
         self.version = version
@@ -540,7 +887,14 @@ class ValueHead(keras.layers.Layer):
             keras.activations.relu if self.version == 0 else keras.activations.mish
         )
         self.conv = make_conv(channels, kernel_size=1, name="value_conv")
-        self.gpool = GlobalPool(channels, board_len, board_len, name="value_gpool")
+        self.gpool = GlobalPool(name="value_gpool")
+        self.norm_layer = (
+            keras.layers.Rescaling(
+                scale=float(1.0 / (incoming_var**0.5)), offset=0.0, name="value_rescale"
+            )
+            if version >= 1
+            else keras.layers.Identity()
+        )
 
         # Game Outcome/Q Subhead
         self.outcome_q_biases = make_dense(c_val, name="value_outcome_q_biases")
@@ -561,19 +915,17 @@ class ValueHead(keras.layers.Layer):
         self.score_min, self.score_max = -score_range // 2, score_range // 2
         # self.scores = .05 * tf.range(self.score_min + .5,
         #                              self.score_max + .5)  # [-399.5 ... 399.5]
-        self.score_identity = keras.layers.Activation(
-            "linear"
-        )  # need for mixed-precision
         self.score_pre = make_dense(c_val, name="score_distribution_pre")
         self.score_output = make_dense(1, name="score_distribution_output")
 
         # Save for serialization
         self.channels = channels
         self.c_val = c_val
-        self.board_len = board_len
         self.score_range = score_range
+        self.incoming_var = incoming_var
 
     def call(self, x, scores):
+        x = self.norm_layer(x)
         v = self.conv(x)
         v_pooled = self.gpool(v)
 
@@ -597,28 +949,33 @@ class ValueHead(keras.layers.Layer):
         gamma = self.act(gamma)
         gamma = self.gamma_output(gamma)
 
-        # comments assume score_range = 800
-        n, _ = v_pooled.shape
+        # Compute score logits by combining v_pooled features with each score bin
+        # Goal: Create (batch, score_range, pooled_features + 1) tensor
+        # where each slice (batch, i, :) = [v_pooled_features..., score_bin_i]
 
-        #  [[[-399.5]
-        #   ...
-        #   399.5]]]
-        scores = keras.ops.expand_dims(
-            keras.ops.expand_dims(self.score_identity(scores), axis=1), axis=0
-        )
-        # Tile to match batch size: (1, 800, 1) -> (n, 800, 1)
+        # Cast scores for mixed-precision without losing shape information
+        scores = tf.cast(scores, dtype=v_pooled.dtype)
+
+        # Reshape to broadcastable shapes
         batch_size = keras.ops.shape(x)[0]
-        scores = keras.ops.tile(scores, [batch_size, 1, 1])
+        pooled_features = keras.ops.shape(v_pooled)[1]
 
-        v_pools = keras.ops.expand_dims(v_pooled, axis=1)  # (n, k) -> (n, 1, k)
-        v_pools = keras.ops.tile(
-            v_pools, [1, self.score_range, 1]
-        )  # (n, 1, k) -> (n, 800, k)
-        v_scores = keras.ops.concatenate([v_pools, scores], axis=2)  # (n, 800, k + 1)
-        # v_scores = tf.vectorized_map(lambda x: keras.ops.concatenate([x, scores], axis=1),
-        #                              v_pools)
+        v_pooled_exp = v_pooled[:, None, :]  # (batch, 1, features)
+        scores_exp = scores[None, :, None]  # (1, score_range, 1)
+
+        # Broadcast and concatenate to create (batch, score_range, features + 1)
+        v_scores = keras.ops.concatenate(
+            [
+                keras.ops.broadcast_to(
+                    v_pooled_exp, (batch_size, self.score_range, pooled_features)
+                ),
+                keras.ops.broadcast_to(scores_exp, (batch_size, self.score_range, 1)),
+            ],
+            axis=-1,
+        )
+
         v_scores = self.score_pre(v_scores)
-        v_scores = keras.activations.relu(v_scores)
+        v_scores = self.act(v_scores)
         score_logits = self.score_output(v_scores)  # (n, 800, 1)
         score_logits = keras.ops.squeeze(score_logits, axis=2)  # (n, 800)
         score_logits = keras.ops.softplus(gamma) * score_logits
@@ -632,15 +989,6 @@ class ValueHead(keras.layers.Layer):
                 q6,
                 q16,
                 q50,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
             )
         else:
             # q_err outputs predict squared error of q values (range [0, 4] since q is in [-1, 1])
@@ -678,8 +1026,9 @@ class ValueHead(keras.layers.Layer):
         return {
             "channels": self.channels,
             "c_val": self.c_val,
-            "board_len": self.board_len,
             "score_range": self.score_range,
+            "version": self.version,
+            "incoming_var": self.incoming_var,
             "name": self.name,
         }
 
@@ -715,6 +1064,7 @@ class P3achyGoModel(keras.Model):
     5. {k - 3}rd move was pass
     6. {k - 2}nd move was pass
     7. {k - 1}st move was pass
+    (v1) komi (current player perspective) / 15.0
 
     Output:
 
@@ -769,15 +1119,27 @@ class P3achyGoModel(keras.Model):
 
         super(P3achyGoModel, self).__init__(name=name)
         self.version = version
-        self.act = keras.activations.relu
-        if self.version == 1:
-            self.act = keras.activations.mish
+        self.act = keras.activations.mish if version >= 1 else keras.activations.relu
+        self.use_var_norm = version >= 1
 
         ## Initialize Model Layers ##
-        self.init_board_conv = ConvBlock(
-            num_channels, conv_size + 2, name="init_board_conv"
-        )
-        self.init_game_layer = make_dense(num_channels, name="init_game_layer")
+        if version == 0:
+            self.init_board_conv = make_v0_conv_block(
+                num_channels, conv_size + 2, name="init_board_conv"
+            )
+            self.init_game_layer = make_dense(num_channels, name="init_game_layer")
+        else:
+            self.init_board_conv = make_conv(
+                num_channels,
+                conv_size + 2,
+                init=keras.initializers.VarianceScaling(
+                    scale=2.0,  # inputs are very sparse
+                    mode="fan_in",
+                    distribution="truncated_normal",
+                ),
+            )
+            self.init_game_layer = make_dense(num_channels, name="init_game_layer")
+
         self.blocks = []
         for i in range(num_blocks):
             if i % broadcast_interval == broadcast_interval - 1:
@@ -785,8 +1147,8 @@ class P3achyGoModel(keras.Model):
                     BroadcastResidualBlock(
                         num_channels,
                         board_len,
-                        activation=self.act,
-                        broadcast_act=self.act,
+                        version=version,
+                        incoming_var=float(i + 1),
                         name=f"broadcast_res_{i}",
                     )
                 )
@@ -798,14 +1160,19 @@ class P3achyGoModel(keras.Model):
                             num_bottleneck_channels,
                             conv_size,
                             stack_size=bottleneck_length,
-                            act=self.act,
+                            version=version,
+                            incoming_var=float(i + 1),
                             name=f"bottleneck_res_{i}",
                         )
                     )
                 elif trunk_block_type == "classic":
                     self.blocks.append(
                         ClassicResidualBlock(
-                            num_channels, conv_size, name=f"classic_res_{i}"
+                            num_channels,
+                            conv_size,
+                            version=version,
+                            incoming_var=float(i + 1),
+                            name=f"classic_res_{i}",
                         )
                     )
                 elif trunk_block_type == "nbt":
@@ -814,19 +1181,46 @@ class P3achyGoModel(keras.Model):
                             num_channels,
                             num_bottleneck_channels,
                             conv_size,
+                            version=version,
+                            incoming_var=float(i + 1),
                             name=f"nbt_res_{i}",
                         )
                     )
 
         self.policy_head = PolicyHead(
             channels=num_head_channels,
-            board_len=board_len,
             version=self.version,
+            use_var_norm=self.use_var_norm,
+            incoming_var=float(num_blocks + 1),
             name="policy_head",
         )
         self.value_head = ValueHead(
-            num_head_channels, c_val, board_len, version=self.version, name="value_head"
+            num_head_channels,
+            c_val,
+            version=self.version,
+            incoming_var=float(num_blocks + 1),
+            name="value_head",
         )
+
+        # v1 always uses one-batch-norm: duplicate heads with batch norm on trunk input
+        if version >= 1:
+            self.trunk_bn = keras.layers.BatchNormalization(
+                momentum=0.999, epsilon=1e-3, name="trunk_bn"
+            )
+            self.policy_head_bn = PolicyHead(
+                channels=num_head_channels,
+                version=self.version,
+                use_var_norm=self.use_var_norm,
+                incoming_var=1.0,  # using batchnorm
+                name="policy_head_bn",
+            )
+            self.value_head_bn = ValueHead(
+                num_head_channels,
+                c_val,
+                version=self.version,
+                incoming_var=1.0,  # using batchnorm
+                name="value_head_bn",
+            )
 
         ## Initialize Loss Objects. Defer reduction strategy to loss objects ##
         self.scce_logits = keras.losses.SparseCategoricalCrossentropy(from_logits=True)
@@ -850,8 +1244,10 @@ class P3achyGoModel(keras.Model):
 
     def call(self, board_state, game_state, training=False, scores=None):
         if scores is None:
-            scores = 0.05 * keras.ops.arange(
-                -SCORE_RANGE // 2 + 0.5, SCORE_RANGE // 2 + 0.5
+            # Use tf.range with explicit dtype to ensure shape inference works
+            scores = (
+                0.05 * tf.range(-SCORE_RANGE // 2, SCORE_RANGE // 2, dtype=tf.float32)
+                + 0.025
             )
 
         x = self.init_board_conv(board_state, training=training)
@@ -866,10 +1262,39 @@ class P3achyGoModel(keras.Model):
         for block in self.blocks:
             x = block(x, training=training)
 
+        # v0: No batch norm heads
+        if self.version == 0:
+            pi_logits, pi_logits_aux = self.policy_head(x, training=training)
+            (
+                outcome_logits,
+                ownership,
+                score_logits,
+                gamma,
+                q6,
+                q16,
+                q50,
+            ) = self.value_head(x, scores=scores)
+            pi = keras.activations.softmax(pi_logits)
+            outcome_probs = keras.activations.softmax(outcome_logits)
+            score_probs = keras.activations.softmax(score_logits)
+            return (
+                keras.ops.cast(pi_logits, "float32"),
+                keras.ops.cast(pi, "float32"),
+                keras.ops.cast(outcome_logits, "float32"),
+                keras.ops.cast(outcome_probs, "float32"),
+                keras.ops.cast(ownership, "float32"),
+                keras.ops.cast(score_logits, "float32"),
+                keras.ops.cast(score_probs, "float32"),
+                keras.ops.cast(gamma, "float32"),
+                keras.ops.cast(pi_logits_aux, "float32"),
+                keras.ops.cast(q6, "float32"),
+                keras.ops.cast(q16, "float32"),
+                keras.ops.cast(q50, "float32"),
+            )
+
         pi_logits, pi_logits_aux, pi_logits_soft, pi_logits_optimistic = (
             self.policy_head(x, training=training)
         )
-        pi = keras.activations.softmax(pi_logits)
         (
             outcome_logits,
             ownership,
@@ -888,25 +1313,40 @@ class P3achyGoModel(keras.Model):
             q16_score_err,
             q50_score_err,
         ) = self.value_head(x, scores=scores)
+        pi = keras.activations.softmax(pi_logits)
         outcome_probs = keras.activations.softmax(outcome_logits)
         score_probs = keras.activations.softmax(score_logits)
 
-        if self.version == 0:
-            return (
-                keras.ops.cast(pi_logits, "float32"),
-                keras.ops.cast(pi, "float32"),
-                keras.ops.cast(outcome_logits, "float32"),
-                keras.ops.cast(outcome_probs, "float32"),
-                keras.ops.cast(ownership, "float32"),
-                keras.ops.cast(score_logits, "float32"),
-                keras.ops.cast(score_probs, "float32"),
-                keras.ops.cast(gamma, "float32"),
-                keras.ops.cast(pi_logits_aux, "float32"),
-                keras.ops.cast(q6, "float32"),
-                keras.ops.cast(q16, "float32"),
-                keras.ops.cast(q50, "float32"),
-            )
+        # v1: Always use one-batch-norm (compute BN heads)
+        x_bn = self.trunk_bn(x, training=training)
+        pi_logits_bn, pi_logits_aux_bn, pi_logits_soft_bn, pi_logits_optimistic_bn = (
+            self.policy_head_bn(x_bn, training=training)
+        )
+        (
+            outcome_logits_bn,
+            ownership_bn,
+            score_logits_bn,
+            gamma_bn,
+            q6_bn,
+            q16_bn,
+            q50_bn,
+            q6_err_bn,
+            q16_err_bn,
+            q50_err_bn,
+            q6_score_bn,
+            q16_score_bn,
+            q50_score_bn,
+            q6_score_err_bn,
+            q16_score_err_bn,
+            q50_score_err_bn,
+        ) = self.value_head_bn(x_bn, scores=scores)
+        pi_bn = keras.activations.softmax(pi_logits_bn)
+        outcome_probs_bn = keras.activations.softmax(outcome_logits_bn)
+        score_probs_bn = keras.activations.softmax(score_logits_bn)
+
+        # v1 + one-batch-norm: 23 FVI outputs + 23 BN outputs = 46 total
         return (
+            # FVI outputs (23)
             keras.ops.cast(pi_logits, "float32"),
             keras.ops.cast(pi, "float32"),
             keras.ops.cast(outcome_logits, "float32"),
@@ -930,81 +1370,63 @@ class P3achyGoModel(keras.Model):
             keras.ops.cast(q50_score_err, "float32"),
             keras.ops.cast(pi_logits_soft, "float32"),
             keras.ops.cast(pi_logits_optimistic, "float32"),
+            # BN outputs (23)
+            keras.ops.cast(pi_logits_bn, "float32"),
+            keras.ops.cast(pi_bn, "float32"),
+            keras.ops.cast(outcome_logits_bn, "float32"),
+            keras.ops.cast(outcome_probs_bn, "float32"),
+            keras.ops.cast(ownership_bn, "float32"),
+            keras.ops.cast(score_logits_bn, "float32"),
+            keras.ops.cast(score_probs_bn, "float32"),
+            keras.ops.cast(gamma_bn, "float32"),
+            keras.ops.cast(pi_logits_aux_bn, "float32"),
+            keras.ops.cast(q6_bn, "float32"),
+            keras.ops.cast(q16_bn, "float32"),
+            keras.ops.cast(q50_bn, "float32"),
+            keras.ops.cast(q6_err_bn, "float32"),
+            keras.ops.cast(q16_err_bn, "float32"),
+            keras.ops.cast(q50_err_bn, "float32"),
+            keras.ops.cast(q6_score_bn, "float32"),
+            keras.ops.cast(q16_score_bn, "float32"),
+            keras.ops.cast(q50_score_bn, "float32"),
+            keras.ops.cast(q6_score_err_bn, "float32"),
+            keras.ops.cast(q16_score_err_bn, "float32"),
+            keras.ops.cast(q50_score_err_bn, "float32"),
+            keras.ops.cast(pi_logits_soft_bn, "float32"),
+            keras.ops.cast(pi_logits_optimistic_bn, "float32"),
         )
 
     def compute_losses(
         self,
-        pi_logits,
-        pi_logits_aux,
-        game_outcome,
-        score_logits,
-        own_pred,
-        q6_pred,
-        q16_pred,
-        q50_pred,
-        gamma,
-        policy,
-        policy_aux,
-        score,
-        score_one_hot,
-        own,
-        q6,
-        q16,
-        q50,
-        w_pi,
-        w_pi_aux,
-        w_val,
-        w_outcome,
-        w_score,
-        w_own,
-        w_q6,
-        w_q16,
-        w_q50,
-        w_gamma,
-        # v1 parameters (optional, default to None/0 for v0)
-        q6_err_pred=None,
-        q16_err_pred=None,
-        q50_err_pred=None,
-        q6_score_pred=None,
-        q16_score_pred=None,
-        q50_score_pred=None,
-        q6_score_err_pred=None,
-        q16_score_err_pred=None,
-        q50_score_err_pred=None,
-        pi_logits_soft=None,
-        pi_logits_optimistic=None,
-        # v1 ground truth labels
-        q6_score=None,
-        q16_score=None,
-        q50_score=None,
-        # v1 weights
-        w_q_err=0.0,
-        w_q_score=0.0,
-        w_q_score_err=0.0,
-        w_pi_soft=0.0,
-        w_pi_optimistic=0.0,
+        predictions: ModelPredictions,
+        targets: GroundTruth,
+        weights: LossWeights,
     ):
         # Policy Loss
-        pi_probs = keras.activations.softmax(tf.cast(pi_logits, tf.float32))
-        policy_loss = keras.metrics.kl_divergence(tf.cast(policy, tf.float32), pi_probs)
+        pi_probs = keras.activations.softmax(tf.cast(predictions.pi_logits, tf.float32))
+        policy_loss = keras.metrics.kl_divergence(
+            tf.cast(targets.policy, tf.float32), pi_probs
+        )
         policy_loss = tf.reduce_mean(policy_loss)
-        policy_aux_loss = self.scce_logits(policy_aux, pi_logits_aux)
+        policy_aux_loss = self.scce_logits(
+            targets.policy_aux, predictions.pi_logits_aux
+        )
 
         # Outcome Loss
-        did_win = score >= 0
-        outcome_loss = self.scce_logits(did_win, game_outcome)
-        q6_loss = self.mse(q6, q6_pred)
-        q16_loss = self.mse(q16, q16_pred)
-        q50_loss = self.mse(q50, q50_pred)
+        did_win = targets.score >= 0
+        outcome_loss = self.scce_logits(did_win, predictions.game_outcome)
+        q6_loss = self.mse(targets.q6, predictions.q6_pred)
+        q16_loss = self.mse(targets.q16, predictions.q16_pred)
+        q50_loss = self.mse(targets.q50, predictions.q50_pred)
 
         # Score Loss
-        score_index = score + SCORE_RANGE_MIDPOINT
-        score_distribution = keras.activations.softmax(score_logits)
+        score_index = targets.score + SCORE_RANGE_MIDPOINT
+        score_distribution = keras.activations.softmax(predictions.score_logits)
         score_pdf_loss = self.scce(score_index, score_distribution)
         score_cdf_loss = tf.math.reduce_mean(
             tf.math.reduce_sum(
                 tf.math.square(
-                    tf.math.cumsum(score_one_hot, axis=1)
+                    tf.math.cumsum(targets.score_one_hot, axis=1)
                     - tf.math.cumsum(score_distribution, axis=1)
                 ),
                 axis=1,
@@ -1012,22 +1434,24 @@ class P3achyGoModel(keras.Model):
         )
 
         # Ownership Loss
-        own_pred = tf.squeeze(own_pred, -1)  # tailing 1 dim.
-        own_loss = self.mse(own, own_pred)
+        own_pred_squeezed = tf.squeeze(predictions.own_pred, -1)  # tailing 1 dim.
+        own_loss = self.mse(targets.own, own_pred_squeezed)
 
-        gamma = tf.squeeze(gamma, axis=-1)
-        gamma_loss = tf.math.reduce_mean(gamma * gamma * w_gamma)
+        gamma_squeezed = tf.squeeze(predictions.gamma, axis=-1)
+        gamma_loss = tf.math.reduce_mean(
+            gamma_squeezed * gamma_squeezed * weights.w_gamma
+        )
 
         # Weight everything
-        woutcome_loss = w_outcome * outcome_loss
-        wq6_loss = w_q6 * q6_loss
-        wq16_loss = w_q16 * q16_loss
-        wq50_loss = w_q50 * q50_loss
-        wscore_pdf_loss = w_score * score_pdf_loss
-        wscore_cdf_loss = w_score * score_cdf_loss
-        wown_loss = w_own * own_loss
+        woutcome_loss = weights.w_outcome * outcome_loss
+        wq6_loss = weights.w_q6 * q6_loss
+        wq16_loss = weights.w_q16 * q16_loss
+        wq50_loss = weights.w_q50 * q50_loss
+        wscore_pdf_loss = weights.w_score * score_pdf_loss
+        wscore_cdf_loss = weights.w_score * score_cdf_loss
+        wown_loss = weights.w_own * own_loss
         val_loss = (
-            w_val
+            weights.w_val
             * (
                 woutcome_loss
                 + wq6_loss
@@ -1036,12 +1460,12 @@ class P3achyGoModel(keras.Model):
                 + wscore_pdf_loss
                 + wown_loss
             )
-            + wscore_cdf_loss
+            + wscore_cdf_loss  # Outside w_val to prevent score variance
         )
 
         loss = (
-            w_pi * tf.cast(policy_loss, tf.float32)
-            + w_pi_aux * tf.cast(policy_aux_loss, tf.float32)
+            weights.w_pi * tf.cast(policy_loss, tf.float32)
+            + weights.w_pi_aux * tf.cast(policy_aux_loss, tf.float32)
             + tf.cast(val_loss, tf.float32)
             + tf.cast(gamma_loss, tf.float32)
         )
@@ -1053,44 +1477,22 @@ class P3achyGoModel(keras.Model):
         pi_soft_loss = tf.constant(0.0)
         pi_optimistic_loss = tf.constant(0.0)
 
-        if self.version == 1 and q6_err_pred is not None:
+        if self.version >= 1 and predictions.q6_err_pred is not None:
             (
                 q_err_loss,
                 q_score_loss,
                 q_score_err_loss,
                 pi_soft_loss,
                 pi_optimistic_loss,
-            ) = self.v1_loss_terms(
-                q6_pred=q6_pred,
-                q16_pred=q16_pred,
-                q50_pred=q50_pred,
-                q6_err_pred=q6_err_pred,
-                q16_err_pred=q16_err_pred,
-                q50_err_pred=q50_err_pred,
-                q6_score_pred=q6_score_pred,
-                q16_score_pred=q16_score_pred,
-                q50_score_pred=q50_score_pred,
-                q6_score_err_pred=q6_score_err_pred,
-                q16_score_err_pred=q16_score_err_pred,
-                q50_score_err_pred=q50_score_err_pred,
-                pi_logits_soft=pi_logits_soft,
-                pi_logits_optimistic=pi_logits_optimistic,
-                q6=q6,
-                q16=q16,
-                q50=q50,
-                q6_score=q6_score,
-                q16_score=q16_score,
-                q50_score=q50_score,
-                policy=policy,
-            )
+            ) = self.v1_loss_terms(predictions, targets)
 
             # Add v1 losses to total
             loss = loss + (
-                w_q_err * q_err_loss
-                + w_q_score * q_score_loss
-                + w_q_score_err * q_score_err_loss
-                + w_pi_soft * pi_soft_loss
-                + w_pi_optimistic * pi_optimistic_loss
+                weights.w_q_err * q_err_loss
+                + weights.w_q_score * q_score_loss
+                + weights.w_q_score_err * q_score_err_loss
+                + weights.w_pi_soft * pi_soft_loss
+                + weights.w_pi_optimistic * pi_optimistic_loss
             )
 
         return (
@@ -1102,6 +1504,7 @@ class P3achyGoModel(keras.Model):
             q16_loss,
             q50_loss,
             score_pdf_loss,
+            score_cdf_loss,
             own_loss,
             # v1 losses (for logging)
             q_err_loss,
@@ -1113,29 +1516,8 @@ class P3achyGoModel(keras.Model):
 
     def v1_loss_terms(
         self,
-        # Predictions
-        q6_pred,
-        q16_pred,
-        q50_pred,
-        q6_err_pred,
-        q16_err_pred,
-        q50_err_pred,
-        q6_score_pred,
-        q16_score_pred,
-        q50_score_pred,
-        q6_score_err_pred,
-        q16_score_err_pred,
-        q50_score_err_pred,
-        pi_logits_soft,
-        pi_logits_optimistic,
-        # Ground truth
-        q6,
-        q16,
-        q50,
-        q6_score,
-        q16_score,
-        q50_score,
-        policy,
+        predictions: ModelPredictions,
+        targets: GroundTruth,
     ):
         """
         Compute v1-specific losses.
@@ -1145,60 +1527,70 @@ class P3achyGoModel(keras.Model):
         """
         epsilon = 1e-6
         huber = keras.losses.Huber(reduction="none")
+        huber_score = keras.losses.Huber(reduction="none", delta=10.0)
 
         # Q error losses (outputs 12-14): Huber loss
         # Target is squared diff between NN prediction and ground truth
         # Use stop_gradient on predictions used as targets
-        q6_err_target = tf.square(tf.stop_gradient(q6_pred) - q6)
-        q16_err_target = tf.square(tf.stop_gradient(q16_pred) - q16)
-        q50_err_target = tf.square(tf.stop_gradient(q50_pred) - q50)
+        q6_err_target = tf.square(tf.stop_gradient(predictions.q6_pred) - targets.q6)
+        q16_err_target = tf.square(tf.stop_gradient(predictions.q16_pred) - targets.q16)
+        q50_err_target = tf.square(tf.stop_gradient(predictions.q50_pred) - targets.q50)
 
-        q6_err_loss = tf.reduce_mean(huber(q6_err_target, q6_err_pred))
-        q16_err_loss = tf.reduce_mean(huber(q16_err_target, q16_err_pred))
-        q50_err_loss = tf.reduce_mean(huber(q50_err_target, q50_err_pred))
+        q6_err_loss = tf.reduce_mean(huber(q6_err_target, predictions.q6_err_pred))
+        q16_err_loss = tf.reduce_mean(huber(q16_err_target, predictions.q16_err_pred))
+        q50_err_loss = tf.reduce_mean(huber(q50_err_target, predictions.q50_err_pred))
         q_err_loss = q6_err_loss + q16_err_loss + q50_err_loss
 
         # Q score losses (outputs 15-17): Huber loss on score predictions
         q_score_loss = tf.constant(0.0)
-        if q6_score is not None:
-            q6_score_loss = tf.reduce_mean(huber(q6_score, q6_score_pred))
-            q16_score_loss = tf.reduce_mean(huber(q16_score, q16_score_pred))
-            q50_score_loss = tf.reduce_mean(huber(q50_score, q50_score_pred))
+        if targets.q6_score is not None:
+            q6_score_loss = tf.reduce_mean(
+                huber_score(targets.q6_score, predictions.q6_score_pred)
+            )
+            q16_score_loss = tf.reduce_mean(
+                huber_score(targets.q16_score, predictions.q16_score_pred)
+            )
+            q50_score_loss = tf.reduce_mean(
+                huber_score(targets.q50_score, predictions.q50_score_pred)
+            )
             q_score_loss = q6_score_loss + q16_score_loss + q50_score_loss
 
         # Q score error losses (outputs 18-20): Huber loss
         # Use stop_gradient on predictions used as targets
         q_score_err_loss = tf.constant(0.0)
-        if q6_score is not None:
-            q6_score_err_target = tf.square(tf.stop_gradient(q6_score_pred) - q6_score)
+        if targets.q6_score is not None:
+            q6_score_err_target = tf.square(
+                tf.stop_gradient(predictions.q6_score_pred) - targets.q6_score
+            )
             q16_score_err_target = tf.square(
-                tf.stop_gradient(q16_score_pred) - q16_score
+                tf.stop_gradient(predictions.q16_score_pred) - targets.q16_score
             )
             q50_score_err_target = tf.square(
-                tf.stop_gradient(q50_score_pred) - q50_score
+                tf.stop_gradient(predictions.q50_score_pred) - targets.q50_score
             )
 
             q6_score_err_loss = tf.reduce_mean(
-                huber(q6_score_err_target, q6_score_err_pred)
+                huber_score(q6_score_err_target, predictions.q6_score_err_pred)
             )
             q16_score_err_loss = tf.reduce_mean(
-                huber(q16_score_err_target, q16_score_err_pred)
+                huber_score(q16_score_err_target, predictions.q16_score_err_pred)
             )
             q50_score_err_loss = tf.reduce_mean(
-                huber(q50_score_err_target, q50_score_err_pred)
+                huber_score(q50_score_err_target, predictions.q50_score_err_pred)
             )
             q_score_err_loss = (
                 q6_score_err_loss + q16_score_err_loss + q50_score_err_loss
             )
 
         # Soft policy loss (output 21): KLD on policy^0.25
-        # Compute soft policy target from policy by raising to 0.25 power and renormalizing
-        policy_f32 = tf.cast(policy, tf.float32)
-        policy_soft = tf.pow(policy_f32 + epsilon, 0.25)
-        policy_soft = policy_soft / (
-            tf.reduce_sum(policy_soft, axis=-1, keepdims=True) + epsilon
+        policy_f32 = tf.cast(targets.policy, tf.float32)
+        policy_soft = tf.pow(policy_f32, 0.25)
+        policy_soft = policy_soft / tf.reduce_sum(policy_soft, axis=-1, keepdims=True)
+
+        # Compute KLD loss
+        pi_soft_probs = keras.activations.softmax(
+            tf.cast(predictions.pi_logits_soft, tf.float32)
         )
-        pi_soft_probs = keras.activations.softmax(tf.cast(pi_logits_soft, tf.float32))
         pi_soft_loss = keras.metrics.kl_divergence(policy_soft, pi_soft_probs)
         pi_soft_loss = tf.reduce_mean(pi_soft_loss)
 
@@ -1206,13 +1598,13 @@ class P3achyGoModel(keras.Model):
         # Weight = clamp(0, 1, sigmoid((z_value-1.5)*3) + sigmoid((z_score-1.5)*3))
         # z_value = (q6 - stop_grad(q6_pred)) / stop_grad(sqrt(q6_err_pred + eps))
         # Note: q_err_pred is already constrained to be non-negative via sigmoid in ValueHead
-        z_value = (q6 - tf.stop_gradient(q6_pred)) / (
-            tf.stop_gradient(tf.sqrt(q6_err_pred + epsilon))
+        z_value = (targets.q6 - tf.stop_gradient(predictions.q6_pred)) / (
+            tf.stop_gradient(tf.sqrt(predictions.q6_err_pred + epsilon))
         )
-        if q6_score is not None:
-            z_score = (q6_score - tf.stop_gradient(q6_score_pred)) / (
-                tf.stop_gradient(tf.sqrt(q6_score_err_pred + epsilon))
-            )
+        if targets.q6_score is not None:
+            z_score = (
+                targets.q6_score - tf.stop_gradient(predictions.q6_score_pred)
+            ) / (tf.stop_gradient(tf.sqrt(predictions.q6_score_err_pred + epsilon)))
         else:
             z_score = tf.zeros_like(z_value)
 
@@ -1225,14 +1617,14 @@ class P3achyGoModel(keras.Model):
         optimistic_weight = tf.expand_dims(optimistic_weight, axis=-1)
 
         # Weighted policy target
-        weighted_policy = tf.cast(policy, tf.float32) * optimistic_weight
+        weighted_policy = tf.cast(targets.policy, tf.float32) * optimistic_weight
         # Renormalize
         weighted_policy = weighted_policy / (
             tf.reduce_sum(weighted_policy, axis=-1, keepdims=True) + epsilon
         )
 
         pi_optimistic_probs = keras.activations.softmax(
-            tf.cast(pi_logits_optimistic, tf.float32)
+            tf.cast(predictions.pi_logits_optimistic, tf.float32)
         )
         pi_optimistic_loss = keras.metrics.kl_divergence(
             weighted_policy, pi_optimistic_probs
@@ -1264,6 +1656,33 @@ class P3achyGoModel(keras.Model):
             "version": self.version,
             "name": self.name,
         }
+
+    def get_build_config(self):
+        """Return config needed to rebuild the model's state."""
+        return {
+            "input_shape": [None, self.board_len, self.board_len, self.num_input_planes],
+            "game_state_shape": [None, self.num_input_features],
+        }
+
+    def build_from_config(self, config):
+        """Build the model from the saved build config."""
+        input_shape = config.get("input_shape")
+        game_shape = config.get("game_state_shape")
+
+        if input_shape is not None:
+            # Extract spatial dimensions, ignoring batch
+            if isinstance(input_shape, list) and len(input_shape) >= 4:
+                board_input = keras.ops.zeros([1, input_shape[-3], input_shape[-2], input_shape[-1]])
+            else:
+                board_input = keras.ops.zeros([1, self.board_len, self.board_len, self.num_input_planes])
+
+            if game_shape is not None and isinstance(game_shape, list):
+                game_input = keras.ops.zeros([1, game_shape[-1]])
+            else:
+                game_input = keras.ops.zeros([1, self.num_input_features])
+
+            # Call the model to trigger building all layers
+            self(board_input, game_input, training=False)
 
     def summary(self):
         x0 = keras.layers.Input(
@@ -1308,12 +1727,19 @@ class P3achyGoModel(keras.Model):
     def custom_objects():
         return {
             "ConvBlock": ConvBlock,
+            "ConvPostActivation": ConvPostActivation,
+            "ConvPreActivation": ConvPreActivation,
             "ResidualBlock": ResidualBlock,
+            "ClassicResidualBlock": ClassicResidualBlock,
             "BottleneckResidualConvBlock": BottleneckResidualConvBlock,
+            "NbtResidualBlock": NbtResidualBlock,
             "BroadcastResidualBlock": BroadcastResidualBlock,
             "Broadcast": BroadcastResidualBlock.Broadcast,
+            "BroadcastPostAct": BroadcastResidualBlock.BroadcastPostAct,
+            "BroadcastPreAct": BroadcastResidualBlock.BroadcastPreAct,
             "GlobalPoolBias": GlobalPoolBias,
             "GlobalPool": GlobalPool,
             "PolicyHead": PolicyHead,
+            "ValueHead": ValueHead,
             "P3achyGoModel": P3achyGoModel,
         }

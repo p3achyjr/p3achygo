@@ -12,6 +12,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "NvInferImpl.h"
 #include "absl/flags/flag.h"
 #include "absl/flags/parse.h"
 #include "absl/log/check.h"
@@ -19,6 +20,7 @@
 #include "cc/nn/engine/benchmark_engine.h"
 #include "cc/nn/engine/buf_utils.h"
 #include "cc/nn/engine/engine.h"
+#include "cc/nn/engine/engine_factory.h"
 #include "cc/nn/engine/go_dataset.h"
 #include "cc/nn/engine/go_features.h"
 #include "cc/nn/engine/trt_calibrator.h"
@@ -72,7 +74,8 @@ ABSL_FLAG(std::string, ds_path, "", "Path to calibration ds.");
 ABSL_FLAG(std::string, out_dir, "",
           "Directory to store engine. Defaults to same directory as weights.");
 ABSL_FLAG(std::string, engine_path, "", "Path to existing engine.");
-ABSL_FLAG(std::string, engine_name, "engine.trt", "Name of engine.");
+ABSL_FLAG(std::string, engine_name, "",
+          "Name of engine. Defaults to <onnx_stem>.trt.");
 ABSL_FLAG(bool, use_int8, false, "Whether to enable INT8.");
 ABSL_FLAG(int, batch_size, 0, "Batch Size. ");
 
@@ -94,6 +97,11 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  // Extract version from model path
+  std::string model_path = onnx_path.empty() ? engine_path : onnx_path;
+  int version = nn::GetVersionFromModelPath(model_path);
+  LOG(INFO) << "Detected model version: " << version;
+
   std::unique_ptr<nn::GoDataset> go_ds =
       std::make_unique<nn::GoDataset>(batch_size, ds_path);
   if (engine_path == "") {
@@ -106,13 +114,17 @@ int main(int argc, char** argv) {
       out_dir = fs::path(onnx_path).parent_path();
     }
 
-    engine_path = fs::path(out_dir) / absl::GetFlag(FLAGS_engine_name);
+    std::string engine_name = absl::GetFlag(FLAGS_engine_name);
+    if (engine_name.empty()) {
+      engine_name = fs::path(onnx_path).stem().string() + ".trt";
+    }
+    engine_path = fs::path(out_dir) / engine_name;
 
     // 1. Create TensorRT builder, logger, and network
     nv::IBuilder* builder = nv::createInferBuilder(nn::trt::logger());
     nv::INetworkDefinition* network = builder->createNetworkV2(
         1U << static_cast<uint32_t>(
-            nv::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH));
+            nv::NetworkDefinitionCreationFlag::kSTRONGLY_TYPED));
 
     // 2. Create ONNX parser
     nvonnxparser::IParser* parser =
@@ -126,48 +138,28 @@ int main(int argc, char** argv) {
       return 1;
     }
 
+    // Set static input dimensions
+    const int num_planes = version >= 1 ? constants::kNumInputFeaturePlanesV1
+                                        : constants::kNumInputFeaturePlanesV0;
+    const int num_features = version >= 1
+                                 ? constants::kNumInputFeatureScalarsV1
+                                 : constants::kNumInputFeatureScalarsV0;
     for (int i = 0; i < network->getNbInputs(); ++i) {
-      nv::ITensor* tensor = network->getInput(i);
-      LOG(INFO) << "Tensor " << i << ": " << static_cast<int>(tensor->getType())
-                << ", " << tensor->getName()
-                << ", formats: " << tensor->getAllowedFormats() << std::endl;
+      nv::ITensor* input = network->getInput(i);
+      std::string name = input->getName();
+      LOG(INFO) << "Input " << i << ": " << static_cast<int>(input->getType())
+                << ", " << name << ", formats: " << input->getAllowedFormats();
+
+      if (name == "board_state") {
+        input->setDimensions(nv::Dims4(batch_size, 19, 19, num_planes));
+      } else if (name == "game_state") {
+        input->setDimensions(nv::Dims2(batch_size, num_features));
+      }
     }
-
-    // Build Optimization Profile.
-    nv::IOptimizationProfile* profile = builder->createOptimizationProfile();
-
-    // Min
-    profile->setDimensions("board_state", nv::OptProfileSelector::kMIN,
-                           nv::Dims4(1, 19, 19, 13));
-    profile->setDimensions("game_state", nv::OptProfileSelector::kMIN,
-                           nv::Dims2(1, 7));
-
-    // Opt
-    profile->setDimensions("board_state", nv::OptProfileSelector::kOPT,
-                           nv::Dims4(batch_size, 19, 19, 13));
-    profile->setDimensions("game_state", nv::OptProfileSelector::kOPT,
-                           nv::Dims2(batch_size, 7));
-
-    // Max
-    profile->setDimensions("board_state", nv::OptProfileSelector::kMAX,
-                           nv::Dims4(batch_size, 19, 19, 13));
-    profile->setDimensions("game_state", nv::OptProfileSelector::kMAX,
-                           nv::Dims2(batch_size, 7));
 
     nvinfer1::IBuilderConfig* config = builder->createBuilderConfig();
     config->setMemoryPoolLimit(nv::MemoryPoolType::kWORKSPACE,
                                static_cast<size_t>(20) << 32);
-    config->addOptimizationProfile(profile);
-    std::unique_ptr<nn::trt::Int8Calibrator> calibrator =
-        nn::trt::Int8Calibrator::Create(batch_size, go_ds.get(),
-                                        "/tmp/int8_cache.trt");
-    config->setFlag(nv::BuilderFlag::kFP16);
-    if (absl::GetFlag(FLAGS_use_int8) && builder->platformHasFastInt8()) {
-      config->setFlag(nv::BuilderFlag::kINT8);
-      config->setInt8Calibrator(calibrator.get());
-      config->setCalibrationProfile(profile);
-    }
-
     nv::IHostMemory* serialized_engine =
         builder->buildSerializedNetwork(*network, *config);
 
@@ -182,7 +174,7 @@ int main(int argc, char** argv) {
 
   // Read back from file.
   std::unique_ptr<TrtEngine> trt_engine =
-      TrtEngine::Create(engine_path, batch_size);
+      TrtEngine::Create(engine_path, batch_size, version);
 
   // Benchmark/verify inference.
   DefaultStats stats;

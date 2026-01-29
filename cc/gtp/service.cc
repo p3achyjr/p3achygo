@@ -147,7 +147,8 @@ ServiceImpl::ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
       k_(k),
       use_puct_(use_puct),
       analysis_running_(false) {
-  root_history_.emplace_back(node_table_->GetOrCreate(game_->board().hash(), current_color_));
+  root_history_.emplace_back(
+      node_table_->GetOrCreate(game_->board().hash(), current_color_, false));
 }
 
 Response<int> ServiceImpl::GtpProtocolVersion(std::optional<int> id) {
@@ -420,7 +421,8 @@ GumbelResult ServiceImpl::GenMoveCommon(Color color) {
     TreeNode* next_root = root_history_.back()->children[kPassLoc];
     if (!next_root) {
       // After the pass, it's the opponent's (color's) turn
-      next_root = node_table_->GetOrCreate(game_->board().hash(), color);
+      next_root = node_table_->GetOrCreate(game_->board().hash(), color,
+                                           game_->IsGameOver());
     }
 
     root_history_.emplace_back(next_root);
@@ -459,7 +461,8 @@ void ServiceImpl::MakeMove(Color color, Loc loc) {
 
   TreeNode* next_root = root_history_.back()->children[loc];
   if (!next_root) {
-    next_root = node_table_->GetOrCreate(game_->board().hash(), current_color_);
+    next_root = node_table_->GetOrCreate(game_->board().hash(), current_color_,
+                                         game_->IsGameOver());
   }
   root_history_.emplace_back(next_root);
 }
@@ -469,14 +472,16 @@ void ServiceImpl::ClearBoard() {
   node_table_ = std::make_unique<MctsNodeTable>();
   current_color_ = BLACK;
   root_history_.clear();
-  root_history_.emplace_back(node_table_->GetOrCreate(game_->board().hash(), current_color_));
+  root_history_.emplace_back(node_table_->GetOrCreate(
+      game_->board().hash(), current_color_, /*is_terminal=*/false));
 }
 }  // namespace
 
 /* static */ absl::StatusOr<std::unique_ptr<Service>> Service::CreateService(
     std::string model_path, int n, int k, bool use_puct) {
   std::unique_ptr<nn::Engine> engine =
-      nn::CreateEngine(nn::KindFromEnginePath(model_path), model_path, 1);
+      nn::CreateEngine(nn::KindFromEnginePath(model_path), model_path, 1,
+                       nn::GetVersionFromModelPath(model_path));
   std::unique_ptr<NNInterface> nn_interface = std::make_unique<NNInterface>(
       1 /* num_threads */, std::numeric_limits<int64_t>::max(), 16384,
       std::move(engine));

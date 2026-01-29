@@ -23,7 +23,8 @@ class TrtEngine : public Engine {
       int batch_id,
       std::array<float, constants::kNumBoardLocs>& own) override = 0;
 
-  static std::unique_ptr<TrtEngine> Create(std::string path, int batch_size);
+  static std::unique_ptr<TrtEngine> Create(std::string path, int batch_size,
+                                           int version);
 
  protected:
   TrtEngine() = default;

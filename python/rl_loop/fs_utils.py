@@ -6,189 +6,193 @@ import shutil
 from pathlib import Path
 from typing import Tuple, Callable
 
-LOCAL_PATH = ''
-MODE = 'gcs'
+LOCAL_PATH = ""
+MODE = "gcs"
 
 
-def _get_most_recent(prefix: str, num_fn: Callable[[str], int],
-                     sentinel: int) -> int:
-  dir = Path(LOCAL_PATH, prefix)
-  most_recent = sentinel
-  for blob in dir.iterdir():
-    most_recent = max(num_fn(blob.name), most_recent)
+def _get_most_recent(prefix: str, num_fn: Callable[[str], int], sentinel: int) -> int:
+    dir = Path(LOCAL_PATH, prefix)
+    most_recent = sentinel
+    for blob in dir.iterdir():
+        most_recent = max(num_fn(blob.name), most_recent)
 
-  return most_recent
+    return most_recent
 
 
-def configure_fs(mode='gcs', local_path=''):
-  if mode not in ['local', 'gcs']:
-    raise Exception(f'Invalid Mode: {mode}, Must be (local, gcs)')
-  if mode == 'local' and not local_path:
-    raise Exception('Must pass a local path if using local storage.')
+def configure_fs(mode="gcs", local_path=""):
+    if mode not in ["local", "gcs"]:
+        raise Exception(f"Invalid Mode: {mode}, Must be (local, gcs)")
+    if mode == "local" and not local_path:
+        raise Exception("Must pass a local path if using local storage.")
 
-  global MODE
-  global LOCAL_PATH
-  MODE = mode
-  LOCAL_PATH = local_path
+    global MODE
+    global LOCAL_PATH
+    MODE = mode
+    LOCAL_PATH = local_path
 
 
 def get_most_recent_model(run_id: str) -> int:
-  if MODE == 'gcs':
-    return gcs.get_most_recent_model(run_id)
-  return _get_most_recent(str(Path(gcs.MODELS_DIR)), gcs._get_model_num, -1)
+    if MODE == "gcs":
+        return gcs.get_most_recent_model(run_id)
+    return _get_most_recent(str(Path(gcs.MODELS_DIR)), gcs._get_model_num, -1)
 
 
 def get_most_recent_model_cand(run_id: str) -> int:
-  if MODE == 'gcs':
-    return gcs.get_most_recent_model_cand(run_id)
-  return _get_most_recent(str(Path(gcs.MODEL_CANDS_DIR)), gcs._get_model_num,
-                          -1)
+    if MODE == "gcs":
+        return gcs.get_most_recent_model_cand(run_id)
+    return _get_most_recent(str(Path(gcs.MODEL_CANDS_DIR)), gcs._get_model_num, -1)
 
 
 def get_most_recent_chunk(run_id: str) -> int:
-  if MODE == 'gcs':
-    return gcs.get_most_recent_chunk(run_id)
+    if MODE == "gcs":
+        return gcs.get_most_recent_chunk(run_id)
 
-  # Shuffler will write the size file after the chunk. We can use this as an
-  # indicator for when the golden chunk is fully flushed.
-  return _get_most_recent(
-      str(Path(gcs.GOLDEN_CHUNK_DIR)),
-      lambda blob_path: gcs._get_num(blob_path, gcs.GOLDEN_CHUNK_SIZE_RE), 0)
+    # Shuffler will write the size file after the chunk. We can use this as an
+    # indicator for when the golden chunk is fully flushed.
+    return _get_most_recent(
+        str(Path(gcs.GOLDEN_CHUNK_DIR)),
+        lambda blob_path: gcs._get_num(blob_path, gcs.GOLDEN_CHUNK_SIZE_RE),
+        0,
+    )
 
 
 def upload_chunk(run_id: str, local_chunk_dir: str, gen: int):
-  if MODE == 'gcs':
-    gcs.upload_chunk(run_id, local_chunk_dir, gen)
+    if MODE == "gcs":
+        gcs.upload_chunk(run_id, local_chunk_dir, gen)
 
 
 def upload_chunk_size(run_id: str, local_chunk_dir: str, gen: int):
-  if MODE == 'gcs':
-    gcs.upload_chunk_size(run_id, local_chunk_dir, gen)
+    if MODE == "gcs":
+        gcs.upload_chunk_size(run_id, local_chunk_dir, gen)
 
 
 def remove_local_chunk(local_chunk_dir: str, gen: int):
-  if MODE == 'gcs':
-    gcs.remove_local_chunk(local_chunk_dir, gen)
-  # We should not remove this in case, as the shuffler will need this file.
+    if MODE == "gcs":
+        gcs.remove_local_chunk(local_chunk_dir, gen)
+    # We should not remove this in case, as the shuffler will need this file.
 
 
 def upload_model(run_id: str, local_models_dir: str, gen: int):
-  if MODE == 'gcs':
-    gcs.upload_model(run_id, local_models_dir, gen)
-    return
+    if MODE == "gcs":
+        gcs.upload_model(run_id, local_models_dir, gen)
+        return
 
-  model_cand_path = Path(LOCAL_PATH, gcs.MODEL_CANDS_DIR,
-                         gcs.MODEL_FORMAT.format(gen))
-  model_path = Path(LOCAL_PATH, gcs.MODELS_DIR, gcs.MODEL_FORMAT.format(gen))
-  shutil.copytree(model_cand_path, model_path)
+    model_cand_path = Path(
+        LOCAL_PATH, gcs.MODEL_CANDS_DIR, gcs.MODEL_FORMAT.format(gen)
+    )
+    model_path = Path(LOCAL_PATH, gcs.MODELS_DIR, gcs.MODEL_FORMAT.format(gen))
+    shutil.copy2(model_cand_path, model_path)
 
 
 def upload_model_cand(run_id: str, local_models_dir: str, gen: int):
-  if MODE == 'gcs':
-    gcs.upload_model_cand(run_id, local_models_dir, gen)
+    if MODE == "gcs":
+        gcs.upload_model_cand(run_id, local_models_dir, gen)
 
 
 def upload_sp_chunk(run_id: str, local_path: Path):
-  if MODE == 'gcs':
-    gcs.upload_sp_chunk(run_id, local_path)
+    if MODE == "gcs":
+        gcs.upload_sp_chunk(run_id, local_path)
 
 
 def upload_sgf(run_id: str, local_path: Path):
-  if MODE == 'gcs':
-    gcs.upload_sgf(run_id, local_path)
+    if MODE == "gcs":
+        gcs.upload_sgf(run_id, local_path)
 
 
-def download_golden_chunk_size(run_id: str, local_chunk_dir: str,
-                               gen: int) -> str:
-  if MODE == 'gcs':
-    return gcs.download_golden_chunk_size(run_id, local_chunk_dir, gen)
-  return str(Path(local_chunk_dir, gcs.GOLDEN_CHUNK_SIZE_FORMAT.format(gen)))
+def download_golden_chunk_size(run_id: str, local_chunk_dir: str, gen: int) -> str:
+    if MODE == "gcs":
+        return gcs.download_golden_chunk_size(run_id, local_chunk_dir, gen)
+    return str(Path(local_chunk_dir, gcs.GOLDEN_CHUNK_SIZE_FORMAT.format(gen)))
 
 
 def download_golden_chunk(run_id: str, local_chunk_dir: str, gen: int) -> str:
-  if MODE == 'gcs':
-    return gcs.download_golden_chunk(run_id, local_chunk_dir, gen)
-  return str(Path(local_chunk_dir, gcs.GOLDEN_CHUNK_FORMAT.format(gen)))
+    if MODE == "gcs":
+        return gcs.download_golden_chunk(run_id, local_chunk_dir, gen)
+    return str(Path(local_chunk_dir, gcs.GOLDEN_CHUNK_FORMAT.format(gen)))
 
 
 def download_model(run_id: str, local_models_dir: str, gen: int) -> str:
-  if MODE == 'gcs':
-    return gcs.download_model(run_id, local_models_dir, gen)
-  return str(Path(local_models_dir, gcs.MODEL_FORMAT.format(gen)))
+    if MODE == "gcs":
+        return gcs.download_model(run_id, local_models_dir, gen)
+    return str(Path(local_models_dir, gcs.MODEL_FORMAT.format(gen)))
 
 
 def download_model_cand(run_id: str, local_models_dir: str, gen: int) -> str:
-  if MODE == 'gcs':
-    return gcs.download_model_cand(run_id, local_models_dir, gen)
-  return str(Path(local_models_dir, gcs.MODEL_FORMAT.format(gen)))
+    if MODE == "gcs":
+        return gcs.download_model_cand(run_id, local_models_dir, gen)
+    return str(Path(local_models_dir, gcs.MODEL_FORMAT.format(gen)))
 
 
 def download_val_ds(local_dir: str) -> str:
-  return gcs.download_val_ds(local_dir)
+    if MODE == "gcs":
+        return gcs.download_val_ds(local_dir)
 
 
 def rsync_chunks(run_id: str, local_dir: str):
-  if MODE == 'gcs':
-    gcs.rsync_chunks(run_id, local_dir)
+    if MODE == "gcs":
+        gcs.rsync_chunks(run_id, local_dir)
 
 
 def list_sp_chunks(run_id: str) -> list[str]:
-  if MODE == 'gcs':
-    return gcs.list_sp_chunks(run_id)
+    if MODE == "gcs":
+        return gcs.list_sp_chunks(run_id)
 
-  return [
-      str(path)
-      for path in Path(LOCAL_PATH, gcs.SP_CHUNK_DIR).glob('*')
-      if gcs.SP_CHUNK_RE.fullmatch(path.name)
-  ]
+    return [
+        str(path)
+        for path in Path(LOCAL_PATH, gcs.SP_CHUNK_DIR).glob("*")
+        if gcs.SP_CHUNK_RE.fullmatch(path.name)
+    ]
 
 
 def local_models_dir(model_dir: str) -> str:
-  return str(Path(model_dir, gcs.MODELS_DIR))
+    return str(Path(model_dir, gcs.MODELS_DIR))
 
 
 def local_chunk_dir(data_dir: str) -> str:
-  return str(Path(data_dir, gcs.GOLDEN_CHUNK_DIR))
+    return str(Path(data_dir, gcs.GOLDEN_CHUNK_DIR))
 
 
 def is_done(run_id: str, local_run_dir: str) -> bool:
-  if MODE == 'gcs':
-    return gcs.is_done(run_id)
+    if MODE == "gcs":
+        return gcs.is_done(run_id)
 
-  for path in Path(local_run_dir):
-    if path.parent.name == gcs.DONE_PREFIX and path.name == gcs.DONE_FILENAME:
-      return True
+    for path in Path(local_run_dir):
+        if path.parent.name == gcs.DONE_PREFIX and path.name == gcs.DONE_FILENAME:
+            return True
 
-  return False
+    return False
 
 
 def signal_done(run_id: str, local_run_dir: str):
-  if MODE == 'gcs':
-    gcs.signal_done(run_id)
+    if MODE == "gcs":
+        gcs.signal_done(run_id)
 
-  path = Path(local_run_dir, gcs.DONE_PREFIX, gcs.DONE_FILENAME)
-  path.touch(exist_ok=True)
-
-
-def ensure_local_dirs(
-    local_run_dir: str) -> Tuple[Path, Path, Path, Path, Path]:
-  local_models_dir = Path(local_run_dir, gcs.MODELS_DIR)
-  local_model_cands_dir = Path(local_run_dir, gcs.MODEL_CANDS_DIR)
-  local_golden_chunk_dir = Path(local_run_dir, gcs.GOLDEN_CHUNK_DIR)
-  local_sp_chunk_dir = Path(local_run_dir, gcs.SP_CHUNK_DIR)
-  local_sgf_dir = Path(local_run_dir, gcs.SGF_DIR)
-
-  local_models_dir.mkdir(exist_ok=True)
-  local_model_cands_dir.mkdir(exist_ok=True)
-  local_golden_chunk_dir.mkdir(exist_ok=True)
-  local_sp_chunk_dir.mkdir(exist_ok=True)
-  local_sgf_dir.mkdir(exist_ok=True)
-
-  return (local_models_dir, local_model_cands_dir, local_golden_chunk_dir,
-          local_sp_chunk_dir, local_sgf_dir)
+    path = Path(local_run_dir, gcs.DONE_PREFIX, gcs.DONE_FILENAME)
+    path.touch(exist_ok=True)
 
 
-def file_diff(dir: Path, files: set(Path),
-              pat: str) -> Tuple[set(Path), set[Path]]:
-  cur_files = set(dir.glob(pat))
-  return cur_files, cur_files.difference(files)
+def ensure_local_dirs(local_run_dir: str) -> Tuple[Path, Path, Path, Path, Path]:
+    local_models_dir = Path(local_run_dir, gcs.MODELS_DIR)
+    local_model_cands_dir = Path(local_run_dir, gcs.MODEL_CANDS_DIR)
+    local_golden_chunk_dir = Path(local_run_dir, gcs.GOLDEN_CHUNK_DIR)
+    local_sp_chunk_dir = Path(local_run_dir, gcs.SP_CHUNK_DIR)
+    local_sgf_dir = Path(local_run_dir, gcs.SGF_DIR)
+
+    local_models_dir.mkdir(exist_ok=True)
+    local_model_cands_dir.mkdir(exist_ok=True)
+    local_golden_chunk_dir.mkdir(exist_ok=True)
+    local_sp_chunk_dir.mkdir(exist_ok=True)
+    local_sgf_dir.mkdir(exist_ok=True)
+
+    return (
+        local_models_dir,
+        local_model_cands_dir,
+        local_golden_chunk_dir,
+        local_sp_chunk_dir,
+        local_sgf_dir,
+    )
+
+
+def file_diff(dir: Path, files: set(Path), pat: str) -> Tuple[set(Path), set[Path]]:
+    cur_files = set(dir.glob(pat))
+    return cur_files, cur_files.difference(files)

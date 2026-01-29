@@ -9,3 +9,7 @@
 - 13 input feature planes, 7 input feature scalars.
 - Aux Policy, short-term q loss (regularization only)
 - SWA Momentum Scaling
+
+## v2
+- 15 input features, 8 input feature scalars
+- variance, shortterm value, optimistic policy prep

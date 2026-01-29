@@ -84,9 +84,9 @@ Int8CalibratorImpl::~Int8CalibratorImpl() {
 
 void Int8CalibratorImpl::initialize() {
   nbytes_planes_ = sizeof(float) * batch_size_ *
-                   constants::kNumInputFeaturePlanes * BOARD_LEN * BOARD_LEN;
+                   constants::kNumInputFeaturePlanesV0 * BOARD_LEN * BOARD_LEN;
   nbytes_features_ =
-      sizeof(float) * batch_size_ * constants::kNumInputFeatureScalars;
+      sizeof(float) * batch_size_ * constants::kNumInputFeatureScalarsV0;
 
   nbytes_scores_ = sizeof(float) * constants::kNumScoreLogits;
   cudaMalloc(&device_input_planes_, nbytes_planes_);
@@ -112,9 +112,9 @@ bool Int8CalibratorImpl::getBatch(void* bindings[], const char* names[],
 
   std::array<int, 4> planes_shape = {static_cast<int>(batch_size_), BOARD_LEN,
                                      BOARD_LEN,
-                                     constants::kNumInputFeaturePlanes};
+                                     constants::kNumInputFeaturePlanesV0};
   std::array<int, 2> feats_shape = {static_cast<int>(batch_size_),
-                                    constants::kNumInputFeatureScalars};
+                                    constants::kNumInputFeatureScalarsV0};
   std::vector<GoDataset::Row> batch_examples = *go_ds_iterator_;
   ++go_ds_iterator_;
 
@@ -147,10 +147,10 @@ bool Int8CalibratorImpl::getBatch(void* bindings[], const char* names[],
       const GoFeatures& example = batch_examples[batch_id].features;
       if (std::string(name) == input::kPlanesName) {
         LoadPlanes(static_cast<float*>(host_binding), planes_shape, example,
-                   batch_id);
+                   batch_id, 1);
       } else if (std::string(name) == input::kFeaturesName) {
         LoadFeatures(static_cast<float*>(host_binding), feats_shape, example,
-                     batch_id);
+                     batch_id, 1);
       }
     }
 

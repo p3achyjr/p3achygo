@@ -5,27 +5,7 @@ import symmetry as sym
 import tensorflow as tf
 from constants import *
 
-# v0 example description
 EX_DESC = {
-    "bsize": tf.io.FixedLenFeature([], tf.string),
-    "board": tf.io.FixedLenFeature([], tf.string),
-    "last_moves": tf.io.FixedLenFeature([], tf.string),
-    "stones_atari": tf.io.FixedLenFeature([], tf.string),
-    "stones_two_liberties": tf.io.FixedLenFeature([], tf.string),
-    "stones_three_liberties": tf.io.FixedLenFeature([], tf.string),
-    "color": tf.io.FixedLenFeature([], tf.string),
-    "komi": tf.io.FixedLenFeature([], tf.float32),
-    "own": tf.io.FixedLenFeature([], tf.string),
-    "pi": tf.io.FixedLenFeature([], tf.string),
-    "pi_aux": tf.io.FixedLenFeature([], tf.string),
-    "score_margin": tf.io.FixedLenFeature([], tf.float32),
-    "q30": tf.io.FixedLenFeature([], tf.float32),
-    "q100": tf.io.FixedLenFeature([], tf.float32),
-    "q200": tf.io.FixedLenFeature([], tf.float32),
-}
-
-# v1 example description
-EX_DESC_V1 = {
     "bsize": tf.io.FixedLenFeature([], tf.string),
     "board": tf.io.FixedLenFeature([], tf.string),
     "last_moves": tf.io.FixedLenFeature([], tf.string),
@@ -143,7 +123,7 @@ def _apply_symmetry_to_grids(
     own,
     policy,
     policy_aux,
-    stones_in_ladder=None,
+    stones_in_ladder,
 ):
     """Apply symmetry transformations to all grid-based tensors."""
     board = sym.apply_grid_symmetry(symmetry, board)
@@ -153,6 +133,7 @@ def _apply_symmetry_to_grids(
     stones_atari = sym.apply_grid_symmetry(symmetry, stones_atari)
     stones_two_liberties = sym.apply_grid_symmetry(symmetry, stones_two_liberties)
     stones_three_liberties = sym.apply_grid_symmetry(symmetry, stones_three_liberties)
+    stones_in_ladder = sym.apply_grid_symmetry(symmetry, stones_in_ladder)
     own = sym.apply_grid_symmetry(symmetry, own)
 
     board_policy = policy[0 : bsize * bsize]
@@ -165,9 +146,6 @@ def _apply_symmetry_to_grids(
         policy_aux = as_loc(policy_aux, bsize=bsize)
         policy_aux = sym.apply_loc_symmetry(symmetry, policy_aux, bsize)
         policy_aux = as_index(policy_aux, bsize=bsize)
-
-    if stones_in_ladder is not None:
-        stones_in_ladder = sym.apply_grid_symmetry(symmetry, stones_in_ladder)
 
     return (
         board,
@@ -182,7 +160,7 @@ def _apply_symmetry_to_grids(
     )
 
 
-def _build_base_input_planes(
+def _build_input_planes(
     color,
     bsize,
     board,
@@ -190,8 +168,9 @@ def _build_base_input_planes(
     stones_atari,
     stones_two_liberties,
     stones_three_liberties,
+    stones_in_ladder,
 ):
-    """Build the first 13 input planes common to v0 and v1."""
+    """Build the first 13 input planes."""
     black_stones = get_color(board, BLACK)
     white_stones = get_color(board, WHITE)
     black_atari = get_color(stones_atari, BLACK)
@@ -200,6 +179,8 @@ def _build_base_input_planes(
     white_two_liberties = get_color(stones_two_liberties, WHITE)
     black_three_liberties = get_color(stones_three_liberties, BLACK)
     white_three_liberties = get_color(stones_three_liberties, WHITE)
+    black_in_ladder = get_color(stones_in_ladder, BLACK)
+    white_in_ladder = get_color(stones_in_ladder, WHITE)
 
     our_stones = tf.where(color == BLACK, black_stones, white_stones)
     opp_stones = tf.where(color == BLACK, white_stones, black_stones)
@@ -217,6 +198,8 @@ def _build_base_input_planes(
     opp_three_liberties = tf.where(
         color == BLACK, white_three_liberties, black_three_liberties
     )
+    our_in_ladder = tf.where(color == BLACK, black_in_ladder, white_in_ladder)
+    opp_in_ladder = tf.where(color == BLACK, white_in_ladder, black_in_ladder)
 
     # mask last moves on a small percentage of examples to prevent net from
     # tunnel-visioning on move history.
@@ -237,6 +220,8 @@ def _build_base_input_planes(
         opp_two_liberties,
         our_three_liberties,
         opp_three_liberties,
+        our_in_ladder,
+        opp_in_ladder,
     ]
 
 
@@ -255,7 +240,7 @@ def _build_score_one_hot(score):
     )
 
 
-def _build_global_state(color, last_moves):
+def _build_global_state(color, last_moves, komi):
     """Build global state tensor from color and last moves."""
     last_move_was_pass = tf.cast(
         tf.map_fn(lambda mv: 1 if tf.reduce_all(mv == PASS_MOVE) else 0, last_moves),
@@ -264,25 +249,28 @@ def _build_global_state(color, last_moves):
     color_indicator = tf.cast(
         tf.convert_to_tensor([color == BLACK, color == WHITE]), tf.float32
     )
-    return tf.concat([color_indicator, last_move_was_pass], axis=0)
+    komi_normalized = komi / 15.0
+    komi_normalized = tf.cast(
+        tf.convert_to_tensor([-komi_normalized if color == BLACK else komi_normalized]),
+        tf.float32,
+    )
+    return tf.concat([color_indicator, last_move_was_pass, komi_normalized], axis=0)
 
 
-def _parse_example(tf_example, version=0):
+def _parse_example(tf_example):
     """
-    Parse a tfrecord example for v0 or v1.
+    Parse a tfrecord example.
 
-    Returns a dict with parsed and preprocessed tensors. v1 includes additional
-    fields (stones_in_ladder, q6_score, q16_score, q50_score).
+    Returns a dict with parsed and preprocessed tensors.
     """
-    ex_desc = EX_DESC_V1 if version == 1 else EX_DESC
-    ex = tf.io.parse_single_example(tf_example, ex_desc)
+    ex = tf.io.parse_single_example(tf_example, EX_DESC)
 
     # keep these in sync with cc/recorder/tf_recorder.cc
     bsize = tf.cast(
         tf.reshape(tf.io.decode_raw(ex["bsize"], tf.uint8), shape=()), dtype=tf.int32
     )
 
-    # Parse common grid fields
+    # Parse grid fields
     board = tf.reshape(tf.io.decode_raw(ex["board"], tf.int8), shape=(bsize * bsize,))
     last_moves = tf.reshape(tf.io.decode_raw(ex["last_moves"], tf.int16), shape=(5,))
     stones_atari = tf.reshape(
@@ -294,6 +282,9 @@ def _parse_example(tf_example, version=0):
     stones_three_liberties = tf.reshape(
         tf.io.decode_raw(ex["stones_three_liberties"], tf.int8), shape=(bsize * bsize,)
     )
+    stones_in_ladder = tf.reshape(
+        tf.io.decode_raw(ex["stones_in_ladder"], tf.int8), shape=(bsize * bsize,)
+    )
     color = tf.reshape(tf.io.decode_raw(ex["color"], tf.int8), shape=())
     own = tf.reshape(tf.io.decode_raw(ex["own"], tf.int8), shape=(bsize * bsize,))
     policy = tf.reshape(
@@ -304,16 +295,12 @@ def _parse_example(tf_example, version=0):
     # Parse scalar fields
     komi = ex["komi"]
     score = ex["score_margin"]
-
-    # Parse q values (different keys for v0 vs v1)
-    if version == 0:
-        q6 = ex["q30"]
-        q16 = ex["q100"]
-        q50 = ex["q200"]
-    else:
-        q6 = ex["q6"]
-        q16 = ex["q16"]
-        q50 = ex["q50"]
+    q6 = ex["q6"]
+    q16 = ex["q16"]
+    q50 = ex["q50"]
+    q6_score = ex["q6_score"]
+    q16_score = ex["q16_score"]
+    q50_score = ex["q50_score"]
 
     # Cast to int32
     board = tf.cast(board, tf.int32)
@@ -321,6 +308,7 @@ def _parse_example(tf_example, version=0):
     stones_atari = tf.cast(stones_atari, tf.int32)
     stones_two_liberties = tf.cast(stones_two_liberties, tf.int32)
     stones_three_liberties = tf.cast(stones_three_liberties, tf.int32)
+    stones_in_ladder = tf.cast(stones_in_ladder, tf.int32)
     own = tf.cast(own, tf.int32)
     policy_aux = tf.cast(policy_aux, tf.int32)
 
@@ -330,15 +318,17 @@ def _parse_example(tf_example, version=0):
     stones_atari = tf.reshape(stones_atari, shape=(bsize, bsize))
     stones_two_liberties = tf.reshape(stones_two_liberties, shape=(bsize, bsize))
     stones_three_liberties = tf.reshape(stones_three_liberties, shape=(bsize, bsize))
+    stones_in_ladder = tf.reshape(stones_in_ladder, shape=(bsize, bsize))
     own = tf.reshape(own, shape=(bsize, bsize))
 
-    result = {
+    return {
         "bsize": bsize,
         "board": board,
         "last_moves": last_moves,
         "stones_atari": stones_atari,
         "stones_two_liberties": stones_two_liberties,
         "stones_three_liberties": stones_three_liberties,
+        "stones_in_ladder": stones_in_ladder,
         "color": color,
         "komi": komi,
         "own": own,
@@ -348,26 +338,15 @@ def _parse_example(tf_example, version=0):
         "q6": q6,
         "q16": q16,
         "q50": q50,
+        "q6_score": q6_score,
+        "q16_score": q16_score,
+        "q50_score": q50_score,
     }
 
-    # v1-specific fields
-    if version == 1:
-        stones_in_ladder = tf.reshape(
-            tf.io.decode_raw(ex["stones_in_ladder"], tf.int8), shape=(bsize * bsize,)
-        )
-        stones_in_ladder = tf.cast(stones_in_ladder, tf.int32)
-        stones_in_ladder = tf.reshape(stones_in_ladder, shape=(bsize, bsize))
-        result["stones_in_ladder"] = stones_in_ladder
-        result["q6_score"] = ex["q6_score"]
-        result["q16_score"] = ex["q16_score"]
-        result["q50_score"] = ex["q50_score"]
 
-    return result
-
-
-def _expand_common(parsed, stones_in_ladder=None):
+def _expand_common(parsed):
     """
-    Common expansion logic for v0 and v1.
+    Expand parsed tensors.
 
     Takes parsed tensors and applies symmetry, builds input planes, etc.
     Returns processed tensors ready for training.
@@ -378,10 +357,12 @@ def _expand_common(parsed, stones_in_ladder=None):
     stones_atari = parsed["stones_atari"]
     stones_two_liberties = parsed["stones_two_liberties"]
     stones_three_liberties = parsed["stones_three_liberties"]
+    stones_in_ladder = parsed["stones_in_ladder"]
     color = parsed["color"]
     own = parsed["own"]
     policy = parsed["policy"]
     policy_aux = parsed["policy_aux"]
+    komi = parsed["komi"]
 
     # apply symmetry.
     symmetry = sym.get_random_symmetry()
@@ -413,7 +394,7 @@ def _expand_common(parsed, stones_in_ladder=None):
     own = tf.cond(color == BLACK, lambda: own, lambda: -own)
 
     # build input tensors.
-    input_planes = _build_base_input_planes(
+    input_planes = _build_input_planes(
         color,
         bsize,
         board,
@@ -421,21 +402,14 @@ def _expand_common(parsed, stones_in_ladder=None):
         stones_atari,
         stones_two_liberties,
         stones_three_liberties,
+        stones_in_ladder,
     )
-
-    # add ladder planes for v1.
-    if stones_in_ladder is not None:
-        black_in_ladder = get_color(stones_in_ladder, BLACK)
-        white_in_ladder = get_color(stones_in_ladder, WHITE)
-        our_in_ladder = tf.where(color == BLACK, black_in_ladder, white_in_ladder)
-        opp_in_ladder = tf.where(color == BLACK, white_in_ladder, black_in_ladder)
-        input_planes.extend([our_in_ladder, opp_in_ladder])
 
     input = tf.convert_to_tensor(input_planes, dtype=tf.float32)
     input = tf.transpose(input, perm=(1, 2, 0))  # CHW -> HWC
 
     score_one_hot = _build_score_one_hot(parsed["score"])
-    input_global_state = _build_global_state(color, last_moves)
+    input_global_state = _build_global_state(color, last_moves, komi)
 
     return {
         "input": input,
@@ -448,31 +422,10 @@ def _expand_common(parsed, stones_in_ladder=None):
     }
 
 
-def expand_v0(tf_example):
-    """Expands a v0 tfrecord from cc/recorder/tf_recorder.cc"""
-    parsed = _parse_example(tf_example, version=0)
+def expand(tf_example):
+    """Expands a tfrecord from cc/recorder/tf_recorder.cc"""
+    parsed = _parse_example(tf_example)
     expanded = _expand_common(parsed)
-
-    return (
-        expanded["input"],
-        expanded["input_global_state"],
-        expanded["color"],
-        parsed["komi"],
-        parsed["score"],
-        expanded["score_one_hot"],
-        expanded["policy"],
-        expanded["policy_aux"],
-        expanded["own"],
-        parsed["q6"],
-        parsed["q16"],
-        parsed["q50"],
-    )
-
-
-def expand_v1(tf_example):
-    """Expands a v1 tfrecord from cc/recorder/tf_recorder.cc"""
-    parsed = _parse_example(tf_example, version=1)
-    expanded = _expand_common(parsed, stones_in_ladder=parsed["stones_in_ladder"])
 
     return (
         expanded["input"],

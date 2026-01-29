@@ -38,5 +38,9 @@ if(BUILD_BINARIES)
         m
         dl
     )
+    # Link with mimalloc if enabled
+    if(USE_MIMALLOC)
+        target_link_libraries(selfplay_main PRIVATE mimalloc_iface)
+    endif()
     set_target_properties(selfplay_main PROPERTIES OUTPUT_NAME "selfplay")
 endif()

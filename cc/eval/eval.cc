@@ -95,8 +95,10 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
     node_table_w = std::make_unique<MctsNodeTable>();
   }
   // Both trees start at the empty board with BLACK to move
-  TreeNode* btree = node_table_b->GetOrCreate(game.board().hash(), BLACK);
-  TreeNode* wtree = node_table_w->GetOrCreate(game.board().hash(), BLACK);
+  TreeNode* btree = node_table_b->GetOrCreate(game.board().hash(), BLACK,
+                                              /*is_terminal=*/false);
+  TreeNode* wtree = node_table_w->GetOrCreate(game.board().hash(), BLACK,
+                                              /*is_terminal=*/false);
   Color player_resigned = EMPTY;
 
   // Track root history for tree logging
@@ -182,11 +184,13 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
     TreeNode* next_opp = opp_tree->children[move];
     if (!next_player) {
       // After the move, it's the opponent's turn (color_to_move was already flipped)
-      next_player = player_table->GetOrCreate(game.board().hash(), color_to_move);
+      next_player = player_table->GetOrCreate(game.board().hash(),
+                                              color_to_move, game.IsGameOver());
     }
     if (!next_opp) {
       // After the move, it's the opponent's turn (color_to_move was already flipped)
-      next_opp = opp_table->GetOrCreate(game.board().hash(), color_to_move);
+      next_opp = opp_table->GetOrCreate(game.board().hash(), color_to_move,
+                                        game.IsGameOver());
     }
 
     int num_nodes_reaped = 0, reap_time_us = 0;

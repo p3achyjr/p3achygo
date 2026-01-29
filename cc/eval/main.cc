@@ -110,9 +110,11 @@ int main(int argc, char** argv) {
   // Initialize NN evaluators.
   int cache_size = absl::GetFlag(FLAGS_cache_size);
   std::unique_ptr<nn::Engine> cur_engine = nn::CreateEngine(
-      nn::KindFromEnginePath(cur_model_path), cur_model_path, num_games);
+      nn::KindFromEnginePath(cur_model_path), cur_model_path, num_games,
+      nn::GetVersionFromModelPath(cur_model_path));
   std::unique_ptr<nn::Engine> cand_engine = nn::CreateEngine(
-      nn::KindFromEnginePath(cand_model_path), cand_model_path, num_games);
+      nn::KindFromEnginePath(cand_model_path), cand_model_path, num_games,
+      nn::GetVersionFromModelPath(cand_model_path));
   std::unique_ptr<nn::NNInterface> cur_nn_interface =
       std::make_unique<nn::NNInterface>(num_games, kTimeoutUs, cache_size,
                                         std::move(cur_engine));

@@ -77,7 +77,7 @@ def main(_):
         return
 
     ds = tf.data.TFRecordDataset(ds_path, compression_type="ZLIB")
-    ds = ds.map(transforms.expand_v0)
+    ds = ds.map(transforms.expand)
     ds = ds.shuffle(1000)
     ds = ds.prefetch(tf.data.AUTOTUNE)
 

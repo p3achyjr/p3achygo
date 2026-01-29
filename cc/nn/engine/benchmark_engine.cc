@@ -82,8 +82,12 @@ void Benchmark(Engine* const engine, GoDataset* const go_ds, Stats& stats) {
   }
 
   LOG(INFO) << "Starting Benchmark...";
+  int num_inferences = 0;
   NNInferResult result;
   for (const std::vector<GoDataset::Row>& batch : *go_ds) {
+    if (num_inferences > 1000) {
+      break;
+    }
     for (int batch_id = 0; batch_id < batch.size(); ++batch_id) {
       engine->LoadBatch(batch_id, batch[batch_id].features);
     }
@@ -99,6 +103,8 @@ void Benchmark(Engine* const engine, GoDataset* const go_ds, Stats& stats) {
       engine->GetBatch(batch_id, result);
       stats.Update(result, batch[batch_id], elapsed_us);
     }
+
+    ++num_inferences;
   }
 }
 

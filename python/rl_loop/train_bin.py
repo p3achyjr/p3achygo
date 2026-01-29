@@ -99,8 +99,7 @@ def main(_):
 
     model.summary(batch_size=BATCH_SIZE)
     val_ds = tf.data.TFRecordDataset(FLAGS.val_ds_path, compression_type="ZLIB")
-    expand_fn = transforms.expand_v1 if model.version == 1 else transforms.expand_v0
-    val_ds = val_ds.map(expand_fn, num_parallel_calls=tf.data.AUTOTUNE)
+    val_ds = val_ds.map(transforms.expand, num_parallel_calls=tf.data.AUTOTUNE)
     val_ds = val_ds.batch(BATCH_SIZE)
     val_ds = val_ds.prefetch(tf.data.AUTOTUNE)
 

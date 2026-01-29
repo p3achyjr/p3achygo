@@ -29,8 +29,9 @@ int main(int argc, char** argv) {
   std::vector<std::unique_ptr<Engine>> engines;
   for (int i = 0; i < model_paths.size(); ++i) {
     int kind = std::atoi(kinds[i].c_str());
-    engines.emplace_back(CreateEngine(static_cast<Engine::Kind>(kind + 1),
-                                      model_paths[i], batch_size));
+    engines.emplace_back(
+        CreateEngine(static_cast<Engine::Kind>(kind + 1), model_paths[i],
+                     batch_size, GetVersionFromModelPath(model_paths[i])));
   }
 
   std::unique_ptr<GoDataset> go_ds =

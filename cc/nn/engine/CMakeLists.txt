@@ -160,3 +160,6 @@ target_link_libraries(benchmark_engine PUBLIC
     go_dataset
     absl::log
 )
+
+# Scripts and utilities
+add_subdirectory(scripts)

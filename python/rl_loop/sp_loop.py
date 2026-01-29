@@ -76,7 +76,8 @@ def loop(bin_path: str,
 
   # first model is now uploaded. Get it and start run.
   model_path = fs.download_model(run_id, str(local_model_cands_dir), model_gen)
-  model_path = str(Path(model_path, '_onnx', 'engine.trt'))
+  model_p = Path(model_path)
+  model_path = str(model_p.parent / '_onnx' / (model_p.stem + '.trt'))
 
   # most recent chunk tells us which generation we are making self-play data for.
   gen = fs.get_most_recent_chunk(run_id)
@@ -147,7 +148,8 @@ def loop(bin_path: str,
         logging.info('Found new model. Fetching and reloading self-play.')
         model_gen = next_model_gen
         model_path = fs.download_model(run_id, str(local_run_dir), model_gen)
-        model_path = str(Path(model_path, '_trt'))
+        model_p = Path(model_path)
+        model_path = str(model_p.parent / '_onnx' / (model_p.stem + '.trt'))
         break
 
       if queue and not queue.empty():

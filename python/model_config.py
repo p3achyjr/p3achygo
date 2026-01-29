@@ -7,6 +7,7 @@ CONFIG_OPTIONS = [
     "b12c256btl3",
     "b14c384btl3",
     "b15c192_classic",
+    "b7c128nbt",
     "b10c384nbt",
 ]
 
@@ -116,6 +117,17 @@ class ModelConfig:
         )
 
     @staticmethod
+    def b7c128nbt():
+        return ModelConfig(
+            blocks=7,
+            broadcast_interval=3,
+            channels=128,
+            bottleneck_channels=64,
+            head_channels=32,
+            trunk_block_type="nbt",
+        )
+
+    @staticmethod
     def b10c384nbt():
         return ModelConfig(
             blocks=10,
@@ -141,6 +153,8 @@ class ModelConfig:
             return ModelConfig.b14c384btl3()
         elif s == "b15c192_classic":
             return ModelConfig.b15c192_classic()
+        elif s == "b7c128nbt":
+            return ModelConfig.b7c128nbt()
         elif s == "b10c384nbt":
             return ModelConfig.b10c384nbt()
 
