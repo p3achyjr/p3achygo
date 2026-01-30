@@ -363,6 +363,17 @@ def _expand_common(parsed):
     policy = parsed["policy"]
     policy_aux = parsed["policy_aux"]
     komi = parsed["komi"]
+    score = parsed["score"]
+
+    game_outcome = tf.cond(
+        score > 0,
+        lambda: tf.constant([0.0, 1.0], dtype=tf.float32),  # Win
+        lambda: tf.cond(
+            score < 0,
+            lambda: tf.constant([1.0, 0.0], dtype=tf.float32),  # Loss
+            lambda: tf.constant([0.5, 0.5], dtype=tf.float32),  # Draw
+        ),
+    )
 
     # apply symmetry.
     symmetry = sym.get_random_symmetry()
@@ -419,6 +430,7 @@ def _expand_common(parsed):
         "policy": policy,
         "policy_aux": policy_aux,
         "score_one_hot": score_one_hot,
+        "game_outcome": game_outcome,
     }
 
 
@@ -443,4 +455,5 @@ def expand(tf_example):
         parsed["q6_score"],
         parsed["q16_score"],
         parsed["q50_score"],
+        expanded["game_outcome"],
     )

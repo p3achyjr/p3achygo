@@ -48,6 +48,6 @@ class LossCoeffs:
             0.1,  # q err
             0.005,  # short-term score
             0.005,  # short-term score err
-            4.0,  # soft policy
+            0.0,  # soft policy
             0.15,  # optimistic policy
         )

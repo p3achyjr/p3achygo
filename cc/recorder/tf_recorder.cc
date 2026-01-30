@@ -179,7 +179,12 @@ void TfRecorderImpl::Flush() {
           const std::array<float, constants::kMaxMovesPerPosition>& pi =
               mcts_pis[move_num];
           Color color = move.color;
-          float z = game.result().winner == color ? 1.0 : -1.0;
+          float z = [&]() {
+            if (game.result().winner == EMPTY) {
+              return 0.0f;
+            }
+            return game.result().winner == color ? 1.0f : -1.0f;
+          }();
           const auto exp_weighted_short_term_value_score =
               [&](const float lambda,
                   const int horizon) -> std::pair<float, float> {

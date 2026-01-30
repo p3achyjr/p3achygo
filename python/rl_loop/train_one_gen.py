@@ -93,6 +93,8 @@ def main(_):
         model_path, custom_objects=P3achyGoModel.custom_objects()
     )
 
+    logging.info(f"Using Train Dataset: {FLAGS.chunk_path}")
+    logging.info(f"Using Val Dataset: {FLAGS.val_ds_path}")
     val_ds = tf.data.TFRecordDataset(FLAGS.val_ds_path, compression_type="ZLIB")
     val_ds = val_ds.map(transforms.expand, num_parallel_calls=tf.data.AUTOTUNE)
     val_ds = val_ds.batch(config.batch_size)

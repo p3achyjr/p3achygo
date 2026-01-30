@@ -40,8 +40,8 @@
   "min_train_default_n": 16,
   "max_train_default_k": 8,
   "max_train_default_n": 100,
-  "n_growth_window": 200,
-  "k_growth_window": 200,
+  "n_growth_window": 400,
+  "k_growth_window": 400,
   "eval_k": 8,
-  "eval_n": 400
+  "eval_n": 100
 }

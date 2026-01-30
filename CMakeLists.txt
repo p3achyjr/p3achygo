@@ -20,7 +20,6 @@ option(USE_TENSORFLOW "Enable TensorFlow support" OFF)
 option(USE_TENSORRT "Enable TensorRT support" OFF)
 option(USE_ASAN "Enable AddressSanitizer" OFF)
 option(USE_LTO "Enable Link Time Optimization" OFF)
-option(USE_MIMALLOC "Use mimalloc allocator" OFF)
 
 # Set board size
 if(BOARD_SIZE_9)
@@ -46,15 +45,6 @@ if(USE_LTO)
     else()
         message(WARNING "LTO is not supported: ${ipo_error}")
     endif()
-endif()
-
-# Mimalloc allocator
-if(USE_MIMALLOC)
-    find_library(MIMALLOC_LIB mimalloc PATHS /usr/local/lib REQUIRED)
-    message(STATUS "Using mimalloc: ${MIMALLOC_LIB}")
-    # Create interface library for mimalloc
-    add_library(mimalloc_iface INTERFACE)
-    target_link_libraries(mimalloc_iface INTERFACE ${MIMALLOC_LIB})
 endif()
 
 # Find packages
@@ -199,7 +189,6 @@ message(STATUS "TensorFlow support: ${USE_TENSORFLOW}")
 message(STATUS "TensorRT support: ${USE_TENSORRT}")
 message(STATUS "AddressSanitizer: ${USE_ASAN}")
 message(STATUS "Link Time Optimization: ${USE_LTO}")
-message(STATUS "Mimalloc allocator: ${USE_MIMALLOC}")
 if (USE_TENSORFLOW)
     message(STATUS "========================================")
     message(STATUS "Note: TensorFlow is required and expected in cc/tensorflow/")

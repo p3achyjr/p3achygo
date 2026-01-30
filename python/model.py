@@ -51,6 +51,7 @@ class GroundTruth(NamedTuple):
     policy_aux: tf.Tensor
     score: tf.Tensor
     score_one_hot: tf.Tensor
+    game_outcome: tf.Tensor
     own: tf.Tensor
     q6: tf.Tensor
     q16: tf.Tensor
@@ -1225,6 +1226,7 @@ class P3achyGoModel(keras.Model):
         ## Initialize Loss Objects. Defer reduction strategy to loss objects ##
         self.scce_logits = keras.losses.SparseCategoricalCrossentropy(from_logits=True)
         self.scce = keras.losses.SparseCategoricalCrossentropy(from_logits=False)
+        self.cce_logits = keras.losses.CategoricalCrossentropy(from_logits=True)
         self.mse = keras.losses.MeanSquaredError()
         self.identity = keras.layers.Activation("linear")  # need for mixed-precision
 
@@ -1413,8 +1415,7 @@ class P3achyGoModel(keras.Model):
         )
 
         # Outcome Loss
-        did_win = targets.score >= 0
-        outcome_loss = self.scce_logits(did_win, predictions.game_outcome)
+        outcome_loss = self.cce_logits(targets.game_outcome, predictions.game_outcome)
         q6_loss = self.mse(targets.q6, predictions.q6_pred)
         q16_loss = self.mse(targets.q16, predictions.q16_pred)
         q50_loss = self.mse(targets.q50, predictions.q50_pred)

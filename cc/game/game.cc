@@ -24,9 +24,12 @@ int Game::num_moves() const { return moves_.size() - kMoveOffset; }
 
 Move Game::move(int move_num) const { return moves_[move_num + kMoveOffset]; }
 
-Game::Result Game::result() const { return result_; }
+Game::Result Game::result() const {
+  CHECK(result_.has_value());
+  return result_.value();
+}
 
-bool Game::has_result() const { return result_.winner != EMPTY; }
+bool Game::has_result() const { return result_.has_value(); }
 
 float Game::komi() const { return board_.komi(); }
 
@@ -62,13 +65,12 @@ Scores Game::GetScores() { return board_.GetScores(); }
 
 void Game::WriteResult() {
   Scores scores = GetScores();
-  if (scores.black_score > scores.white_score) {
-    result_ = Result{BLACK, scores.black_score, scores.white_score,
-                     false /* by_resign */, scores.ownership};
-  } else if (scores.white_score > scores.black_score) {
-    result_ = Result{WHITE, scores.black_score, scores.white_score,
-                     false /* by_resign */, scores.ownership};
-  }
+  Color winner =
+      scores.black_score > scores.white_score
+          ? BLACK
+          : (scores.white_score > scores.black_score ? WHITE : EMPTY);
+  result_ = Result{winner, scores.black_score, scores.white_score,
+                   false /* by_resign */, scores.ownership};
 }
 
 }  // namespace game

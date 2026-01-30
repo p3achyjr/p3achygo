@@ -59,13 +59,13 @@ class Game final {
 
   Scores GetScores();
   void WriteResult();
-  void SetWinner(Color winner) { result_.winner = winner; }
-  void SetDidResign(bool did_resign) { result_.by_resign = true; }
+  void SetWinner(Color winner) { result_->winner = winner; }
+  void SetDidResign(bool did_resign) { result_->by_resign = true; }
 
  private:
   Board board_;
   absl::InlinedVector<struct Move, constants::kMaxGameLen> moves_;
-  Result result_;
+  std::optional<Result> result_;
 };
 }  // namespace game
 

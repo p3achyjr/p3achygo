@@ -793,6 +793,7 @@ def train(
                 q6_score,
                 q16_score,
                 q50_score,
+                game_outcome,
             ) = batch_data
 
             # transforms.expand always returns v1-sized tensors (15 planes, 8 features)
@@ -809,6 +810,7 @@ def train(
                     policy_aux=policy_aux,
                     score=score,
                     score_one_hot=score_one_hot,
+                    game_outcome=game_outcome,
                     own=own,
                     q6=q6,
                     q16=q16,
@@ -831,6 +833,7 @@ def train(
                     policy_aux=policy_aux,
                     score=score,
                     score_one_hot=score_one_hot,
+                    game_outcome=game_outcome,
                     own=own,
                     q6=q6,
                     q16=q16,
@@ -867,7 +870,7 @@ def train(
 
             # Query snapshot manager after every training step
             if ss_manager and ss_manager.should_take_snapshot(local_batch_num):
-                ss_manager.add(local_batch_num)
+                ss_manager.take_snapshot(model)
 
             if local_batch_num % log_interval == 0:
                 log_train(batch_num, losses_train, summary_writer, mode, model.version)
@@ -911,6 +914,7 @@ def train(
                 mode=mode,
                 tensorboard_log_dir=tensorboard_log_dir,
             )
+    return local_batch_num + batch_num
 
 
 def log_train(
@@ -1143,6 +1147,7 @@ def val(
             q6_score,
             q16_score,
             q50_score,
+            game_outcome,
         ) = batch_data
 
         # transforms.expand always returns v1-sized tensors (15 planes, 8 features)
@@ -1157,6 +1162,7 @@ def val(
                 policy_aux=policy_aux,
                 score=score,
                 score_one_hot=score_one_hot,
+                game_outcome=game_outcome,
                 own=own,
                 q6=q6,
                 q16=q16,
@@ -1176,6 +1182,7 @@ def val(
                 policy_aux=policy_aux,
                 score=score,
                 score_one_hot=score_one_hot,
+                game_outcome=game_outcome,
                 own=own,
                 q6=q6,
                 q16=q16,

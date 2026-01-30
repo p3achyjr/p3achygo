@@ -3,6 +3,7 @@
 #include <NvInfer.h>
 #include <NvOnnxParser.h>
 #include <cuda_runtime_api.h>
+#include <driver_types.h>
 
 #include <numeric>
 #include <unordered_map>
@@ -66,6 +67,11 @@ class TrtEngineImpl : public TrtEngine {
   const std::array<int, 2> pi_shape_;
   const std::array<int, 2> outcome_shape_;
   const std::array<int, 2> score_shape_;
+
+  // CUDA Graph Stuff
+  bool cuda_graph_initialized_ = false;
+  cudaGraph_t cuda_graph_{};
+  cudaGraphExec_t cuda_graph_exec_{};
 };
 
 TrtEngineImpl::TrtEngineImpl(std::string path, int batch_size, int version)
@@ -144,12 +150,46 @@ TrtEngineImpl::TrtEngineImpl(std::string path, int batch_size, int version)
     exec_context_->setInputShape(nn::trt::input::kScoresName,
                                  input_scores.dims);
   }
+
+  {
+    // Attempt CUDA Graph Capture.
+    LOG(INFO) << "Attempting CUDA Graph Capture for TRT Engine.";
+    CHECK(exec_context_->enqueueV3(stream_));
+    if (cudaStreamBeginCapture(stream_, cudaStreamCaptureModeGlobal) !=
+        cudaSuccess) {
+      return;
+    }
+
+    CHECK(exec_context_->enqueueV3(stream_));
+    if (cudaStreamEndCapture(stream_, &cuda_graph_) != cudaSuccess) {
+      auto err = cudaGetLastError();
+      LOG(WARNING) << "CUDA Graph Capture Failed: " << cudaGetErrorName(err)
+                   << ", " << cudaGetErrorString(err);
+      return;
+    }
+
+    if (cudaGraphInstantiate(&cuda_graph_exec_, cuda_graph_, 0) !=
+        cudaSuccess) {
+      auto err = cudaGetLastError();
+      LOG(WARNING) << "CUDA Graph Instantation Failed: "
+                   << cudaGetErrorName(err) << ", " << cudaGetErrorString(err);
+      return;
+    }
+
+    cuda_graph_initialized_ = true;
+    LOG(INFO) << "CUDA Graph Capture Succeeded for TRT Engine.";
+  }
 }
 
 TrtEngineImpl::~TrtEngineImpl() {
   for (auto& [name, buf_handle] : buf_map_) {
     cudaFreeHost(buf_handle.host_buf);
     cudaFree(buf_handle.device_buf);
+  }
+
+  if (cuda_graph_initialized_) {
+    cudaGraphExecDestroy(cuda_graph_exec_);
+    cudaGraphDestroy(cuda_graph_);
   }
 }
 
@@ -188,7 +228,14 @@ void TrtEngineImpl::RunInference() {
                   input_features.size, cudaMemcpyHostToDevice, stream_);
   cudaMemcpyAsync(input_scores.device_buf, input_scores.host_buf,
                   input_scores.size, cudaMemcpyHostToDevice, stream_);
-  CHECK(exec_context_->enqueueV3(stream_));
+  if (cuda_graph_initialized_) {
+    auto err = cudaGraphLaunch(cuda_graph_exec_, stream_);
+    CHECK(err == cudaSuccess)
+        << "CUDA Graph Launch Failed: " << cudaGetErrorName(err) << ", "
+        << cudaGetErrorString(err);
+  } else {
+    CHECK(exec_context_->enqueueV3(stream_));
+  }
   cudaMemcpyAsync(output_pi_logits.host_buf, output_pi_logits.device_buf,
                   output_pi_logits.size, cudaMemcpyDeviceToHost, stream_);
   cudaMemcpyAsync(output_pi_probs.host_buf, output_pi_probs.device_buf,

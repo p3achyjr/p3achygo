@@ -122,6 +122,6 @@ def train_one_gen(
     model.set_weights(new_weights)
 
     logging.info(f"Running validation for new model...")
-    train.val(model, mode=train.Mode.RL, val_ds=val_ds, val_batch_num=model_gen + 1)
+    train.val(model, mode=train.Mode.RL, val_ds=val_ds, batch_num=model_gen + 1)
 
     return batch_num

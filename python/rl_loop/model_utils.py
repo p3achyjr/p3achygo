@@ -97,7 +97,7 @@ def save_onnx_trt(
     """
     model_path = save(model, local_model_dir, gen)
     logging.info("Converting to ONNX...")
-    cmd = f"python -m python.scripts.convert_to_onnx --model_path={model_path}"
+    cmd = f"python -m python.scripts.convert_to_onnx --model_path={model_path} --fp16"
     proc.run_proc(cmd)
 
     logging.info("Converting to ONNX-TRT...")

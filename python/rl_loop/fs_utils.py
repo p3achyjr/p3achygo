@@ -126,6 +126,7 @@ def download_model_cand(run_id: str, local_models_dir: str, gen: int) -> str:
 def download_val_ds(local_dir: str) -> str:
     if MODE == "gcs":
         return gcs.download_val_ds(local_dir)
+    return str(Path(local_dir, "val.tfrecord.zz"))
 
 
 def rsync_chunks(run_id: str, local_dir: str):
