@@ -33,12 +33,31 @@ namespace nv = ::nvinfer1;
 namespace fs = ::std::filesystem;
 using namespace ::nn;
 
+constexpr char kTimingCachePath[] = "/tmp/trt_timing_cache.bin";
+
 struct BufferHandle {
   size_t size;
   nv::Dims dims;
   void* host_buf;
   void* device_buf;
 };
+
+static std::vector<char> ReadFile(const std::string& path) {
+  std::ifstream f(path, std::ios::binary);
+  if (!f) return {};
+  f.seekg(0, std::ios::end);
+  const std::streamsize size = f.tellg();
+  f.seekg(0, std::ios::beg);
+  std::vector<char> data(static_cast<size_t>(size));
+  f.read(data.data(), size);
+  return data;
+}
+
+static void WriteFile(const std::string& path, const void* data, size_t size) {
+  std::ofstream f(path, std::ios::binary);
+  f.write(reinterpret_cast<const char*>(data),
+          static_cast<std::streamsize>(size));
+}
 
 void WriteEngineToDisk(nvinfer1::IHostMemory* serialized_engine,
                        std::string path) {
@@ -158,12 +177,27 @@ int main(int argc, char** argv) {
     }
 
     nvinfer1::IBuilderConfig* config = builder->createBuilderConfig();
+    const std::vector<char> timing_cache_blob = ReadFile(kTimingCachePath);
+    std::unique_ptr<nvinfer1::ITimingCache> timingCache(
+        config->createTimingCache(
+            timing_cache_blob.empty() ? nullptr : timing_cache_blob.data(),
+            timing_cache_blob.size()));
     config->setMemoryPoolLimit(nv::MemoryPoolType::kWORKSPACE,
                                static_cast<size_t>(20) << 32);
+    const bool ok =
+        config->setTimingCache(*timingCache, /*ignoreMismatch=*/false);
+    LOG(INFO) << "Timing cache set: " << ok
+              << ", initial size: " << timing_cache_blob.size();
     nv::IHostMemory* serialized_engine =
         builder->buildSerializedNetwork(*network, *config);
 
     WriteEngineToDisk(serialized_engine, engine_path);
+    if (auto const* new_timing_cache = config->getTimingCache()) {
+      std::unique_ptr<nvinfer1::IHostMemory> new_timing_cache_blob(
+          new_timing_cache->serialize());
+      WriteFile(kTimingCachePath, new_timing_cache_blob->data(),
+                new_timing_cache_blob->size());
+    }
 
     delete config;
     delete network;

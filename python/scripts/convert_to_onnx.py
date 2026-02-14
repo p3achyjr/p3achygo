@@ -1,4 +1,5 @@
 import tensorflow as tf
+import keras
 import tf2onnx, onnx
 import onnxruntime as ort
 import numpy as np
@@ -15,6 +16,7 @@ from onnx import TensorProto, helper
 
 from model import P3achyGoModel
 from constants import *
+from lr_schedule import ConstantLRSchedule
 
 FLAGS = flags.FLAGS
 DUMMY_BATCH_SIZE = 32
@@ -65,6 +67,38 @@ def prune_unused_graph_inputs(model: onnx.ModelProto) -> onnx.ModelProto:
     new_inputs = [i for i in g.input if i.name in used]
     del g.input[:]
     g.input.extend(new_inputs)
+    return model
+
+
+def fix_cast_output_types(model: onnx.ModelProto) -> onnx.ModelProto:
+    """Fix Cast nodes where output is marked FP16 but Cast attribute is FP32.
+
+    convert_float_to_float16() updates value_info but doesn't always update
+    the Cast node's 'to' attribute, causing type mismatches in TensorRT.
+    """
+    g = model.graph
+
+    # Build map: tensor_name -> type from value_info
+    tensor_types = {}
+    for vi in g.value_info:
+        tensor_types[vi.name] = vi.type.tensor_type.elem_type
+
+    fixed_count = 0
+    for node in g.node:
+        if node.op_type == "Cast":
+            output_name = node.output[0]
+            if output_name in tensor_types:
+                expected_type = tensor_types[output_name]
+                # Check Cast node's 'to' attribute
+                for attr in node.attribute:
+                    if attr.name == "to":
+                        if attr.i != expected_type and expected_type == TensorProto.FLOAT16:
+                            logging.info(f"Fixing Cast '{node.name}': changing 'to' from {attr.i} to FLOAT16")
+                            attr.i = TensorProto.FLOAT16
+                            fixed_count += 1
+                        break
+
+    logging.info(f"fix_cast_output_types: fixed {fixed_count} cast nodes")
     return model
 
 
@@ -173,7 +207,7 @@ def main(_):
 
     with tf.device("/cpu:0"):
         tf.keras.mixed_precision.set_global_policy("float32")
-        model = tf.keras.models.load_model(
+        model = keras.models.load_model(
             model_path, custom_objects=P3achyGoModel.custom_objects()
         )
         planes_shape = model.input_planes_shape()
@@ -186,155 +220,68 @@ def main(_):
         )
         model.summary()
 
-        model_version = getattr(model, "version", 0)
-        logging.info(f"Model Version: {model_version}")
-
         # Scores is a constant - embed it in the graph rather than passing as input
         scores = (
             0.05 * tf.cast(tf.range(-SCORE_RANGE // 2, SCORE_RANGE // 2), tf.float32)
             + 0.025
         )
 
-        if model_version == 0:
+        @tf.function
+        def model_fn(board_state: tf.Tensor, game_state: tf.Tensor):
+            # v1 model returns 46 outputs (23 FVI + 23 BN)
+            # Include all outputs to avoid grappler optimization issues
+            (
+                pi_logits,
+                pi,
+                outcome_logits,
+                outcome,
+                own,
+                score_logits,
+                score_probs,
+                gamma,
+                pi_logits_aux,
+                q6,
+                q16,
+                q50,
+                q6_err,
+                q16_err,
+                q50_err,
+                q6_score,
+                q16_score,
+                q50_score,
+                q6_score_err,
+                q16_score_err,
+                q50_score_err,
+                pi_logits_soft,
+                pi_logits_optimistic,
+            ) = model(board_state, game_state, training=False, scores=scores)
 
-            @tf.function
-            def model_fn(board_state: tf.Tensor, game_state: tf.Tensor):
-                (
-                    pi_logits,
-                    pi,
-                    outcome_logits,
-                    outcome,
-                    own,
-                    score_logits,
-                    score_probs,
-                    gamma,
-                    pi_logits_aux,
-                    q30,
-                    q100,
-                    q200,
-                ) = model(board_state, game_state, training=False, scores=scores)
-
-                return {
-                    "00:pi_logits": pi_logits,
-                    "01:pi": pi,
-                    "02:outcome_logits": outcome_logits,
-                    "03:outcome": outcome,
-                    "04:own": own,
-                    "05:score_logits": score_logits,
-                    "06:score_probs": score_probs,
-                    "07:gamma": gamma,
-                    "08:pi_logits_aux": pi_logits_aux,
-                    "09:q6": q30,
-                    "10:q16": q100,
-                    "11:q50": q200,
-                }
-
-        else:
-
-            @tf.function
-            def model_fn(board_state: tf.Tensor, game_state: tf.Tensor):
-                # v1 model returns 46 outputs (23 FVI + 23 BN)
-                # Include all outputs to avoid grappler optimization issues
-                (
-                    pi_logits,
-                    pi,
-                    outcome_logits,
-                    outcome,
-                    own,
-                    score_logits,
-                    score_probs,
-                    gamma,
-                    pi_logits_aux,
-                    q6,
-                    q16,
-                    q50,
-                    q6_err,
-                    q16_err,
-                    q50_err,
-                    q6_score,
-                    q16_score,
-                    q50_score,
-                    q6_score_err,
-                    q16_score_err,
-                    q50_score_err,
-                    pi_logits_soft,
-                    pi_logits_optimistic,
-                    # BN outputs
-                    pi_logits_bn,
-                    pi_bn,
-                    outcome_logits_bn,
-                    outcome_bn,
-                    own_bn,
-                    score_logits_bn,
-                    score_probs_bn,
-                    gamma_bn,
-                    pi_logits_aux_bn,
-                    q6_bn,
-                    q16_bn,
-                    q50_bn,
-                    q6_err_bn,
-                    q16_err_bn,
-                    q50_err_bn,
-                    q6_score_bn,
-                    q16_score_bn,
-                    q50_score_bn,
-                    q6_score_err_bn,
-                    q16_score_err_bn,
-                    q50_score_err_bn,
-                    pi_logits_soft_bn,
-                    pi_logits_optimistic_bn,
-                ) = model(board_state, game_state, training=False, scores=scores)
-
-                return {
-                    # FVI outputs (0-22)
-                    "00:pi_logits": pi_logits,
-                    "01:pi": pi,
-                    "02:outcome_logits": outcome_logits,
-                    "03:outcome": outcome,
-                    "04:own": own,
-                    "05:score_logits": score_logits,
-                    "06:score_probs": score_probs,
-                    "07:gamma": gamma,
-                    "08:pi_logits_aux": pi_logits_aux,
-                    "09:q6": q6,
-                    "10:q16": q16,
-                    "11:q50": q50,
-                    "12:q6_err": q6_err,
-                    "13:q16_err": q16_err,
-                    "14:q50_err": q50_err,
-                    "15:q6_score": q6_score,
-                    "16:q16_score": q16_score,
-                    "17:q50_score": q50_score,
-                    "18:q6_score_err": q6_score_err,
-                    "19:q16_score_err": q16_score_err,
-                    "20:q50_score_err": q50_score_err,
-                    "21:pi_logits_soft": pi_logits_soft,
-                    "22:pi_logits_optimistic": pi_logits_optimistic,
-                    # BN outputs (23-45)
-                    "23:pi_logits_bn": pi_logits_bn,
-                    "24:pi_bn": pi_bn,
-                    "25:outcome_logits_bn": outcome_logits_bn,
-                    "26:outcome_bn": outcome_bn,
-                    "27:own_bn": own_bn,
-                    "28:score_logits_bn": score_logits_bn,
-                    "29:score_probs_bn": score_probs_bn,
-                    "30:gamma_bn": gamma_bn,
-                    "31:pi_logits_aux_bn": pi_logits_aux_bn,
-                    "32:q6_bn": q6_bn,
-                    "33:q16_bn": q16_bn,
-                    "34:q50_bn": q50_bn,
-                    "35:q6_err_bn": q6_err_bn,
-                    "36:q16_err_bn": q16_err_bn,
-                    "37:q50_err_bn": q50_err_bn,
-                    "38:q6_score_bn": q6_score_bn,
-                    "39:q16_score_bn": q16_score_bn,
-                    "40:q50_score_bn": q50_score_bn,
-                    "41:q6_score_err_bn": q6_score_err_bn,
-                    "42:q16_score_err_bn": q16_score_err_bn,
-                    "43:q50_score_err_bn": q50_score_err_bn,
-                    "44:pi_logits_soft_bn": pi_logits_soft_bn,
-                    "45:pi_logits_optimistic_bn": pi_logits_optimistic_bn,
-                }
+            return {
+                # FVI outputs (0-22)
+                "00:pi_logits": pi_logits,
+                "01:pi": pi,
+                "02:outcome_logits": outcome_logits,
+                "03:outcome": outcome,
+                "04:own": own,
+                "05:score_logits": score_logits,
+                "06:score_probs": score_probs,
+                "07:gamma": gamma,
+                "08:pi_logits_aux": pi_logits_aux,
+                "09:q6": q6,
+                "10:q16": q16,
+                "11:q50": q50,
+                "12:q6_err": q6_err,
+                "13:q16_err": q16_err,
+                "14:q50_err": q50_err,
+                "15:q6_score": q6_score,
+                "16:q16_score": q16_score,
+                "17:q50_score": q50_score,
+                "18:q6_score_err": q6_score_err,
+                "19:q16_score_err": q16_score_err,
+                "20:q50_score_err": q50_score_err,
+                "21:pi_logits_soft": pi_logits_soft,
+                "22:pi_logits_optimistic": pi_logits_optimistic,
+            }
 
         input_signature = [
             tf.TensorSpec(
@@ -348,9 +295,13 @@ def main(_):
                 name="game_state",
             ),
         ]
+        # Note: tf2onnx runs optimization passes by default
+        # Set optimize=False to disable all optimizations (for debugging)
+        # Or use optimizer_exclude to disable specific optimizers
         onnx_model, _ = tf2onnx.convert.from_function(
             model_fn,
             input_signature=input_signature,
+            # optimize=False,  # Uncomment to disable all optimizations
         )
         onnx_model = prune_unused_graph_inputs(onnx_model)
         if FLAGS.fp16:
@@ -363,6 +314,7 @@ def main(_):
                 keep_io_types=True,
             )
 
+            onnx_model = fix_cast_output_types(onnx_model)
             onnx_model = fix_mixed_precision_inputs(onnx_model)
 
         onnx_dir.mkdir(exist_ok=True)

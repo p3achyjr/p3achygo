@@ -26,7 +26,7 @@ using ::data::RecordWriterOptions;
 using ::data::SequentialRecordReader;
 
 static constexpr size_t kDefaultChunkSize = 2048000;
-static constexpr int kDefaultPollIntervalS = 30;
+static constexpr int kDefaultPollIntervalS = 10;
 
 void WriteChunkToDisk(std::string filename,
                       const std::vector<std::string>& chunk) {

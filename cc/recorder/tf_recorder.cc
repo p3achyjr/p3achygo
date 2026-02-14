@@ -104,10 +104,7 @@ void TfRecorderImpl::RecordGame(int thread_id, const Board& init_board,
 // Only one thread can call this method. Additionally, no thread can call
 // `RecordGame` while this method is running.
 void TfRecorderImpl::Flush() {
-  int num_games =
-      std::accumulate(thread_game_counts_.begin(),
-                      thread_game_counts_.begin() + num_threads_, 0);
-  int num_records = std::accumulate(
+  const int expected_records = std::accumulate(
       thread_records_.begin(), thread_records_.begin() + num_threads_, 0,
       [](int n, const std::vector<Record>& records) {
         for (const auto& record : records) {
@@ -118,26 +115,8 @@ void TfRecorderImpl::Flush() {
 
         return n;
       });
-
-  if (num_records == 0) {
-    return;
-  }
-
-  const int timestamp = Timestamp();
-
-  // Create File.
-  std::string path =
-      FilePath(path_) / absl::StrFormat(data::kChunkFormat, gen_, batch_num_,
-                                        num_games, num_records, timestamp,
-                                        worker_id_);
-
-  // Create Writer with zlib compression.
-  RecordWriterOptions options = RecordWriterOptions::Zlib();
-  options.zlib_options.compression_level = 2;
-  RecordWriter writer(path, options);
-  CHECK(writer.Init().ok()) << "Failed to initialize RecordWriter";
-
-  // Flush each thread.
+  // Buffer examples first. We need to account for policy surprise weighting.
+  std::vector<std::string> tf_examples;
   for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
     std::vector<Record>& records = thread_records_[thread_id];
     if (records.empty()) {
@@ -155,10 +134,17 @@ void TfRecorderImpl::Flush() {
       const size_t num_trainable_moves =
           std::accumulate(move_trainables.begin(), move_trainables.end(), 0,
                           [](size_t x, size_t y) { return x + y; });
+      const float kld_sum = [&]() {
+        float sum = 0;
+        for (size_t i = 0; i < move_trainables.size(); ++i) {
+          if (move_trainables[i]) {
+            sum += record.klds[i];
+          }
+        }
+        return sum;
+      }();
       const float avg_kld =
-          std::accumulate(record.klds.begin(), record.klds.end(), 0.0F,
-                          std::plus<float>()) /
-          num_trainable_moves;
+          num_trainable_moves > 0 ? kld_sum / num_trainable_moves : 0.0f;
       Board board = record.init_board;
       for (int move_num = 0; move_num < game.num_moves(); ++move_num) {
         // Populate last moves as indices.
@@ -221,14 +207,16 @@ void TfRecorderImpl::Flush() {
 
           // Policy surprise weighting.
           const float freq_weight =
-              0.5F + 0.5F * (record.klds[move_num] / avg_kld);
+              avg_kld == 0.0f
+                  ? 1.0
+                  : (0.5F + 0.5F * (record.klds[move_num] / avg_kld));
           for (int i = 0; i < std::floor(freq_weight); ++i) {
-            CHECK(writer.WriteRecord(data).ok());
+            tf_examples.push_back(data);
           }
 
           if (probability_.Uniform() <
               (freq_weight - std::floor(freq_weight))) {
-            CHECK(writer.WriteRecord(data).ok());
+            tf_examples.push_back(data);
           }
         }
 
@@ -238,6 +226,32 @@ void TfRecorderImpl::Flush() {
     }
 
     records.clear();
+  }
+
+  if (tf_examples.size() == 0) {
+    return;
+  }
+
+  const int num_games =
+      std::accumulate(thread_game_counts_.begin(),
+                      thread_game_counts_.begin() + num_threads_, 0);
+  const int num_records = tf_examples.size();
+  const int timestamp = Timestamp();
+
+  // Create File.
+  std::string path =
+      FilePath(path_) / absl::StrFormat(data::kChunkFormat, gen_, batch_num_,
+                                        num_games, num_records, timestamp,
+                                        worker_id_);
+
+  // Create Writer with zlib compression.
+  RecordWriterOptions options = RecordWriterOptions::Zlib();
+  options.zlib_options.compression_level = 2;
+  RecordWriter writer(path, options);
+  CHECK(writer.Init().ok()) << "Failed to initialize RecordWriter";
+
+  for (const std::string& example : tf_examples) {
+    CHECK(writer.WriteRecord(example).ok());
   }
 
   // Close file.

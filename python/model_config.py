@@ -7,9 +7,14 @@ CONFIG_OPTIONS = [
     "b12c256btl3",
     "b14c384btl3",
     "b15c192_classic",
-    "b7c128nbt",
+    "b8c128nbt",
     "b10c384nbt",
+    "b14d96h3_transformer",
 ]
+
+B14_D96_N3_TRANSFORMER = {
+    "trunk": 14 * [["transformer", {"embed_dim": 96, "num_heads": 3}]]
+}
 
 
 class ModelConfig:
@@ -34,7 +39,9 @@ class ModelConfig:
         head_channels=32,
         c_val=64,
         trunk_block_type="btl",
-        version=1,
+        generic_arch=None,
+        is_transformer=False,
+        c_l2=1e-4,
     ):
         self.kBlocks = blocks
         self.kConvSize = conv_size
@@ -45,7 +52,10 @@ class ModelConfig:
         self.kHeadChannels = head_channels
         self.kCVal = c_val
         self.kTrunkBlockType = trunk_block_type
-        self.kVersion = version
+
+        self.generic_arch = generic_arch
+        self.is_transformer = is_transformer
+        self.c_l2 = c_l2
 
     @staticmethod
     def tiny():
@@ -117,9 +127,9 @@ class ModelConfig:
         )
 
     @staticmethod
-    def b7c128nbt():
+    def b8c128nbt():
         return ModelConfig(
-            blocks=7,
+            blocks=8,
             broadcast_interval=3,
             channels=128,
             bottleneck_channels=64,
@@ -140,6 +150,15 @@ class ModelConfig:
         )
 
     @staticmethod
+    def b14d96h3_transformer():
+        return ModelConfig(
+            channels=96,
+            generic_arch=B14_D96_N3_TRANSFORMER,
+            is_transformer=True,
+            c_l2=0.0,
+        )
+
+    @staticmethod
     def from_str(s: str):
         if s == "tiny":
             return ModelConfig.tiny()
@@ -153,9 +172,11 @@ class ModelConfig:
             return ModelConfig.b14c384btl3()
         elif s == "b15c192_classic":
             return ModelConfig.b15c192_classic()
-        elif s == "b7c128nbt":
-            return ModelConfig.b7c128nbt()
+        elif s == "b8c128nbt":
+            return ModelConfig.b8c128nbt()
         elif s == "b10c384nbt":
             return ModelConfig.b10c384nbt()
+        elif s == "b14d96h3_transformer":
+            return ModelConfig.b14d96h3_transformer()
 
         raise Exception("Unknown Model Config")

@@ -171,6 +171,7 @@ add_subdirectory(cc/data)
 add_subdirectory(cc/selfplay)
 add_subdirectory(cc/eval)
 add_subdirectory(cc/gtp)
+add_subdirectory(cc/experiments)
 
 # Print configuration summary
 message(STATUS "========================================")

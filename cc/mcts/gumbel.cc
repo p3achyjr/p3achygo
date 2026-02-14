@@ -319,6 +319,7 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
         // update tree
         Backward(search_path,
                  /*use_idempotent_updates=*/node_table->is_graph());
+        root->child_visits[move_info.move_encoding] += 1;
 
         // update budget
         --n_remaining;

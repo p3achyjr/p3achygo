@@ -234,6 +234,7 @@ def loop(
         logging.info("No existing model candidate found. Creating initial model...")
         model_gen = 0
         model_path = str(Path(local_model_cands_dir, gcs.MODEL_FORMAT.format(0)))
+        checkpoint_path = str(Path(local_model_cands_dir, "live_model.keras"))
         with tf.device("/cpu:0"):
             batch_size = SELFPLAY_BATCH_SIZE
             model = model_utils.new_model(
@@ -250,6 +251,7 @@ def loop(
                 ),
             )
             model.summary()
+            model.save(checkpoint_path)
             model.save(model_path)
 
             # convert to TRT.

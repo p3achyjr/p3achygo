@@ -21,13 +21,9 @@ PASS_MOVE_ENCODING = 361
 
 def num_input_planes(version=1) -> int:
     """Returns number of input planes for a given model version."""
-    if version == 0:
-        return 13
     return 15
 
 
 def num_input_features(version=1) -> int:
     """Returns number of input planes for a given model version."""
-    if version == 0:
-        return 7
     return 8

@@ -26,7 +26,6 @@ class TrainStepResult(NamedTuple):
 
     predictions: ModelPredictions
     total_loss: tf.Tensor
-    grad_norm: float
     policy_loss: tf.Tensor
     policy_aux_loss: tf.Tensor
     outcome_loss: tf.Tensor
@@ -42,150 +41,21 @@ class TrainStepResult(NamedTuple):
     q_score_err_loss: Optional[tf.Tensor] = None
     pi_soft_loss: Optional[tf.Tensor] = None
     pi_optimistic_loss: Optional[tf.Tensor] = None
-
-
-class ValStepResult(NamedTuple):
-    """Result from a validation step."""
-
-    predictions: ModelPredictions
-    total_loss: tf.Tensor
-    policy_loss: tf.Tensor
-    policy_aux_loss: tf.Tensor
-    outcome_loss: tf.Tensor
-    q6_loss: tf.Tensor
-    q16_loss: tf.Tensor
-    q50_loss: tf.Tensor
-    score_pdf_loss: tf.Tensor
-    score_cdf_loss: tf.Tensor
-    own_loss: tf.Tensor
-    # v1 only
-    q_err_loss: Optional[tf.Tensor] = None
-    q_score_loss: Optional[tf.Tensor] = None
-    q_score_err_loss: Optional[tf.Tensor] = None
-    pi_soft_loss: Optional[tf.Tensor] = None
-    pi_optimistic_loss: Optional[tf.Tensor] = None
+    grad_norm: float = 0.0
 
 
 @tf.function
-def train_step_v0(
+def train_step(
     input: tf.Tensor,
     input_global_state: tf.Tensor,
     targets: GroundTruth,
     weights: LossWeights,
     model: P3achyGoModel,
     optimizer,
-) -> TrainStepResult:
-    """
-    Training step for v0 models (no one-batch-norm).
-
-    Args:
-        input: Board state tensor
-        input_global_state: Global state tensor
-        targets: GroundTruth with labels
-        weights: LossWeights with loss weights
-        model: The model instance
-        optimizer: The optimizer
-
-    Returns:
-        TrainStepResult with predictions and losses
-    """
-    with tf.GradientTape() as g:
-        # Get model outputs (v0: 12 outputs)
-        (
-            pi_logits,
-            pi,
-            outcome_logits,
-            outcome_probs,
-            ownership,
-            score_logits,
-            score_probs,
-            gamma,
-            pi_logits_aux,
-            q6_pred,
-            q16_pred,
-            q50_pred,
-        ) = model(input, input_global_state, training=True)
-
-        predictions = ModelPredictions(
-            pi_logits=pi_logits,
-            pi_logits_aux=pi_logits_aux,
-            game_outcome=outcome_logits,
-            score_logits=score_logits,
-            own_pred=ownership,
-            q6_pred=q6_pred,
-            q16_pred=q16_pred,
-            q50_pred=q50_pred,
-            gamma=gamma,
-        )
-
-        # Compute losses
-        (
-            loss,
-            policy_loss,
-            policy_aux_loss,
-            outcome_loss,
-            q6_loss,
-            q16_loss,
-            q50_loss,
-            score_pdf_loss,
-            score_cdf_loss,
-            own_loss,
-            _,  # q_err_loss (v0 doesn't have these)
-            _,  # q_score_loss
-            _,  # q_score_err_loss
-            _,  # pi_soft_loss
-            _,  # pi_optimistic_loss
-        ) = model.compute_losses(predictions, targets, weights)
-
-        # Add regularization
-        reg_loss = tf.math.add_n(model.losses)
-        total_loss = loss + reg_loss
-        scaled_loss = optimizer.scale_loss(total_loss)
-
-        # Clip loss for numerical stability
-        # clipped_loss = tf.clip_by_value(total_loss, -100.0, 100.0)
-
-    gradients = g.gradient(scaled_loss, model.trainable_variables)
-    # gradients, _ = tf.clip_by_global_norm(gradients, 1.0)
-    optimizer.apply_gradients(zip(gradients, model.trainable_variables))
-    scale = tf.cast(
-        optimizer.dynamic_scale if optimizer.built else optimizer.initial_scale,
-        tf.float32,
-    )
-    return TrainStepResult(
-        predictions=predictions,
-        total_loss=total_loss,
-        grad_norm=tf.linalg.global_norm(gradients) / scale,
-        policy_loss=policy_loss,
-        policy_aux_loss=policy_aux_loss,
-        outcome_loss=outcome_loss,
-        q6_loss=q6_loss,
-        q16_loss=q16_loss,
-        q50_loss=q50_loss,
-        score_pdf_loss=score_pdf_loss,
-        score_cdf_loss=score_cdf_loss,
-        own_loss=own_loss,
-    )
-
-
-@tf.function
-def train_step_v1(
-    input: tf.Tensor,
-    input_global_state: tf.Tensor,
-    targets: GroundTruth,
-    weights: LossWeights,
-    model: P3achyGoModel,
-    optimizer,
-    fvi_weight: float = 0.2,
-    bn_weight: float = 0.8,
 ) -> TrainStepResult:
     """
     Training step for v1 models (with one-batch-norm).
 
-    v1 always uses one-batch-norm: the model returns 46 outputs
-    (23 FVI + 23 BN). We compute losses for both and combine them
-    with weighted sum: 0.2 * fvi_loss + 0.8 * bn_loss.
-
     Args:
         input: Board state tensor
         input_global_state: Global state tensor
@@ -193,8 +63,6 @@ def train_step_v1(
         weights: LossWeights with loss weights
         model: The model instance
         optimizer: The optimizer
-        fvi_weight: Weight for FVI heads (default 0.2)
-        bn_weight: Weight for BN heads (default 0.8)
 
     Returns:
         TrainStepResult with predictions and losses
@@ -228,37 +96,10 @@ def train_step_v1(
             q50_score_err_pred,
             pi_logits_soft,
             pi_logits_optimistic,
-        ) = model_outputs[:23]
-
-        # Extract BN outputs (second 23)
-        (
-            pi_logits_bn,
-            pi_bn,
-            outcome_logits_bn,
-            outcome_probs_bn,
-            ownership_bn,
-            score_logits_bn,
-            score_probs_bn,
-            gamma_bn,
-            pi_logits_aux_bn,
-            q6_pred_bn,
-            q16_pred_bn,
-            q50_pred_bn,
-            q6_err_pred_bn,
-            q16_err_pred_bn,
-            q50_err_pred_bn,
-            q6_score_pred_bn,
-            q16_score_pred_bn,
-            q50_score_pred_bn,
-            q6_score_err_pred_bn,
-            q16_score_err_pred_bn,
-            q50_score_err_pred_bn,
-            pi_logits_soft_bn,
-            pi_logits_optimistic_bn,
-        ) = model_outputs[23:]
+        ) = model_outputs
 
         # Create FVI predictions
-        predictions_fvi = ModelPredictions(
+        predictions = ModelPredictions(
             pi_logits=pi_logits,
             pi_logits_aux=pi_logits_aux,
             game_outcome=outcome_logits,
@@ -281,39 +122,8 @@ def train_step_v1(
             pi_logits_optimistic=pi_logits_optimistic,
         )
 
-        # Create BN predictions
-        predictions_bn = ModelPredictions(
-            pi_logits=pi_logits_bn,
-            pi_logits_aux=pi_logits_aux_bn,
-            game_outcome=outcome_logits_bn,
-            score_logits=score_logits_bn,
-            own_pred=ownership_bn,
-            q6_pred=q6_pred_bn,
-            q16_pred=q16_pred_bn,
-            q50_pred=q50_pred_bn,
-            gamma=gamma_bn,
-            q6_err_pred=q6_err_pred_bn,
-            q16_err_pred=q16_err_pred_bn,
-            q50_err_pred=q50_err_pred_bn,
-            q6_score_pred=q6_score_pred_bn,
-            q16_score_pred=q16_score_pred_bn,
-            q50_score_pred=q50_score_pred_bn,
-            q6_score_err_pred=q6_score_err_pred_bn,
-            q16_score_err_pred=q16_score_err_pred_bn,
-            q50_score_err_pred=q50_score_err_pred_bn,
-            pi_logits_soft=pi_logits_soft_bn,
-            pi_logits_optimistic=pi_logits_optimistic_bn,
-        )
-
         # Compute losses for both heads
-        loss_outputs_fvi = model.compute_losses(predictions_fvi, targets, weights)
-        loss_outputs_bn = model.compute_losses(predictions_bn, targets, weights)
-
-        # Weighted combination: 0.2 * FVI + 0.8 * BN
-        loss_outputs = tuple(
-            fvi_weight * loss_fvi + bn_weight * loss_bn
-            for loss_fvi, loss_bn in zip(loss_outputs_fvi, loss_outputs_bn)
-        )
+        loss_outputs = model.compute_losses(predictions, targets, weights)
 
         # Unpack loss outputs
         (
@@ -346,12 +156,12 @@ def train_step_v1(
         optimizer.dynamic_scale if optimizer.built else optimizer.initial_scale,
         tf.float32,
     )
+    unscaled_gradients = [g / scale for g in gradients]
 
     # Return FVI predictions for logging
     return TrainStepResult(
-        predictions=predictions_fvi,
+        predictions=predictions,
         total_loss=total_loss,
-        grad_norm=tf.linalg.global_norm(gradients) / scale,
         policy_loss=policy_loss,
         policy_aux_loss=policy_aux_loss,
         outcome_loss=outcome_loss,
@@ -366,93 +176,18 @@ def train_step_v1(
         q_score_err_loss=q_score_err_loss,
         pi_soft_loss=pi_soft_loss,
         pi_optimistic_loss=pi_optimistic_loss,
+        grad_norm=tf.linalg.global_norm(unscaled_gradients),
     )
 
 
 @tf.function
-def val_step_v0(
+def val_step(
     input: tf.Tensor,
     input_global_state: tf.Tensor,
     targets: GroundTruth,
     weights: LossWeights,
     model: P3achyGoModel,
-) -> ValStepResult:
-    """Validation step for v0 models."""
-    # Get model outputs (v0: 12 outputs)
-    (
-        pi_logits,
-        pi,
-        outcome_logits,
-        outcome_probs,
-        ownership,
-        score_logits,
-        score_probs,
-        gamma,
-        pi_logits_aux,
-        q6_pred,
-        q16_pred,
-        q50_pred,
-    ) = model(input, input_global_state, training=False)
-
-    predictions = ModelPredictions(
-        pi_logits=pi_logits,
-        pi_logits_aux=pi_logits_aux,
-        game_outcome=outcome_logits,
-        score_logits=score_logits,
-        own_pred=ownership,
-        q6_pred=q6_pred,
-        q16_pred=q16_pred,
-        q50_pred=q50_pred,
-        gamma=gamma,
-    )
-
-    # Compute losses
-    (
-        loss,
-        policy_loss,
-        policy_aux_loss,
-        outcome_loss,
-        q6_loss,
-        q16_loss,
-        q50_loss,
-        score_pdf_loss,
-        score_cdf_loss,
-        own_loss,
-        _,
-        _,
-        _,
-        _,
-        _,
-    ) = model.compute_losses(predictions, targets, weights)
-
-    reg_loss = tf.math.add_n(model.losses)
-    total_loss = loss + reg_loss
-
-    return ValStepResult(
-        predictions=predictions,
-        total_loss=total_loss,
-        policy_loss=policy_loss,
-        policy_aux_loss=policy_aux_loss,
-        outcome_loss=outcome_loss,
-        q6_loss=q6_loss,
-        q16_loss=q16_loss,
-        q50_loss=q50_loss,
-        score_pdf_loss=score_pdf_loss,
-        score_cdf_loss=score_cdf_loss,
-        own_loss=own_loss,
-    )
-
-
-@tf.function
-def val_step_v1(
-    input: tf.Tensor,
-    input_global_state: tf.Tensor,
-    targets: GroundTruth,
-    weights: LossWeights,
-    model: P3achyGoModel,
-    fvi_weight: float = 0.2,
-    bn_weight: float = 0.8,
-) -> ValStepResult:
+) -> TrainStepResult:
     """Validation step for v1 models (with one-batch-norm)."""
     # Get model outputs (v1: 46 outputs = 23 FVI + 23 BN)
     model_outputs = model(input, input_global_state, training=False)
@@ -484,35 +219,8 @@ def val_step_v1(
         pi_logits_optimistic,
     ) = model_outputs[:23]
 
-    # Extract BN outputs (second 23)
-    (
-        pi_logits_bn,
-        pi_bn,
-        outcome_logits_bn,
-        outcome_probs_bn,
-        ownership_bn,
-        score_logits_bn,
-        score_probs_bn,
-        gamma_bn,
-        pi_logits_aux_bn,
-        q6_pred_bn,
-        q16_pred_bn,
-        q50_pred_bn,
-        q6_err_pred_bn,
-        q16_err_pred_bn,
-        q50_err_pred_bn,
-        q6_score_pred_bn,
-        q16_score_pred_bn,
-        q50_score_pred_bn,
-        q6_score_err_pred_bn,
-        q16_score_err_pred_bn,
-        q50_score_err_pred_bn,
-        pi_logits_soft_bn,
-        pi_logits_optimistic_bn,
-    ) = model_outputs[23:]
-
     # Create FVI predictions
-    predictions_fvi = ModelPredictions(
+    predictions = ModelPredictions(
         pi_logits=pi_logits,
         pi_logits_aux=pi_logits_aux,
         game_outcome=outcome_logits,
@@ -535,39 +243,8 @@ def val_step_v1(
         pi_logits_optimistic=pi_logits_optimistic,
     )
 
-    # Create BN predictions
-    predictions_bn = ModelPredictions(
-        pi_logits=pi_logits_bn,
-        pi_logits_aux=pi_logits_aux_bn,
-        game_outcome=outcome_logits_bn,
-        score_logits=score_logits_bn,
-        own_pred=ownership_bn,
-        q6_pred=q6_pred_bn,
-        q16_pred=q16_pred_bn,
-        q50_pred=q50_pred_bn,
-        gamma=gamma_bn,
-        q6_err_pred=q6_err_pred_bn,
-        q16_err_pred=q16_err_pred_bn,
-        q50_err_pred=q50_err_pred_bn,
-        q6_score_pred=q6_score_pred_bn,
-        q16_score_pred=q16_score_pred_bn,
-        q50_score_pred=q50_score_pred_bn,
-        q6_score_err_pred=q6_score_err_pred_bn,
-        q16_score_err_pred=q16_score_err_pred_bn,
-        q50_score_err_pred=q50_score_err_pred_bn,
-        pi_logits_soft=pi_logits_soft_bn,
-        pi_logits_optimistic=pi_logits_optimistic_bn,
-    )
-
     # Compute losses for both heads
-    loss_outputs_fvi = model.compute_losses(predictions_fvi, targets, weights)
-    loss_outputs_bn = model.compute_losses(predictions_bn, targets, weights)
-
-    # Weighted combination
-    loss_outputs = tuple(
-        fvi_weight * loss_fvi + bn_weight * loss_bn
-        for loss_fvi, loss_bn in zip(loss_outputs_fvi, loss_outputs_bn)
-    )
+    loss_outputs = model.compute_losses(predictions, targets, weights)
 
     # Unpack loss outputs
     (
@@ -591,8 +268,8 @@ def val_step_v1(
     reg_loss = tf.math.add_n(model.losses)
     total_loss = loss + reg_loss
 
-    return ValStepResult(
-        predictions=predictions_fvi,
+    return TrainStepResult(
+        predictions=predictions,
         total_loss=total_loss,
         policy_loss=policy_loss,
         policy_aux_loss=policy_aux_loss,
@@ -621,17 +298,35 @@ class LossTracker:
 
     def update_losses(
         self,
-        loss,
-        policy_loss,
-        policy_aux_loss,
-        outcome_loss,
-        score_pdf_loss,
-        score_cdf_loss,
-        own_loss,
-        q30_loss,
-        q100_loss,
-        q200_loss,
+        result: TrainStepResult,
     ):
+        loss = result.total_loss.numpy()
+        policy_loss = result.policy_loss.numpy()
+        policy_aux_loss = result.policy_aux_loss.numpy()
+        outcome_loss = result.outcome_loss.numpy()
+        score_pdf_loss = result.score_pdf_loss.numpy()
+        score_cdf_loss = result.score_cdf_loss.numpy()
+        own_loss = result.own_loss.numpy()
+        q6_loss = result.q6_loss.numpy()
+        q16_loss = result.q16_loss.numpy()
+        q50_loss = result.q50_loss.numpy()
+        q_err_loss = result.q_err_loss.numpy() if result.q_err_loss is not None else 0.0
+        q_score_loss = (
+            result.q_score_loss.numpy() if result.q_score_loss is not None else 0.0
+        )
+        q_score_err_loss = (
+            result.q_score_err_loss.numpy()
+            if result.q_score_err_loss is not None
+            else 0.0
+        )
+        pi_soft_loss = (
+            result.pi_soft_loss.numpy() if result.pi_soft_loss is not None else 0.0
+        )
+        pi_optimistic_loss = (
+            result.pi_optimistic_loss.numpy()
+            if result.pi_optimistic_loss is not None
+            else 0.0
+        )
         self.losses.append(
             {
                 "loss": loss,
@@ -641,9 +336,14 @@ class LossTracker:
                 "score_pdf": score_pdf_loss,
                 "score_cdf": score_cdf_loss,
                 "own": own_loss,
-                "q30": q30_loss,
-                "q100": q100_loss,
-                "q200": q200_loss,
+                "q6": q6_loss,
+                "q16": q16_loss,
+                "q50": q50_loss,
+                "q_err": q_err_loss,
+                "q_score": q_score_loss,
+                "q_score_err": q_score_err_loss,
+                "pi_soft": pi_soft_loss,
+                "pi_optimistic": pi_optimistic_loss,
             }
         )
 
@@ -656,9 +356,18 @@ class LossTracker:
         self.min_losses["score_pdf"] = min(self.min_losses["score_pdf"], score_pdf_loss)
         self.min_losses["score_cdf"] = min(self.min_losses["score_cdf"], score_cdf_loss)
         self.min_losses["own"] = min(self.min_losses["own"], own_loss)
-        self.min_losses["q30"] = min(self.min_losses["q30"], q30_loss)
-        self.min_losses["q100"] = min(self.min_losses["q100"], q100_loss)
-        self.min_losses["q200"] = min(self.min_losses["q200"], q200_loss)
+        self.min_losses["q6"] = min(self.min_losses["q6"], q6_loss)
+        self.min_losses["q16"] = min(self.min_losses["q16"], q16_loss)
+        self.min_losses["q50"] = min(self.min_losses["q50"], q50_loss)
+        self.min_losses["q_err"] = min(self.min_losses["q_err"], q_err_loss)
+        self.min_losses["q_score"] = min(self.min_losses["q_score"], q_score_loss)
+        self.min_losses["q_score_err"] = min(
+            self.min_losses["q_score_err"], q_score_err_loss
+        )
+        self.min_losses["pi_soft"] = min(self.min_losses["pi_soft"], pi_soft_loss)
+        self.min_losses["pi_optimistic"] = min(
+            self.min_losses["pi_optimistic"], pi_optimistic_loss
+        )
 
         n = len(self.losses)
         r_m = (n - 1) / n
@@ -678,9 +387,22 @@ class LossTracker:
             self.avg_losses["score_cdf"] * r_m + score_cdf_loss * r_c
         )
         self.avg_losses["own"] = self.avg_losses["own"] * r_m + own_loss * r_c
-        self.avg_losses["q30"] = self.avg_losses["q30"] * r_m + q30_loss * r_c
-        self.avg_losses["q100"] = self.avg_losses["q100"] * r_m + q100_loss * r_c
-        self.avg_losses["q200"] = self.avg_losses["q200"] * r_m + q200_loss * r_c
+        self.avg_losses["q6"] = self.avg_losses["q6"] * r_m + q6_loss * r_c
+        self.avg_losses["q16"] = self.avg_losses["q16"] * r_m + q16_loss * r_c
+        self.avg_losses["q50"] = self.avg_losses["q50"] * r_m + q50_loss * r_c
+        self.avg_losses["q_err"] = self.avg_losses["q_err"] * r_m + q_err_loss * r_c
+        self.avg_losses["q_score"] = (
+            self.avg_losses["q_score"] * r_m + q_score_loss * r_c
+        )
+        self.avg_losses["q_score_err"] = (
+            self.avg_losses["q_score_err"] * r_m + q_score_err_loss * r_c
+        )
+        self.avg_losses["pi_soft"] = (
+            self.avg_losses["pi_soft"] * r_m + pi_soft_loss * r_c
+        )
+        self.avg_losses["pi_optimistic"] = (
+            self.avg_losses["pi_optimistic"] * r_m + pi_optimistic_loss * r_c
+        )
 
 
 class ValMetrics:
@@ -705,6 +427,8 @@ def train(
     momentum: float,
     log_interval: int,
     mode: Mode,
+    coeffs: LossCoeffs,
+    optimizer: Optional[keras.optimizers.Optimizer] = None,
     save_interval=1000,
     save_path="/tmp",
     tensorboard_log_dir="/tmp/logs",
@@ -721,14 +445,6 @@ def train(
     assert is_gpu
     summary_writer = tf.summary.create_file_writer(tensorboard_log_dir)
 
-    # Select coefficients based on mode and model version
-    if mode == Mode.SL:
-        coeffs = LossCoeffs.SLCoeffs()
-    elif model.version >= 1:
-        coeffs = LossCoeffs.RLCoeffsV1()
-    else:
-        coeffs = LossCoeffs.RLCoeffs()
-
     # Create LossWeights NamedTuple from coefficients
     weights = LossWeights(
         w_pi=coeffs.w_pi,
@@ -737,27 +453,26 @@ def train(
         w_outcome=coeffs.w_outcome,
         w_score=coeffs.w_score,
         w_own=coeffs.w_own,
-        w_q6=coeffs.w_q30,
-        w_q16=coeffs.w_q100,
-        w_q50=coeffs.w_q200,
+        w_q6=coeffs.w_q6,
+        w_q16=coeffs.w_q16,
+        w_q50=coeffs.w_q50,
         w_gamma=coeffs.w_gamma,
-        w_q_err=coeffs.w_q_err if model.version >= 1 else 0.0,
-        w_q_score=coeffs.w_q_score if model.version >= 1 else 0.0,
-        w_q_score_err=coeffs.w_q_score_err if model.version >= 1 else 0.0,
-        w_pi_soft=coeffs.w_pi_soft if model.version >= 1 else 0.0,
-        w_pi_optimistic=coeffs.w_pi_optimistic if model.version >= 1 else 0.0,
+        w_q_err=coeffs.w_q_err,
+        w_q_score=coeffs.w_q_score,
+        w_q_score_err=coeffs.w_q_score_err,
+        w_pi_soft=coeffs.w_pi_soft,
+        w_pi_optimistic=coeffs.w_pi_optimistic,
     )
 
-    # Select train function based on model version
-    train_fn = train_step_v1 if model.version >= 1 else train_step_v0
-
-    optimizer = keras.optimizers.SGD(
-        learning_rate=lr_schedule,
-        momentum=momentum,
-        global_clipnorm=100.0,  # purely for numerical stability
-    )
-    if is_gpu:
-        optimizer = keras.mixed_precision.LossScaleOptimizer(optimizer)
+    if not optimizer:
+        optimizer = keras.optimizers.SGD(
+            learning_rate=lr_schedule,
+            momentum=momentum,
+            global_clipnorm=10.0,  # purely for numerical stability
+            nesterov=True,
+        )
+        if is_gpu:
+            optimizer = keras.mixed_precision.LossScaleOptimizer(optimizer)
 
     losses_train = LossTracker()
     local_batch_num = 0
@@ -765,7 +480,7 @@ def train(
         # train
         for batch_data in train_ds:
             if save_path and save_interval and batch_num % save_interval == 0:
-                save_model(model, batch_num, save_path)
+                save_model(model, optimizer, batch_num, save_path)
                 # Run validation on checkpoint save
                 if val_ds is not None:
                     val(
@@ -796,74 +511,31 @@ def train(
                 game_outcome,
             ) = batch_data
 
-            # transforms.expand always returns v1-sized tensors (15 planes, 8 features)
-            # Slice to v0 size if needed (13 planes, 7 features)
-            if model.version == 0:
-                input = input[:, :, :, :13]  # Keep first 13 planes
-                input_global_state = input_global_state[:, :7]  # Keep first 7 features
-
-            if model.version == 0:
-                # v0 dataset format
-
-                targets = GroundTruth(
-                    policy=policy,
-                    policy_aux=policy_aux,
-                    score=score,
-                    score_one_hot=score_one_hot,
-                    game_outcome=game_outcome,
-                    own=own,
-                    q6=q6,
-                    q16=q16,
-                    q50=q50,
-                )
-
-                result = train_fn(
-                    input,
-                    input_global_state,
-                    targets,
-                    weights,
-                    model,
-                    optimizer,
-                )
-            else:
-                # v1 dataset format (includes additional labels)
-
-                targets = GroundTruth(
-                    policy=policy,
-                    policy_aux=policy_aux,
-                    score=score,
-                    score_one_hot=score_one_hot,
-                    game_outcome=game_outcome,
-                    own=own,
-                    q6=q6,
-                    q16=q16,
-                    q50=q50,
-                    q6_score=q6_score,
-                    q16_score=q16_score,
-                    q50_score=q50_score,
-                )
-
-                result = train_fn(
-                    input,
-                    input_global_state,
-                    targets,
-                    weights,
-                    model,
-                    optimizer,
-                )
-
-            losses_train.update_losses(
-                result.total_loss.numpy(),
-                result.policy_loss.numpy(),
-                result.policy_aux_loss.numpy(),
-                result.outcome_loss.numpy(),
-                result.score_pdf_loss.numpy(),
-                result.score_cdf_loss.numpy(),
-                result.own_loss.numpy(),
-                result.q6_loss.numpy(),
-                result.q16_loss.numpy(),
-                result.q50_loss.numpy(),
+            targets = GroundTruth(
+                policy=policy,
+                policy_aux=policy_aux,
+                score=score,
+                score_one_hot=score_one_hot,
+                game_outcome=game_outcome,
+                own=own,
+                q6=q6,
+                q16=q16,
+                q50=q50,
+                q6_score=q6_score,
+                q16_score=q16_score,
+                q50_score=q50_score,
             )
+
+            result = train_step(
+                input,
+                input_global_state,
+                targets,
+                weights,
+                model,
+                optimizer,
+            )
+
+            losses_train.update_losses(result)
 
             local_batch_num += 1
             batch_num += 1
@@ -873,7 +545,13 @@ def train(
                 ss_manager.take_snapshot(model)
 
             if local_batch_num % log_interval == 0:
-                log_train(batch_num, losses_train, summary_writer, mode, model.version)
+                log_train(
+                    batch_num,
+                    losses_train,
+                    result.grad_norm,
+                    summary_writer,
+                    mode,
+                )
 
                 # Log board position with predictions every 10th log interval
                 if local_batch_num % (log_interval * 10) == 0:
@@ -903,7 +581,7 @@ def train(
                     )
 
     if save_path:
-        save_model(model, batch_num, save_path)
+        save_model(model, optimizer, batch_num, save_path)
         # Run validation on final checkpoint save
         if val_ds is not None:
             val(
@@ -914,15 +592,15 @@ def train(
                 mode=mode,
                 tensorboard_log_dir=tensorboard_log_dir,
             )
-    return local_batch_num + batch_num
+    return batch_num, optimizer
 
 
 def log_train(
     batch_num: int,
     losses: LossTracker,
+    grad_norm: float,
     summary_writer: tf.summary.SummaryWriter,
     mode: Mode,
-    version: int,
 ):
     mode_str = "sl" if mode == Mode.SL else "rl"
 
@@ -933,9 +611,14 @@ def log_train(
     score_pdf_avg = losses.avg_losses["score_pdf"]
     score_cdf_avg = losses.avg_losses["score_cdf"]
     own_avg = losses.avg_losses["own"]
-    q30_avg = losses.avg_losses["q30"]
-    q100_avg = losses.avg_losses["q100"]
-    q200_avg = losses.avg_losses["q200"]
+    q6_avg = losses.avg_losses["q6"]
+    q16_avg = losses.avg_losses["q16"]
+    q50_avg = losses.avg_losses["q50"]
+    q_err_avg = losses.avg_losses["q_err"]
+    q_score_avg = losses.avg_losses["q_score"]
+    q_score_err_avg = losses.avg_losses["q_score_err"]
+    pi_soft_avg = losses.avg_losses["pi_soft"]
+    pi_optimistic_avg = losses.avg_losses["pi_optimistic"]
 
     loss_min = losses.min_losses["loss"]
     policy_min = losses.min_losses["policy"]
@@ -944,9 +627,14 @@ def log_train(
     score_pdf_min = losses.min_losses["score_pdf"]
     score_cdf_min = losses.min_losses["score_cdf"]
     own_min = losses.min_losses["own"]
-    q30_min = losses.min_losses["q30"]
-    q100_min = losses.min_losses["q100"]
-    q200_min = losses.min_losses["q200"]
+    q6_min = losses.min_losses["q6"]
+    q16_min = losses.min_losses["q16"]
+    q50_min = losses.min_losses["q50"]
+    q_err_min = losses.min_losses["q_err"]
+    q_score_min = losses.min_losses["q_score"]
+    q_score_err_min = losses.min_losses["q_score_err"]
+    pi_soft_min = losses.min_losses["pi_soft"]
+    pi_optimistic_min = losses.min_losses["pi_optimistic"]
 
     print(
         f"[batch {batch_num}] {mode_str}: "
@@ -957,9 +645,15 @@ def log_train(
         f"score_pdf = {score_pdf_avg:.4f} ({score_pdf_min:.4f}), "
         f"score_cdf = {score_cdf_avg:.4f} ({score_cdf_min:.4f}), "
         f"own = {own_avg:.4f} ({own_min:.4f}), "
-        f"q30 = {q30_avg:.4f} ({q30_min:.4f}), "
-        f"q100 = {q100_avg:.4f} ({q100_min:.4f}), "
-        f"q200 = {q200_avg:.4f} ({q200_min:.4f})"
+        f"q6 = {q6_avg:.4f} ({q6_min:.4f}), "
+        f"q16 = {q16_avg:.4f} ({q16_min:.4f}), "
+        f"q50 = {q50_avg:.4f} ({q50_min:.4f}), "
+        f"q_err = {q_err_avg:.4f} ({q_err_min:.4f}), "
+        f"q_score = {q_score_avg:.4f} ({q_score_min:.4f}), "
+        f"q_score_err = {q_score_err_avg:.4f} ({q_score_err_min:.4f}), "
+        f"pi_soft = {pi_soft_avg:.4f} ({pi_soft_min:.4f}), "
+        f"pi_optimistic = {pi_optimistic_avg:.4f} ({pi_optimistic_min:.4f}, "
+        f"grad_norm = {grad_norm:.4f}"
     )
 
     with summary_writer.as_default():
@@ -970,9 +664,9 @@ def log_train(
         tf.summary.scalar(f"{mode_str}/score_pdf", score_pdf_avg, step=batch_num)
         tf.summary.scalar(f"{mode_str}/score_cdf", score_cdf_avg, step=batch_num)
         tf.summary.scalar(f"{mode_str}/own", own_avg, step=batch_num)
-        tf.summary.scalar(f"{mode_str}/q30", q30_avg, step=batch_num)
-        tf.summary.scalar(f"{mode_str}/q100", q100_avg, step=batch_num)
-        tf.summary.scalar(f"{mode_str}/q200", q200_avg, step=batch_num)
+        tf.summary.scalar(f"{mode_str}/q6", q6_avg, step=batch_num)
+        tf.summary.scalar(f"{mode_str}/q16", q16_avg, step=batch_num)
+        tf.summary.scalar(f"{mode_str}/q50", q50_avg, step=batch_num)
 
     # Reset losses
     losses.losses.clear()
@@ -1024,6 +718,44 @@ def log_board_position(
     top_indices = np.argsort(policy_pred)[-5:][::-1]
     top_indices_target = np.argsort(policy_target)[-5:][::-1]
 
+    # short-term
+    q6_pred, q6 = predictions.q6_pred[0].numpy(), targets.q6[0].numpy()
+    q16_pred, q16 = predictions.q16_pred[0].numpy(), targets.q16[0].numpy()
+    q50_pred, q50 = predictions.q50_pred[0].numpy(), targets.q50[0].numpy()
+    q6_err_pred, q6_err = predictions.q6_err_pred[0].numpy(), np.square(q6 - q6_pred)
+    q16_err_pred, q16_err = predictions.q16_err_pred[0].numpy(), np.square(
+        q16 - q16_pred
+    )
+    q50_err_pred, q50_err = predictions.q50_err_pred[0].numpy(), np.square(
+        q50 - q50_pred
+    )
+
+    # short-term score
+    q6_score_pred, q6_score = (
+        predictions.q6_score_pred[0].numpy(),
+        targets.q6_score[0].numpy(),
+    )
+    q16_score_pred, q16_score = (
+        predictions.q16_score_pred[0].numpy(),
+        targets.q16_score[0].numpy(),
+    )
+    q50_score_pred, q50_score = (
+        predictions.q50_score_pred[0].numpy(),
+        targets.q50_score[0].numpy(),
+    )
+    q6_score_err_pred, q6_score_err = (
+        predictions.q6_score_err_pred[0].numpy(),
+        np.square(q6_score - q6_score_pred),
+    )
+    q16_score_err_pred, q16_score_err = (
+        predictions.q16_score_err_pred[0].numpy(),
+        np.square(q16_score - q16_score_pred),
+    )
+    q50_score_err_pred, q50_score_err = (
+        predictions.q50_score_err_pred[0].numpy(),
+        np.square(q50_score - q50_score_pred),
+    )
+
     # Convert move indices to coordinates
     def move_to_coords(move_idx):
         if move_idx == 361:
@@ -1054,13 +786,38 @@ def log_board_position(
     )
 
     # Score distribution
-    score_mean_pred = np.sum(score_pred * np.arange(-400, 400) * 0.05)
+    score_mean_pred = np.sum(score_pred * np.arange(-400, 400))
     score_std_pred = np.sqrt(
-        np.sum(score_pred * ((np.arange(-400, 400) * 0.05 - score_mean_pred) ** 2))
+        np.sum(score_pred * ((np.arange(-400, 400) - score_mean_pred) ** 2))
     )
     print(f"\nScore Prediction:")
     print(f"  Predicted: {score_mean_pred:+.1f} ± {score_std_pred:.1f}")
     print(f"  Actual:    {score_target:+.1f}")
+
+    # Short-term
+    print(f"\nShort-Term Value:")
+    print(
+        f"  Q6 Predicted: {q6_pred:.4f}, Actual: {q6:.4f}, Err Predicted: {q6_err_pred:.4f}, Actual: {q6_err:.4f}"
+    )
+    print(
+        f"  Q16 Predicted: {q16_pred:.4f}, Actual: {q16:.4f}, Err Predicted: {q16_err_pred:.4f}, Actual: {q16_err:.4f}"
+    )
+    print(
+        f"  Q50 Predicted: {q50_pred:.4f}, Actual: {q50:.4f}, Err Predicted: {q50_err_pred:.4f}, Actual: {q50_err:.4f}"
+    )
+    print(f"\n\nShort-Term Score:")
+    print(
+        f"  Q6 Score Predicted: {q6_score_pred:.4f}, Actual: {q6_score:.4f}"
+        f", Err Predicted: {q6_score_err_pred:.4f}, Actual: {q6_score_err:.4f}"
+    )
+    print(
+        f"  Q16 Score Predicted: {q16_score_pred:.4f}, Actual: {q16_score:.4f}"
+        f", Err Predicted: {q16_score_err_pred:.4f}, Actual: {q16_score_err:.4f}"
+    )
+    print(
+        f"  Q50 Score Predicted: {q50_score_pred:.4f}, Actual: {q50_score:.4f}"
+        f", Err Predicted: {q50_score_err_pred:.4f}, Actual: {q50_score_err:.4f}"
+    )
 
     # Top policy moves
     print(f"\nTop 5 Policy Moves:")
@@ -1077,9 +834,15 @@ def log_board_position(
     print(f"{'='*60}\n")
 
 
-def save_model(model: P3achyGoModel, batch_num: int, save_path: str):
+def save_model(
+    model: P3achyGoModel,
+    opt: keras.optimizers.Optimizer,
+    batch_num: int,
+    save_path: str,
+):
     filename = f"model_{batch_num}.keras"
     filepath = Path(save_path) / filename
+    model.compile(optimizer=opt)
     model.save(filepath)
 
 
@@ -1094,11 +857,8 @@ def val(
     """Validation on dataset."""
     summary_writer = tf.summary.create_file_writer(tensorboard_log_dir)
 
-    # Select coefficients based on mode and model version
     if mode == Mode.SL:
         coeffs = LossCoeffs.SLCoeffs()
-    elif model.version >= 1:
-        coeffs = LossCoeffs.RLCoeffsV1()
     else:
         coeffs = LossCoeffs.RLCoeffs()
 
@@ -1110,19 +870,18 @@ def val(
         w_outcome=coeffs.w_outcome,
         w_score=coeffs.w_score,
         w_own=coeffs.w_own,
-        w_q6=coeffs.w_q30,
-        w_q16=coeffs.w_q100,
-        w_q50=coeffs.w_q200,
+        w_q6=coeffs.w_q6,
+        w_q16=coeffs.w_q16,
+        w_q50=coeffs.w_q50,
         w_gamma=coeffs.w_gamma,
-        w_q_err=coeffs.w_q_err if model.version >= 1 else 0.0,
-        w_q_score=coeffs.w_q_score if model.version >= 1 else 0.0,
-        w_q_score_err=coeffs.w_q_score_err if model.version >= 1 else 0.0,
-        w_pi_soft=coeffs.w_pi_soft if model.version >= 1 else 0.0,
-        w_pi_optimistic=coeffs.w_pi_optimistic if model.version >= 1 else 0.0,
+        w_q_err=coeffs.w_q_err,
+        w_q_score=coeffs.w_q_score,
+        w_q_score_err=coeffs.w_q_score_err,
+        w_pi_soft=coeffs.w_pi_soft,
+        w_pi_optimistic=coeffs.w_pi_optimistic,
     )
 
-    # Select val function based on model version
-    val_fn = val_step_v1 if model.version >= 1 else val_step_v0
+    val_fn = val_step
 
     losses_val = LossTracker()
     metrics_val = ValMetrics()
@@ -1150,87 +909,50 @@ def val(
             game_outcome,
         ) = batch_data
 
-        # transforms.expand always returns v1-sized tensors (15 planes, 8 features)
-        # Slice to v0 size if needed (13 planes, 7 features)
-        if model.version == 0:
-            input = input[:, :, :, :13]  # Keep first 13 planes
-            input_global_state = input_global_state[:, :7]  # Keep first 7 features
-
-        if model.version == 0:
-            targets = GroundTruth(
-                policy=policy,
-                policy_aux=policy_aux,
-                score=score,
-                score_one_hot=score_one_hot,
-                game_outcome=game_outcome,
-                own=own,
-                q6=q6,
-                q16=q16,
-                q50=q50,
-            )
-
-            result = val_fn(
-                input,
-                input_global_state,
-                targets,
-                weights,
-                model,
-            )
-        else:
-            targets = GroundTruth(
-                policy=policy,
-                policy_aux=policy_aux,
-                score=score,
-                score_one_hot=score_one_hot,
-                game_outcome=game_outcome,
-                own=own,
-                q6=q6,
-                q16=q16,
-                q50=q50,
-                q6_score=q6_score,
-                q16_score=q16_score,
-                q50_score=q50_score,
-            )
-
-            result = val_fn(
-                input,
-                input_global_state,
-                targets,
-                weights,
-                model,
-            )
-
-        losses_val.update_losses(
-            result.total_loss.numpy(),
-            result.policy_loss.numpy(),
-            result.policy_aux_loss.numpy(),
-            result.outcome_loss.numpy(),
-            result.score_pdf_loss.numpy(),
-            result.score_cdf_loss.numpy(),
-            result.own_loss.numpy(),
-            result.q6_loss.numpy(),
-            result.q16_loss.numpy(),
-            result.q50_loss.numpy(),
+        targets = GroundTruth(
+            policy=policy,
+            policy_aux=policy_aux,
+            score=score,
+            score_one_hot=score_one_hot,
+            game_outcome=game_outcome,
+            own=own,
+            q6=q6,
+            q16=q16,
+            q50=q50,
+            q6_score=q6_score,
+            q16_score=q16_score,
+            q50_score=q50_score,
         )
+
+        result = val_fn(
+            input,
+            input_global_state,
+            targets,
+            weights,
+            model,
+        )
+
+        losses_val.update_losses(result)
 
         # Compute accuracy metrics
         num_moves = policy.shape[0]
         num_outcomes = score.shape[0]
 
-        predicted_moves = keras.ops.argmax(result.predictions.pi_logits, axis=1)
-        actual_moves = keras.ops.argmax(policy, axis=1)
-        correct_moves = keras.ops.sum(
-            keras.ops.cast(predicted_moves == actual_moves, "int32")
-        ).numpy()
+        def compute_accuracy(predictions: ModelPredictions):
+            predicted_moves = keras.ops.argmax(predictions.pi_logits, axis=1)
+            actual_moves = keras.ops.argmax(policy, axis=1)
+            correct_moves = keras.ops.sum(
+                keras.ops.cast(predicted_moves == actual_moves, "int32")
+            ).numpy()
 
-        predicted_outcomes = (
-            result.predictions.game_outcome[:, 1] > 0.5
-        )  # Win probability
-        actual_outcomes = score >= 0  # Actual win
-        correct_outcomes = keras.ops.sum(
-            keras.ops.cast(predicted_outcomes == actual_outcomes, "int32")
-        ).numpy()
+            predicted_outcomes = predictions.game_outcome[:, 1] > 0.5  # Win probability
+            actual_outcomes = score >= 0  # Actual win
+            correct_outcomes = keras.ops.sum(
+                keras.ops.cast(predicted_outcomes == actual_outcomes, "int32")
+            ).numpy()
+            return correct_moves, correct_outcomes
 
+        correct_moves, correct_outcomes = compute_accuracy(result.predictions)
         metrics_val.increment(num_moves, num_outcomes, correct_moves, correct_outcomes)
 
     log_val(
@@ -1261,9 +983,9 @@ def log_val(
     outcome_avg = losses.avg_losses["outcome"]
     score_pdf_avg = losses.avg_losses["score_pdf"]
     own_avg = losses.avg_losses["own"]
-    q30_avg = losses.avg_losses["q30"]
-    q100_avg = losses.avg_losses["q100"]
-    q200_avg = losses.avg_losses["q200"]
+    q6_avg = losses.avg_losses["q6"]
+    q16_avg = losses.avg_losses["q16"]
+    q50_avg = losses.avg_losses["q50"]
 
     move_acc = metrics.correct_moves / metrics.num_moves if metrics.num_moves > 0 else 0
     outcome_acc = (
@@ -1280,9 +1002,9 @@ def log_val(
         f"outcome = {outcome_avg:.4f}, "
         f"score_pdf = {score_pdf_avg:.4f}, "
         f"own = {own_avg:.4f}, "
-        f"q30 = {q30_avg:.4f}, "
-        f"q100 = {q100_avg:.4f}, "
-        f"q200 = {q200_avg:.4f}, "
+        f"q6 = {q6_avg:.4f}, "
+        f"q16 = {q16_avg:.4f}, "
+        f"q50 = {q50_avg:.4f}, "
         f"move_acc = {move_acc:.4f}, "
         f"outcome_acc = {outcome_acc:.4f}"
     )

@@ -51,15 +51,15 @@ RUN git clone https://github.com/microsoft/mimalloc.git && \
   cd ../../.. && \
   rm -rf mimalloc
 
-# Install CUDA 11.8 toolkit for TensorFlow compatibility (libraries only)
+# Install CUDA 12.3 toolkit for TensorFlow 2.16 compatibility (alongside CUDA 13.0 from base image)
 RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb && \
   dpkg -i cuda-keyring_1.1-1_all.deb && \
   apt-get update && \
-  apt-get install -y cuda-toolkit-11-8 libcudnn8 libcudnn8-dev && \
+  apt-get install -y cuda-toolkit-12-3 libcudnn8 libcudnn8-dev && \
   rm cuda-keyring_1.1-1_all.deb
 
-# Install TensorFlow 2.11
-RUN pip3 install tensorflow==2.11.* nvidia-cudnn-cu11==8.6.*
+# Install TensorFlow 2.16
+RUN pip3 install tensorflow==2.16.* nvidia-cudnn-cu12==8.9.*
 
 # Create non-root user with matching UID/GID for host compatibility
 ARG UID=1000
@@ -72,9 +72,9 @@ ENV PYTHONPATH=/app/python
 ENV LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
 ENV PATH=/usr/lib/llvm-16/bin:$PATH
 
-# CUDA 11.8 paths for TensorFlow
-ENV LD_LIBRARY_PATH=/usr/local/cuda-11.8/lib64:$LD_LIBRARY_PATH
-ENV PATH=/usr/local/cuda-11.8/bin:$PATH
+# CUDA 12.3 paths for TensorFlow
+ENV LD_LIBRARY_PATH=/usr/local/cuda-12.3/lib64:$LD_LIBRARY_PATH
+ENV PATH=/usr/local/cuda-12.3/bin:$PATH
 
 # TensorRT and TensorRT-RTX paths (mounted at runtime)
 # Mount points: /opt/tensorrt and /opt/tensorrt-rtx

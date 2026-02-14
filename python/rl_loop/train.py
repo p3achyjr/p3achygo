@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tensorflow as tf
+import keras
 import transforms
 import train
 import rl_loop.model_utils as model_utils
@@ -11,6 +12,7 @@ from lr_schedule import ConstantLRSchedule, CyclicLRSchedule
 from model import P3achyGoModel
 from rl_loop.config import RunConfig
 from weight_snapshot import WeightSnapshotManager
+from loss_coeffs import LossCoeffs
 
 EPOCHS_PER_GEN = 1
 MOMENTUM = 0.9
@@ -40,7 +42,9 @@ def get_lr(config: RunConfig, model_gen: int) -> float:
 
 
 def train_one_gen(
-    model: P3achyGoModel,
+    live_model: P3achyGoModel,
+    last_swa_model: P3achyGoModel,
+    optimizer: keras.optimizers.Optimizer,
     model_gen: int,
     chunk_path: str,
     val_ds: tf.data.TFRecordDataset,
@@ -88,17 +92,26 @@ def train_one_gen(
     ds = ds.prefetch(tf.data.AUTOTUNE)
 
     ss_manager = WeightSnapshotManager(get_ss_timestamps(num_batches))
-    prev_weights = model.get_weights()
+    last_swa_weights = last_swa_model.get_weights()
+    loss_coeffs = LossCoeffs.RLCoeffs()
+    if model_gen <= 100:
+        # downweight some terms as at this point it is just noise.
+        loss_coeffs.w_q_score *= 0.5
+        loss_coeffs.w_q_score_err *= 0.5
+        loss_coeffs.w_pi_soft *= 0.25
 
+    logging.info(f"Loss Coefficients: {loss_coeffs}")
     old_batch_num = batch_num
-    batch_num = train.train(
-        model,
+    batch_num, optimizer = train.train(
+        live_model,
         ds,
         EPOCHS_PER_GEN,
         MOMENTUM,
+        optimizer=optimizer,
         lr_schedule=lr_schedule,
         log_interval=log_interval,
         mode=train.Mode.RL,
+        coeffs=loss_coeffs,
         save_interval=None,
         save_path=None,
         is_gpu=is_gpu,
@@ -108,20 +121,29 @@ def train_one_gen(
 
     print(
         f"SWA Momentum: {SWA_MOMENTUM}, "
+        + f"Num Batches: {num_batches}, "
         + f"Num Batches in Chunk: {batch_num - old_batch_num}, "
         + f"Num Snapshots: {len(ss_manager.snapshots)}, "
         + f"Snapshots: {get_ss_timestamps(num_batches)}"
     )
     # num_batches_in_chunk = batch_num - old_batch_num
-    # new_weights = model_utils.avg_weights(prev_weights, model.get_weights(),
+    # new_weights = model_utils.avg_weights(last_swa_weights, model.get_weights(),
     #                                       num_batches_in_chunk)
     new_weights = model_utils.swa_avg_weights(
-        [prev_weights] + ss_manager.snapshots + [model.get_weights()],
+        [last_swa_weights] + ss_manager.snapshots + [live_model.get_weights()],
         swa_momentum=SWA_MOMENTUM,
     )
-    model.set_weights(new_weights)
-
+    print(f"Last Model: {model_gen}, Next Model: {model_gen + 1}")
+    print(f"Last SWA Model Weights: {last_swa_weights[0][0][0][0][0:8]}")
+    print(f"Live Weights: {live_model.get_weights()[0][0][0][0][0:8]}")
+    print(f"New SWA Model Weights: {new_weights[0][0][0][0][0:8]}")
+    swa_model = keras.models.clone_model(live_model)
+    swa_model.set_weights(new_weights)
+    model_utils.recompute_bn_statistics(swa_model, ds)
+    # model.set_weights(new_weights)
+    logging.info(f"Running validation for live model...")
+    train.val(live_model, mode=train.Mode.RL, val_ds=val_ds, batch_num=model_gen + 1)
     logging.info(f"Running validation for new model...")
-    train.val(model, mode=train.Mode.RL, val_ds=val_ds, batch_num=model_gen + 1)
+    train.val(swa_model, mode=train.Mode.RL, val_ds=val_ds, batch_num=model_gen + 1)
 
-    return batch_num
+    return batch_num, live_model, swa_model, optimizer

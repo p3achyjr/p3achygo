@@ -89,8 +89,8 @@ void AddNewInitState(GoExploitBuffer* buffer, const Game& game,
 }
 
 InitState GetInitState(Probability& probability, GoExploitBuffer* buffer) {
-  const float komi =
-      std::round(14 + probability.Gaussian() * 6) / 2.0f;  // Normal(7, 1)
+  const float komi = std::round(7.0f + std::min(probability.Gaussian(), 3.0f)) +
+                     (probability.Uniform() < 0.5f ? 0.5f : -0.5f);
   InitState s0 =
       InitState{Board(komi),
                 {kNoopMove, kNoopMove, kNoopMove, kNoopMove, kNoopMove},
@@ -122,7 +122,7 @@ InitState GetInitState(Probability& probability, GoExploitBuffer* buffer) {
     return seen_state.value();
   } else if (p <= kPlayFromBookProb + kUseSeenStateProb + kHandicapGame) {
     int handicap = std::floor(probability.Uniform() * 3 + 2);
-    float komi = (handicap - 2) * 14 + 20;  // katago ;)
+    float komi = (handicap - 2) * 14 + 20.5;  // katago ;)
     return InitState{Board(handicap, komi),
                      {kNoopMove, kNoopMove, kNoopMove, kNoopMove, kNoopMove},
                      WHITE};
@@ -318,7 +318,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       // Run and Profile Search.
       auto begin = std::chrono::high_resolution_clock::now();
       GumbelResult gumbel_res =
-          is_move_selected_for_training || sampling_raw_policy
+          is_move_selected_for_training || sampling_raw_policy || gumbel_n < 100
               ? gumbel_evaluator.SearchRoot(probability, game, node_table.get(),
                                             root_node, color_to_move, gumbel_n,
                                             gumbel_k, noise_scaling)
@@ -360,7 +360,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       // Play move, and calculate PA regions if we hit a checkpoint.
       game.PlayMove(move, color_to_move);
       if (std::find(std::begin(kComputePAMoveNums),
-                    std::end(kComputePAMoveNums), game.num_moves())) {
+                    std::end(kComputePAMoveNums),
+                    game.num_moves()) != std::end(kComputePAMoveNums)) {
         game.CalculatePassAliveRegions();
       }
       color_to_move = OppositeColor(color_to_move);

@@ -476,8 +476,8 @@ Board::Board(int handicap, float komi)
     }
   }
 
-  constexpr std::array<Loc, 4> kHandicapStones = {Loc{16, 3}, Loc{3, 16},
-                                                  Loc{3, 3}, Loc{16, 16}};
+  constexpr std::array<Loc, 4> kHandicapStones = {Loc{15, 3}, Loc{3, 15},
+                                                  Loc{3, 3}, Loc{15, 15}};
   for (int i = 0; i < handicap; ++i) {
     const Loc stone = kHandicapStones[i];
     SetLoc(stone, BLACK);

@@ -7,6 +7,7 @@ from __future__ import annotations
 import sys
 import gcs_utils as gcs
 import tensorflow as tf
+import keras
 import transforms
 import rl_loop.model_utils as model_utils
 import rl_loop.train
@@ -17,8 +18,10 @@ from model import P3achyGoModel
 from pathlib import Path
 from rl_loop.constants import SELFPLAY_BATCH_SIZE
 from typing import Tuple
+from lr_schedule import ConstantLRSchedule
 
 BATCH_SIZE = 256
+LIVE_MODEL_NAME = "live_model.keras"
 
 FLAGS = flags.FLAGS
 
@@ -88,13 +91,33 @@ def main(_):
 
     config = rl_loop.config.parse(FLAGS.run_id)
 
-    model_path, _ = get_model_path(FLAGS.models_dir, FLAGS.gen)
-    model = tf.keras.models.load_model(
-        model_path, custom_objects=P3achyGoModel.custom_objects()
+    swa_model_path, _ = get_model_path(FLAGS.models_dir, FLAGS.gen)
+    live_model_path = str(Path(FLAGS.models_dir, LIVE_MODEL_NAME))
+    live_model = keras.models.load_model(
+        live_model_path,
+        custom_objects=P3achyGoModel.custom_objects()
+        | {
+            "custom>ConstantLRSchedule": ConstantLRSchedule,
+            "ConstantLRSchedule": ConstantLRSchedule,
+        },
     )
-
+    optimizer = getattr(live_model, "optimizer", None)
+    if not optimizer:
+        logging.info(
+            "No optimizer found in model. This should only happen for model_0000."
+        )
+    swa_model = keras.models.load_model(
+        swa_model_path,
+        custom_objects=P3achyGoModel.custom_objects()
+        | {
+            "custom>ConstantLRSchedule": ConstantLRSchedule,
+            "ConstantLRSchedule": ConstantLRSchedule,
+        },
+    )
     logging.info(f"Using Train Dataset: {FLAGS.chunk_path}")
     logging.info(f"Using Val Dataset: {FLAGS.val_ds_path}")
+    logging.info(f"Using Model Checkpoint: {live_model_path}")
+    logging.info(f"Using SWA Model: {swa_model_path}")
     val_ds = tf.data.TFRecordDataset(FLAGS.val_ds_path, compression_type="ZLIB")
     val_ds = val_ds.map(transforms.expand, num_parallel_calls=tf.data.AUTOTUNE)
     val_ds = val_ds.batch(config.batch_size)
@@ -103,9 +126,13 @@ def main(_):
     with open(FLAGS.batch_num_path, "r") as f:  # assumes file is already created.
         batch_num = int(f.read())
 
-    logging.info(f"Model Path: {model_path}, Training on Chunk: {FLAGS.chunk_path}")
-    batch_num = rl_loop.train.train_one_gen(
-        model,
+    logging.info(
+        f"Model Path: {live_model_path}, Training on Chunk: {FLAGS.chunk_path}"
+    )
+    batch_num, live_model, swa_model, optimizer = rl_loop.train.train_one_gen(
+        live_model,
+        swa_model,
+        optimizer,
         FLAGS.gen,
         FLAGS.chunk_path,
         val_ds,
@@ -114,9 +141,11 @@ def main(_):
         batch_num=batch_num,
         chunk_size=FLAGS.chunk_size,
     )
+    live_model.compile(optimizer=optimizer)
+    live_model.save(live_model_path)
     if FLAGS.save_trt:
         model_utils.save_onnx_trt(
-            model,
+            swa_model,
             FLAGS.val_ds_path,
             FLAGS.models_dir,
             FLAGS.next_gen,
@@ -124,7 +153,7 @@ def main(_):
             trt_convert_path=FLAGS.trt_convert_path,
         )
     else:
-        model_utils.save(model, FLAGS.models_dir, FLAGS.next_gen)
+        model_utils.save(swa_model, FLAGS.models_dir, FLAGS.next_gen)
 
     with open(FLAGS.batch_num_path, "w") as f:
         f.write(str(batch_num))

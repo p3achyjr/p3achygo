@@ -17,6 +17,7 @@ import sys
 import transforms
 import train
 import trt_convert
+import keras
 
 from absl import app, flags, logging
 from constants import *
@@ -24,6 +25,8 @@ from lr_schedule import CyclicLRDecaySchedule, ConstantLRSchedule
 from model import P3achyGoModel
 from model_config import ModelConfig, CONFIG_OPTIONS
 from pathlib import Path
+
+from loss_coeffs import LossCoeffs
 
 sys.stdout.reconfigure(line_buffering=True)  # pytype: disable=attribute-error
 sys.stderr.reconfigure(line_buffering=True)  # pytype: disable=attribute-error
@@ -54,8 +57,8 @@ flags.DEFINE_integer(
 )
 flags.DEFINE_string("dataset_dir", "", "Directory to datasets.")
 flags.DEFINE_string("tensorboard_logdir", "/tmp/logs", "Tensorboard log directory.")
-flags.DEFINE_enum("model_config", "small", CONFIG_OPTIONS, "Model Config/Size.")
-flags.DEFINE_integer("version", 1, "Model Version")
+flags.DEFINE_enum("model_config", "b10c128btl3", CONFIG_OPTIONS, "Model Config/Size.")
+flags.DEFINE_string("from_checkpoint", "", "Path to checkpoint to load weights from.")
 
 
 def main(_):
@@ -79,14 +82,21 @@ def main(_):
 
     lr, momentum, epochs = FLAGS.learning_rate, FLAGS.momentum, FLAGS.epochs
     config = ModelConfig.from_str(FLAGS.model_config)
-    config.kVersion = FLAGS.version
     model = P3achyGoModel.create(
         config=config,
         board_len=BOARD_LEN,
-        num_input_planes=num_input_planes(FLAGS.version),
-        num_input_features=num_input_features(FLAGS.version),
+        num_input_planes=num_input_planes(),
+        num_input_features=num_input_features(),
         name="p3achygo_sl",
     )
+    optimizer = None
+    if FLAGS.from_checkpoint:
+        model = keras.models.load_model(
+            FLAGS.from_checkpoint, custom_objects=P3achyGoModel.custom_objects()
+        )
+        optimizer = model.optimizer
+    if optimizer is None and model.is_transformer:
+        optimizer = keras.optimizers.Muon(learning_rate=lr)
 
     # setup train ds.
     train_ds = tf.data.Dataset.from_tensor_slices(train_shards)
@@ -107,6 +117,7 @@ def main(_):
     val_ds = val_ds.map(transforms.expand)
     val_ds = val_ds.batch(batch_size)
     lr_schedule = CyclicLRDecaySchedule(lr, lr * 10, ds_len * epochs)
+    lr_schedule = ConstantLRSchedule(lr)
     print(lr_schedule.info())
     model.summary()
 
@@ -127,13 +138,15 @@ def main(_):
     train.val(model, mode=train.Mode.SL, val_ds=val_ds, batch_num=0)
 
     logging.info(f"Starting Training...")
-    train.train(
+    _, optimizer = train.train(
         model,
         train_ds,
         epochs,
         momentum,
         log_interval=FLAGS.log_interval,
         mode=train.Mode.SL,
+        coeffs=LossCoeffs.SLCoeffs(),
+        optimizer=optimizer,
         save_interval=FLAGS.model_save_interval,
         save_path=FLAGS.model_save_path,
         tensorboard_log_dir=tensorboard_log_dir,
@@ -147,6 +160,7 @@ def main(_):
     train.val(model, mode=train.Mode.SL, val_ds=val_ds, batch_num=1)
 
     model_path = str(Path(FLAGS.model_save_path, "p3achygo_sl.keras"))
+    model.compile(optimizer=optimizer)
     model.save(model_path)
 
 
