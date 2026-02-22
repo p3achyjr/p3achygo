@@ -1,5 +1,6 @@
 #include "cc/selfplay/self_play_thread.h"
 
+#include <algorithm>
 #include <chrono>
 #include <sstream>
 
@@ -11,6 +12,7 @@
 #include "cc/game/game.h"
 #include "cc/mcts/gumbel.h"
 #include "cc/mcts/node_table.h"
+#include "cc/mcts/tree.h"
 #include "cc/recorder/game_recorder.h"
 #include "cc/selfplay/book.h"
 #include "cc/selfplay/go_exploit_buffer.h"
@@ -54,6 +56,9 @@ static constexpr float kLogFullTreeProb = 0.0f;  // .002;
 
 // Probability that we pick a move for training.
 static constexpr float kMoveSelectedForTrainingProb = .25;
+
+// Base probability that we over-search a node.
+static constexpr float kOverSearchNodeProb = 0.15;
 
 // Threshold beneath which we are down bad (should resign).
 static constexpr float kDownBadThreshold = -.90;
@@ -183,6 +188,9 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     // The KLD of the i'th move from the prior.
     std::vector<float> klds;
 
+    // Visit counts for each move.
+    std::vector<uint32_t> visit_counts;
+
     // Number of consecutive moves at which we are beneath kDownBadThreshold.
     int num_consecutive_down_bad_moves = 0;
 
@@ -255,6 +263,26 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         return p;
       }();
 
+      // Probability of over-searching this move, if selected for training.
+      float const over_search_prob = [sampling_raw_policy, is_either_down_bad,
+                                      &root_node]() {
+        if (sampling_raw_policy || is_either_down_bad) {
+          return 0.0f;
+        }
+        if (root_node == nullptr) {
+          return kOverSearchNodeProb;
+        }
+
+        constexpr float kBaseStdDev = 0.15;
+        const float v = VOutcome(root_node);
+        const float std = root_node->v_outcome_var == 0.0
+                              ? kBaseStdDev
+                              : std::sqrt(root_node->v_outcome_var);
+        const float cv = std::clamp((1.0f - std::abs(v)) / 0.8f, 0.0f, 1.0f);
+        const float cstd = std / kBaseStdDev;
+        return std::min(kOverSearchNodeProb, cv * cstd * kOverSearchNodeProb);
+      }();
+
       // Visit count cap for trainable moves. If we are not down bad, then we
       // return the default. Otherwise, we anneal according to n =
       // (1 - down_bad_coeff) * default_n + down_bad_coeff * default_n. We
@@ -275,6 +303,9 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
       bool const is_move_selected_for_training =
           probability.Uniform() < select_move_prob;
+      bool const is_move_over_search =
+          probability.Uniform() < over_search_prob &&
+          is_move_selected_for_training;
       auto const [gumbel_n, gumbel_k, noise_scaling] = [&]() {
         int gumbel_n, gumbel_k;
         float noise_scaling = 1.0f;
@@ -319,13 +350,20 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       auto begin = std::chrono::high_resolution_clock::now();
       GumbelResult gumbel_res =
           is_move_selected_for_training || sampling_raw_policy || gumbel_n < 100
-              ? gumbel_evaluator.SearchRoot(probability, game, node_table.get(),
-                                            root_node, color_to_move, gumbel_n,
-                                            gumbel_k, noise_scaling)
+              ? gumbel_evaluator.SearchRoot(
+                    probability, game, node_table.get(), root_node,
+                    color_to_move,
+                    GumbelSearchParams{
+                        gumbel_n, gumbel_k, noise_scaling,
+                        /*disable_pass=*/false,
+                        /*early_stopping_enabled=*/!is_move_over_search,
+                        /*over_search_enabled=*/
+                        is_move_over_search})
               : gumbel_evaluator.SearchRootPuct(
                     probability, game, node_table.get(), root_node,
-                    color_to_move, gumbel_n, 1.05f, 0.28f,
-                    PuctParams(PuctKind::kVisitCountSample, tau));
+                    color_to_move, gumbel_n,
+                    PuctParams{PuctRootSelectionPolicy::kVisitCountSample,
+                               1.05f, 0.28f, 0, false, false, tau});
       auto end = std::chrono::high_resolution_clock::now();
 
       // Post Search Statstics.
@@ -351,6 +389,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       root_q_outcomes.push_back(root_q_outcome);
       root_scores.push_back(root_score);
       klds.push_back(gumbel_res.kld);
+      visit_counts.push_back(gumbel_res.visits);
       if (-std::abs(root_q_outcome) < kDownBadThreshold) {
         ++num_consecutive_down_bad_moves;
       } else {
@@ -417,7 +456,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       }
 
       auto search_dur =
-          std::chrono::duration_cast<std::chrono::microseconds>(end - begin)
+          std::chrono::duration_cast<std::chrono::milliseconds>(end - begin)
               .count();
       search_dur_avg = (search_dur_avg * (game.num_moves() - 1) + search_dur) /
                        game.num_moves();
@@ -433,7 +472,9 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         s << "N: " << gumbel_n << ", K: " << gumbel_k
           << ", Select Move Prob: " << select_move_prob
           << ", Add Init State Prob: " << add_init_state_prob
-          << ", Trainable: " << is_move_selected_for_training << "\n";
+          << ", Trainable: " << is_move_selected_for_training
+          << ", Over Search: " << is_move_over_search
+          << ", Visits: " << gumbel_res.visits << "\n";
         s << "Last 5 Moves: " << game.move(game.num_moves() - 5) << ", "
           << game.move(game.num_moves() - 4) << ", "
           << game.move(game.num_moves() - 3) << ", "
@@ -466,9 +507,9 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
           << " Score: " << root_node->init_score_est << "\n";
         s << "Board:\n" << game.board() << "\n";
         s << "Nodes Reaped: " << num_nodes_reaped
-          << ", Reap Time: " << reap_time_us << "\n";
+          << ", Reap Time: " << reap_time_us << "us\n";
         s << "Search Took " << search_dur
-          << "us. Average For Game: " << search_dur_avg << "us.\n";
+          << "ms. Average For Game: " << search_dur_avg << "ms.\n";
 
         LOG_TO_SINK(INFO, sink) << s.str();
       }
@@ -481,8 +522,9 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       auto begin = std::chrono::high_resolution_clock::now();
       GumbelResult gumbel_res = gumbel_evaluator.SearchRoot(
           probability, game, node_table.get(), root_node, color_to_move,
-          std::min(80, config.default_params.n),
-          std::min(8, config.default_params.k), 0.0f);
+          GumbelSearchParams{std::min(80, config.default_params.n),
+                             std::min(8, config.default_params.k),
+                             /*noise_scaling=*/0.0f});
       auto end = std::chrono::high_resolution_clock::now();
       auto search_dur =
           std::chrono::duration_cast<std::chrono::microseconds>(end - begin)
@@ -543,7 +585,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     auto begin = std::chrono::high_resolution_clock::now();
     game_recorder->RecordGame(thread_id, init_state.board, game, mcts_pis,
                               move_trainables, root_q_outcomes, root_scores,
-                              klds, search_roots);
+                              klds, search_roots, visit_counts);
     auto end = std::chrono::high_resolution_clock::now();
 
     LOG_TO_SINK(INFO, sink)

@@ -34,7 +34,8 @@ class GameRecorder {
                           const std::vector<float>& root_qs,
                           const std::vector<float>& root_scores,
                           const std::vector<float>& klds,
-                          const std::vector<mcts::TreeNode*>& roots) = 0;
+                          const std::vector<mcts::TreeNode*>& roots,
+                          const std::vector<uint32_t>& visit_counts) = 0;
 
   virtual void RecordEvalGame(int thread_id, const game::Game& game,
                               const std::string& b_name,

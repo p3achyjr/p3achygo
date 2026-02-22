@@ -34,6 +34,10 @@ struct EvalConfig {
   const bool cand_var_scale_cpuct;
   const bool cur_use_mcgs;
   const bool cand_use_mcgs;
+  const bool cur_use_puct_v;
+  const bool cand_use_puct_v;
+  const float cur_c_puct_v_2;
+  const float cand_c_puct_v_2;
 };
 
 struct EvalResult {

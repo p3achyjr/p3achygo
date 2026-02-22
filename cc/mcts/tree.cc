@@ -30,16 +30,40 @@ float CachedQuantile(const int v) {
   return kZTable.back();
 }
 
+float ZScore(float alpha, int n) {
+  boost::math::students_t dist(n);
+  return boost::math::quantile(boost::math::complement(dist, alpha / 2));
+}
+
+std::pair<float, float> ConfidenceInterval(const TreeNode* node, int action,
+                                           float alpha) {
+  static constexpr float kMinLcb = -1e6f;
+  static constexpr float kMaxUcb = 1e6f;
+  float n = NAction(node, action);
+  if (!node->child(action) || n < 2) return {kMinLcb + n, kMaxUcb - n};
+
+  float stddev = std::sqrt(QVar(node, action) / n);
+  float z = std::abs(alpha - kAlpha) < 1e-5 ? CachedQuantile(n - 1)
+                                            : ZScore(alpha, n - 1);
+  return {Q(node, action) - z * stddev, Q(node, action) + z * stddev};
+}
+
 }  // namespace
 
 float Lcb(const TreeNode* node, int action) {
-  static constexpr float kMinLcb = -1e6f;
-  float n = NAction(node, action);
-  if (!node->child(action) || n < 2) return kMinLcb + n;
+  return ConfidenceInterval(node, action, kAlpha).first;
+}
 
-  float stddev = std::sqrt(QVar(node, action) / n);
-  float z = CachedQuantile(n - 1);
-  return Q(node, action) - z * stddev;
+float Ucb(const TreeNode* node, int action) {
+  return ConfidenceInterval(node, action, kAlpha).second;
+}
+
+float Lcb(const TreeNode* node, int action, float alpha) {
+  return ConfidenceInterval(node, action, alpha).first;
+}
+
+float Ucb(const TreeNode* node, int action, float alpha) {
+  return ConfidenceInterval(node, action, alpha).second;
 }
 
 void AdvanceState(TreeNode* node) {

@@ -13,7 +13,7 @@ using namespace ::mcts;
 }  // namespace
 
 void PlayGames(nn::NNInterface* nn_interface, int num_games, int visit_count,
-               std::vector<Callback*> callbacks) {
+               bool seq_halving, std::vector<Callback*> callbacks) {
   Probability probability;
 
   for (int i = 0; i < num_games; ++i) {
@@ -24,9 +24,15 @@ void PlayGames(nn::NNInterface* nn_interface, int num_games, int visit_count,
         node_table->GetOrCreate(game.board().hash(), color_to_move, false);
     GumbelEvaluator gumbel_evaluator(nn_interface, 0);
     while (!game.IsGameOver()) {
-      GumbelResult search_result = gumbel_evaluator.SearchRootPuct(
-          probability, game, node_table.get(), root, color_to_move, visit_count,
-          1.0f, 0.45f, PuctKind::kLcb);
+      GumbelResult search_result =
+          seq_halving
+              ? gumbel_evaluator.SearchRoot(
+                    probability, game, node_table.get(), root, color_to_move,
+                    mcts::GumbelSearchParams{visit_count, 16})
+              : gumbel_evaluator.SearchRootPuct(
+                    probability, game, node_table.get(), root, color_to_move,
+                    visit_count,
+                    PuctParams{PuctRootSelectionPolicy::kLcb, 1.0f, 0.45f});
       for (auto& cb : callbacks) {
         cb->OnMove(game, color_to_move, root, search_result);
       }

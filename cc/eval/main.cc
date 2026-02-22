@@ -52,6 +52,8 @@ ABSL_FLAG(bool, cur_var_scale_cpuct, false,
 ABSL_FLAG(
     bool, cur_use_mcgs, false,
     "Whether to use Monte-Carlo Graph Search (transposition table) for cur.");
+ABSL_FLAG(bool, cur_use_puct_v, false, "Whether to use PUCT-V for cur.");
+ABSL_FLAG(float, cur_c_puct_v_2, 3.0, "cur c_puct_v_2 scaling.");
 ABSL_FLAG(int, cand_n, kDefaultGumbelN, "N for candidate player");
 ABSL_FLAG(int, cand_k, kDefaultGumbelK, "K for candidate player");
 ABSL_FLAG(float, cand_noise_scaling, 1.0f, "Cand gumbel noise scaling");
@@ -63,6 +65,8 @@ ABSL_FLAG(bool, cand_var_scale_cpuct, false,
 ABSL_FLAG(
     bool, cand_use_mcgs, false,
     "Whether to use Monte-Carlo Graph Search (transposition table) for cand.");
+ABSL_FLAG(bool, cand_use_puct_v, false, "Whether to use PUCT-V for cand.");
+ABSL_FLAG(float, cand_c_puct_v_2, 3.0, "cand c_puct_v_2 scaling.");
 
 float ConfidenceDelta(float z_score, float num_sims, float wr) {
   return z_score * std::sqrt(wr * (1 - wr) / num_sims);
@@ -178,6 +182,10 @@ int main(int argc, char** argv) {
       absl::GetFlag(FLAGS_cand_var_scale_cpuct),
       absl::GetFlag(FLAGS_cur_use_mcgs),
       absl::GetFlag(FLAGS_cand_use_mcgs),
+      absl::GetFlag(FLAGS_cur_use_puct_v),
+      absl::GetFlag(FLAGS_cand_use_puct_v),
+      absl::GetFlag(FLAGS_cur_c_puct_v_2),
+      absl::GetFlag(FLAGS_cand_c_puct_v_2),
   };
   std::vector<std::thread> threads;
   std::vector<std::future<EvalResult>> eval_results;

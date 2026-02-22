@@ -124,8 +124,11 @@ inline float ChildScore(const TreeNode* node, int action) {
                                  : -node->children[action]->init_score_est;
 }
 
-// Returns LCB for the value of a child node.
+// Returns LCB/UCB for the value of a child node.
 float Lcb(const TreeNode* node, int action);
+float Ucb(const TreeNode* node, int action);
+float Lcb(const TreeNode* node, int action, float alpha);
+float Ucb(const TreeNode* node, int action, float alpha);
 
 void AdvanceState(TreeNode* node);
 

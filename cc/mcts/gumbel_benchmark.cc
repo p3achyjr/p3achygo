@@ -6,6 +6,7 @@
 #include "cc/game/loc.h"
 #include "cc/game/move.h"
 #include "cc/mcts/gumbel.h"
+#include "cc/mcts/node_table.h"
 #include "cc/mcts/tree.h"
 #include "cc/nn/nn_interface.h"
 
@@ -50,13 +51,15 @@ static void BM_Gumbel(benchmark::State& state) {
     state.PauseTiming();
     Game game;
     Color color_to_move = BLACK;
-    TreeNode root_node;
+    auto node_table = std::make_unique<MctsNodeTable>();
+    TreeNode* root_node =
+        node_table->GetOrCreate(game.board().hash(), color_to_move, false);
     GumbelEvaluator gumbel_evaluator(&nn_interface, 0);
     state.ResumeTiming();
 
     GumbelResult gumbel_res = gumbel_evaluator.SearchRoot(
-        probability, game, &root_node, color_to_move, state.range(0),
-        state.range(1));
+        probability, game, node_table.get(), root_node, color_to_move,
+        GumbelSearchParams{state.range(0), state.range(1)});
     Loc move = gumbel_res.mcts_move;
     game.PlayMove(move, color_to_move);
     color_to_move = OppositeColor(color_to_move);

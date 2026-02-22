@@ -7,4 +7,4 @@
 #include "cc/nn/nn_interface.h"
 
 void PlayGames(nn::NNInterface* nn_interface, int num_games, int visit_count,
-               std::vector<Callback*> callbacks);
+               bool seq_halving, std::vector<Callback*> callbacks);

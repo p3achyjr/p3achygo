@@ -363,8 +363,8 @@ Response<std::string> ServiceImpl::GtpGenMoveDbg(std::optional<int> id,
 
   // Run this to populate the policy logits at the new root.
   gumbel_evaluator_->SearchRoot(probability_, *game_, node_table_.get(),
-                                current_root(), game::OppositeColor(color), 1,
-                                1);
+                                current_root(), game::OppositeColor(color),
+                                mcts::GumbelSearchParams{1, 1});
   std::vector<std::pair<game::Loc, float>> top_policy_moves_next =
       current_root() ? GetTopPolicyMoves(current_root()->move_probs)
                      : std::vector<std::pair<game::Loc, float>>();
@@ -430,12 +430,13 @@ GumbelResult ServiceImpl::GenMoveCommon(Color color) {
   }
 
   GumbelResult search_result =
-      use_puct_ ? gumbel_evaluator_->SearchRootPuct(
-                      probability_, *game_, node_table_.get(), current_root(),
-                      color, n_, 1.0f, 0.45f, PuctKind::kLcb)
-                : gumbel_evaluator_->SearchRoot(
-                      probability_, *game_, node_table_.get(), current_root(),
-                      color, n_, k_, 0.0f);
+      use_puct_
+          ? gumbel_evaluator_->SearchRootPuct(
+                probability_, *game_, node_table_.get(), current_root(), color,
+                n_, PuctParams{PuctRootSelectionPolicy::kLcb, 1.0f, 0.45f})
+          : gumbel_evaluator_->SearchRoot(
+                probability_, *game_, node_table_.get(), current_root(), color,
+                mcts::GumbelSearchParams{n_, k_, 0.0f});
   return search_result;
 }
 

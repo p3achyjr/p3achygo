@@ -9,6 +9,7 @@
 ABSL_FLAG(std::string, model_path, "", "Path to model.");
 ABSL_FLAG(int, num_games, 1, "Number of games");
 ABSL_FLAG(int, visit_count, 400, "Visits Per Move");
+ABSL_FLAG(bool, seq_halving, false, "Whether to use seq-halving");
 
 constexpr size_t kCacheSize = 16384;
 static constexpr int64_t kTimeoutUs = 4000;
@@ -35,7 +36,9 @@ int main(int argc, char** argv) {
                                         std::move(engine));
 
   // callbacks
+  PrintCallback print_cb;
   BiasCallback bias_cb;
-  std::vector<Callback*> cbs = {&bias_cb};
-  PlayGames(nn_interface.get(), num_games, visit_count, cbs);
+  std::vector<Callback*> cbs = {&print_cb};
+  PlayGames(nn_interface.get(), num_games, visit_count,
+            absl::GetFlag(FLAGS_seq_halving), cbs);
 }

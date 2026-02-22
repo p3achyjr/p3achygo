@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cc/core/heap.h"
+#include "cc/game/board.h"
 #include "cc/game/game.h"
 #include "cc/mcts/gumbel.h"
 #include "cc/mcts/tree.h"
@@ -12,6 +13,19 @@ struct Callback {
                       const mcts::GumbelResult& search_result) = 0;
   virtual void OnGameEnd(const game::Game& game) = 0;
   virtual void OnEpisodeEnd() = 0;
+};
+
+struct PrintCallback final : public Callback {
+  PrintCallback() = default;
+  ~PrintCallback() = default;
+  inline void OnMove(const game::Game& game, const game::Color color_to_move,
+                     const mcts::TreeNode* root,
+                     const mcts::GumbelResult& search_result) override {
+    std::cerr << "Move Num: " << game.num_moves() << ", Position:\n"
+              << game::ToString(game.board().position()) << "\n\n";
+  }
+  inline void OnGameEnd(const game::Game& game) override {}
+  inline void OnEpisodeEnd() override {}
 };
 
 struct BiasCallback final : public Callback {

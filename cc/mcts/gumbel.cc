@@ -52,6 +52,8 @@ int log2(int x) {
   return i - 1;
 }
 
+inline int ceil_div(int x, int y) { return (x + y - 1) / y; }
+
 // `q`: value estimate of action
 // `max_b`: max visit count of all children
 float QTransform(float q, int max_b) {
@@ -158,11 +160,12 @@ Loc GumbelNonRootSearchPolicy::SelectNextAction(const TreeNode* node,
   return game::AsLoc(selected_action);
 }
 
-PuctSearchPolicy::PuctSearchPolicy(float c_puct, float c_puct_visit_scaling,
-                                   bool enable_var_scaling)
-    : c_puct_(c_puct),
-      c_puct_visit_scaling_(c_puct_visit_scaling),
-      enable_var_scaling_(enable_var_scaling) {}
+PuctSearchPolicy::PuctSearchPolicy(PuctParams params)
+    : c_puct_(params.c_puct),
+      c_puct_visit_scaling_(params.c_puct_visit_scaling),
+      enable_var_scaling_(params.enable_var_scaling),
+      c_puct_v_2_(params.c_puct_v_2),
+      use_puct_v_(params.use_puct_v) {}
 
 Loc PuctSearchPolicy::SelectNextAction(const TreeNode* node,
                                        const game::Game& game,
@@ -171,11 +174,13 @@ Loc PuctSearchPolicy::SelectNextAction(const TreeNode* node,
   DCHECK(node->state != TreeNodeState::kNew);
 
   // Scale c_puct according to visit count.
-  float c_puct =
-      c_puct_ + c_puct_visit_scaling_ * std::log((N(node) + 500.0f) / 500.0f);
+  const float c_puct_visit_scaling_term =
+      c_puct_visit_scaling_ * std::log((N(node) + 500.0f) / 500.0f);
+  float c_puct = c_puct_ + c_puct_visit_scaling_term;
+  float c_puct_v_2 = c_puct_v_2_ + c_puct_visit_scaling_term;
   if (enable_var_scaling_ && N(node) > 3) {
     static constexpr float kBaseStdDev = 0.15;
-    float var = VVar(node);
+    float var = node->v_var == 0 ? kBaseStdDev * kBaseStdDev : node->v_var;
     float stddev = std::sqrt(var);
     float scale = stddev / kBaseStdDev;
     c_puct *= scale;
@@ -195,9 +200,23 @@ Loc PuctSearchPolicy::SelectNextAction(const TreeNode* node,
   // Compute PUCT values.
   std::array<std::pair<int, float>, constants::kMaxMovesPerPosition> pucts{};
   for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    const auto compute_u = [&]() {
+      if (use_puct_v_) {
+        float var = NAction(node, a) < 3 ? (N(node) < 3 ? 1.0f : node->v_var)
+                                         : node->child(a)->v_var;
+        float stddev = std::sqrt(var);
+        float var_scale_term = node->move_probs[a] * stddev *
+                               (std::sqrt(N(node)) / (1 + NAction(node, a)));
+        float n_scale_term =
+            node->move_probs[a] * std::log(N(node)) / (1 + NAction(node, a));
+        return c_puct * var_scale_term + c_puct_v_2 * n_scale_term;
+      } else {
+        return c_puct * node->move_probs[a] *
+               (std::sqrt(N(node)) / (1 + NAction(node, a)));
+      }
+    };
     TreeNode* child = node->children[a];
-    float u = c_puct * node->move_probs[a] *
-              (std::sqrt(N(node)) / (1 + NAction(node, a)));
+    float u = compute_u();
     float v = child == nullptr ? v_fpu : Q(node, a);
     pucts[a] = {a, u + v};
   }
@@ -229,10 +248,15 @@ GumbelEvaluator::GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id)
 GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
                                          Game& game, NodeTable* node_table,
                                          TreeNode* const root,
-                                         Color color_to_move, int n, int k,
-                                         float noise_scaling,
-                                         bool disable_pass) {
+                                         Color color_to_move,
+                                         GumbelSearchParams params) {
   DCHECK(root);
+  const int n = params.n;
+  int k = params.k;
+  const float noise_scaling = params.noise_scaling;
+  const bool disable_pass = params.disable_pass;
+  const bool early_stopping_enabled = params.early_stopping_enabled;
+  const bool over_search_enabled = params.over_search_enabled;
   int num_rounds = std::max(log2(k), 1);
 
   if (root->state == TreeNodeState::kNew) {
@@ -280,31 +304,121 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
     top_k_actions.emplace_back(gmove_info[i].move_encoding);
   }
 
+#if 0
+  std::stringstream ss;
+  ss << "\n";
+
+  const auto dbg = [&](int visits_so_far) {
+    if (n < 200) return;
+    float top_lcb_70 = -2, top_lcb_80 = -2, top_lcb_90 = -2, top_lcb_95 = -2;
+    float bot_ucb_70 = -2, bot_ucb_80 = -2, bot_ucb_90 = -2, bot_ucb_95 = -2;
+    ss << std::fixed << std::setprecision(3);
+    ss << "SEQ_HALVING n: " << n << ", k: " << k
+       << ", visits_this_round: " << visits_so_far << "\n";
+    for (auto i = 0; i < k; ++i) {
+      auto& move_info = gmove_info[i];
+      if (move_info.move_encoding == game::kInvalidMoveEncoding) {
+        continue;
+      }
+      int a = move_info.move_encoding;
+      int kb = k / 2 + k % 2;
+      ss << "  action: " << move_info.move_loc
+         << ", n: " << root->child_visits[a] << ", q: " << Q(root, a)
+         << ", var: " << VVar(root->child(a))
+         << ", LCB(.85): " << Lcb(root, a, .15 / kb)
+         << ", UCB(.85): " << Ucb(root, a, .15 / kb)
+         << ", LCB(.9): " << Lcb(root, a, .1 / kb)
+         << ", UCB(.9): " << Ucb(root, a, .1 / kb)
+         << ", LCB(.95): " << Lcb(root, a, .05 / kb)
+         << ", UCB(.95): " << Ucb(root, a, .05 / kb) << "\n";
+
+      if (i < k / 2) {
+        top_lcb_70 = std::max(top_lcb_70, Lcb(root, a, .3 / kb));
+        top_lcb_80 = std::max(top_lcb_80, Lcb(root, a, .2 / kb));
+        top_lcb_90 = std::max(top_lcb_90, Lcb(root, a, .1 / kb));
+        top_lcb_95 = std::max(top_lcb_95, Lcb(root, a, .05 / kb));
+      } else {
+        bot_ucb_70 = std::max(bot_ucb_70, Ucb(root, a, .3 / kb));
+        bot_ucb_80 = std::max(bot_ucb_80, Ucb(root, a, .2 / kb));
+        bot_ucb_90 = std::max(bot_ucb_90, Ucb(root, a, .1 / kb));
+        bot_ucb_95 = std::max(bot_ucb_95, Ucb(root, a, .05 / kb));
+      }
+
+      if (i == k / 2 - 1) ss << "-----\n";
+    }
+    ss << ".9 confidence LCB: " << top_lcb_90 << ", UCB: " << bot_ucb_90
+       << ", proceed? " << (bot_ucb_90 <= top_lcb_90) << "\n";
+    ss << "==============\n";
+  };
+#endif
+
+  // checks whether none of the moves to be eliminated are the best move with
+  // 90% confidence.
+  constexpr int kMinEarlyStoppingVisits = 6;
+  const auto bottom_half_ci_gating_check =
+      [&gmove_info, &root](const int visits_so_far, const int k) {
+        if (visits_so_far < kMinEarlyStoppingVisits) return false;
+        float top_lcb_90 = -2;
+        float bot_ucb_90 = -2;
+        for (auto i = 0; i < k; ++i) {
+          auto& move_info = gmove_info[i];
+          if (move_info.move_encoding == game::kInvalidMoveEncoding) {
+            continue;
+          }
+          const int a = move_info.move_encoding;
+          const int kb = k / 2 + k % 2;
+          if (i < k / 2) {
+            top_lcb_90 = std::max(top_lcb_90, Lcb(root, a, .1 / kb));
+          } else {
+            bot_ucb_90 = std::max(bot_ucb_90, Ucb(root, a, .1 / kb));
+          }
+        }
+        return bot_ucb_90 <= top_lcb_90;
+      };
+
   // For each round:
   // - Select k top nodes to search.
   // - Reject half for next round.
   // - Divide k by 2
   // - Multiply visits_per_action by 2
-  int n_remaining = n;
-  int m = k;
+  uint32_t visits_spent = 0;
+  const int m = k;
   while (k > 1) {
-    // Visits for this round: floor(n / (num_rounds * k)). If k ~ {2, 3}, then
-    // this is the last round.
-    int visits_per_action = k < 4 ? (n_remaining / k) : (n / (num_rounds * k));
-    for (auto i = 0; i < k; ++i) {
-      auto& move_info = gmove_info[i];
-      if (move_info.move_encoding == game::kInvalidMoveEncoding) {
-        // We have less valid moves than k.
-        continue;
+    // We are supporting three search modes:
+    // 1. normal
+    // 2. early stopping
+    // - every visits_per_action / 4 moves, check whether we hit some confidence
+    // check and stop early if we do.
+    // 3. over search
+    // - do at least visits_per_action, and up to visits_per_action * 2.5. do
+    // the same confidence check, using the base visits_per_action / 4 interval.
+    const int v = std::round(float(n) / float(num_rounds * k));
+    const auto [visits_per_action, early_stopping_check_interval,
+                min_check_interval] = [early_stopping_enabled,
+                                       over_search_enabled,
+                                       v]() -> std::tuple<int, int, int> {
+      if (early_stopping_enabled) {
+        return {v, ceil_div(v, 4), 0};
+      } else if (over_search_enabled) {
+        return {v * 5 / 2, ceil_div(v, 4), v - 1};
       }
 
-      for (int _ = 0; _ < visits_per_action; ++_) {
+      return {v, v, v};
+    }();
+    for (int visit_num = 0; visit_num < visits_per_action; ++visit_num) {
+      for (auto i = 0; i < k; ++i) {
+        auto& move_info = gmove_info[i];
+        if (move_info.move_encoding == game::kInvalidMoveEncoding) {
+          // We have less valid moves than k.
+          continue;
+        }
+
         Game search_game = game;
         search_game.PlayMove(move_info.move_loc, color_to_move);
 
         // This branch should only trigger once in this search.
         if (!root->children[move_info.move_encoding]) {
-          // After the move, it's the opponent's turn
+          // After the move, it's the opponent's turn.
           root->children[move_info.move_encoding] = node_table->GetOrCreate(
               search_game.board().hash(), game::OppositeColor(color_to_move),
               search_game.IsGameOver());
@@ -320,9 +434,23 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
         Backward(search_path,
                  /*use_idempotent_updates=*/node_table->is_graph());
         root->child_visits[move_info.move_encoding] += 1;
+        ++visits_spent;
+      }
 
-        // update budget
-        --n_remaining;
+      if (visit_num % early_stopping_check_interval ==
+              (early_stopping_check_interval - 1) &&
+          visit_num >= min_check_interval) {
+        std::sort(gmove_info, gmove_info + k, GumbelMoveInfoGreater);
+        if (bottom_half_ci_gating_check(visit_num, k)) {
+          break;
+        }
+      }
+    }
+
+    for (auto i = 0; i < k; ++i) {
+      auto& move_info = gmove_info[i];
+      if (move_info.move_encoding == game::kInvalidMoveEncoding) {
+        continue;
       }
 
       // update qvalue
@@ -408,16 +536,19 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
       };
 
   result.kld = kld(result.pi_improved, root->move_probs);
+  result.visits = visits_spent;
+  // result.dbg = ss.str();
   return result;
 }
 
 // Search using PUCT to select root actions. Still uses Gumbel planning at
 // non-root nodes.
-GumbelResult GumbelEvaluator::SearchRootPuct(
-    core::Probability& probability, game::Game& game, NodeTable* node_table,
-    TreeNode* root, game::Color color_to_move, int n, const float c_puct,
-    const float c_puct_scaling, const PuctParams puct_params,
-    const bool var_scale_cpuct) {
+GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
+                                             game::Game& game,
+                                             NodeTable* node_table,
+                                             TreeNode* root,
+                                             game::Color color_to_move, int n,
+                                             const PuctParams puct_params) {
   auto best_lcb_move = [&](const TreeNode* node) {
     std::array<std::pair<int, float>, constants::kMaxMovesPerPosition>
         move_lcbs;
@@ -491,7 +622,7 @@ GumbelResult GumbelEvaluator::SearchRootPuct(
   }
 
   // Conduct search.
-  PuctSearchPolicy search_policy(c_puct, c_puct_scaling, var_scale_cpuct);
+  PuctSearchPolicy search_policy(puct_params);
   for (size_t _ = 0; _ < n; ++_) {
     Game search_game = game;
     SearchPath search_path =
@@ -509,11 +640,11 @@ GumbelResult GumbelEvaluator::SearchRootPuct(
   Loc raw_nn_move = game::AsLoc(Argmax(root->move_logits));
   Loc mcts_move = [&]() {
     switch (puct_params.kind) {
-      case PuctKind::kVisitCount:
+      case PuctRootSelectionPolicy::kVisitCount:
         return game::AsLoc(Argmax(visit_counts));
-      case PuctKind::kLcb:
+      case PuctRootSelectionPolicy::kLcb:
         return best_lcb_move(root);
-      case PuctKind::kVisitCountSample:
+      case PuctRootSelectionPolicy::kVisitCountSample:
         return game::AsLoc(
             sample_action_from_visits(visit_counts, puct_params.tau));
     }
@@ -644,6 +775,25 @@ void GumbelEvaluator::SingleBackup(TreeNode* node, TreeNode* child,
     node->v = v;
     node->v_outcome = v_outcome;
     node->score = score;
+
+    // Variance of a mixture distribution.
+    // Var(Y) = (1/N) * sum(i : 0...k) ni(vi + (mi - m)^2)
+    float m2 = (node->init_util_est - v) * (node->init_util_est - v);
+    float m2_outcome = (node->init_outcome_est - v_outcome) *
+                       (node->init_outcome_est - v_outcome);
+    for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+      if (node->child_visits[a] == 0) {
+        continue;
+      }
+
+      float dv = Q(node, a) - v;
+      float dv_outcome = QOutcome(node, a) - v_outcome;
+      m2 += node->child_visits[a] * (node->child(a)->v_var + dv * dv);
+      m2_outcome += node->child_visits[a] *
+                    (node->child(a)->v_outcome_var + dv_outcome * dv_outcome);
+    }
+    node->v_var = m2 / node->n;
+    node->v_outcome_var = m2_outcome / node->n;
   } else {
     // incremental
     node->w += leaf_q;
@@ -652,18 +802,18 @@ void GumbelEvaluator::SingleBackup(TreeNode* node, TreeNode* child,
     node->v_outcome = node->w_outcome / node->n;
     node->score = leaf_score * (1.0f / N(node)) +
                   node->score * ((N(node) - 1.0f) / N(node));
+    // Update variance.
+    node->v_var = n_old * node->v_var + (leaf_q - v_old) * (leaf_q - node->v);
+    node->v_var /= node->n;
+    node->v_outcome_var =
+        n_old * node->v_outcome_var +
+        (leaf_q_outcome - v_outcome_old) * (leaf_q_outcome - node->v_outcome);
+    node->v_outcome_var /= node->n;
   }
   int child_n = node->child_visits[a];
   if (child_n > node->max_child_n) {
     node->max_child_n = child_n;
   }
-
-  // Update variance.
-  node->v_var = n_old * node->v_var + (leaf_q - v_old) * (leaf_q - node->v);
-  node->v_var /= node->n;
-  node->v_outcome_var = n_old * node->v_outcome_var +
-                        (leaf_q - v_outcome_old) * (leaf_q - node->v_outcome);
-  node->v_outcome_var /= node->n;
 
 #ifdef V_CATEGORICAL
   // Add V to bucket.

@@ -468,7 +468,7 @@ def train(
         optimizer = keras.optimizers.SGD(
             learning_rate=lr_schedule,
             momentum=momentum,
-            global_clipnorm=10.0,  # purely for numerical stability
+            global_clipnorm=20.0,  # purely for numerical stability
             nesterov=True,
         )
         if is_gpu:
@@ -652,7 +652,7 @@ def log_train(
         f"q_score = {q_score_avg:.4f} ({q_score_min:.4f}), "
         f"q_score_err = {q_score_err_avg:.4f} ({q_score_err_min:.4f}), "
         f"pi_soft = {pi_soft_avg:.4f} ({pi_soft_min:.4f}), "
-        f"pi_optimistic = {pi_optimistic_avg:.4f} ({pi_optimistic_min:.4f}, "
+        f"pi_optimistic = {pi_optimistic_avg:.4f} ({pi_optimistic_min:.4f}), "
         f"grad_norm = {grad_norm:.4f}"
     )
 
@@ -732,27 +732,27 @@ def log_board_position(
 
     # short-term score
     q6_score_pred, q6_score = (
-        predictions.q6_score_pred[0].numpy(),
+        predictions.q6_score_pred[0].numpy() * 10,
         targets.q6_score[0].numpy(),
     )
     q16_score_pred, q16_score = (
-        predictions.q16_score_pred[0].numpy(),
+        predictions.q16_score_pred[0].numpy() * 10,
         targets.q16_score[0].numpy(),
     )
     q50_score_pred, q50_score = (
-        predictions.q50_score_pred[0].numpy(),
+        predictions.q50_score_pred[0].numpy() * 10,
         targets.q50_score[0].numpy(),
     )
     q6_score_err_pred, q6_score_err = (
-        predictions.q6_score_err_pred[0].numpy(),
+        predictions.q6_score_err_pred[0].numpy() * 100,
         np.square(q6_score - q6_score_pred),
     )
     q16_score_err_pred, q16_score_err = (
-        predictions.q16_score_err_pred[0].numpy(),
+        predictions.q16_score_err_pred[0].numpy() * 100,
         np.square(q16_score - q16_score_pred),
     )
     q50_score_err_pred, q50_score_err = (
-        predictions.q50_score_err_pred[0].numpy(),
+        predictions.q50_score_err_pred[0].numpy() * 100,
         np.square(q50_score - q50_score_pred),
     )
 
@@ -945,7 +945,7 @@ def val(
                 keras.ops.cast(predicted_moves == actual_moves, "int32")
             ).numpy()
 
-            predicted_outcomes = predictions.game_outcome[:, 1] > 0.5  # Win probability
+            predicted_outcomes = keras.ops.argmax(predictions.game_outcome, axis=1) == 1
             actual_outcomes = score >= 0  # Actual win
             correct_outcomes = keras.ops.sum(
                 keras.ops.cast(predicted_outcomes == actual_outcomes, "int32")

@@ -11,18 +11,20 @@
 
 namespace mcts {
 
-enum class PuctKind : uint8_t {
+enum class PuctRootSelectionPolicy : uint8_t {
   kVisitCount = 0,
   kLcb = 1,
   kVisitCountSample = 2,
 };
 
 struct PuctParams {
-  PuctKind kind;
+  PuctRootSelectionPolicy kind;
+  float c_puct = 1.0f;
+  float c_puct_visit_scaling = 0.45f;
+  float c_puct_v_2 = 3;
+  bool use_puct_v = false;
+  bool enable_var_scaling = false;
   float tau = 1.0f;
-
-  PuctParams(PuctKind k) : kind(k) {}
-  PuctParams(PuctKind k, float tau) : kind(k), tau(tau) {}
 };
 
 struct ChildStats {
@@ -43,6 +45,17 @@ struct GumbelResult {
   std::array<float, constants::kMaxMovesPerPosition> pi_improved;
   absl::InlinedVector<ChildStats, 16> child_stats;
   float kld = 0;
+  uint32_t visits = 0;
+  // std::string dbg;
+};
+
+struct GumbelSearchParams {
+  int n;
+  int k;
+  float noise_scaling = 1.0f;
+  bool disable_pass = false;
+  bool early_stopping_enabled = false;
+  bool over_search_enabled = false;
 };
 
 /*
@@ -73,8 +86,7 @@ class GumbelNonRootSearchPolicy : public SearchPolicy {
  */
 class PuctSearchPolicy : public SearchPolicy {
  public:
-  PuctSearchPolicy(float c_puct, float c_puct_visit_scaling,
-                   bool enable_var_scaling = false);
+  PuctSearchPolicy(PuctParams params);
   game::Loc SelectNextAction(const TreeNode* node, const game::Game& game,
                              game::Color color_to_move) const override;
 
@@ -82,6 +94,8 @@ class PuctSearchPolicy : public SearchPolicy {
   const float c_puct_;
   const float c_puct_visit_scaling_;
   const bool enable_var_scaling_;
+  const float c_puct_v_2_;
+  const bool use_puct_v_;
 };
 
 /*
@@ -100,20 +114,16 @@ class GumbelEvaluator final {
 
   // Performs a full Gumbel root search. Returns a pair of the original move,
   // and the selected move.
-  // If n == 1, we will sample a move directly from the policy.
+  // If params.n == 1, we will sample a move directly from the policy.
   GumbelResult SearchRoot(core::Probability& probability, game::Game& game,
                           NodeTable* node_table, TreeNode* root,
-                          game::Color color_to_move, int n, int k,
-                          float noise_scaling = 1.0f,
-                          const bool disable_pass = false);
+                          game::Color color_to_move, GumbelSearchParams params);
 
   // Performs a full PUCT search.
   GumbelResult SearchRootPuct(core::Probability& probability, game::Game& game,
                               NodeTable* node_table, TreeNode* root,
                               game::Color color_to_move, int n,
-                              const float c_puct, const float c_puct_scaling,
-                              const PuctParams puct_params,
-                              const bool var_scale_cpuct = false);
+                              const PuctParams puct_params);
 
  private:
   static constexpr int kMaxPathLenEst = 128;

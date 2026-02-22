@@ -37,7 +37,8 @@ class GameRecorderImpl final : public GameRecorder {
                   const std::vector<float>& root_qs,
                   const std::vector<float>& root_scores,
                   const std::vector<float>& klds,
-                  const std::vector<mcts::TreeNode*>& roots) override;
+                  const std::vector<mcts::TreeNode*>& roots,
+                  const std::vector<uint32_t>& visit_counts) override;
 
   void RecordEvalGame(int thread_id, const game::Game& game,
                       const std::string& b_name,
@@ -103,7 +104,8 @@ void GameRecorderImpl::RecordGame(int thread_id, const game::Board& init_board,
                                   const std::vector<float>& root_qs,
                                   const std::vector<float>& root_scores,
                                   const std::vector<float>& klds,
-                                  const std::vector<mcts::TreeNode*>& roots) {
+                                  const std::vector<mcts::TreeNode*>& roots,
+                                  const std::vector<uint32_t>& visit_counts) {
   if (path_.empty()) {
     return;
   }
@@ -114,7 +116,8 @@ void GameRecorderImpl::RecordGame(int thread_id, const game::Board& init_board,
                               roots);
   }
   tf_recorder_->RecordGame(thread_id, init_board, game, mcts_pis,
-                           is_move_trainable, root_qs, root_scores, klds);
+                           is_move_trainable, root_qs, root_scores, klds,
+                           visit_counts);
   thread_mus_[thread_id].Unlock();
 
   absl::MutexLock lock(&mu_);

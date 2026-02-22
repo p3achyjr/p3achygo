@@ -1088,9 +1088,9 @@ class P3achyGoModel(keras.Model):
     (v1) 15. Exp-weighted sum of score 0-6 turns into the future
     (v1) 16. Exp-weighted sum of score 0-30 turns into the future
     (v1) 17. Exp-weighted sum of score 0-50 turns into the future
-    (v1) 18. Squared Error of (14)
-    (v1) 19. Squared Error of (15)
-    (v1) 20. Squared Error of (16)
+    (v1) 18. Squared Error of (15)
+    (v1) 19. Squared Error of (16)
+    (v1) 20. Squared Error of (17)
     (v1) 21. Soft Policy Target (pi ^ .25)
     (v1) 22. Optimistic Policy
     """
@@ -1167,7 +1167,6 @@ class P3achyGoModel(keras.Model):
         self.cce_logits = keras.losses.CategoricalCrossentropy(from_logits=True)
         self.mse = keras.losses.MeanSquaredError()
         self.huber = keras.losses.Huber()
-        self.huber_score = keras.losses.Huber(delta=10.0)
         self.identity = keras.layers.Activation("linear")  # need for mixed-precision
 
         # store parameters so we can serialize model correctly
@@ -1405,41 +1404,41 @@ class P3achyGoModel(keras.Model):
 
         # Q score losses (outputs 15-17): Huber loss on score predictions
         q_score_loss = tf.constant(0.0)
+        q_score_err_loss = tf.constant(0.0)
         if targets.q6_score is not None:
-            q6_score_loss = self.huber_score(
-                targets.q6_score, predictions.q6_score_pred
+            q6_score_normalized = targets.q6_score / 10.0
+            q16_score_normalized = targets.q16_score / 10.0
+            q50_score_normalized = targets.q50_score / 10.0
+            q6_score_loss = self.huber(q6_score_normalized, predictions.q6_score_pred)
+            q16_score_loss = self.huber(
+                q16_score_normalized, predictions.q16_score_pred
             )
-            q16_score_loss = self.huber_score(
-                targets.q16_score, predictions.q16_score_pred
-            )
-            q50_score_loss = self.huber_score(
-                targets.q50_score, predictions.q50_score_pred
+            q50_score_loss = self.huber(
+                q50_score_normalized, predictions.q50_score_pred
             )
             q_score_loss = tf.clip_by_value(
                 (q6_score_loss + q16_score_loss + q50_score_loss) / 3.0, 0.0, 200.0
             )
 
-        # Q score error losses (outputs 18-20): Huber loss
-        # Use stop_gradient on predictions used as targets
-        q_score_err_loss = tf.constant(0.0)
-        if targets.q6_score is not None:
+            # Q score error losses (outputs 18-20): Huber loss
+            # Use stop_gradient on predictions used as targets
             q6_score_err_target = tf.square(
-                tf.stop_gradient(predictions.q6_score_pred) - targets.q6_score
+                tf.stop_gradient(predictions.q6_score_pred) - q6_score_normalized
             )
             q16_score_err_target = tf.square(
-                tf.stop_gradient(predictions.q16_score_pred) - targets.q16_score
+                tf.stop_gradient(predictions.q16_score_pred) - q16_score_normalized
             )
             q50_score_err_target = tf.square(
-                tf.stop_gradient(predictions.q50_score_pred) - targets.q50_score
+                tf.stop_gradient(predictions.q50_score_pred) - q50_score_normalized
             )
 
-            q6_score_err_loss = self.huber_score(
+            q6_score_err_loss = self.huber(
                 q6_score_err_target, predictions.q6_score_err_pred
             )
-            q16_score_err_loss = self.huber_score(
+            q16_score_err_loss = self.huber(
                 q16_score_err_target, predictions.q16_score_err_pred
             )
-            q50_score_err_loss = self.huber_score(
+            q50_score_err_loss = self.huber(
                 q50_score_err_target, predictions.q50_score_err_pred
             )
             q_score_err_loss = tf.clip_by_value(
@@ -1473,7 +1472,7 @@ class P3achyGoModel(keras.Model):
         z_value = (z_value_q6 + z_value_q16 + z_value_q50) / 3.0
         # if targets.q6_score is not None:
         #     z_score = (
-        #         targets.q6_score - tf.stop_gradient(predictions.q6_score_pred)
+        #         targets.q6_score / 20 - tf.stop_gradient(predictions.q6_score_pred)
         #     ) / (tf.stop_gradient(tf.sqrt(predictions.q6_score_err_pred + epsilon)))
         # else:
         #     z_score = tf.zeros_like(z_value)

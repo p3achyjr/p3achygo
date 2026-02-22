@@ -35,13 +35,13 @@ class LossCoeffs:
             1.5,
             0.02,  # score
             0.45,  # own
-            0.5,  # q6
-            0.5,  # q16
-            0.5,  # q50
+            0.7,  # q6
+            0.4,  # q16
+            0.3,  # q50
             0.005,  # gamma
             5.0,  # q err
-            0.005,  # short-term score
-            0.002,  # short-term score err
+            0.2,  # short-term score
+            0.2,  # short-term score err
             4.0,  # soft policy
             1.0,  # optimistic policy
         )

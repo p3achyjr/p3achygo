@@ -80,6 +80,14 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
       cur_is_black ? config.cand_var_scale_cpuct : config.cur_var_scale_cpuct;
   bool use_mcgs_b = cur_is_black ? config.cur_use_mcgs : config.cand_use_mcgs;
   bool use_mcgs_w = cur_is_black ? config.cand_use_mcgs : config.cur_use_mcgs;
+  bool use_puct_v_b =
+      cur_is_black ? config.cur_use_puct_v : config.cand_use_puct_v;
+  bool use_puct_v_w =
+      cur_is_black ? config.cand_use_puct_v : config.cur_use_puct_v;
+  float c_puct_v_2_b =
+      cur_is_black ? config.cur_c_puct_v_2 : config.cand_c_puct_v_2;
+  float c_puct_v_2_w =
+      cur_is_black ? config.cand_c_puct_v_2 : config.cur_c_puct_v_2;
 
   Game game;
   std::unique_ptr<NodeTable> node_table_b;
@@ -133,6 +141,8 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
     float cand_q_pre = V(cand_tree);
     float cand_q_outcome_pre = VOutcome(cand_tree);
     float cand_score_pre = Score(cand_tree);
+    float cur_var_pre = VVar(cur_tree);
+    float cand_var_pre = VVar(cand_tree);
 
     // Search.
     int n = color_to_move == BLACK ? n_b : n_w;
@@ -145,16 +155,21 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
     bool var_scale_cpuct =
         color_to_move == BLACK ? var_scale_cpuct_b : var_scale_cpuct_w;
     bool use_mcgs = color_to_move == BLACK ? use_mcgs_b : use_mcgs_w;
+    bool use_puct_v = color_to_move == BLACK ? use_puct_v_b : use_puct_v_w;
+    float c_puct_v_2 = color_to_move == BLACK ? c_puct_v_2_b : c_puct_v_2_w;
     auto begin = std::chrono::high_resolution_clock::now();
     GumbelResult gumbel_res =
         use_puct
             ? gumbel.SearchRootPuct(
                   probability, game, player_table, player_tree, color_to_move,
-                  n, c_puct, 0.45f,
-                  use_lcb ? PuctKind::kLcb : PuctKind::kVisitCount,
-                  var_scale_cpuct)
+                  n,
+                  PuctParams{use_lcb ? PuctRootSelectionPolicy::kLcb
+                                     : PuctRootSelectionPolicy::kVisitCount,
+                             c_puct, 0.45f, c_puct_v_2, use_puct_v,
+                             var_scale_cpuct, 1.0f})
             : gumbel.SearchRoot(probability, game, player_table, player_tree,
-                                color_to_move, n, k, noise_scaling);
+                                color_to_move,
+                                mcts::GumbelSearchParams{n, k, noise_scaling});
     auto end = std::chrono::high_resolution_clock::now();
     if (VOutcome(player_tree) < kResignThreshold) {
       LOG_TO_SINK(INFO, sink) << "Player " << ToString(color_to_move)
@@ -172,6 +187,8 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
     float cand_q_post = V(cand_tree);
     float cand_q_outcome_post = VOutcome(cand_tree);
     float cand_score_post = Score(cand_tree);
+    float cur_var_post = VVar(cur_tree);
+    float cand_var_post = VVar(cand_tree);
 
     // Commit move changes.
     Loc move = gumbel_res.mcts_move;
@@ -220,8 +237,9 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
       s << "\n----- Move Num: " << game.num_moves() << " -----\n";
       s << "N: " << n << ", K: " << k << ", Noise Scaling: " << noise_scaling
         << ", PUCT: " << use_puct << ", LCB: " << use_lcb
-        << ", cPUCT Var Scaling: " << var_scale_cpuct << ", MCGS: " << use_mcgs
-        << "\n";
+        << ", cPUCT: " << c_puct << ", cPUCT Var Scaling: " << var_scale_cpuct
+        << ", MCGS: " << use_mcgs << ", PUCT-V: " << use_puct_v
+        << ", cPUCT_2: " << c_puct_v_2 << "\n";
       s << "Gumbel Move: " << move << ", q: " << move_q << "\n";
       s << "Last 5 Moves: " << game.move(game.num_moves() - 5) << ", "
         << game.move(game.num_moves() - 4) << ", "
@@ -236,21 +254,25 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
       s << "(" << root_color
         << ") Cur Tree Stats, Pre-Search :\n  N: " << cur_n_pre
         << "\n  Q: " << cur_q_pre << "\n  Q_z: " << cur_q_outcome_pre
-        << "\n  Score: " << cur_score_pre << "\n";
+        << "\n  Score: " << cur_score_pre << ", Variance: " << cur_var_pre
+        << "\n";
       s << "(" << root_color
         << ") Cur Tree Stats, Post-Search :\n  N: " << cur_n_post
         << "\n  Q: " << cur_q_post << "\n  Q_z: " << cur_q_outcome_post
-        << "\n  Score: " << cur_score_post << "\n";
+        << "\n  Score: " << cur_score_post << ", Variance: " << cur_var_post
+        << "\n";
       s << "(" << root_color << ") Cand Tree NN Stat:\n  Q_z: " << cand_qz_nn
         << "\n  Score: " << cand_score_est_nn << "\n";
       s << "(" << root_color
         << ") Cand Tree Stats, Pre-Search :\n  N: " << cand_n_pre
         << "\n  Q: " << cand_q_pre << "\n  Q_z: " << cand_q_outcome_pre
-        << "\n  Score: " << cand_score_pre << "\n";
+        << "\n  Score: " << cand_score_pre << ", Variance: " << cand_var_pre
+        << "\n";
       s << "(" << root_color
         << ") Cand Tree Stats, Post-Search :\n  N: " << cand_n_post
         << "\n  Q: " << cand_q_post << "\n  Q_z: " << cand_q_outcome_post
-        << "\n  Score: " << cand_score_post << "\n";
+        << "\n  Score: " << cand_score_post << ", Variance: " << cand_var_post
+        << "\n";
       s << "Player to Move: " << ToString(color_to_move) << ", "
         << (color_to_move == BLACK ? (cur_is_black ? "CUR" : "CAND")
                                    : (cur_is_black ? "CAND" : "CUR"))

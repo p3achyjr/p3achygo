@@ -49,7 +49,8 @@ class TfRecorderImpl final : public TfRecorder {
                   const std::vector<uint8_t>& move_trainables,
                   const std::vector<float>& root_qs,
                   const std::vector<float>& root_scores,
-                  const std::vector<float>& klds) override;
+                  const std::vector<float>& klds,
+                  const std::vector<uint32_t>& visit_counts) override;
   void Flush() override;
 
  private:
@@ -61,6 +62,7 @@ class TfRecorderImpl final : public TfRecorder {
     std::vector<float> root_qs;
     std::vector<float> root_scores;
     std::vector<float> klds;
+    std::vector<uint32_t> visit_counts;
   };
 
   const std::string path_;
@@ -89,32 +91,26 @@ void TfRecorderImpl::RecordGame(int thread_id, const Board& init_board,
                                 const std::vector<uint8_t>& move_trainables,
                                 const std::vector<float>& root_qs,
                                 const std::vector<float>& root_scores,
-                                const std::vector<float>& klds) {
+                                const std::vector<float>& klds,
+                                const std::vector<uint32_t>& visit_counts) {
   CHECK(game.has_result());
   CHECK(game.num_moves() == mcts_pis.size() &&
         game.num_moves() == move_trainables.size() &&
         game.num_moves() == root_qs.size() &&
         game.num_moves() == root_scores.size() &&
-        game.num_moves() == klds.size());
-  thread_records_[thread_id].emplace_back(Record{
-      init_board, game, mcts_pis, move_trainables, root_qs, root_scores, klds});
+        game.num_moves() == klds.size() &&
+        game.num_moves() == visit_counts.size());
+  thread_records_[thread_id].emplace_back(
+      Record{init_board, game, mcts_pis, move_trainables, root_qs, root_scores,
+             klds, visit_counts});
   ++thread_game_counts_[thread_id];
 }
 
 // Only one thread can call this method. Additionally, no thread can call
 // `RecordGame` while this method is running.
 void TfRecorderImpl::Flush() {
-  const int expected_records = std::accumulate(
-      thread_records_.begin(), thread_records_.begin() + num_threads_, 0,
-      [](int n, const std::vector<Record>& records) {
-        for (const auto& record : records) {
-          for (const auto& is_trainable : record.move_trainables) {
-            if (is_trainable) ++n;
-          }
-        }
-
-        return n;
-      });
+  size_t trainable_visit_count = 0, fast_visit_count = 0,
+         total_num_trainable_moves = 0, total_num_fast_moves = 0;
   // Buffer examples first. We need to account for policy surprise weighting.
   std::vector<std::string> tf_examples;
   for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
@@ -131,6 +127,7 @@ void TfRecorderImpl::Flush() {
       const std::vector<uint8_t>& move_trainables = record.move_trainables;
       const std::vector<float>& root_qs = record.root_qs;
       const std::vector<float>& root_scores = record.root_scores;
+      const std::vector<uint32_t>& visit_counts = record.visit_counts;
       const size_t num_trainable_moves =
           std::accumulate(move_trainables.begin(), move_trainables.end(), 0,
                           [](size_t x, size_t y) { return x + y; });
@@ -143,6 +140,12 @@ void TfRecorderImpl::Flush() {
         }
         return sum;
       }();
+      for (size_t i = 0; i < visit_counts.size(); ++i) {
+        trainable_visit_count += visit_counts[i] * (move_trainables[i] ? 1 : 0);
+        fast_visit_count += visit_counts[i] * (move_trainables[i] ? 0 : 1);
+        total_num_trainable_moves += (move_trainables[i] ? 1 : 0);
+        total_num_fast_moves += (move_trainables[i] ? 0 : 1);
+      }
       const float avg_kld =
           num_trainable_moves > 0 ? kld_sum / num_trainable_moves : 0.0f;
       Board board = record.init_board;
@@ -265,6 +268,25 @@ void TfRecorderImpl::Flush() {
   FILE* const lock_file = fopen(done_filename.c_str(), "w");
   absl::FPrintF(lock_file, "");
   fclose(lock_file);
+
+  // Dump visit count info
+  std::string visit_count_filename =
+      FilePath(path_) /
+      absl::StrFormat("gen%03d_b%03d_g%03d_n%05d_t%d_%s.visit_count", gen_,
+                      batch_num_, num_games, num_records, timestamp,
+                      worker_id_);
+  FILE* const visit_count_file = fopen(visit_count_filename.c_str(), "w");
+  absl::FPrintF(
+      visit_count_file,
+      "Trainable Visits: %lu\nFast Visits: %lu\nTrainable Moves: %lu\nFast "
+      "Moves: %lu\nVisits Per Trainable Move: %lu\nVisits Per Fast Move: %lu\n",
+      trainable_visit_count, fast_visit_count, total_num_trainable_moves,
+      total_num_fast_moves,
+      total_num_trainable_moves > 0
+          ? trainable_visit_count / total_num_trainable_moves
+          : 0,
+      total_num_fast_moves > 0 ? fast_visit_count / total_num_fast_moves : 0);
+  fclose(visit_count_file);
 
   // Update metadata fields.
   ++batch_num_;
