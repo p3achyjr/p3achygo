@@ -6,26 +6,11 @@
 #include "cc/game/game.h"
 #include "cc/mcts/leaf_evaluator.h"
 #include "cc/mcts/node_table.h"
+#include "cc/mcts/search_policy.h"
 #include "cc/mcts/tree.h"
 #include "cc/nn/nn_interface.h"
 
 namespace mcts {
-
-enum class PuctRootSelectionPolicy : uint8_t {
-  kVisitCount = 0,
-  kLcb = 1,
-  kVisitCountSample = 2,
-};
-
-struct PuctParams {
-  PuctRootSelectionPolicy kind;
-  float c_puct = 1.0f;
-  float c_puct_visit_scaling = 0.45f;
-  float c_puct_v_2 = 3;
-  bool use_puct_v = false;
-  bool enable_var_scaling = false;
-  float tau = 1.0f;
-};
 
 struct ChildStats {
   game::Loc move;
@@ -56,46 +41,6 @@ struct GumbelSearchParams {
   bool disable_pass = false;
   bool early_stopping_enabled = false;
   bool over_search_enabled = false;
-};
-
-/*
- * Base class representing a search policy.
- */
-class SearchPolicy {
- public:
-  virtual game::Loc SelectNextAction(const TreeNode* node,
-                                     const game::Game& game,
-                                     game::Color color_to_move) const = 0;
-  virtual ~SearchPolicy() = default;
-
- protected:
-  SearchPolicy() = default;
-};
-
-/*
- * Gumbel non-root search policy.
- */
-class GumbelNonRootSearchPolicy : public SearchPolicy {
- public:
-  game::Loc SelectNextAction(const TreeNode* node, const game::Game& game,
-                             game::Color color_to_move) const override;
-};
-
-/*
- * PUCT search policy.
- */
-class PuctSearchPolicy : public SearchPolicy {
- public:
-  PuctSearchPolicy(PuctParams params);
-  game::Loc SelectNextAction(const TreeNode* node, const game::Game& game,
-                             game::Color color_to_move) const override;
-
- private:
-  const float c_puct_;
-  const float c_puct_visit_scaling_;
-  const bool enable_var_scaling_;
-  const float c_puct_v_2_;
-  const bool use_puct_v_;
 };
 
 /*

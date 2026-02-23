@@ -41,7 +41,6 @@ void LoadFeatures(float* feats_buf, std::array<int, 2> feats_shape,
   std::array<int, 2> color_index = {batch_id,
                                     go_features.color == BLACK ? 0 : 1};
   SetIndex(feats_buf, feats_shape, color_index, 1.0f);
-  feats_buf[go_features.color == BLACK ? 0 : 1] = 1.0f;
   for (int i = 0; i < constants::kNumLastMoves; ++i) {
     game::Loc last_move = go_features.last_moves[i];
     if (last_move != game::kPassLoc) {
@@ -54,7 +53,9 @@ void LoadFeatures(float* feats_buf, std::array<int, 2> feats_shape,
 
   if (version >= 1) {
     std::array<int, 2> komi_index = {batch_id, 7};
-    SetIndex(feats_buf, feats_shape, komi_index, go_features.komi / 15.0f);
+    float komi_val =
+        (go_features.color == BLACK ? -1.0f : 1.0f) * go_features.komi / 15.0f;
+    SetIndex(feats_buf, feats_shape, komi_index, komi_val);
   }
 }
 

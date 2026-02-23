@@ -2,6 +2,7 @@
 
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "cc/constants/constants.h"
 #include "cc/data/tfrecord/record_reader.h"
 #include "cc/proto/feature_util.h"
 #include "example.pb.h"
@@ -67,10 +68,13 @@ GoDataset::GoDataset(size_t batch_size, std::string ds_path)
       auto& stones_three_liberties_feat =
           GetFeatureValues<std::string>("stones_three_liberties", example)
               .Get(0);
+      auto& stones_in_ladder_feat =
+          GetFeatureValues<std::string>("stones_in_ladder", example).Get(0);
       auto& color_feat = GetFeatureValues<std::string>("color", example).Get(0);
       auto& policy = GetFeatureValues<std::string>("pi", example).Get(0);
       auto& score_margin =
           GetFeatureValues<float>("score_margin", example).Get(0);
+      auto& komi_feat = GetFeatureValues<float>("komi", example).Get(0);
 
       // Parse strings into desired format.
       int bsize = static_cast<int>(ParseScalar<uint8_t>(bsize_feat));
@@ -98,6 +102,10 @@ GoDataset::GoDataset(size_t batch_size, std::string ds_path)
       go_features.stones_three_liberties =
           ParseSequence<game::Color, constants::kNumBoardLocs>(
               stones_three_liberties_feat);
+      go_features.stones_laddered =
+          ParseSequence<game::Color, constants::kNumBoardLocs>(
+              stones_in_ladder_feat);
+      go_features.komi = komi_feat;
 
       GoLabels go_labels;
       go_labels.policy =

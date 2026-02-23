@@ -168,7 +168,7 @@ def signal_done(run_id: str, local_run_dir: str):
     if MODE == "gcs":
         gcs.signal_done(run_id)
 
-    path = Path(local_run_dir, gcs.DONE_PREFIX, gcs.DONE_FILENAME)
+    path = Path(local_run_dir, gcs.DONE_FILENAME)
     path.touch(exist_ok=True)
 
 

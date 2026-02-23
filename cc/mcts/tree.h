@@ -4,6 +4,7 @@
 #include <cmath>
 #include <memory>
 
+#include "absl/synchronization/mutex.h"
 #include "cc/constants/constants.h"
 #include "cc/game/color.h"
 #include "cc/game/zobrist.h"
@@ -60,6 +61,10 @@ struct TreeNode final {
 
     return children[a];
   }
+
+  // Parallel search stuff.
+  absl::Mutex mu;
+  std::atomic<int> n_in_flight = 0;
 };
 
 inline float N(const TreeNode* node) { return node == nullptr ? 0 : node->n; }

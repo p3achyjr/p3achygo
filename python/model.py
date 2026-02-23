@@ -1469,7 +1469,11 @@ class P3achyGoModel(keras.Model):
         z_value_q50 = (targets.q50 - tf.stop_gradient(predictions.q50_pred)) / (
             tf.stop_gradient(tf.sqrt(predictions.q50_err_pred + epsilon))
         )
-        z_value = (z_value_q6 + z_value_q16 + z_value_q50) / 3.0
+        z_weight_decay = 4.0 / 7.0
+        c_z6 = z_weight_decay * 3
+        c_z16 = z_weight_decay * 1.5
+        c_z50 = z_weight_decay * 0.75
+        z_value = (c_z6 * z_value_q6 + c_z16 * z_value_q16 + c_z50 * z_value_q50) / 3.0
         # if targets.q6_score is not None:
         #     z_score = (
         #         targets.q6_score / 20 - tf.stop_gradient(predictions.q6_score_pred)

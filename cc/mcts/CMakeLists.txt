@@ -48,6 +48,8 @@ target_link_libraries(leaf_evaluator PUBLIC
 add_library(gumbel
     gumbel.cc
     gumbel.h
+    search_policy.cc
+    search_policy.h
 )
 target_link_libraries(gumbel PUBLIC
     leaf_evaluator

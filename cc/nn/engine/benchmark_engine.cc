@@ -38,7 +38,7 @@ void DefaultStats::Update(const NNInferResult& result,
                          ? -std::log(result.move_probs[mv])
                          : kMaxLoss;
   float v_ce_loss =
-      result.move_probs[mv] != 0.0
+      result.value_probs[static_cast<int>(did_win)] != 0.0
           ? -std::log(result.value_probs[static_cast<int>(did_win)])
           : kMaxLoss;
 

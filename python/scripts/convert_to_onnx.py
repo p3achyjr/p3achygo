@@ -26,6 +26,17 @@ flags.DEFINE_string("onnx_name", "", "Name of ONNX model.")
 flags.DEFINE_string("val_ds", "", "Validation DS, to verify conversion.")
 flags.DEFINE_integer("num_samples", -1, "Number of samples to collect stats on.")
 flags.DEFINE_bool("fp16", False, "Whether to convert to FP16.")
+flags.DEFINE_bool(
+    "fp32_value_head",
+    False,
+    "Keep value head nodes in FP32 when --fp16 is set. "
+    "Avoids precision loss in score distribution, gamma, and Q-value outputs.",
+)
+flags.DEFINE_bool(
+    "fp32_policy_head",
+    False,
+    "Keep policy head nodes in FP32 when --fp16 is set.",
+)
 
 
 def random_inputs(planes_shape, features_shape):
@@ -112,13 +123,15 @@ def fix_mixed_precision_inputs(model: onnx.ModelProto) -> onnx.ModelProto:
     g = model.graph
     output_names = {o.name for o in g.output}
 
-    # Find fp32 tensors: outputs of Cast(to=fp32) that are graph outputs.
-    fp32_outputs = set()
-    for node in g.node:
-        if node.op_type == "Cast" and node.output[0] in output_names:
-            for attr in node.attribute:
-                if attr.name == "to" and attr.i == TensorProto.FLOAT:
-                    fp32_outputs.add(node.output[0])
+    # Collect all fp32 graph outputs by annotation.  This covers both the
+    # normal case (keep_io_types inserted Cast(fp16→fp32)) and the
+    # node_block_list case (fix_fp16_graph_outputs reconnected a blocked node
+    # directly, so there is no Cast wrapper to inspect).
+    fp32_outputs = {
+        o.name
+        for o in g.output
+        if o.type.tensor_type.elem_type == TensorProto.FLOAT
+    }
 
     if not fp32_outputs:
         return model
@@ -187,6 +200,187 @@ def fix_mixed_precision_inputs(model: onnx.ModelProto) -> onnx.ModelProto:
     del g.node[:]
     g.node.extend(new_nodes)
     return model
+
+
+def fix_fp16_graph_outputs(model: onnx.ModelProto) -> onnx.ModelProto:
+    """Remove spurious Cast(fp32→fp16) nodes at graph outputs left by node_block_list.
+
+    insert_cast16_after_node in onnxconverter_common (v1.16) checks both
+    graph.value_info and graph.output when looking for blocked-node outputs.
+    When a blocked node's output tensor IS a graph output tensor it:
+      1. Sets graph.output[i].elem_type to FLOAT16.
+      2. Inserts Cast(fp32→fp16) that produces the original graph output name.
+    process_graph_output (keep_io_types) then sees FLOAT16 and skips wrapping
+    that output, leaving it as fp16.
+
+    We fix this by removing the spurious Cast(fp32→fp16) and reconnecting the
+    blocked node's fp32 output directly to the graph output tensor name.
+    """
+    g = model.graph
+
+    # producer[tensor_name] = (node, output_index)
+    producer = {}
+    for node in g.node:
+        for i, out in enumerate(node.output):
+            if out:
+                producer[out] = (node, i)
+
+    nodes_to_remove = set()
+    vi_to_remove = set()
+    fixed = 0
+
+    for out_proto in g.output:
+        if out_proto.type.tensor_type.elem_type != TensorProto.FLOAT16:
+            continue
+
+        out_name = out_proto.name
+        if out_name not in producer:
+            continue
+
+        cast_node, _ = producer[out_name]
+
+        # Only handle the specific Cast(fp32→fp16) inserted by insert_cast16_after_node.
+        if cast_node.op_type != "Cast":
+            continue
+        cast_to = next((a.i for a in cast_node.attribute if a.name == "to"), None)
+        if cast_to != TensorProto.FLOAT16:
+            continue
+
+        # The Cast's input is the fp32 tensor produced by the blocked node.
+        fp32_intermediate = cast_node.input[0]
+
+        # Reconnect: make the blocked node output the graph output name directly.
+        if fp32_intermediate in producer:
+            upstream_node, upstream_idx = producer[fp32_intermediate]
+            upstream_node.output[upstream_idx] = out_name
+
+        nodes_to_remove.add(id(cast_node))
+        vi_to_remove.add(fp32_intermediate)
+
+        # Restore graph output type annotation.
+        out_proto.type.tensor_type.elem_type = TensorProto.FLOAT
+        fixed += 1
+
+    if fixed:
+        new_nodes = [n for n in g.node if id(n) not in nodes_to_remove]
+        del g.node[:]
+        g.node.extend(new_nodes)
+
+        new_vi = [vi for vi in g.value_info if vi.name not in vi_to_remove]
+        del g.value_info[:]
+        g.value_info.extend(new_vi)
+
+        logging.info(f"fix_fp16_graph_outputs: removed {fixed} Cast(fp32→fp16) node(s)")
+    return model
+
+
+def fix_value_head_minimum_fp16_inputs(model: onnx.ModelProto) -> onnx.ModelProto:
+    """Fix actual fp16 inputs on the value-head Minimum node.
+
+    In ValueHead.call():
+        keras.ops.minimum(keras.ops.softplus(gamma), 10.0)
+
+    After convert_float_to_float16, ONNX type annotations for the Minimum
+    node's inputs may incorrectly say fp32 even though the actual computation
+    path contains fp16 Cast nodes (e.g. a Cast(→fp16) before the softplus that
+    feeds this Minimum). TRT traces Cast 'to' attributes — not annotations —
+    and raises a type-mismatch error.
+
+    Fix: for each input of every value-head Minimum node, walk backwards through
+    the producer chain and determine the *actual* element type by following Cast
+    'to' attributes. If fp16 is found anywhere in the path, insert a Cast(→fp32)
+    immediately before the Minimum for that input.
+    """
+    g = model.graph
+
+    # producer[tensor] = node that outputs it
+    producer: dict[str, onnx.NodeProto] = {}
+    for node in g.node:
+        for out in node.output:
+            if out:
+                producer[out] = node
+
+    def is_explicit_fp32_cast(inp_name: str) -> bool:
+        """Return True if inp_name is already produced by an explicit Cast(→fp32)."""
+        p = producer.get(inp_name)
+        if p is not None and p.op_type == "Cast":
+            return next((a.i for a in p.attribute if a.name == "to"), None) == TensorProto.FLOAT
+        return False
+
+    new_nodes: list[onnx.NodeProto] = []
+    cast_id = 0
+    fixed = 0
+
+    for node in g.node:
+        if node.op_type != "Min" or "value_" not in node.name:
+            new_nodes.append(node)
+            continue
+
+        # Unconditionally insert Cast(→fp32) for every input that is not
+        # already behind an explicit Cast(→fp32).  We cannot rely on ONNX
+        # type annotations here: TRT overrides them with its own fp16
+        # inference when the tensor also feeds a Cast(→fp16) downstream
+        # (e.g. the Cast insert_cast16_after_node placed after Softplus).
+        # An explicit Cast(→fp32) acts as a hard fp32 constraint that TRT
+        # respects even in a globally-fp16 engine.
+        for i, inp_name in enumerate(node.input):
+            if not inp_name:
+                continue
+            if is_explicit_fp32_cast(inp_name):
+                logging.info(
+                    f"fix_value_head_minimum_fp16_inputs: input[{i}] '{inp_name}' "
+                    f"of '{node.name}' already has explicit Cast(→fp32) — skipping"
+                )
+                continue
+            cast_out = f"_val_min_fp32_{cast_id}"
+            cast_id += 1
+            logging.info(
+                f"fix_value_head_minimum_fp16_inputs: inserting Cast(→fp32) "
+                f"for input[{i}] '{inp_name}' of '{node.name}'"
+            )
+            new_nodes.append(
+                helper.make_node(
+                    "Cast",
+                    [inp_name],
+                    [cast_out],
+                    name=f"_fix_val_min_{fixed}",
+                    to=TensorProto.FLOAT,
+                )
+            )
+            node.input[i] = cast_out
+            fixed += 1
+
+        new_nodes.append(node)
+
+    if fixed:
+        del g.node[:]
+        g.node.extend(new_nodes)
+        logging.info(
+            f"fix_value_head_minimum_fp16_inputs: inserted {fixed} Cast(→fp32) node(s)"
+        )
+    else:
+        logging.info("fix_value_head_minimum_fp16_inputs: no inputs needed fixing")
+    return model
+
+
+# Keras layer name prefixes for each head. tf2onnx preserves these in ONNX
+# node names, so prefix matching correctly identifies head-exclusive nodes
+# without requiring graph traversal.
+_VALUE_HEAD_PREFIXES = ("value_",)
+_POLICY_HEAD_PREFIXES = ("policy_",)
+
+
+def find_head_node_names(model: onnx.ModelProto, prefixes: tuple) -> list:
+    """Return ONNX node names whose name contains any of the given Keras layer prefixes."""
+    names = [
+        node.name
+        for node in model.graph.node
+        if node.name and any(p in node.name for p in prefixes)
+    ]
+    logging.info(
+        f"find_head_node_names{prefixes}: found {len(names)} nodes to keep in FP32"
+    )
+    return names
 
 
 def main(_):
@@ -306,13 +500,31 @@ def main(_):
         onnx_model = prune_unused_graph_inputs(onnx_model)
         if FLAGS.fp16:
             logging.info("Converting ONNX model to FP16...")
-            # Block Softmax and specific Softplus nodes to avoid type mismatches
-            # Softmax outputs are model outputs and must stay FP32
-            # The value_head gamma Softplus must also remain FP32
+            fp32_node_block_list = []
+            if FLAGS.fp32_value_head:
+                fp32_node_block_list += find_head_node_names(
+                    onnx_model, _VALUE_HEAD_PREFIXES
+                )
+            if FLAGS.fp32_policy_head:
+                fp32_node_block_list += find_head_node_names(
+                    onnx_model, _POLICY_HEAD_PREFIXES
+                )
             onnx_model = convert_float_to_float16(
                 onnx_model,
                 keep_io_types=True,
+                node_block_list=fp32_node_block_list if fp32_node_block_list else None,
             )
+
+            if fp32_node_block_list:
+                # Remove Cast(fp32→fp16) nodes that insert_cast16_after_node
+                # incorrectly inserted for blocked-node outputs that are also
+                # graph outputs. Must run before fix_cast_output_types.
+                onnx_model = fix_fp16_graph_outputs(onnx_model)
+                # Fix actual fp16 inputs on the value-head Minimum node.
+                # Type annotations may incorrectly say fp32; we trace Cast 'to'
+                # attributes backwards to find the real precision.
+                if FLAGS.fp32_value_head:
+                    onnx_model = fix_value_head_minimum_fp16_inputs(onnx_model)
 
             onnx_model = fix_cast_output_types(onnx_model)
             onnx_model = fix_mixed_precision_inputs(onnx_model)

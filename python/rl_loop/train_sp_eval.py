@@ -280,7 +280,7 @@ def loop(
         return
 
     eval_res_path = str(Path(local_run_dir, "eval_res.txt"))
-    while model_gen < config.num_generations:
+    while model_gen <= config.num_generations:
         # Start self-play.
         logging.info(f"Model Generation: {model_gen}")
         sp_queue = Queue()
@@ -331,7 +331,7 @@ def loop(
 
     # We have completed all self-play. Continue to train on the tail of self-play
     # data. Shuffler is responsible for notifying when there are no more chunks.
-    while model_gen < config.num_generations + config.extra_train_gens:
+    while model_gen <= config.num_generations + config.extra_train_gens:
         # Wait for chunk.
         latest_chunk_gen = fs.get_most_recent_chunk(run_id)
         while latest_chunk_gen <= model_gen:
