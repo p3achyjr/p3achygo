@@ -11,8 +11,13 @@ python/scripts/estimate_score.py
 .vscode
 models/**
 data/**
+.claude-scripts/
 
 cc/tensorflow/**
 !cc/tensorflow/BUILD
 .trunk
 .clangd
+build/
+*.log
+*.txt
+!CMakeLists.txt

@@ -5,16 +5,14 @@
 #include <deque>
 #include <fstream>
 
+#include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "cc/constants/constants.h"
 #include "cc/game/color.h"
 #include "cc/nn/engine/buf_utils.h"
 #include "cc/nn/engine/go_dataset.h"
 #include "cc/nn/engine/go_features.h"
 #include "cc/nn/engine/trt_names.h"
-#include "tensorflow/core/example/example.pb.h"
-#include "tensorflow/core/example/feature_util.h"
-#include "tensorflow/core/lib/io/compression.h"
-#include "tensorflow/core/lib/io/record_reader.h"
 
 namespace nn {
 namespace trt {
@@ -86,9 +84,9 @@ Int8CalibratorImpl::~Int8CalibratorImpl() {
 
 void Int8CalibratorImpl::initialize() {
   nbytes_planes_ = sizeof(float) * batch_size_ *
-                   constants::kNumInputFeaturePlanes * BOARD_LEN * BOARD_LEN;
+                   constants::kNumInputFeaturePlanesV0 * BOARD_LEN * BOARD_LEN;
   nbytes_features_ =
-      sizeof(float) * batch_size_ * constants::kNumInputFeatureScalars;
+      sizeof(float) * batch_size_ * constants::kNumInputFeatureScalarsV0;
 
   nbytes_scores_ = sizeof(float) * constants::kNumScoreLogits;
   cudaMalloc(&device_input_planes_, nbytes_planes_);
@@ -114,9 +112,9 @@ bool Int8CalibratorImpl::getBatch(void* bindings[], const char* names[],
 
   std::array<int, 4> planes_shape = {static_cast<int>(batch_size_), BOARD_LEN,
                                      BOARD_LEN,
-                                     constants::kNumInputFeaturePlanes};
+                                     constants::kNumInputFeaturePlanesV0};
   std::array<int, 2> feats_shape = {static_cast<int>(batch_size_),
-                                    constants::kNumInputFeatureScalars};
+                                    constants::kNumInputFeatureScalarsV0};
   std::vector<GoDataset::Row> batch_examples = *go_ds_iterator_;
   ++go_ds_iterator_;
 
@@ -149,10 +147,10 @@ bool Int8CalibratorImpl::getBatch(void* bindings[], const char* names[],
       const GoFeatures& example = batch_examples[batch_id].features;
       if (std::string(name) == input::kPlanesName) {
         LoadPlanes(static_cast<float*>(host_binding), planes_shape, example,
-                   batch_id);
+                   batch_id, 1);
       } else if (std::string(name) == input::kFeaturesName) {
         LoadFeatures(static_cast<float*>(host_binding), feats_shape, example,
-                     batch_id);
+                     batch_id, 1);
       }
     }
 

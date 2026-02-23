@@ -19,18 +19,19 @@ def main(_):
     logging.error('No --model_path specified.')
     return
 
-  batch_size = 32
-  model = model_utils.new_model(name=f'p3achygo',
-                                model_config=FLAGS.model_config)
-  model(
-      tf.convert_to_tensor(np.random.random([batch_size] +
-                                            model.input_planes_shape()),
-                           dtype=tf.float32),
-      tf.convert_to_tensor(np.random.random([batch_size] +
-                                            model.input_features_shape()),
-                           dtype=tf.float32))
-  model.summary()
-  model.save(FLAGS.model_path)
+  with tf.device('/cpu:0'):
+    batch_size = 32
+    model = model_utils.new_model(name=f'p3achygo',
+                                  model_config=FLAGS.model_config)
+    model(
+        tf.convert_to_tensor(np.random.random([batch_size] +
+                                              model.input_planes_shape()),
+                             dtype=tf.float32),
+        tf.convert_to_tensor(np.random.random([batch_size] +
+                                              model.input_features_shape()),
+                             dtype=tf.float32))
+    model.summary()
+    model.save(FLAGS.model_path)
 
 
 if __name__ == '__main__':

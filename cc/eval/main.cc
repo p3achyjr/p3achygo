@@ -32,9 +32,6 @@ namespace fs = std::filesystem;
 static constexpr int64_t kTimeoutUs = 4000;
 static constexpr int kDefaultGumbelN = 128;
 static constexpr int kDefaultGumbelK = 8;
-static constexpr int kPositionCacheSize =
-    67108864;  // 2 ^ 26. The cache holds a single int, so size should be ok.
-static constexpr int kRootsCacheSize = 131072;  // 2 ^ 16.
 }  // namespace
 
 ABSL_FLAG(std::string, cur_model_path, "", "Path to current best model.");
@@ -47,15 +44,29 @@ ABSL_FLAG(int, cache_size, constants::kDefaultNNCacheSize / 2,
 ABSL_FLAG(int, cur_n, kDefaultGumbelN, "N for current player");
 ABSL_FLAG(int, cur_k, kDefaultGumbelK, "K for current player");
 ABSL_FLAG(float, cur_noise_scaling, 1.0f, "Cur gumbel noise scaling");
-ABSL_FLAG(bool, cur_use_puct, false, "Whether to use PUCT for cur.");
-ABSL_FLAG(bool, cur_use_lcb, false, "Whether to use LCB in PUCT for cur.");
+ABSL_FLAG(bool, cur_use_puct, true, "Whether to use PUCT for cur.");
+ABSL_FLAG(bool, cur_use_lcb, true, "Whether to use LCB in PUCT for cur.");
 ABSL_FLAG(float, cur_c_puct, 1.0f, "c_puct for cur.");
+ABSL_FLAG(bool, cur_var_scale_cpuct, false,
+          "Whether to scale c_puct based on variance for cur.");
+ABSL_FLAG(
+    bool, cur_use_mcgs, false,
+    "Whether to use Monte-Carlo Graph Search (transposition table) for cur.");
+ABSL_FLAG(bool, cur_use_puct_v, false, "Whether to use PUCT-V for cur.");
+ABSL_FLAG(float, cur_c_puct_v_2, 3.0, "cur c_puct_v_2 scaling.");
 ABSL_FLAG(int, cand_n, kDefaultGumbelN, "N for candidate player");
 ABSL_FLAG(int, cand_k, kDefaultGumbelK, "K for candidate player");
 ABSL_FLAG(float, cand_noise_scaling, 1.0f, "Cand gumbel noise scaling");
-ABSL_FLAG(bool, cand_use_puct, false, "Whether to use PUCT for cand.");
-ABSL_FLAG(bool, cand_use_lcb, false, "Whether to use LCB in PUCT for cand.");
+ABSL_FLAG(bool, cand_use_puct, true, "Whether to use PUCT for cand.");
+ABSL_FLAG(bool, cand_use_lcb, true, "Whether to use LCB in PUCT for cand.");
 ABSL_FLAG(float, cand_c_puct, 1.0f, "c_puct for cand.");
+ABSL_FLAG(bool, cand_var_scale_cpuct, false,
+          "Whether to scale c_puct based on variance for cand.");
+ABSL_FLAG(
+    bool, cand_use_mcgs, false,
+    "Whether to use Monte-Carlo Graph Search (transposition table) for cand.");
+ABSL_FLAG(bool, cand_use_puct_v, false, "Whether to use PUCT-V for cand.");
+ABSL_FLAG(float, cand_c_puct_v_2, 3.0, "cand c_puct_v_2 scaling.");
 
 float ConfidenceDelta(float z_score, float num_sims, float wr) {
   return z_score * std::sqrt(wr * (1 - wr) / num_sims);
@@ -103,9 +114,11 @@ int main(int argc, char** argv) {
   // Initialize NN evaluators.
   int cache_size = absl::GetFlag(FLAGS_cache_size);
   std::unique_ptr<nn::Engine> cur_engine = nn::CreateEngine(
-      nn::KindFromEnginePath(cur_model_path), cur_model_path, num_games);
+      nn::KindFromEnginePath(cur_model_path), cur_model_path, num_games,
+      nn::GetVersionFromModelPath(cur_model_path));
   std::unique_ptr<nn::Engine> cand_engine = nn::CreateEngine(
-      nn::KindFromEnginePath(cand_model_path), cand_model_path, num_games);
+      nn::KindFromEnginePath(cand_model_path), cand_model_path, num_games,
+      nn::GetVersionFromModelPath(cand_model_path));
   std::unique_ptr<nn::NNInterface> cur_nn_interface =
       std::make_unique<nn::NNInterface>(num_games, kTimeoutUs, cache_size,
                                         std::move(cur_engine));
@@ -162,9 +175,17 @@ int main(int argc, char** argv) {
       absl::GetFlag(FLAGS_cur_use_puct),
       absl::GetFlag(FLAGS_cur_use_lcb),
       absl::GetFlag(FLAGS_cur_c_puct),
+      absl::GetFlag(FLAGS_cur_var_scale_cpuct),
       absl::GetFlag(FLAGS_cand_use_puct),
       absl::GetFlag(FLAGS_cand_use_lcb),
       absl::GetFlag(FLAGS_cand_c_puct),
+      absl::GetFlag(FLAGS_cand_var_scale_cpuct),
+      absl::GetFlag(FLAGS_cur_use_mcgs),
+      absl::GetFlag(FLAGS_cand_use_mcgs),
+      absl::GetFlag(FLAGS_cur_use_puct_v),
+      absl::GetFlag(FLAGS_cand_use_puct_v),
+      absl::GetFlag(FLAGS_cur_c_puct_v_2),
+      absl::GetFlag(FLAGS_cand_c_puct_v_2),
   };
   std::vector<std::thread> threads;
   std::vector<std::future<EvalResult>> eval_results;
@@ -187,12 +208,10 @@ int main(int argc, char** argv) {
   }
 
   int num_cand_won = 0;
-  int total_num_moves = 0;
   for (auto& eval_result : eval_results) {
     EvalResult res = eval_result.get();
     Winner winner = res.winner;
     num_cand_won += winner == Winner::kCand ? 1 : 0;
-    total_num_moves += res.num_moves;
   }
 
   float winrate =

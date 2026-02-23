@@ -1,22 +1,24 @@
-import numpy as np
 import tensorflow as tf
-from constants import *
+import numpy as np
 from model import P3achyGoModel
 from model_config import ModelConfig
 
-model = P3achyGoModel.create(ModelConfig.tiny(),
-                             board_len=BOARD_LEN,
-                             num_input_planes=NUM_INPUT_PLANES,
-                             num_input_features=NUM_INPUT_FEATURES,
-                             name='test')
-x = np.random.random((2, 19, 19, 7))
-pi_logits, game_outcome, game_ownership, score_logits, gamma = model(x)
+# Create a simple config (you may need to adjust based on your ModelConfig class)
+model = P3achyGoModel.create(ModelConfig.b10c128btl3(), 19, 15, 8, "test")
 
-print('-------- Policy --------')
-print(pi_logits.numpy())
-print('-------- Outcome --------')
-print(game_outcome.numpy())
-print('-------- Ownership --------')
-print(game_ownership.numpy())
-print('-------- Score --------')
-print(game_ownership.numpy())
+# Create dummy inputs
+batch_size = 2
+board_state = tf.random.uniform([batch_size, 19, 19, 15], dtype=tf.float32)
+game_state = tf.random.uniform([batch_size, 8], dtype=tf.float32)
+
+# Run once to build the model
+outputs = model(board_state, game_state, training=False)
+
+# Print shapes
+for i, out in enumerate(outputs):
+    if out is not None:
+        print(f"Output {i}: {out.shape}")
+    else:
+        print(f"Output {i}: None")
+
+model.summary()

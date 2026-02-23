@@ -5,52 +5,47 @@
 #include <string>
 #include <vector>
 
+#include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/strings/str_format.h"
 #include "absl/time/time.h"
 #include "cc/data/filename_format.h"
+#include "cc/data/tfrecord/record_reader.h"
+#include "cc/data/tfrecord/record_writer.h"
 #include "cc/shuffler/chunk_info.h"
 #include "cc/shuffler/constants.h"
-#include "tensorflow/core/lib/io/compression.h"
-#include "tensorflow/core/lib/io/record_reader.h"
-#include "tensorflow/core/lib/io/record_writer.h"
 
 namespace shuffler {
 namespace {
 namespace fs = std::filesystem;
 using ::data::kGoldenChunkFormat;
 using ::data::kGoldenChunkSizeFormat;
-using ::tensorflow::tstring;
-using ::tensorflow::io::RecordReaderOptions;
-using ::tensorflow::io::RecordWriter;
-using ::tensorflow::io::RecordWriterOptions;
-using ::tensorflow::io::SequentialRecordReader;
-using ::tensorflow::io::compression::kZlib;
+using ::data::RecordReaderOptions;
+using ::data::RecordWriter;
+using ::data::RecordWriterOptions;
+using ::data::SequentialRecordReader;
 
 static constexpr size_t kDefaultChunkSize = 2048000;
-static constexpr int kDefaultPollIntervalS = 30;
-static constexpr int kLoggingInterval = 1000000;
+static constexpr int kDefaultPollIntervalS = 10;
 
-void WriteChunkToDisk(std::string filename, const std::vector<tstring>& chunk) {
-  std::unique_ptr<tensorflow::WritableFile> file;
-  TF_CHECK_OK(tensorflow::Env::Default()->NewWritableFile(filename, &file));
-
-  RecordWriterOptions options;
-  options.compression_type = RecordWriterOptions::ZLIB_COMPRESSION;
+void WriteChunkToDisk(std::string filename,
+                      const std::vector<std::string>& chunk) {
+  RecordWriterOptions options = RecordWriterOptions::Zlib();
   options.zlib_options.compression_level = 2;
-  RecordWriter writer(file.get(), options);
+  RecordWriter writer(filename, options);
+  CHECK(writer.Init().ok()) << "Failed to initialize RecordWriter";
 
-  for (const tstring& record : chunk) {
-    TF_CHECK_OK(writer.WriteRecord(record));
+  for (const std::string& record : chunk) {
+    CHECK(writer.WriteRecord(record).ok());
   }
 
-  TF_CHECK_OK(writer.Close());
-  TF_CHECK_OK(file->Close());
+  CHECK(writer.Close().ok());
 }
 }  // namespace
 
 ChunkManager::ChunkManager(std::string dir, int gen, float p, int games_per_gen,
-                           int train_window_size, bool is_continuous)
+                           int train_window_size, bool is_continuous,
+                           bool is_local)
     : dir_(dir),
       gen_(gen),
       p_(p),
@@ -58,7 +53,7 @@ ChunkManager::ChunkManager(std::string dir, int gen, float p, int games_per_gen,
       poll_interval_s_(kDefaultPollIntervalS),
       games_per_gen_(games_per_gen),
       is_continuous_(is_continuous),
-      watcher_(dir_, train_window_size),
+      watcher_(dir_, train_window_size, is_local),
       fbuffer_(watcher_.GetFiles()),
       running_(true) {
   fs_thread_ = std::thread(&ChunkManager::FsThread, this);
@@ -76,9 +71,11 @@ ChunkManager::~ChunkManager() {
 
 void ChunkManager::CreateChunk() {
   if (is_continuous_) {
-    LOG(INFO) << "Creating Chunk (Continuous Mode)...";
+    LOG(INFO) << "Creating Chunk " << gen_
+              << " (Continuous Mode)... Dir: " << dir_;
   } else {
-    LOG(INFO) << "Creating Chunk (Finite Task Mode)...";
+    LOG(INFO) << "Creating Chunk " << gen_
+              << " (Finite Task Mode)... Dir: " << dir_;
   }
 
   int num_scanned = 0;
@@ -97,14 +94,14 @@ void ChunkManager::CreateChunk() {
     }
 
     // Read file into memory.
-    std::unique_ptr<tensorflow::RandomAccessFile> file;
-    TF_CHECK_OK(tensorflow::Env::Default()->NewRandomAccessFile(*f, &file));
-
-    SequentialRecordReader reader(
-        file.get(), RecordReaderOptions::CreateRecordReaderOptions(kZlib));
+    SequentialRecordReader reader(*f, RecordReaderOptions::Zlib());
+    if (!reader.Init().ok()) {
+      LOG(WARNING) << "Failed to initialize reader for file: " << *f;
+      continue;
+    }
 
     while (true) {
-      tstring record;
+      std::string record;
       if (!reader.ReadRecord(&record).ok()) {
         break;
       }
@@ -124,7 +121,7 @@ void ChunkManager::CreateChunk() {
 
 void ChunkManager::ShuffleAndFlush() {
   // shuffle chunk
-  std::vector<tstring> golden_chunk(chunk_.begin(), chunk_.end());
+  std::vector<std::string> golden_chunk(chunk_.begin(), chunk_.end());
   auto start = std::chrono::steady_clock::now();
   std::shuffle(golden_chunk.begin(), golden_chunk.end(), probability_.prng());
   auto end = std::chrono::steady_clock::now();
@@ -133,17 +130,12 @@ void ChunkManager::ShuffleAndFlush() {
             << "s. Chunk contains " << golden_chunk.size() << " elements.";
 
   // create directory
-  std::string chunk_dir = fs::path(dir_) / kGoldenChunkDirname;
+  std::string chunk_dir = fs::path(dir_).parent_path() / kGoldenChunkDirname;
   std::string chunk_filename =
       fs::path(chunk_dir) / absl::StrFormat(kGoldenChunkFormat, gen_);
   std::string chunk_size_filename =
       fs::path(chunk_dir) / absl::StrFormat(kGoldenChunkSizeFormat, gen_);
   fs::create_directory(chunk_dir);
-
-  // write number of examples in batch.
-  FILE* const file = fopen(chunk_size_filename.c_str(), "w");
-  absl::FPrintF(file, "%d", golden_chunk.size());
-  fclose(file);
 
   // write to disk.
   start = std::chrono::steady_clock::now();
@@ -151,6 +143,11 @@ void ChunkManager::ShuffleAndFlush() {
   end = std::chrono::steady_clock::now();
   elapsed = end - start;
   LOG(INFO) << "Writing chunk took " << elapsed.count() << "s.";
+
+  // write number of examples in batch.
+  FILE* const file = fopen(chunk_size_filename.c_str(), "w");
+  absl::FPrintF(file, "%d", golden_chunk.size());
+  fclose(file);
 }
 
 void ChunkManager::SignalStop() {
@@ -168,7 +165,7 @@ std::optional<std::string> ChunkManager::PopFile() {
   return fbuffer_.PopFile();
 }
 
-void ChunkManager::AppendToChunk(tstring&& proto) {
+void ChunkManager::AppendToChunk(std::string&& proto) {
   chunk_.emplace_back(proto);
   if (chunk_.size() > chunk_size_) {
     chunk_.pop_front();

@@ -164,6 +164,11 @@ class GroupTracker final {
     Loc root;
     Color color;
     bool is_valid;
+
+    bool operator==(const GroupInfo& other) const {
+      return liberties == other.liberties && root == other.root &&
+             color == other.color && is_valid == other.is_valid;
+    }
   };
 
   /*
@@ -210,6 +215,9 @@ class GroupTracker final {
   ~GroupTracker() = default;
 
   inline groupid GroupAt(Loc loc) const { return groups_[loc]; }
+  inline const GroupInfo& GroupInfoAt(groupid gid) const {
+    return group_info_map_[gid];
+  }
   inline int LibertiesForGroup(groupid gid) const {
     return group_info_map_[gid].liberties;
   }
@@ -240,6 +248,11 @@ class GroupTracker final {
     return pass_alive_[loc] == color;
   }
 
+  inline const std::array<Color, BOARD_LEN * BOARD_LEN>& pass_alive() {
+    return pass_alive_;
+  }
+
+  friend bool operator==(const GroupTracker& g0, const GroupTracker& g1);
   friend std::ostream& operator<<(std::ostream& os,
                                   const GroupTracker& group_tracker);
 
@@ -257,9 +270,9 @@ class GroupTracker final {
 
   groupid EmplaceGroup(Loc root_loc, GroupInfo group_info);
 
-  std::array<groupid, BOARD_LEN * BOARD_LEN> groups_;
-  std::array<GroupInfo, BOARD_LEN * BOARD_LEN> group_info_map_;
-  std::array<Color, BOARD_LEN * BOARD_LEN> pass_alive_;
+  std::array<groupid, BOARD_LEN * BOARD_LEN> groups_{};
+  std::array<GroupInfo, BOARD_LEN * BOARD_LEN> group_info_map_{};
+  std::array<Color, BOARD_LEN * BOARD_LEN> pass_alive_{};
 };
 
 /*
@@ -268,8 +281,9 @@ class GroupTracker final {
 class Board final {
  public:
   using BoardData = std::array<Color, BOARD_LEN * BOARD_LEN>;
-  Board();
-  Board(bool prohibit_pass_alive);
+  Board(float komi = 7.5);
+  Board(int handicap, float komi);
+  Board(bool prohibit_pass_alive, float komi = 7.5);
   ~Board() = default;
 
   inline int at(int i, int j) const { return board_[i * BOARD_LEN + j]; }
@@ -294,6 +308,7 @@ class Board final {
 
   bool IsValidMove(Loc loc, Color color) const;
   bool IsGameOver() const;
+  bool IsAllPassAlive();
 
   MoveStatus PlayBlack(int i, int j);
   MoveStatus PlayWhite(int i, int j);
@@ -306,6 +321,10 @@ class Board final {
   // Retrieve stones with `liberties` number of liberties.
   BoardData GetStonesWithLiberties(const int liberties) const;
 
+  // Generalization of Ladder
+  BoardData GetLadderedStones() const;
+
+  friend bool operator==(const Board& b0, const Board& b1);
   friend std::ostream& operator<<(std::ostream& os, const Board& board);
 
  private:
@@ -341,6 +360,22 @@ class Board final {
   GroupTracker group_tracker_;
   absl::flat_hash_set<Zobrist::Hash> seen_states_;
 };
+
+inline bool operator==(const GroupTracker& g0, const GroupTracker& g1) {
+  return g0.groups_ == g1.groups_ && g0.group_info_map_ == g1.group_info_map_ &&
+         g0.pass_alive_ == g1.pass_alive_;
+}
+
+inline bool operator==(const Board& b0, const Board& b1) {
+  return b0.board_ == b1.board_ && b0.move_count_ == b1.move_count_ &&
+         b0.prohibit_pass_alive_ == b1.prohibit_pass_alive_ &&
+         b0.consecutive_passes_ == b1.consecutive_passes_ &&
+         b0.passes_ == b1.passes_ && b0.komi_ == b1.komi_ &&
+         b0.num_b_prisoners_ == b1.num_b_prisoners_ &&
+         b0.num_w_prisoners_ == b1.num_w_prisoners_ && b0.hash_ == b1.hash_ &&
+         b0.group_tracker_ == b1.group_tracker_ &&
+         b0.seen_states_ == b1.seen_states_;
+}
 
 inline std::ostream& operator<<(std::ostream& os,
                                 const GroupTracker& group_tracker) {

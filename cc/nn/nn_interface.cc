@@ -189,6 +189,9 @@ void NNInterface::LoadBatch(int thread_id, const game::Game& game,
       ApplySymmetry(sym, game.board().GetStonesWithLiberties(2), BOARD_LEN);
   input_features.stones_three_liberties =
       ApplySymmetry(sym, game.board().GetStonesWithLiberties(3), BOARD_LEN);
+  input_features.stones_laddered =
+      ApplySymmetry(sym, game.board().GetLadderedStones(), BOARD_LEN);
+  input_features.komi = game.komi();
 
   engine_->LoadBatch(thread_id, input_features);
 }

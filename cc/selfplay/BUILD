@@ -25,6 +25,7 @@ cc_library(
     name = "self_play",
     srcs = ["self_play_thread.cc"],
     hdrs = [
+        "book.h",
         "go_exploit_buffer.h",
         "self_play_thread.h",
     ],

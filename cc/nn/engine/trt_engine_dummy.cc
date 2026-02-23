@@ -21,7 +21,8 @@ class TrtEngineImpl : public TrtEngine {
 }  // namespace
 
 /* static */ std::unique_ptr<TrtEngine> TrtEngine::Create(std::string path,
-                                                          int batch_size) {
+                                                          int batch_size,
+                                                          int version) {
   return std::make_unique<TrtEngineImpl>();
 }
 

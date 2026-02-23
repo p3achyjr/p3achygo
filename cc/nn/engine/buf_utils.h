@@ -43,7 +43,7 @@ int Offset(std::array<int, N> shape, std::array<int, N> index) {
  */
 template <size_t N>
 int SliceSize(std::array<int, N> shape, int i) {
-  if (i > N) return 0;
+  if (i >= N) return 0;
 
   int size = Sizes(shape)[i];
   return size * shape[i];  // `size` is exclusive.

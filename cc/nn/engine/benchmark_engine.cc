@@ -38,7 +38,7 @@ void DefaultStats::Update(const NNInferResult& result,
                          ? -std::log(result.move_probs[mv])
                          : kMaxLoss;
   float v_ce_loss =
-      result.move_probs[mv] != 0.0
+      result.value_probs[static_cast<int>(did_win)] != 0.0
           ? -std::log(result.value_probs[static_cast<int>(did_win)])
           : kMaxLoss;
 
@@ -82,8 +82,12 @@ void Benchmark(Engine* const engine, GoDataset* const go_ds, Stats& stats) {
   }
 
   LOG(INFO) << "Starting Benchmark...";
+  int num_inferences = 0;
   NNInferResult result;
   for (const std::vector<GoDataset::Row>& batch : *go_ds) {
+    if (num_inferences > 1000) {
+      break;
+    }
     for (int batch_id = 0; batch_id < batch.size(); ++batch_id) {
       engine->LoadBatch(batch_id, batch[batch_id].features);
     }
@@ -99,6 +103,8 @@ void Benchmark(Engine* const engine, GoDataset* const go_ds, Stats& stats) {
       engine->GetBatch(batch_id, result);
       stats.Update(result, batch[batch_id], elapsed_us);
     }
+
+    ++num_inferences;
   }
 }
 

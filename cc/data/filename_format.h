@@ -19,6 +19,10 @@ static constexpr char kChunkDoneFormat[] =
 static constexpr char kChunkRegex[] =
     "gen(\\d+)_b(\\d+)_g(\\d+)_n(\\d+)_t(\\d+)_(.*)\\.tfrecord\\.zz";
 
+// Regex for parsing selfplay chunk .DONE files.
+static constexpr char kChunkDoneRegex[] =
+    "gen(\\d+)_b(\\d+)_g(\\d+)_n(\\d+)_t(\\d+)_(.*)\\.done";
+
 // Format for SGFs
 static constexpr char kSgfFormat[] = "gen%03d_b%03d_g%03d_%s.sgf";
 

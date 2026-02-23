@@ -29,4 +29,18 @@ float Probability::Uniform() {
   return res - 1.0f;
 }
 
+float Probability::Gaussian() {
+  const auto sample_until_nonzero = [&]() {
+    float u = 0.0f;
+    while (u == 0.0f) {
+      u = Uniform();
+    }
+    return u;
+  };
+  const float u0 = sample_until_nonzero();
+  const float u1 = sample_until_nonzero();
+  const float z = std::sqrt(-2 * std::log(u0)) * std::sin(2 * M_PI * u1);
+  return z;
+}
+
 }  // namespace core

@@ -22,10 +22,9 @@ AnalysisSnapshot ConstructAnalysisSnapshot(TreeNode* const node) {
   auto best_children = [](TreeNode* const node) {
     std::vector<Child> children;
     for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
-      std::unique_ptr<TreeNode>& child = node->children[i];
+      TreeNode* child = node->children[i];
       if (child) {
-        children.emplace_back(
-            Child{AsLoc(i), node->move_probs[i], child.get()});
+        children.emplace_back(Child{AsLoc(i), node->move_probs[i], child});
       }
     }
 

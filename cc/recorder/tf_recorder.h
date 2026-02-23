@@ -30,7 +30,10 @@ class TfRecorder {
                           const game::Game& game,
                           const ImprovedPolicies& mcts_pis,
                           const std::vector<uint8_t>& is_move_trainable,
-                          const std::vector<float>& root_qs) = 0;
+                          const std::vector<float>& root_qs,
+                          const std::vector<float>& root_scores,
+                          const std::vector<float>& klds,
+                          const std::vector<uint32_t>& visit_counts) = 0;
 
   // Flushes all pending writes. Not thread safe.
   virtual void Flush() = 0;

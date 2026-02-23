@@ -4,8 +4,10 @@
 #include <cmath>
 #include <memory>
 
+#include "absl/synchronization/mutex.h"
 #include "cc/constants/constants.h"
 #include "cc/game/color.h"
+#include "cc/game/zobrist.h"
 #include "cc/mcts/constants.h"
 
 namespace mcts {
@@ -17,9 +19,10 @@ enum class TreeNodeState {
 };
 
 struct TreeNode final {
-  TreeNode() = default;
+  TreeNode(game::Zobrist::Hash board_hash) : board_hash(board_hash) {};
   ~TreeNode() = default;
 
+  const game::Zobrist::Hash board_hash;
   TreeNodeState state = TreeNodeState::kNew;
   bool is_terminal = false;
   game::Color color_to_move;
@@ -37,17 +40,18 @@ struct TreeNode final {
   float w_outcome = 0;
   float v_outcome = 0;
   float v_outcome_var = 0;
+  float score = 0;
 
   int max_child_n = 0;
 
-  std::array<std::unique_ptr<TreeNode>, constants::kMaxMovesPerPosition>
-      children{};
+  std::array<TreeNode*, constants::kMaxMovesPerPosition> children{};
+  std::array<int, constants::kMaxMovesPerPosition> child_visits{};
 
-  // write-once
+  // initial evaluation (conceptual write-once)
   std::array<float, constants::kMaxMovesPerPosition> move_logits{};
   std::array<float, constants::kMaxMovesPerPosition> move_probs{};
-  float outcome_est = 0;
-  float score_est = 0;
+  float init_outcome_est = 0;
+  float init_score_est = 0;
   float init_util_est = 0;  // mix value estimate and score estimate.
 
   inline TreeNode* child(int a) const {
@@ -55,13 +59,17 @@ struct TreeNode final {
       return nullptr;
     }
 
-    return children[a].get();
+    return children[a];
   }
+
+  // Parallel search stuff.
+  absl::Mutex mu;
+  std::atomic<int> n_in_flight = 0;
 };
 
 inline float N(const TreeNode* node) { return node == nullptr ? 0 : node->n; }
 inline float NAction(const TreeNode* node, int action) {
-  return N(node->children[action].get());
+  return node->child_visits[action];
 }
 
 inline float V(const TreeNode* node) {
@@ -93,11 +101,15 @@ inline float QOutcome(const TreeNode* node, int action) {
 }
 
 inline float QVar(const TreeNode* node, int action) {
-  return node == nullptr ? kMaxQ : VVar(node->children[action].get());
+  return node == nullptr ? kMaxQ : VVar(node->children[action]);
 }
 
 inline float QOutcomeVar(const TreeNode* node, int action) {
-  return node == nullptr ? 1.0f : VOutcomeVar(node->children[action].get());
+  return node == nullptr ? 1.0f : VOutcomeVar(node->children[action]);
+}
+
+inline float Score(const TreeNode* node) {
+  return node == nullptr ? 0 : node->score;
 }
 
 inline float MaxN(const TreeNode* node) {
@@ -113,12 +125,15 @@ inline float SumChildrenN(const TreeNode* node) {
 }
 
 inline float ChildScore(const TreeNode* node, int action) {
-  return !node->children[action] ? node->score_est
-                                 : -node->children[action]->score_est;
+  return !node->children[action] ? node->init_score_est
+                                 : -node->children[action]->init_score_est;
 }
 
-// Returns LCB for the value of a child node.
+// Returns LCB/UCB for the value of a child node.
 float Lcb(const TreeNode* node, int action);
+float Ucb(const TreeNode* node, int action);
+float Lcb(const TreeNode* node, int action, float alpha);
+float Ucb(const TreeNode* node, int action, float alpha);
 
 void AdvanceState(TreeNode* node);
 

@@ -3,12 +3,14 @@
 #include <NvInfer.h>
 #include <NvOnnxParser.h>
 #include <cuda_runtime_api.h>
+#include <driver_types.h>
 
 #include <numeric>
 #include <unordered_map>
 
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "cc/constants/constants.h"
 #include "cc/nn/engine/buf_utils.h"
 #include "cc/nn/engine/trt_logger.h"
 #include "cc/nn/engine/trt_names.h"
@@ -18,9 +20,19 @@ namespace {
 namespace nv = ::nvinfer1;
 using namespace ::nn;
 
+#define CUDA_OK(call)                                               \
+  do {                                                              \
+    cudaError_t _e = (call);                                        \
+    if (_e != cudaSuccess) {                                        \
+      fprintf(stderr, "CUDA error %s:%d: %s\n", __FILE__, __LINE__, \
+              cudaGetErrorString(_e));                              \
+      std::abort();                                                 \
+    }                                                               \
+  } while (0)
+
 class TrtEngineImpl : public TrtEngine {
  public:
-  TrtEngineImpl(std::string path, int batch_size);
+  TrtEngineImpl(std::string path, int batch_size, int version);
   ~TrtEngineImpl();
 
   Engine::Kind kind() override { return Engine::Kind::kTrt; }
@@ -48,20 +60,30 @@ class TrtEngineImpl : public TrtEngine {
   std::vector<float> scores_;
   const int batch_size_;
   const std::string path_;
+  const int version_;
 
   const std::array<int, 4> planes_shape_;
   const std::array<int, 2> feats_shape_;
   const std::array<int, 2> pi_shape_;
   const std::array<int, 2> outcome_shape_;
   const std::array<int, 2> score_shape_;
+
+  // CUDA Graph Stuff
+  bool cuda_graph_initialized_ = false;
+  cudaGraph_t cuda_graph_{};
+  cudaGraphExec_t cuda_graph_exec_{};
 };
 
-TrtEngineImpl::TrtEngineImpl(std::string path, int batch_size)
+TrtEngineImpl::TrtEngineImpl(std::string path, int batch_size, int version)
     : batch_size_(batch_size),
       path_(path),
+      version_(version),
       planes_shape_{batch_size_, BOARD_LEN, BOARD_LEN,
-                    constants::kNumInputFeaturePlanes},
-      feats_shape_{batch_size_, constants::kNumInputFeatureScalars},
+                    version_ == 0 ? constants::kNumInputFeaturePlanesV0
+                                  : constants::kNumInputFeaturePlanesV1},
+      feats_shape_{batch_size_, version_ == 0
+                                    ? constants::kNumInputFeatureScalarsV0
+                                    : constants::kNumInputFeatureScalarsV1},
       pi_shape_{batch_size_, constants::kMaxMovesPerPosition},
       outcome_shape_{batch_size_, constants::kNumValueLogits},
       score_shape_{batch_size_, constants::kNumScoreLogits} {
@@ -84,8 +106,6 @@ TrtEngineImpl::TrtEngineImpl(std::string path, int batch_size)
 
   // Create stream.
   cudaStreamCreate(&stream_);
-
-  // Allocate buffers.
   for (int i = 0; i < engine_->getNbIOTensors(); ++i) {
     const char* name = engine_->getIOTensorName(i);
     nv::Dims dims = engine_->getTensorShape(name);
@@ -99,20 +119,11 @@ TrtEngineImpl::TrtEngineImpl(std::string path, int batch_size)
     BufferHandle buf_handle;
     buf_handle.size = num_bytes;
     buf_handle.dims = dims;
-    cudaMallocHost(&buf_handle.host_buf, num_bytes);
-    cudaMalloc(&buf_handle.device_buf, num_bytes);
+    CUDA_OK(cudaMallocHost(&buf_handle.host_buf, num_bytes));
+    CUDA_OK(cudaMalloc(&buf_handle.device_buf, num_bytes));
     exec_context_->setTensorAddress(name, buf_handle.device_buf);
 
     buf_map_[name] = buf_handle;
-  }
-
-  // Set scores as constant.
-  for (int i = 0; i < constants::kNumScoreLogits; ++i) {
-    float score =
-        0.05f *
-        (static_cast<float>(i - constants::kScoreInflectionPoint) + 0.5f);
-    static_cast<float*>(buf_map_[nn::trt::input::kScoresName].host_buf)[i] =
-        score;
   }
 
   // Need to do this first according to API.
@@ -122,17 +133,63 @@ TrtEngineImpl::TrtEngineImpl(std::string path, int batch_size)
   // Configure inputs for execution context.
   BufferHandle input_planes = buf_map_[nn::trt::input::kPlanesName];
   BufferHandle input_features = buf_map_[nn::trt::input::kFeaturesName];
-  BufferHandle input_scores = buf_map_[nn::trt::input::kScoresName];
   exec_context_->setInputShape(nn::trt::input::kPlanesName, input_planes.dims);
   exec_context_->setInputShape(nn::trt::input::kFeaturesName,
                                input_features.dims);
-  exec_context_->setInputShape(nn::trt::input::kScoresName, input_scores.dims);
+
+  if (version_ == 0) {
+    // Set scores as constant.
+    for (int i = 0; i < constants::kNumScoreLogits; ++i) {
+      float score =
+          0.05f *
+          (static_cast<float>(i - constants::kScoreInflectionPoint) + 0.5f);
+      static_cast<float*>(buf_map_[nn::trt::input::kScoresName].host_buf)[i] =
+          score;
+    }
+    BufferHandle input_scores = buf_map_[nn::trt::input::kScoresName];
+    exec_context_->setInputShape(nn::trt::input::kScoresName,
+                                 input_scores.dims);
+  }
+
+  {
+    // Attempt CUDA Graph Capture.
+    LOG(INFO) << "Attempting CUDA Graph Capture for TRT Engine.";
+    CHECK(exec_context_->enqueueV3(stream_));
+    if (cudaStreamBeginCapture(stream_, cudaStreamCaptureModeGlobal) !=
+        cudaSuccess) {
+      return;
+    }
+
+    CHECK(exec_context_->enqueueV3(stream_));
+    if (cudaStreamEndCapture(stream_, &cuda_graph_) != cudaSuccess) {
+      auto err = cudaGetLastError();
+      LOG(WARNING) << "CUDA Graph Capture Failed: " << cudaGetErrorName(err)
+                   << ", " << cudaGetErrorString(err);
+      return;
+    }
+
+    if (cudaGraphInstantiate(&cuda_graph_exec_, cuda_graph_, 0) !=
+        cudaSuccess) {
+      auto err = cudaGetLastError();
+      LOG(WARNING) << "CUDA Graph Instantation Failed: "
+                   << cudaGetErrorName(err) << ", " << cudaGetErrorString(err);
+      return;
+    }
+
+    cuda_graph_initialized_ = true;
+    LOG(INFO) << "CUDA Graph Capture Succeeded for TRT Engine.";
+  }
 }
 
 TrtEngineImpl::~TrtEngineImpl() {
   for (auto& [name, buf_handle] : buf_map_) {
     cudaFreeHost(buf_handle.host_buf);
     cudaFree(buf_handle.device_buf);
+  }
+
+  if (cuda_graph_initialized_) {
+    cudaGraphExecDestroy(cuda_graph_exec_);
+    cudaGraphDestroy(cuda_graph_);
   }
 }
 
@@ -149,7 +206,7 @@ void TrtEngineImpl::LoadBatch(int batch_id, const GoFeatures& features) {
   std::fill(feats_buf + batch_id * feats_slice_size,
             feats_buf + (batch_id + 1) * feats_slice_size, 0);
   LoadGoFeatures(planes_buf, feats_buf, planes_shape_, feats_shape_, features,
-                 batch_id);
+                 batch_id, version_);
 }
 
 void TrtEngineImpl::RunInference() {
@@ -171,7 +228,14 @@ void TrtEngineImpl::RunInference() {
                   input_features.size, cudaMemcpyHostToDevice, stream_);
   cudaMemcpyAsync(input_scores.device_buf, input_scores.host_buf,
                   input_scores.size, cudaMemcpyHostToDevice, stream_);
-  CHECK(exec_context_->enqueueV3(stream_));
+  if (cuda_graph_initialized_) {
+    auto err = cudaGraphLaunch(cuda_graph_exec_, stream_);
+    CHECK(err == cudaSuccess)
+        << "CUDA Graph Launch Failed: " << cudaGetErrorName(err) << ", "
+        << cudaGetErrorString(err);
+  } else {
+    CHECK(exec_context_->enqueueV3(stream_));
+  }
   cudaMemcpyAsync(output_pi_logits.host_buf, output_pi_logits.device_buf,
                   output_pi_logits.size, cudaMemcpyDeviceToHost, stream_);
   cudaMemcpyAsync(output_pi_probs.host_buf, output_pi_probs.device_buf,
@@ -226,8 +290,9 @@ void TrtEngineImpl::GetOwnership(
 }  // namespace
 
 /* static */ std::unique_ptr<TrtEngine> TrtEngine::Create(std::string path,
-                                                          int batch_size) {
-  return std::make_unique<TrtEngineImpl>(path, batch_size);
+                                                          int batch_size,
+                                                          int version) {
+  return std::make_unique<TrtEngineImpl>(path, batch_size, version);
 }
 
 }  // namespace nn

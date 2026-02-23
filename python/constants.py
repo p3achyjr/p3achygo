@@ -3,8 +3,6 @@ Various constants.
 '''
 
 BOARD_LEN = 19
-NUM_INPUT_PLANES = 13
-NUM_INPUT_FEATURES = 7
 
 SCORE_RANGE_MIDPOINT = 400
 SCORE_RANGE = 800
@@ -19,3 +17,13 @@ NON_MOVE = (-1, -1)
 PASS_MOVE = (BOARD_LEN, 0)
 
 PASS_MOVE_ENCODING = 361
+
+
+def num_input_planes(version=1) -> int:
+    """Returns number of input planes for a given model version."""
+    return 15
+
+
+def num_input_features(version=1) -> int:
+    """Returns number of input planes for a given model version."""
+    return 8

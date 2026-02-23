@@ -33,7 +33,7 @@ void LeafEvaluator::EvaluateLeaf(core::Probability& probability,
 
   root_score_est *= color_to_move == root_color ? 1.0f : -1.0f;
   float score_utility =
-      ScoreTransform(score_weight_, node->score_est, root_score_est);
+      ScoreTransform(score_weight_, node->init_score_est, root_score_est);
 
   InitFields(node, score_utility);
 }
@@ -58,6 +58,7 @@ void LeafEvaluator::EvaluateTerminal(const Scores& scores,
   terminal_node->is_terminal = true;
   terminal_node->v = empirical_q;
   terminal_node->v_outcome = empirical_outcome;
+  terminal_node->init_score_est = final_score;
 }
 
 void LeafEvaluator::InitTreeNode(core::Probability& probability, TreeNode* node,
@@ -81,16 +82,16 @@ void LeafEvaluator::InitTreeNode(core::Probability& probability, TreeNode* node,
   }
 
   node->color_to_move = color_to_move;
-  node->outcome_est = value_est;
-  node->score_est = score_est;
+  node->init_outcome_est = value_est;
+  node->init_score_est = score_est;
 
   AdvanceState(node);
 }
 
 inline void LeafEvaluator::InitFields(TreeNode* node, float score_utility) {
   node->n = 1;
-  node->w = node->outcome_est + score_utility;
-  node->w_outcome = node->outcome_est;
+  node->w = node->init_outcome_est + score_utility;
+  node->w_outcome = node->init_outcome_est;
   node->v = node->w;
   node->v_outcome = node->w_outcome;
   node->init_util_est = node->w;

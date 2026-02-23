@@ -1,0 +1,27 @@
+{
+    "from_existing_run": "v3-b12c256btl3-2000k-inf",
+    "num_generations": 600,
+    "model_config": "b15c192_classic",
+    "games_first_gen": 5000,
+    "games_per_gen": 5000,
+    "batch_size": 256,
+    "lr_schedule": [
+        [
+            0,
+            1e-2
+        ],
+        [
+            100,
+            5e-3
+        ],
+        [
+            200,
+            2e-3
+        ],
+        [
+            300,
+            1e-3
+        ]
+    ],
+    "lr_growth_window": 10
+}

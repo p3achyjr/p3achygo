@@ -27,12 +27,15 @@ class GameRecorder {
   GameRecorder(GameRecorder&&) = delete;
   GameRecorder& operator=(GameRecorder&&) = delete;
 
-  virtual void RecordGame(
-      int thread_id, const game::Board& init_board, const game::Game& game,
-      const ImprovedPolicies& mcts_pis,
-      const std::vector<uint8_t>& move_trainables,
-      const std::vector<float>& root_qs,
-      std::vector<std::unique_ptr<mcts::TreeNode>>&& roots) = 0;
+  virtual void RecordGame(int thread_id, const game::Board& init_board,
+                          const game::Game& game,
+                          const ImprovedPolicies& mcts_pis,
+                          const std::vector<uint8_t>& move_trainables,
+                          const std::vector<float>& root_qs,
+                          const std::vector<float>& root_scores,
+                          const std::vector<float>& klds,
+                          const std::vector<mcts::TreeNode*>& roots,
+                          const std::vector<uint32_t>& visit_counts) = 0;
 
   virtual void RecordEvalGame(int thread_id, const game::Game& game,
                               const std::string& b_name,

@@ -20,7 +20,7 @@ std::optional<ChunkInfo> ParseChunkFilename(std::string chunk_filename) {
   return ChunkInfo{
       std::atoi(match[1].str().c_str()), std::atoi(match[2].str().c_str()),
       std::atoi(match[3].str().c_str()), std::atoi(match[4].str().c_str()),
-      std::atoi(match[5].str().c_str()),
+      std::atoi(match[5].str().c_str()), match[6].str(),
   };
 }
 

@@ -90,7 +90,8 @@ TEST_CASE("GumbelTest") {
   // evaluator into believing the nodes are new. We link dummy implementations
   // for gumbel and leaf evaluation for testing.
   GumbelResult gumbel_result = gumbel_evaluator.SearchRoot(
-      probability, game, root_node.get(), BLACK, kGumbelN, kGumbelK);
+      probability, game, nullptr, root_node.get(), BLACK,
+      GumbelSearchParams{kGumbelN, kGumbelK});
 
   // Check move predictions are correct.
   CHECK(gumbel_result.nn_move == expected_nn_move);

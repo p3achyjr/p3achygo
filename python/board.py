@@ -85,157 +85,174 @@ class ZobristHash:
 
 class GoBoard:
 
-  def __init__(self, b=BOARD_LEN) -> None:
-    self.len = b
-    self.board = np.full(shape=(b, b), fill_value=EMPTY, dtype=np.int8)
-    self.zobrist_table = ZobristTable(self.len, 3)
-    self.zobrist_hash = ZobristHash(self, self.len, self.zobrist_table)
-    self.table = set(self.zobrist_hash.hash())
+    def __init__(self, b=BOARD_LEN) -> None:
+        self.len = b
+        self.board = np.full(shape=(b, b), fill_value=EMPTY, dtype=np.int8)
+        self.zobrist_table = ZobristTable(self.len, 3)
+        self.zobrist_hash = ZobristHash(self, self.len, self.zobrist_table)
+        self.table = set(self.zobrist_hash.hash())
 
-  def at(self, i: int, j: int) -> int:
-    return self.board[i][j]
+    def at(self, i: int, j: int) -> int:
+        return self.board[i][j]
 
-  def move_black(self, i: int, j: int) -> bool:
-    return self.move(BLACK, i, j)
+    def move_black(self, i: int, j: int) -> bool:
+        return self.move(BLACK, i, j)
 
-  def move_white(self, i: int, j: int) -> bool:
-    return self.move(WHITE, i, j)
+    def move_white(self, i: int, j: int) -> bool:
+        return self.move(WHITE, i, j)
 
-  def move(self, color: int, i: int, j: int) -> bool:
-    if color not in [BLACK, WHITE]:
-      print(f'Invalid Color: {color}')
+    def move(self, color: int, i: int, j: int) -> bool:
+        if color not in [BLACK, WHITE]:
+            print(f"Invalid Color: {color}")
 
-    if (self.board[i][j] != EMPTY):
-      print('Invalid Move! Board Position Not Empty.')
-      return False
+        if self.board[i][j] != EMPTY:
+            print("Invalid Move! Board Position Not Empty.")
+            return False
 
-    # we need to change the color here so the liberty detection works.
-    self.board[i][j] = color
-    captured = self.get_captured(i, j, BLACK if color == WHITE else WHITE)
-    if len(captured) == 0 and self.find_liberties(set([(i, j)]), i, j, color,
-                                                  set()) == 0:
-      print('Invalid Move! Self atari.')
-      self.board[i][j] = EMPTY
-      return False
+        # we need to change the color here so the liberty detection works.
+        self.board[i][j] = color
+        captured = self.get_captured(i, j, BLACK if color == WHITE else WHITE)
+        if (
+            len(captured) == 0
+            and self.find_liberties(set([(i, j)]), i, j, color, set()) == 0
+        ):
+            print("Invalid Move! Self atari.")
+            self.board[i][j] = EMPTY
+            return False
 
-    transitions = [(i, j, EMPTY, color)]
-    for i_prime, j_prime in captured:
-      transitions.append(
-          (i_prime, j_prime, BLACK if color == WHITE else WHITE, EMPTY))
+        transitions = [(i, j, EMPTY, color)]
+        for i_prime, j_prime in captured:
+            transitions.append(
+                (i_prime, j_prime, BLACK if color == WHITE else WHITE, EMPTY)
+            )
 
-    self.zobrist_hash.recompute_hash(transitions)
-    if self.zobrist_hash.hash() in self.table:
-      print('Already seen board position!')
-      self.board[i][j] = EMPTY
-      return False
+        self.zobrist_hash.recompute_hash(transitions)
+        if self.zobrist_hash.hash() in self.table:
+            print("Already seen board position!")
+            self.board[i][j] = EMPTY
+            return False
 
-    self.table.add(self.zobrist_hash.hash())
-    for (i, j, _, piece) in transitions:
-      self.board[i][j] = piece
+        self.table.add(self.zobrist_hash.hash())
+        for i, j, _, piece in transitions:
+            self.board[i][j] = piece
 
-    return True
+        return True
 
-  def get_captured(self, i, j, captured_color) -> set[tuple[int, int]]:
-    # intuition is that we only need to check the 4 spots next to the place just
-    # played.
-    checked = set()
-    captured = set()
-    for (i_prime, j_prime) in [(i + 1, j), (i, j + 1), (i - 1, j), (i, j - 1)]:
-      if (i_prime, j_prime) in checked:
-        continue
+    def get_captured(self, i, j, captured_color) -> set[tuple[int, int]]:
+        # intuition is that we only need to check the 4 spots next to the place just
+        # played.
+        checked = set()
+        captured = set()
+        for i_prime, j_prime in [(i + 1, j), (i, j + 1), (i - 1, j), (i, j - 1)]:
+            if (i_prime, j_prime) in checked:
+                continue
 
-      if i_prime < 0 or j_prime < 0 or i_prime >= self.len or j_prime >= self.len:
-        continue
+            if i_prime < 0 or j_prime < 0 or i_prime >= self.len or j_prime >= self.len:
+                continue
 
-      if self.board[i_prime][j_prime] != captured_color:
-        continue
+            if self.board[i_prime][j_prime] != captured_color:
+                continue
 
-      group = set([(i_prime, j_prime)])
-      # print('-----')
-      liberties = self.find_liberties(group, i_prime, j_prime, captured_color,
-                                      set())
+            group = set([(i_prime, j_prime)])
+            # print('-----')
+            liberties = self.find_liberties(
+                group, i_prime, j_prime, captured_color, set()
+            )
 
-      checked.update(group)
-      if liberties == 0:
-        captured.update(group)
+            checked.update(group)
+            if liberties == 0:
+                captured.update(group)
 
-      # print('result:', i_prime, j_prime, liberties, group, captured)
+            # print('result:', i_prime, j_prime, liberties, group, captured)
 
-    return captured
+        return captured
 
-  def find_liberties(self, group: set[tuple[int, int]], i, j, color,
-                     visited: set[tuple[int, int]]) -> int:
-    if (i, j) in visited:
-      return 0
+    def find_liberties(
+        self, group: set[tuple[int, int]], i, j, color, visited: set[tuple[int, int]]
+    ) -> int:
+        if (i, j) in visited:
+            return 0
 
-    if i < 0 or j < 0 or i >= self.len or j >= self.len:
-      return 0
+        if i < 0 or j < 0 or i >= self.len or j >= self.len:
+            return 0
 
-    visited.add((i, j))
-    if self.board[i][j] != color:
-      return 1 if self.board[i][j] == EMPTY else 0
+        visited.add((i, j))
+        if self.board[i][j] != color:
+            return 1 if self.board[i][j] == EMPTY else 0
 
-    group.add((i, j))
-    return self.find_liberties(group, i - 1, j, color, visited) + \
-           self.find_liberties(group, i + 1, j, color, visited) + \
-           self.find_liberties(group, i, j - 1, color, visited) + \
-           self.find_liberties(group, i, j + 1, color, visited)
+        group.add((i, j))
+        return (
+            self.find_liberties(group, i - 1, j, color, visited)
+            + self.find_liberties(group, i + 1, j, color, visited)
+            + self.find_liberties(group, i, j - 1, color, visited)
+            + self.find_liberties(group, i, j + 1, color, visited)
+        )
 
-  def as_color(self, color: int) -> np.ndarray:
-    player = (self.board == color).astype(np.int8) * BLACK
-    opp = (self.board == opposite_color(color)).astype(np.int8) * WHITE
-    return player + opp
+    def as_color(self, color: int) -> np.ndarray:
+        player = (self.board == color).astype(np.int8) * BLACK
+        opp = (self.board == opposite_color(color)).astype(np.int8) * WHITE
+        return player + opp
 
-  def as_black(self):
-    return self.as_color(BLACK)
+    def as_black(self):
+        return self.as_color(BLACK)
 
-  def as_white(self):
-    return self.as_color(WHITE)
+    def as_white(self):
+        return self.as_color(WHITE)
 
-  def is_star_point(self, i, j) -> bool:
-    coords = [3, 9, 15]
-    # print(i, j, i in coords and j in coords)
-    return (i in coords and j in coords)
+    def is_star_point(self, i, j) -> bool:
+        coords = [3, 9, 15]
+        # print(i, j, i in coords and j in coords)
+        return i in coords and j in coords
 
-  def char_at(self, i, j):
-    if self.board[i][j] == EMPTY:
-      return '+' if self.is_star_point(i, j) else '⋅'
-    elif self.board[i][j] == BLACK:
-      return '○'
-    else:
-      return '●'
+    def char_at(self, i, j):
+        if self.board[i][j] == EMPTY:
+            return "+" if self.is_star_point(i, j) else "⋅"
+        elif self.board[i][j] == BLACK:
+            return "○"
+        else:
+            return "●"
 
-  def print(self):
-    for i in range(BOARD_LEN):
-      print('{:2d}'.format(i),
-            ' '.join([self.char_at(i, j) for j in range(BOARD_LEN)]))
+    def print(self):
+        for i in range(BOARD_LEN):
+            print(
+                "{:2d}".format(i),
+                " ".join([self.char_at(i, j) for j in range(BOARD_LEN)]),
+            )
 
-    print('  ', ' '.join(list('ABCDEFGHIJKLMNOPQRS')))
+        print("  ", " ".join(list("ABCDEFGHJKLMNOPQRST")))
 
-  def print_pretty(self):
-    for i in range(BOARD_LEN):
-      print('{:2d}'.format(BOARD_LEN - i),
-            ' '.join([self.char_at(i, j) for j in range(BOARD_LEN)]))
+    def print_pretty(self):
+        for i in range(BOARD_LEN):
+            print(
+                "{:2d}".format(BOARD_LEN - i),
+                " ".join([self.char_at(i, j) for j in range(BOARD_LEN)]),
+            )
 
-    print('  ', ' '.join(list('ABCDEFGHIJKLMNOPQRS')))
+        print("  ", " ".join(list("ABCDEFGHJKLMNOPQRST")))
 
-  @staticmethod
-  def to_string(board):
-    s = []
-    for i in range(len(board)):
-      s.append(('{:2d}'.format(i) + ' ' +
-                ' '.join([char_at(board, i, j) for j in range(len(board[0]))])))
+    @staticmethod
+    def to_string(board):
+        s = []
+        for i in range(len(board)):
+            # Use SGF coordinates: row 19 at top (i=0), row 1 at bottom (i=18)
+            s.append(
+                (
+                    "{:2d}".format(19 - i)
+                    + " "
+                    + " ".join([char_at(board, i, j) for j in range(len(board[0]))])
+                )
+            )
 
-    s.append('   ' + ' '.join(list('ABCDEFGHIJKLMNOPQRS')))
-    return '\n'.join(s)
+        s.append("   " + " ".join(list("ABCDEFGHJKLMNOPQRST")))
+        return "\n".join(s)
 
-  @staticmethod
-  def move_as_tuple(move: int):
-    assert 0 <= move <= BOARD_LEN * BOARD_LEN
-    if move == BOARD_LEN * BOARD_LEN:
-      return PASS_MOVE
+    @staticmethod
+    def move_as_tuple(move: int):
+        assert 0 <= move <= BOARD_LEN * BOARD_LEN
+        if move == BOARD_LEN * BOARD_LEN:
+            return PASS_MOVE
 
-    return (move // BOARD_LEN, move % BOARD_LEN)
+        return (move // BOARD_LEN, move % BOARD_LEN)
 
 
 class GameResult:

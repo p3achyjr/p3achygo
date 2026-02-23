@@ -12,6 +12,7 @@ struct ChunkInfo {
   int num_games;
   int num_examples;
   int timestamp;
+  std::string worker_id;
 };
 
 std::optional<ChunkInfo> ParseChunkFilename(std::string chunk_filename);

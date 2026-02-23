@@ -18,6 +18,7 @@ namespace fs = std::filesystem;
 ABSL_FLAG(std::string, sgf_dir, "", "Path to SGFs");
 ABSL_FLAG(bool, dry_run, false, "Whether to perform a dry run");
 ABSL_FLAG(std::string, out_dir, "", "Path to write dataset to.");
+ABSL_FLAG(int, num_workers, 4, "Number of workers");
 
 int main(int argc, char** argv) {
   absl::ParseCommandLine(argc, argv);
@@ -36,7 +37,7 @@ int main(int argc, char** argv) {
   std::string out_dir = fs::path(absl::GetFlag(FLAGS_out_dir));
   LOG(INFO) << "Out Dir: " << out_dir;
 
-  int num_workers = 4;
+  int num_workers = absl::GetFlag(FLAGS_num_workers);
   LOG(INFO) << "Using " << num_workers << " workers.";
 
   data::Coordinator coordinator(num_workers, sgf_dir, out_dir,

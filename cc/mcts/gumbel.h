@@ -5,6 +5,8 @@
 #include "cc/game/color.h"
 #include "cc/game/game.h"
 #include "cc/mcts/leaf_evaluator.h"
+#include "cc/mcts/node_table.h"
+#include "cc/mcts/search_policy.h"
 #include "cc/mcts/tree.h"
 #include "cc/nn/nn_interface.h"
 
@@ -27,43 +29,18 @@ struct GumbelResult {
   game::Loc mcts_move;
   std::array<float, constants::kMaxMovesPerPosition> pi_improved;
   absl::InlinedVector<ChildStats, 16> child_stats;
+  float kld = 0;
+  uint32_t visits = 0;
+  // std::string dbg;
 };
 
-/*
- * Base class representing a search policy.
- */
-class SearchPolicy {
- public:
-  virtual game::Loc SelectNextAction(const TreeNode* node,
-                                     const game::Game& game,
-                                     game::Color color_to_move) const = 0;
-  virtual ~SearchPolicy() = default;
-
- protected:
-  SearchPolicy() = default;
-};
-
-/*
- * Gumbel non-root search policy.
- */
-class GumbelNonRootSearchPolicy : public SearchPolicy {
- public:
-  game::Loc SelectNextAction(const TreeNode* node, const game::Game& game,
-                             game::Color color_to_move) const override;
-};
-
-/*
- * PUCT search policy.
- */
-class PuctSearchPolicy : public SearchPolicy {
- public:
-  PuctSearchPolicy(float c_puct, float c_puct_visit_scaling);
-  game::Loc SelectNextAction(const TreeNode* node, const game::Game& game,
-                             game::Color color_to_move) const override;
-
- private:
-  const float c_puct_;
-  const float c_puct_visit_scaling_;
+struct GumbelSearchParams {
+  int n;
+  int k;
+  float noise_scaling = 1.0f;
+  bool disable_pass = false;
+  bool early_stopping_enabled = false;
+  bool over_search_enabled = false;
 };
 
 /*
@@ -82,44 +59,36 @@ class GumbelEvaluator final {
 
   // Performs a full Gumbel root search. Returns a pair of the original move,
   // and the selected move.
-  // If n == 1, we will sample a move directly from the policy.
+  // If params.n == 1, we will sample a move directly from the policy.
   GumbelResult SearchRoot(core::Probability& probability, game::Game& game,
-                          TreeNode* root, game::Color color_to_move, int n,
-                          int k, float noise_scaling);
-  inline GumbelResult SearchRoot(core::Probability& probability,
-                                 game::Game& game, TreeNode* root,
-                                 game::Color color_to_move, int n, int k) {
-    return SearchRoot(probability, game, root, color_to_move, n, k, 1.0f);
-  }
+                          NodeTable* node_table, TreeNode* root,
+                          game::Color color_to_move, GumbelSearchParams params);
 
-  // Uses PUCT formula to select actions at the root, but uses Q-based planning
-  // at non-root nodes, as described in the Gumbel paper.
+  // Performs a full PUCT search.
   GumbelResult SearchRootPuct(core::Probability& probability, game::Game& game,
-                              TreeNode* root, game::Color color_to_move, int n,
-                              const float c_puct, const bool use_lcb);
-  inline GumbelResult SearchRootPuct(core::Probability& probability,
-                                     game::Game& game, TreeNode* root,
-                                     game::Color color_to_move, int n,
-                                     const float c_puct) {
-    return SearchRootPuct(probability, game, root, color_to_move, n, c_puct,
-                          false /* use_ucb */);
-  }
+                              NodeTable* node_table, TreeNode* root,
+                              game::Color color_to_move, int n,
+                              const PuctParams puct_params);
 
  private:
   static constexpr int kMaxPathLenEst = 128;
-  // Runs Gumbel non-root search path until leaf, and returns the search path
-  // including root.
-  absl::InlinedVector<TreeNode*, kMaxPathLenEst> Search(
-      core::Probability& probability, game::Game& game, TreeNode* node,
-      game::Color color_to_move, game::Color root_color, float root_score_est,
-      SearchPolicy* search_policy);
+  using SearchPath =
+      absl::InlinedVector<std::pair<game::Loc, TreeNode*>, kMaxPathLenEst>;
+
+  // Runs Gumbel non-root search path until leaf, and returns the search
+  // path including root.
+  SearchPath Search(core::Probability& probability, game::Game& game,
+                    NodeTable* node_table, TreeNode* node,
+                    game::Color color_to_move, game::Color root_color,
+                    float root_score_est, SearchPolicy* search_policy);
 
   // Updates all nodes in tree, based on leaf evaluation.
-  void Backward(absl::InlinedVector<TreeNode*, kMaxPathLenEst>& path);
+  void Backward(SearchPath& path, bool use_idempotent_updates);
 
   // Single Backward Step.
-  void SingleBackup(TreeNode* node, int child_n, float leaf_q,
-                    float leaf_q_outcome);
+  void SingleBackup(TreeNode* node, TreeNode* child, game::Loc action,
+                    float leaf_q, float leaf_q_outcome, float leaf_score,
+                    bool is_idempotent = false);
 
   // Leaf Evaluation module.
   LeafEvaluator leaf_evaluator_;

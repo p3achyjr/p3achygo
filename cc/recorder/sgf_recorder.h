@@ -29,7 +29,11 @@ class SgfRecorder {
   virtual void RecordGame(
       int thread_id, const game::Game& game, std::string b_name,
       std::string w_name,
-      std::vector<std::unique_ptr<mcts::TreeNode>>&& roots) = 0;
+      const std::vector<mcts::TreeNode*>& roots) = 0;
+
+  // For eval games (no tree logging - two player trees can't be stitched)
+  virtual void RecordEvalGame(int thread_id, const game::Game& game,
+                              std::string b_name, std::string w_name) = 0;
 
   // Flushes all pending writes.
   virtual void Flush() = 0;
@@ -47,7 +51,7 @@ class SgfRecorder {
  */
 bool RecordSingleSgfWithTrees(
     std::string path, const game::Game& game,
-    const std::vector<std::unique_ptr<mcts::TreeNode>>& roots);
+    const std::vector<mcts::TreeNode*>& roots);
 
 }  // namespace recorder
 

@@ -4,15 +4,16 @@
 #include <filesystem>
 #include <string>
 
+#include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
 #include "cc/core/probability.h"
+#include "cc/data/tfrecord/record_writer.h"
 #include "cc/game/board.h"
 #include "cc/recorder/make_tf_example.h"
 #include "cc/sgf/parse_sgf.h"
-#include "tensorflow/core/example/example.pb.h"
-#include "tensorflow/core/lib/io/record_writer.h"
+#include "example.pb.h"
 
 namespace data {
 namespace {
@@ -21,8 +22,8 @@ namespace fs = std::filesystem;
 using namespace ::sgf;
 using namespace ::game;
 
-using ::tensorflow::io::RecordWriter;
-using ::tensorflow::io::RecordWriterOptions;
+using ::data::RecordWriter;
+using ::data::RecordWriterOptions;
 
 // Shard Length for single shard.
 static constexpr size_t kShardLen = 350000;
@@ -70,21 +71,20 @@ void FlushShard(const int shard_num, std::vector<tensorflow::Example>& examples,
   // Create File.
   std::string filename =
       fs::path(out_dir) / absl::StrFormat("shard%04d.tfrecord.zz", shard_num);
-  std::unique_ptr<tensorflow::WritableFile> file;
-  TF_CHECK_OK(tensorflow::Env::Default()->NewWritableFile(filename, &file));
 
-  // Create Writer.
-  RecordWriterOptions options;
-  options.compression_type = RecordWriterOptions::ZLIB_COMPRESSION;
+  // Create Writer with zlib compression.
+  RecordWriterOptions options = RecordWriterOptions::Zlib();
   options.zlib_options.compression_level = 2;
-  RecordWriter writer(file.get(), options);
+  RecordWriter writer(filename, options);
+  CHECK(writer.Init().ok()) << "Failed to initialize RecordWriter";
 
   for (const auto& example : examples) {
     std::string data;
     example.SerializeToString(&data);
-    TF_CHECK_OK(writer.WriteRecord(data));
+    CHECK(writer.WriteRecord(data).ok());
   }
 
+  CHECK(writer.Close().ok());
   examples.clear();
 }
 
@@ -153,9 +153,10 @@ void Worker(int worker_id, Coordinator* coordinator, const std::string out_dir,
       pi[move.loc] = 1.0;
       tensorflow::Example example = recorder::MakeTfExample(
           board.position(), last_moves, board.GetStonesInAtari(),
-          board.GetStonesWithLiberties(2), board.GetStonesWithLiberties(3), pi,
-          next_move.loc, game_info.result, 0 /* q30 */, 0 /* q100 */,
-          0 /* q200 */, move.color, game_info.komi, BOARD_LEN);
+          board.GetStonesWithLiberties(2), board.GetStonesWithLiberties(3),
+          board.GetLadderedStones(), pi, next_move.loc, game_info.result,
+          0 /* q30 */, 0 /* q100 */, 0 /* q200 */, 0, 0, 0, move.color,
+          game_info.komi, BOARD_LEN);
       examples.emplace_back(example);
       if (examples.size() == kShardLen) {
         FlushShard(coordinator->GetShardNum(), examples, out_dir, probability,

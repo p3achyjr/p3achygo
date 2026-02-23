@@ -38,10 +38,16 @@ static constexpr int kMaxMovesPerPosition = BOARD_LEN * BOARD_LEN + 1;
 static constexpr int kMaxGameLen = 600;
 
 /* Number of feature planes for neural network */
-static constexpr int kNumInputFeaturePlanes = 13;
+static constexpr int kNumInputFeaturePlanesV0 = 13;
+
+/* Number of feature planes for neural network */
+static constexpr int kNumInputFeaturePlanesV1 = 15;
 
 /* Number of feature scalars in game state vector */
-static constexpr int kNumInputFeatureScalars = 7;
+static constexpr int kNumInputFeatureScalarsV0 = 7;
+
+/* Number of feature scalars in game state vector */
+static constexpr int kNumInputFeatureScalarsV1 = 8;
 
 /* Number of score logits from neural network */
 static constexpr int kNumValueLogits = 2;
