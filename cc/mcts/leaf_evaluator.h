@@ -9,19 +9,14 @@
 
 namespace mcts {
 
-inline float ScoreTransform(float c_score, float score_est,
-                            float root_score_est) {
-  return c_score * M_2_PI * std::atan((score_est - root_score_est) / BOARD_LEN);
-}
-
 /*
  * Wrapper Class for Leaf Evaluation. Mainly useful for testing.
  */
 class LeafEvaluator final {
  public:
+  // Convenience constructor for task_offset=0.
   LeafEvaluator(nn::NNInterface* nn_interface, int thread_id);
-  LeafEvaluator(nn::NNInterface* nn_interface, int thread_id,
-                float score_weight);
+  LeafEvaluator(nn::NNInterface::Slot slot, int thread_id);
   ~LeafEvaluator() = default;
 
   // Disable Copy and Move.
@@ -48,11 +43,21 @@ class LeafEvaluator final {
   void InitTreeNode(core::Probability& probability, TreeNode* node,
                     const game::Game& game, game::Color color_to_move);
 
- private:
-  // Populates initial fields _after_ a call to InitTreeNode.
-  void InitFields(TreeNode* node, float score_utility);
+  // Queues an example for evaluation.
+  inline void QueueEval(core::Probability& probability, const game::Game& game,
+                        game::Color color_to_move) {
+    slot_.LoadEntry(thread_id_, game, color_to_move, probability);
+  }
 
-  nn::NNInterface* nn_interface_;
+  // Fetches queued example.
+  void FetchLeafEval(TreeNode* node, const game::Game& game,
+                     game::Color color_to_move, game::Color root_color,
+                     float root_score_est);
+  void FetchRootEval(TreeNode* node, const game::Game& game,
+                     game::Color color_to_move);
+
+ private:
+  nn::NNInterface::Slot slot_;
   int thread_id_;
   const float score_weight_;
 };

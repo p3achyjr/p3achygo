@@ -14,8 +14,8 @@ namespace mcts {
 
 enum class TreeNodeState {
   kNew = 0,          // new node. No evaluation has been performed.
-  kNnEvaluated = 1,  // initial NN evaluation has been done.
-  kExpanded = 2,     // at least one child has been visited.
+  kPending = 1,      // Some thread has claimed evaluation of this node.
+  kNnEvaluated = 2,  // NN evaluation has been done.
 };
 
 struct TreeNode final {
@@ -23,11 +23,13 @@ struct TreeNode final {
   ~TreeNode() = default;
 
   const game::Zobrist::Hash board_hash;
-  TreeNodeState state = TreeNodeState::kNew;
+  std::atomic<TreeNodeState> state = TreeNodeState::kNew;
   bool is_terminal = false;
   game::Color color_to_move;
 
   // change throughout search
+  // TODO: these are modified/read across threads. This is a latent data
+  // corruption bug on ARM.
   int n = 0;
   float w = 0;
   float v = 0;
@@ -44,7 +46,8 @@ struct TreeNode final {
 
   int max_child_n = 0;
 
-  std::array<TreeNode*, constants::kMaxMovesPerPosition> children{};
+  std::array<std::atomic<TreeNode*>, constants::kMaxMovesPerPosition>
+      children{};
   std::array<int, constants::kMaxMovesPerPosition> child_visits{};
 
   // initial evaluation (conceptual write-once)
@@ -59,12 +62,13 @@ struct TreeNode final {
       return nullptr;
     }
 
-    return children[a];
+    return children[a].load(std::memory_order_relaxed);
   }
 
   // Parallel search stuff.
   absl::Mutex mu;
   std::atomic<int> n_in_flight = 0;
+  std::atomic<bool> is_pending_update = false;
 };
 
 inline float N(const TreeNode* node) { return node == nullptr ? 0 : node->n; }
@@ -92,12 +96,17 @@ inline float VOutcomeVar(const TreeNode* node) {
 
 inline float Q(const TreeNode* node, int action) {
   // remember to flip sign.
-  return !node->children[action] ? kMinQ : -node->children[action]->v;
+  return !node->children[action]
+             ? kMinQ
+             : -node->children[action].load(std::memory_order_relaxed)->v;
 }
 
 inline float QOutcome(const TreeNode* node, int action) {
   // remember to flip sign.
-  return !node->children[action] ? -1.0 : -node->children[action]->v_outcome;
+  return !node->children[action] ? -1.0
+                                 : -node->children[action]
+                                        .load(std::memory_order_relaxed)
+                                        ->v_outcome;
 }
 
 inline float QVar(const TreeNode* node, int action) {
@@ -126,7 +135,9 @@ inline float SumChildrenN(const TreeNode* node) {
 
 inline float ChildScore(const TreeNode* node, int action) {
   return !node->children[action] ? node->init_score_est
-                                 : -node->children[action]->init_score_est;
+                                 : -node->children[action]
+                                        .load(std::memory_order_relaxed)
+                                        ->init_score_est;
 }
 
 // Returns LCB/UCB for the value of a child node.
@@ -135,7 +146,58 @@ float Ucb(const TreeNode* node, int action);
 float Lcb(const TreeNode* node, int action, float alpha);
 float Ucb(const TreeNode* node, int action, float alpha);
 
-void AdvanceState(TreeNode* node);
+inline void AdvanceState(TreeNode* node) {
+  if (node == nullptr) return;
+  node->state.store(TreeNodeState::kNnEvaluated, std::memory_order_release);
+}
+
+inline void RecomputeNodeStats(TreeNode* node) {
+  float w = node->init_util_est, w_outcome = node->init_outcome_est,
+        total_score = node->init_score_est;
+  int max_child_n = 0;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    // flip signs.
+    const TreeNode* child = node->child(a);
+    if (child == nullptr) {
+      continue;
+    }
+    w -= (node->child_visits[a] * child->v);
+    w_outcome -= (node->child_visits[a] * child->v_outcome);
+    total_score -= (node->child_visits[a] * child->score);
+    max_child_n = node->child_visits[a] > max_child_n ? node->child_visits[a]
+                                                      : max_child_n;
+  }
+  float v = w / node->n;
+  float v_outcome = w_outcome / node->n;
+  float score = total_score / node->n;
+
+  // Variance of a mixture distribution.
+  // Var(Y) = (1/N) * sum(i : 0...k) ni(vi + (mi - m)^2)
+  float m2 = (node->init_util_est - v) * (node->init_util_est - v);
+  float m2_outcome = (node->init_outcome_est - v_outcome) *
+                     (node->init_outcome_est - v_outcome);
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    if (node->child_visits[a] == 0) {
+      continue;
+    }
+
+    const TreeNode* child = node->child(a);
+    float dv = -child->v - v;
+    float dv_outcome = -child->v_outcome - v_outcome;
+    m2 += node->child_visits[a] * (child->v_var + dv * dv);
+    m2_outcome += node->child_visits[a] *
+                  (child->v_outcome_var + dv_outcome * dv_outcome);
+  }
+
+  node->w = w;
+  node->w_outcome = w_outcome;
+  node->v = v;
+  node->v_outcome = v_outcome;
+  node->score = score;
+  node->max_child_n = max_child_n;
+  node->v_var = m2 / node->n;
+  node->v_outcome_var = m2_outcome / node->n;
+}
 
 #ifdef V_CATEGORICAL
 std::string VCategoricalHistogram(TreeNode* node);

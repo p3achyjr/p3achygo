@@ -48,6 +48,8 @@ target_link_libraries(leaf_evaluator PUBLIC
 add_library(gumbel
     gumbel.cc
     gumbel.h
+    search.cc
+    search.h
     search_policy.cc
     search_policy.h
 )
@@ -72,26 +74,23 @@ target_link_libraries(mcts INTERFACE
     position_cache
 )
 
-# Tests
-if(BUILD_TESTS)
-    # Note: Both gumbel_test and leaf_evaluator_test use outdated NNInterface constructor signatures
-    # Skipping these tests until they're updated to work with real TensorFlow
-    # add_executable(mcts_gumbel_test gumbel_test.cc)
-    # target_link_libraries(mcts_gumbel_test PRIVATE
-    #     gumbel
-    #     core_impl
-    #     core_doctest
-    # )
-    # add_test(NAME mcts_gumbel_test COMMAND mcts_gumbel_test)
+# Note: Both gumbel_test and leaf_evaluator_test use outdated NNInterface constructor signatures
+# Skipping these tests until they're updated to work with real TensorFlow
+# add_executable(mcts_gumbel_test gumbel_test.cc)
+# target_link_libraries(mcts_gumbel_test PRIVATE
+#     gumbel
+#     core_impl
+#     core_doctest
+# )
+# add_test(NAME mcts_gumbel_test COMMAND mcts_gumbel_test)
 
-    # add_executable(mcts_leaf_evaluator_test leaf_evaluator_test.cc)
-    # target_link_libraries(mcts_leaf_evaluator_test PRIVATE
-    #     leaf_evaluator
-    #     core_impl
-    #     core_doctest
-    # )
-    # add_test(NAME mcts_leaf_evaluator_test COMMAND mcts_leaf_evaluator_test)
-endif()
+# add_executable(mcts_leaf_evaluator_test leaf_evaluator_test.cc)
+# target_link_libraries(mcts_leaf_evaluator_test PRIVATE
+#     leaf_evaluator
+#     core_impl
+#     core_doctest
+# )
+# add_test(NAME mcts_leaf_evaluator_test COMMAND mcts_leaf_evaluator_test)
 
 # Benchmarks
 if(BUILD_BENCHMARKS)
@@ -102,3 +101,5 @@ if(BUILD_BENCHMARKS)
         benchmark::benchmark_main
     )
 endif()
+
+add_subdirectory(search_tests)

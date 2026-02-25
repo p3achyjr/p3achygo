@@ -117,8 +117,9 @@ void PopulateHeader(SgfNode* root, float komi, game::Game::Result result,
 void PopulateTree(SgfNode* sgf_node, TreeNode* node, Color color) {
   std::vector<std::pair<int, TreeNode*>> visited_children;
   for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
-    if (node->children[i] && node->children[i]->n > 0) {
-      visited_children.emplace_back(i, node->children[i]);
+    TreeNode* child = node->children[i].load(std::memory_order_relaxed);
+    if (child && child->n > 0) {
+      visited_children.emplace_back(i, child);
     }
   }
 

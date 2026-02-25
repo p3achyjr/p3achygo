@@ -21,16 +21,32 @@ static constexpr char kSavedModelTagServe[] = "serve";
 
 NNInterface::NNInterface(int num_threads, std::unique_ptr<Engine> engine)
     : NNInterface(num_threads, kTimeoutUs, constants::kDefaultNNCacheSize,
-                  std::move(engine)) {}
+                  std::move(engine), SignalKind::kAuto, -1) {}
 
 NNInterface::NNInterface(int num_threads, int64_t timeout, size_t cache_size,
                          std::unique_ptr<Engine> engine)
+    : NNInterface(num_threads, timeout, cache_size, std::move(engine),
+                  SignalKind::kAuto, -1) {}
+
+NNInterface::NNInterface(int num_threads, std::unique_ptr<Engine> engine,
+                         SignalKind signal_kind, int num_shared_search_tasks)
+    : NNInterface(num_threads, kTimeoutUs, constants::kDefaultNNCacheSize,
+                  std::move(engine), signal_kind, num_shared_search_tasks) {}
+
+NNInterface::NNInterface(int num_threads, int64_t timeout, size_t cache_size,
+                         std::unique_ptr<Engine> engine, SignalKind signal_kind,
+                         int num_shared_search_tasks)
     : num_registered_threads_(num_threads),
       num_threads_(num_threads),
       thread_info_(num_threads_),
       running_(true),
       timeout_(timeout),
-      engine_(std::move(engine)) {
+      engine_(std::move(engine)),
+      symmetries_(num_threads_),
+      signal_kind_(signal_kind),
+      num_shared_search_tasks_(num_shared_search_tasks),
+      num_signaled_search_tasks_(0),
+      num_exited_search_tasks_(0) {
   InitializeCache(cache_size);
   if (num_threads_ > 1) {
     infer_thread_ = std::thread(&NNInterface::InferLoop, this);
@@ -74,31 +90,7 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
   SignalLoadedAndBlockUntilReady(thread_id);
 
   // Inference result is now ready.
-  NNInferResult infer_result;
-  engine_->GetBatch(thread_id, infer_result);
-
-  // We have finished retrieving data. This should not need to be lock-guarded.
-  mu_.Lock();
-  thread_info_[thread_id].res_ready = false;
-  mu_.Unlock();
-
-  // Unapply symmetry.
-  std::array<float, constants::kNumBoardLocs> grid_logits_sym;
-  std::array<float, constants::kNumBoardLocs> grid_probs_sym;
-  std::copy(infer_result.move_logits.begin(),
-            infer_result.move_logits.begin() + constants::kNumBoardLocs,
-            grid_logits_sym.begin());
-  std::copy(infer_result.move_probs.begin(),
-            infer_result.move_probs.begin() + constants::kNumBoardLocs,
-            grid_probs_sym.begin());
-  std::array<float, constants::kNumBoardLocs> grid_logits =
-      ApplyInverse(sym, grid_logits_sym, BOARD_LEN);
-  std::array<float, constants::kNumBoardLocs> grid_probs =
-      ApplyInverse(sym, grid_probs_sym, BOARD_LEN);
-  std::copy(grid_logits.begin(), grid_logits.end(),
-            infer_result.move_logits.begin());
-  std::copy(grid_probs.begin(), grid_probs.end(),
-            infer_result.move_probs.begin());
+  NNInferResult infer_result = GetBatch(thread_id, sym);
 
   // Cache this result.
   CacheInsert(thread_id, cache_key, infer_result);
@@ -139,6 +131,71 @@ void NNInterface::UnregisterThread(int thread_id) {
 
   --num_registered_threads_;
   thread.registered = false;
+}
+
+void NNInterface::LoadEntry(int thread_id, int offset, const game::Game& game,
+                            game::Color color_to_move,
+                            core::Probability& probability) {
+  const int canonical_tid = thread_id + offset;
+  NNKey cache_key = NNKey{
+      color_to_move,
+      game.board().hash(),
+  };
+
+  if (CacheContains(canonical_tid, cache_key)) {
+    // Cached. Do not need to wait for this thread.
+    absl::MutexLock l(&mu_);
+    thread_info_[canonical_tid].res_cached = true;
+    return;
+  }
+
+  // Not cached. Load for inference.
+  DCHECK(game.moves().size() >= constants::kNumLastMoves);
+
+  Symmetry sym = GetRandomSymmetry(probability.prng());
+  symmetries_[canonical_tid] = sym;
+  LoadBatch(canonical_tid, game, color_to_move, sym);
+
+  // signal loaded.
+  {
+    absl::MutexLock l(&mu_);
+    ThreadInfo& thread_info = thread_info_[canonical_tid];
+    thread_info.loaded_for_inference = true;
+    thread_info.res_ready = false;
+    thread_info.res_cached = false;
+  }
+}
+
+NNInferResult NNInterface::FetchEntry(int thread_id, int offset,
+                                      const game::Game& game,
+                                      game::Color color_to_move) {
+  const int canonical_tid = thread_id + offset;
+  NNKey cache_key = NNKey{
+      color_to_move,
+      game.board().hash(),
+  };
+
+  ThreadInfo& thread_info = thread_info_[canonical_tid];
+  if (CacheContains(canonical_tid, cache_key)) {
+    // Cached. Return cache entry.
+    absl::MutexLock l(&mu_);
+    thread_info.res_cached = false;
+    return CacheGet(canonical_tid, cache_key).value();
+  }
+
+  // block until result ready.
+  {
+    absl::MutexLock l(&mu_);
+    mu_.Await(absl::Condition(&thread_info.res_ready));
+  }
+
+  // Inference result is now ready.
+  NNInferResult infer_result =
+      GetBatch(canonical_tid, symmetries_[canonical_tid]);
+
+  // Cache this result.
+  CacheInsert(canonical_tid, cache_key, infer_result);
+  return infer_result;
 }
 
 void NNInterface::InitializeCache(size_t cache_size) {
@@ -204,15 +261,42 @@ void NNInterface::InferLoop() {
 }
 
 void NNInterface::Infer() {
-  mu_.LockWhenWithTimeout(absl::Condition(this, &NNInterface::ShouldInfer),
-                          absl::Microseconds(timeout_));
+  // Always use a timeout (both kAuto and kExplicit).
+  //
+  // kExplicit would otherwise deadlock in eval: cur_nn is shared by 16 games
+  // where cur plays black and 16 where cur plays white, so at most half the
+  // games signal per ply and ShouldInfer() (which requires all tasks to signal)
+  // never returns true.
+  //
+  // With the timeout, inference fires with whatever is loaded. Correctness is
+  // preserved because:
+  //   1. LoadEntry() sets loaded_for_inference before
+  //   SignalReadyForInference().
+  //   2. Infer() only sets res_ready for slots with loaded_for_inference =
+  //   true,
+  //      so workers whose LoadEntry hasn't run yet are skipped and wait for the
+  //      next inference cycle.
+  //   3. FetchEntry() blocks on res_ready, so it reads GetBatch(task_offset +
+  //      worker_id) only after that exact slot's data was processed — the
+  //      queue/fetch pairing is never violated.
+  //   4. SearchTask's Barrier 1 (descent_remaining==0 && pending==0) still
+  //      sequences correctly even if a game's workers are split across two
+  //      inference cycles: the barrier only opens once every worker has both
+  //      finished descending (LoadEntry called) and fetched its eval result.
+  if (timeout_ > 0) {
+    mu_.LockWhenWithTimeout(absl::Condition(this, &NNInterface::ShouldInfer),
+                            absl::Microseconds(timeout_));
+  } else {
+    mu_.LockWhen(absl::Condition(this, &NNInterface::ShouldInfer));
+  }
   if (num_registered_threads_ == 0) {
     mu_.Unlock();
     return;
   }
 
-  // Do not run inference if there is a thread that still has not retrieved its
-  // inference result.
+  // Do not run inference if any thread still has an unread result: running
+  // RunInference() would overwrite the engine output buffer before the worker
+  // calls GetBatch(). Apply to both kAuto and kExplicit.
   for (const ThreadInfo& thread : thread_info_) {
     if (thread.res_ready) {
       mu_.Unlock();
@@ -220,9 +304,25 @@ void NNInterface::Infer() {
     }
   }
 
+  // Timeout may fire before any leaf has been loaded. Skip rather than running
+  // the engine on stale input slots (the outputs would be discarded anyway
+  // since loaded_for_inference would be false for every slot).
+  bool any_loaded = false;
+  for (const ThreadInfo& thread : thread_info_) {
+    if (thread.loaded_for_inference) {
+      any_loaded = true;
+      break;
+    }
+  }
+  if (!any_loaded) {
+    mu_.Unlock();
+    return;
+  }
+
   // Run Inference.
   engine_->RunInference();
 
+  num_signaled_search_tasks_ = 0;
   for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
     ThreadInfo& thread = thread_info_[thread_id];
     if (thread.registered && thread.loaded_for_inference) {
@@ -238,6 +338,7 @@ void NNInterface::Infer() {
       thread.res_ready = true;
       thread.loaded_for_inference = false;
     }
+    thread.res_cached = false;
   }
 
   mu_.Unlock();
@@ -246,6 +347,12 @@ void NNInterface::Infer() {
 bool NNInterface::ShouldInfer() const {
   if (!running_.load(std::memory_order_acquire)) {
     return true;
+  }
+
+  if (signal_kind_ == SignalKind::kExplicit) {
+    const int remaining = num_shared_search_tasks_ - num_exited_search_tasks_;
+    if (remaining <= 0) return false;  // All tasks done; wait for destructor.
+    return num_signaled_search_tasks_ == remaining;
   }
 
   // Only return true if at least one leaf evaluation is pending.

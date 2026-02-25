@@ -21,6 +21,11 @@ class NodeTable {
                                 game::Color color_to_move,
                                 bool is_terminal) = 0;
 
+  // thread-safe version of `GetOrCreate`
+  virtual TreeNode* GetOrCreateGuarded(game::Zobrist::Hash board_hash,
+                                       game::Color color_to_move,
+                                       bool is_terminal) = 0;
+
   // Reap all nodes not reachable from new_root
   virtual uint32_t Reap(TreeNode* new_root) = 0;
 
@@ -49,6 +54,13 @@ class MctsNodeTable final : public NodeTable {
     return node;
   }
 
+  inline TreeNode* GetOrCreateGuarded(game::Zobrist::Hash board_hash,
+                                      game::Color color_to_move,
+                                      bool is_terminal) override {
+    absl::MutexLock l(&mu_);
+    return GetOrCreate(board_hash, color_to_move, is_terminal);
+  }
+
   // Reaps all nodes not reachable from new_root
   uint32_t Reap(TreeNode* new_root) override;
 
@@ -58,6 +70,7 @@ class MctsNodeTable final : public NodeTable {
 
  private:
   absl::flat_hash_set<std::unique_ptr<TreeNode>> nodes_;
+  absl::Mutex mu_;
 };
 
 // For graph search - reuses nodes with the same (hash, color) pair
@@ -86,6 +99,13 @@ class McgsNodeTable final : public NodeTable {
     return node;
   }
 
+  inline TreeNode* GetOrCreateGuarded(game::Zobrist::Hash board_hash,
+                                      game::Color color_to_move,
+                                      bool is_terminal) override {
+    absl::MutexLock l(&mu_);
+    return GetOrCreate(board_hash, color_to_move, is_terminal);
+  }
+
   // Reaps all nodes not reachable from new_root
   uint32_t Reap(TreeNode* new_root) override;
 
@@ -96,6 +116,7 @@ class McgsNodeTable final : public NodeTable {
  private:
   using NodeKey = std::tuple<game::Zobrist::Hash, game::Color, bool>;
   absl::flat_hash_map<NodeKey, std::unique_ptr<TreeNode>> table_;
+  absl::Mutex mu_;
 };
 
 }  // namespace mcts

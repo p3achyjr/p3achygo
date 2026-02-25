@@ -8,6 +8,8 @@
 #include "cc/mcts/gumbel.h"
 #include "cc/mcts/node_table.h"
 #include "cc/mcts/tree.h"
+#include "cc/nn/engine/engine.h"
+#include "cc/nn/engine/go_features.h"
 #include "cc/nn/nn_interface.h"
 
 #define DEFINE_BENCHMARK(name, sequence)           \
@@ -44,8 +46,26 @@ using namespace ::game;
 using namespace ::mcts;
 using namespace ::nn;
 
+class NullEngine final : public Engine {
+ public:
+  Kind kind() override { return Kind::kUnknown; }
+  std::string path() override { return "null"; }
+  void LoadBatch(int, const GoFeatures&) override {}
+  void RunInference() override {}
+  void GetBatch(int, NNInferResult& result) override {
+    result.move_probs.fill(1.0f / constants::kMaxMovesPerPosition);
+    result.move_logits.fill(0.0f);
+    result.value_probs.fill(1.0f / constants::kNumValueLogits);
+    result.score_probs.fill(1.0f / constants::kNumScoreLogits);
+  }
+  void GetOwnership(int,
+                    std::array<float, constants::kNumBoardLocs>& own) override {
+    own.fill(0.0f);
+  }
+};
+
 static void BM_Gumbel(benchmark::State& state) {
-  NNInterface nn_interface(1);
+  NNInterface nn_interface(1, std::make_unique<NullEngine>());
   Probability probability;
   for (auto _ : state) {
     state.PauseTiming();
