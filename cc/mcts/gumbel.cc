@@ -190,13 +190,15 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
 
   std::array<float, constants::kMaxMovesPerPosition>
       masked_logits;  // Logits that zero-out probability for illegal moves.
-  GumbelMoveInfo gmove_info[num_moves];
+  GumbelMoveInfo gmove_info[constants::kMaxMovesPerPosition]{};
   for (int i = 0; i < num_moves; ++i) {
     if ((disable_pass && i == constants::kPassMoveEncoding) ||
         !game.IsValidMove(i, color_to_move)) {
       // ignore move henceforth
       masked_logits[i] = kSmallLogit;
       gmove_info[i].logit = kSmallLogit;
+      gmove_info[i].gumbel_noise = 0;
+      gmove_info[i].qtransform = 0;
       continue;
     }
 
