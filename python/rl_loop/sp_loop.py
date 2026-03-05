@@ -66,6 +66,12 @@ def loop(
     worker_id = secrets.token_hex(5)
 
     # keep track of self-play chunks in order to upload.
+    # TODO(multi-gpu): With multiple GPU processes sharing local_run_dir, each
+    # process will see the other processes' newly written chunks as "new" and
+    # upload them, causing duplicate GCS uploads. Filenames include worker_id
+    # so there are no overwrites, just redundant traffic. Fix by either giving
+    # each GPU process a per-GPU recorder subdirectory, or filtering uploads by
+    # worker_id. Not a problem in local-run mode since nothing is uploaded.
     sp_chunks = set(local_sp_chunk_dir.glob(TFREC_GLOB))
     sgfs = set(local_sgf_dir.glob(SGF_GLOB))
 
@@ -190,8 +196,9 @@ def loop(
                 queue.task_done()
                 break
 
-            if selfplay_proc.poll():
-                logging.warning(f"Selfplay Process Exited: {selfplay_proc.poll()}")
+            if selfplay_proc.poll() is not None:
+                logging.warning(f"Selfplay Process Exited Unexpectedly: {selfplay_proc.returncode}")
+                break
 
         selfplay_proc.communicate("\n")
         selfplay_proc.wait()

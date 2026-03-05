@@ -115,7 +115,7 @@ int main(int argc, char** argv) {
     std::thread thread(
         selfplay::Run, seed, thread_id, nn_interface.get(), game_recorder.get(),
         go_exploit_buffer.get(),
-        absl::StrFormat("/tmp/thread%d_log.txt", thread_id),
+        absl::StrFormat("/tmp/thread%d_%s_log.txt", thread_id, worker_id),
         selfplay::SPConfig{
             absl::GetFlag(FLAGS_max_moves),
             selfplay::GumbelParams{absl::GetFlag(FLAGS_gumbel_selected_n),
