@@ -93,9 +93,9 @@ int main(int argc, char** argv) {
             << " threads.";
 
   // initialize NN evaluator.
-  std::unique_ptr<nn::Engine> engine = nn::CreateEngine(
-      nn::KindFromEnginePath(model_path), model_path, num_threads,
-      nn::GetVersionFromModelPath(model_path));
+  std::unique_ptr<nn::Engine> engine =
+      nn::CreateEngine(nn::KindFromEnginePath(model_path), model_path,
+                       num_threads, nn::GetVersionFromModelPath(model_path));
   std::unique_ptr<nn::NNInterface> nn_interface =
       std::make_unique<nn::NNInterface>(num_threads, std::move(engine));
 
