@@ -83,6 +83,8 @@ int main(int argc, char** argv) {
   chunk_manager.ShuffleAndFlush();
 
   // WaitForSignal may not have exited
-  std::exit(0);
+  pthread_cancel(wait_thread.native_handle());
+  wait_thread.join();
+  LOG(INFO) << "Shuffler Done.";
   return 0;
 }

@@ -13,7 +13,7 @@ class ConstantLRSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
     def __init__(self, lr: float):
         self.lr = lr
 
-    def __call__(self, _):
+    def __call__(self, _=None):
         return self.lr
 
     def info(self) -> str:

@@ -140,6 +140,7 @@ def loop(bin_path: str, run_id: str, local_run_dir: str,
                 download_chunks(local_sp_chunk_dir, new_sp_chunks)
                 num_new_samples += num_samples_in_chunks(new_sp_chunks)
 
+        logging.info(f"Broke out of shuffler loop")
         if shuf_proc.poll() is None:
             shuf_proc.communicate("\n")  # force a flush just to be safe.
 
