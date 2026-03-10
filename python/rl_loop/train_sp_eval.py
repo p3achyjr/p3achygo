@@ -40,6 +40,7 @@ flags.DEFINE_string(
     "local_run_dir", "/tmp/p3achygo", "Local path for temporary storage"
 )
 flags.DEFINE_bool("local_only", False, "Whether to run RL loop locally.")
+flags.DEFINE_string("chunk_dir", "", "Local directory to read training chunks from. Defaults to local_run_dir.")
 
 
 @dataclass
@@ -397,7 +398,12 @@ def main(_):
         return
 
     fs_mode = "local" if FLAGS.local_only else "gcs"
-    fs.configure_fs(mode=fs_mode, local_path=FLAGS.local_run_dir)
+    chunk_source_path = FLAGS.chunk_dir if FLAGS.chunk_dir else FLAGS.local_run_dir
+    fs.configure_fs(
+        mode=fs_mode,
+        local_path=FLAGS.local_run_dir,
+        chunk_source_path=chunk_source_path,
+    )
 
     sp_bin_path = Path(FLAGS.bin_dir, "selfplay")
     eval_bin_path = Path(FLAGS.bin_dir, "eval")
