@@ -157,7 +157,6 @@ int main(int argc, char** argv) {
       return 1;
     }
 
-    // Set static input dimensions
     const int num_planes = version >= 1 ? constants::kNumInputFeaturePlanesV1
                                         : constants::kNumInputFeaturePlanesV0;
     const int num_features = version >= 1
@@ -168,15 +167,25 @@ int main(int argc, char** argv) {
       std::string name = input->getName();
       LOG(INFO) << "Input " << i << ": " << static_cast<int>(input->getType())
                 << ", " << name << ", formats: " << input->getAllowedFormats();
-
-      if (name == "board_state") {
-        input->setDimensions(nv::Dims4(batch_size, 19, 19, num_planes));
-      } else if (name == "game_state") {
-        input->setDimensions(nv::Dims2(batch_size, num_features));
-      }
     }
 
     nvinfer1::IBuilderConfig* config = builder->createBuilderConfig();
+
+    // Optimization profile: dynamic batch in [1, batch_size].
+    nv::IOptimizationProfile* profile = builder->createOptimizationProfile();
+    profile->setDimensions("board_state", nv::OptProfileSelector::kMIN,
+                           nv::Dims4(1, 19, 19, num_planes));
+    profile->setDimensions("board_state", nv::OptProfileSelector::kOPT,
+                           nv::Dims4(batch_size, 19, 19, num_planes));
+    profile->setDimensions("board_state", nv::OptProfileSelector::kMAX,
+                           nv::Dims4(batch_size, 19, 19, num_planes));
+    profile->setDimensions("game_state", nv::OptProfileSelector::kMIN,
+                           nv::Dims2(1, num_features));
+    profile->setDimensions("game_state", nv::OptProfileSelector::kOPT,
+                           nv::Dims2(batch_size, num_features));
+    profile->setDimensions("game_state", nv::OptProfileSelector::kMAX,
+                           nv::Dims2(batch_size, num_features));
+    config->addOptimizationProfile(profile);
     const std::vector<char> timing_cache_blob = ReadFile(kTimingCachePath);
     std::unique_ptr<nvinfer1::ITimingCache> timingCache(
         config->createTimingCache(
