@@ -16,17 +16,17 @@ GOLDEN_CHUNK_DIR = "goldens"
 SP_CHUNK_DIR = "chunks"
 SGF_DIR = "sgf"
 
-GOLDEN_CHUNK_PREFIX = "chunk"
-GOLDEN_CHUNK_FORMAT = GOLDEN_CHUNK_PREFIX + "_{:04d}.tfrecord.zz"
-GOLDEN_CHUNK_RE = re.compile(GOLDEN_CHUNK_PREFIX + "_([0-9]+)\.tfrecord\.zz")
-GOLDEN_CHUNK_SIZE_FORMAT = GOLDEN_CHUNK_PREFIX + "_{:04d}.size"
-GOLDEN_CHUNK_SIZE_RE = re.compile(GOLDEN_CHUNK_PREFIX + "_([0-9]+)\.size")
-MODEL_PREFIX = "model"
-MODEL_FORMAT = MODEL_PREFIX + "_{:04d}.keras"
+GOLDEN_CHUNK_PREFIX = r"chunk"
+GOLDEN_CHUNK_FORMAT = GOLDEN_CHUNK_PREFIX + r"_{:04d}.tfrecord.zz"
+GOLDEN_CHUNK_RE = re.compile(GOLDEN_CHUNK_PREFIX + r"_([0-9]+)\.tfrecord\.zz")
+GOLDEN_CHUNK_SIZE_FORMAT = GOLDEN_CHUNK_PREFIX + r"_{:04d}.size"
+GOLDEN_CHUNK_SIZE_RE = re.compile(GOLDEN_CHUNK_PREFIX + r"_([0-9]+)\.size")
+MODEL_PREFIX = r"model"
+MODEL_FORMAT = MODEL_PREFIX + r"_{:04d}.keras"
 MODEL_RE = re.compile(MODEL_PREFIX + r"_([0-9]+)\.keras")
 
 # Keep in sync with //cc/shuffler/chunk_info.h
-SP_CHUNK_RE = re.compile("gen(\d+)_b(\d+)_g(\d+)_n(\d+)_t(\d+)_(.*)\.tfrecord\.zz")
+SP_CHUNK_RE = re.compile(r"gen(\d+)_b(\d+)_g(\d+)_n(\d+)_t(\d+)_(.*)\.tfrecord\.zz")
 
 DONE_PREFIX = "DONE"
 DONE_FILENAME = "DONE"

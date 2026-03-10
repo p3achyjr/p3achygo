@@ -353,12 +353,11 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
               ? gumbel_evaluator.SearchRoot(
                     probability, game, node_table.get(), root_node,
                     color_to_move,
-                    GumbelSearchParams{
-                        gumbel_n, gumbel_k, noise_scaling,
-                        /*disable_pass=*/false,
-                        /*early_stopping_enabled=*/!is_move_over_search,
-                        /*over_search_enabled=*/
-                        is_move_over_search})
+                    GumbelSearchParams{gumbel_n, gumbel_k, noise_scaling,
+                                       /*disable_pass=*/false,
+                                       /*early_stopping_enabled=*/false,
+                                       /*over_search_enabled=*/
+                                       false})
               : gumbel_evaluator.SearchRootPuct(
                     probability, game, node_table.get(), root_node,
                     color_to_move, gumbel_n,

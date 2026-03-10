@@ -7,11 +7,14 @@ from pathlib import Path
 from typing import Tuple, Callable
 
 LOCAL_PATH = ""
+CHUNK_SOURCE_PATH = ""
 MODE = "gcs"
 
 
-def _get_most_recent(prefix: str, num_fn: Callable[[str], int], sentinel: int) -> int:
-    dir = Path(LOCAL_PATH, prefix)
+def _get_most_recent(
+    base: str, prefix: str, num_fn: Callable[[str], int], sentinel: int
+) -> int:
+    dir = Path(base, prefix)
     most_recent = sentinel
     for blob in dir.iterdir():
         most_recent = max(num_fn(blob.name), most_recent)
@@ -19,28 +22,32 @@ def _get_most_recent(prefix: str, num_fn: Callable[[str], int], sentinel: int) -
     return most_recent
 
 
-def configure_fs(mode="gcs", local_path=""):
+def configure_fs(mode="gcs", local_path="", chunk_source_path=""):
     if mode not in ["local", "gcs"]:
         raise Exception(f"Invalid Mode: {mode}, Must be (local, gcs)")
     if mode == "local" and not local_path:
         raise Exception("Must pass a local path if using local storage.")
 
-    global MODE
-    global LOCAL_PATH
+    global MODE, LOCAL_PATH, CHUNK_SOURCE_PATH
     MODE = mode
     LOCAL_PATH = local_path
+    CHUNK_SOURCE_PATH = chunk_source_path or local_path
 
 
 def get_most_recent_model(run_id: str) -> int:
     if MODE == "gcs":
         return gcs.get_most_recent_model(run_id)
-    return _get_most_recent(str(Path(gcs.MODELS_DIR)), gcs._get_model_num, -1)
+    return _get_most_recent(
+        LOCAL_PATH, str(Path(gcs.MODELS_DIR)), gcs._get_model_num, -1
+    )
 
 
 def get_most_recent_model_cand(run_id: str) -> int:
     if MODE == "gcs":
         return gcs.get_most_recent_model_cand(run_id)
-    return _get_most_recent(str(Path(gcs.MODEL_CANDS_DIR)), gcs._get_model_num, -1)
+    return _get_most_recent(
+        LOCAL_PATH, str(Path(gcs.MODEL_CANDS_DIR)), gcs._get_model_num, -1
+    )
 
 
 def get_most_recent_chunk(run_id: str) -> int:
@@ -50,6 +57,7 @@ def get_most_recent_chunk(run_id: str) -> int:
     # Shuffler will write the size file after the chunk. We can use this as an
     # indicator for when the golden chunk is fully flushed.
     return _get_most_recent(
+        CHUNK_SOURCE_PATH,
         str(Path(gcs.GOLDEN_CHUNK_DIR)),
         lambda blob_path: gcs._get_num(blob_path, gcs.GOLDEN_CHUNK_SIZE_RE),
         0,
@@ -100,15 +108,27 @@ def upload_sgf(run_id: str, local_path: Path):
 
 
 def download_golden_chunk_size(run_id: str, local_chunk_dir: str, gen: int) -> str:
+    """local_chunk_dir is only used in GCS mode (download destination)."""
     if MODE == "gcs":
         return gcs.download_golden_chunk_size(run_id, local_chunk_dir, gen)
-    return str(Path(local_chunk_dir, gcs.GOLDEN_CHUNK_SIZE_FORMAT.format(gen)))
+    return str(
+        Path(
+            CHUNK_SOURCE_PATH,
+            gcs.GOLDEN_CHUNK_DIR,
+            gcs.GOLDEN_CHUNK_SIZE_FORMAT.format(gen),
+        )
+    )
 
 
 def download_golden_chunk(run_id: str, local_chunk_dir: str, gen: int) -> str:
+    """local_chunk_dir is only used in GCS mode (download destination)."""
     if MODE == "gcs":
         return gcs.download_golden_chunk(run_id, local_chunk_dir, gen)
-    return str(Path(local_chunk_dir, gcs.GOLDEN_CHUNK_FORMAT.format(gen)))
+    return str(
+        Path(
+            CHUNK_SOURCE_PATH, gcs.GOLDEN_CHUNK_DIR, gcs.GOLDEN_CHUNK_FORMAT.format(gen)
+        )
+    )
 
 
 def download_model(run_id: str, local_models_dir: str, gen: int) -> str:

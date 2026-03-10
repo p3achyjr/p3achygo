@@ -40,6 +40,7 @@ flags.DEFINE_string(
     "local_run_dir", "/tmp/p3achygo", "Local path for temporary storage"
 )
 flags.DEFINE_bool("local_only", False, "Whether to run RL loop locally.")
+flags.DEFINE_string("chunk_dir", "", "Local directory to read training chunks from. Defaults to local_run_dir.")
 
 
 @dataclass
@@ -279,16 +280,35 @@ def loop(
         )
         return
 
+    num_gpus = len(tf.config.list_physical_devices("GPU"))
+    num_sp_workers = max(num_gpus, 1)
+    logging.info(f"Detected {num_gpus} GPU(s). Starting {num_sp_workers} self-play worker(s).")
+
+    def start_sp():
+        queues = [Queue() for _ in range(num_sp_workers)]
+        threads = [
+            Thread(
+                target=sp.loop,
+                args=(sp_bin_path, run_id, local_run_dir, SELFPLAY_BATCH_SIZE, queues[i]),
+                kwargs={"gpu_device": i if num_gpus > 0 else None},
+            )
+            for i in range(num_sp_workers)
+        ]
+        for t in threads:
+            t.start()
+        return queues, threads
+
+    def stop_sp(queues, threads):
+        for q in queues:
+            q.put(())
+        for t in threads:
+            t.join()
+
     eval_res_path = str(Path(local_run_dir, "eval_res.txt"))
     while model_gen <= config.num_generations:
         # Start self-play.
         logging.info(f"Model Generation: {model_gen}")
-        sp_queue = Queue()
-        sp_thread = Thread(
-            target=sp.loop,
-            args=(sp_bin_path, run_id, local_run_dir, SELFPLAY_BATCH_SIZE, sp_queue),
-        )
-        sp_thread.start()
+        sp_queues, sp_threads = start_sp()
 
         # Poll GCS to check for the availability of a new golden chunk.
         latest_chunk_gen = fs.get_most_recent_chunk(run_id)
@@ -301,8 +321,7 @@ def loop(
             f"Found training chunk {latest_chunk_gen}."
             + f" Current generation is {model_gen}."
         )
-        sp_queue.put(())  # Send any message to trigger shutdown.
-        sp_thread.join()
+        stop_sp(sp_queues, sp_threads)
 
         next_model_gen = model_gen + 1
         chunk_path = fs.download_golden_chunk(
@@ -379,7 +398,12 @@ def main(_):
         return
 
     fs_mode = "local" if FLAGS.local_only else "gcs"
-    fs.configure_fs(mode=fs_mode, local_path=FLAGS.local_run_dir)
+    chunk_source_path = FLAGS.chunk_dir if FLAGS.chunk_dir else FLAGS.local_run_dir
+    fs.configure_fs(
+        mode=fs_mode,
+        local_path=FLAGS.local_run_dir,
+        chunk_source_path=chunk_source_path,
+    )
 
     sp_bin_path = Path(FLAGS.bin_dir, "selfplay")
     eval_bin_path = Path(FLAGS.bin_dir, "eval")

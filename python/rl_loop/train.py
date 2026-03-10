@@ -91,6 +91,22 @@ def train_one_gen(
     ds = ds.batch(batch_size)
     ds = ds.prefetch(tf.data.AUTOTUNE)
 
+    if not optimizer:
+        if config.optimizer == 'muon':
+            optimizer = keras.optimizers.Muon(learning_rate=lr_schedule)
+        else:
+            optimizer = keras.optimizers.SGD(
+                learning_rate=lr_schedule,
+                momentum=MOMENTUM,
+                global_clipnorm=20.0,
+                nesterov=True,
+            )
+        if is_gpu:
+            optimizer = keras.mixed_precision.LossScaleOptimizer(optimizer)
+
+    inner_optimizer = getattr(optimizer, 'inner_optimizer', optimizer)
+    logging.info(f"Optimizer: {type(inner_optimizer).__name__}")
+
     ss_manager = WeightSnapshotManager(get_ss_timestamps(num_batches))
     last_swa_weights = last_swa_model.get_weights()
     loss_coeffs = LossCoeffs.RLCoeffs()

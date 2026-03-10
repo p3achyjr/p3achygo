@@ -109,13 +109,17 @@ int main(int argc, char** argv) {
   std::unique_ptr<selfplay::GoExploitBuffer> go_exploit_buffer =
       std::make_unique<selfplay::GoExploitBuffer>();
 
+  std::vector<std::string> sink_names;
+  for (int thread_id = 0; thread_id < num_threads; ++thread_id) {
+    sink_names.push_back(
+        absl::StrFormat("/tmp/thread%d_%s_log.txt", thread_id, worker_id));
+  }
   std::vector<std::thread> threads;
   for (int thread_id = 0; thread_id < num_threads; ++thread_id) {
     size_t seed = absl::HashOf(worker_id, thread_id);
     std::thread thread(
         selfplay::Run, seed, thread_id, nn_interface.get(), game_recorder.get(),
-        go_exploit_buffer.get(),
-        absl::StrFormat("/tmp/thread%d_log.txt", thread_id),
+        go_exploit_buffer.get(), sink_names[thread_id],
         selfplay::SPConfig{
             absl::GetFlag(FLAGS_max_moves),
             selfplay::GumbelParams{absl::GetFlag(FLAGS_gumbel_selected_n),
@@ -132,6 +136,11 @@ int main(int argc, char** argv) {
 
   for (auto& thread : threads) {
     thread.join();
+  }
+
+  // Delete logfiles
+  for (const auto& sink_name : sink_names) {
+    std::remove(sink_name.c_str());
   }
 
   LOG(INFO) << "Self-Play Done!";
