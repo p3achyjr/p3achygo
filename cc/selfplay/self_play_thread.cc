@@ -306,6 +306,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       bool const is_move_over_search =
           probability.Uniform() < over_search_prob &&
           is_move_selected_for_training;
+      bool const early_stopping_enabled = !is_move_over_search;
       auto const [gumbel_n, gumbel_k, noise_scaling] = [&]() {
         int gumbel_n, gumbel_k;
         float noise_scaling = 1.0f;
@@ -353,11 +354,12 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
               ? gumbel_evaluator.SearchRoot(
                     probability, game, node_table.get(), root_node,
                     color_to_move,
-                    GumbelSearchParams{gumbel_n, gumbel_k, noise_scaling,
-                                       /*disable_pass=*/false,
-                                       /*early_stopping_enabled=*/false,
-                                       /*over_search_enabled=*/
-                                       false})
+                    GumbelSearchParams{
+                        gumbel_n, gumbel_k, noise_scaling,
+                        /*disable_pass=*/false,
+                        /*early_stopping_enabled=*/early_stopping_enabled,
+                        /*over_search_enabled=*/
+                        is_move_over_search})
               : gumbel_evaluator.SearchRootPuct(
                     probability, game, node_table.get(), root_node,
                     color_to_move, gumbel_n,

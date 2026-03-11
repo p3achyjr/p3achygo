@@ -15,9 +15,12 @@ from pathlib import Path
 NUM_BATCHES_FULL_CHECKPOINT = 1000
 
 
-def new_model(name: str, model_config="small") -> P3achyGoModel:
+def new_model(name: str, model_config="small", optimizer="sgd") -> P3achyGoModel:
+    config = ModelConfig.from_str(model_config)
+    if optimizer == "muon":
+        config.c_l2 = 0
     return P3achyGoModel.create(
-        config=ModelConfig.from_str(model_config),
+        config=config,
         board_len=BOARD_LEN,
         num_input_planes=num_input_planes(),
         num_input_features=num_input_features(),
