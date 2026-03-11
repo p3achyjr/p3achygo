@@ -292,7 +292,7 @@ class LossTracker:
     MAX_LOSS = float("inf")
 
     def __init__(self):
-        self.losses = []
+        self.n = 0
         self.min_losses = defaultdict(lambda: self.MAX_LOSS)
         self.avg_losses = defaultdict(lambda: 0)
 
@@ -327,25 +327,6 @@ class LossTracker:
             if result.pi_optimistic_loss is not None
             else 0.0
         )
-        self.losses.append(
-            {
-                "loss": loss,
-                "policy": policy_loss,
-                "policy_aux": policy_aux_loss,
-                "outcome": outcome_loss,
-                "score_pdf": score_pdf_loss,
-                "score_cdf": score_cdf_loss,
-                "own": own_loss,
-                "q6": q6_loss,
-                "q16": q16_loss,
-                "q50": q50_loss,
-                "q_err": q_err_loss,
-                "q_score": q_score_loss,
-                "q_score_err": q_score_err_loss,
-                "pi_soft": pi_soft_loss,
-                "pi_optimistic": pi_optimistic_loss,
-            }
-        )
 
         self.min_losses["loss"] = min(self.min_losses["loss"], loss)
         self.min_losses["policy"] = min(self.min_losses["policy"], policy_loss)
@@ -369,9 +350,9 @@ class LossTracker:
             self.min_losses["pi_optimistic"], pi_optimistic_loss
         )
 
-        n = len(self.losses)
-        r_m = (n - 1) / n
-        r_c = 1 / n
+        r_m = 0.99 if self.n > 0 else 0.0
+        r_c = 0.01 if self.n > 0 else 1.0
+        self.n += 1
         self.avg_losses["loss"] = self.avg_losses["loss"] * r_m + loss * r_c
         self.avg_losses["policy"] = self.avg_losses["policy"] * r_m + policy_loss * r_c
         self.avg_losses["policy_aux"] = (
@@ -667,9 +648,6 @@ def log_train(
         tf.summary.scalar(f"{mode_str}/q6", q6_avg, step=batch_num)
         tf.summary.scalar(f"{mode_str}/q16", q16_avg, step=batch_num)
         tf.summary.scalar(f"{mode_str}/q50", q50_avg, step=batch_num)
-
-    # Reset losses
-    losses.losses.clear()
 
 
 def log_board_position(

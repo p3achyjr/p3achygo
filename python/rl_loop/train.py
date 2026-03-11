@@ -93,7 +93,11 @@ def train_one_gen(
 
     if not optimizer:
         if config.optimizer == 'muon':
-            optimizer = keras.optimizers.Muon(learning_rate=lr_schedule)
+            optimizer = keras.optimizers.Muon(
+                learning_rate=lr_schedule,
+                exclude_layers=[r".*value_head\/.*"],
+                adam_weight_decay=0.01,
+            )
         else:
             optimizer = keras.optimizers.SGD(
                 learning_rate=lr_schedule,
@@ -115,6 +119,9 @@ def train_one_gen(
         loss_coeffs.w_q_score *= 0.5
         loss_coeffs.w_q_score_err *= 0.5
         loss_coeffs.w_pi_soft *= 0.25
+    if isinstance(inner_optimizer, keras.optimizers.Muon):
+        # observed severe overfitting for outcome head.
+        loss_coeffs.w_outcome *= 0.25
 
     logging.info(f"Loss Coefficients: {loss_coeffs}")
     old_batch_num = batch_num

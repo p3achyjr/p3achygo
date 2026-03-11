@@ -5,6 +5,7 @@ Starts Self-Play, then Trains when a chunk is ready, then runs Eval.
 from __future__ import annotations
 
 import gcs_utils as gcs
+import math
 import os, sys, time
 import rl_loop.config as config
 import rl_loop.sp_loop as sp
@@ -27,7 +28,12 @@ FLAGS = flags.FLAGS
 
 POLL_INTERVAL_S = 60
 EVAL_CACHE_SIZE = 32768
-NUM_EVAL_GAMES = 100
+MAX_EVAL_GAMES_PER_WORKER = 100
+TARGET_EVAL_GAMES = 200
+
+# Pool of GPU IDs used for both self-play and eval workers. Set in main().
+# Each worker is assigned one GPU from this pool.
+GPU_IDS: list[int] = []
 
 flags.DEFINE_string(
     "from_existing_run",
@@ -41,6 +47,11 @@ flags.DEFINE_string(
 )
 flags.DEFINE_bool("local_only", False, "Whether to run RL loop locally.")
 flags.DEFINE_string("chunk_dir", "", "Local directory to read training chunks from. Defaults to local_run_dir.")
+flags.DEFINE_string(
+    "gpu_ids",
+    "",
+    "Comma-separated GPU IDs for self-play and eval (e.g. '1,2,3'). Defaults to all detected GPUs.",
+)
 
 
 @dataclass
@@ -68,34 +79,50 @@ def eval(
     cur_model_path_trt = str(cur_p.parent / "_onnx" / (cur_p.stem + ".trt"))
     cand_model_path_trt = str(cand_p.parent / "_onnx" / (cand_p.stem + ".trt"))
 
-    env = os.environ.copy()
-    env["LD_PRELOAD"] = "/usr/local/lib/libmimalloc.so"
-    cmd = (
-        f"{eval_bin_path} --cur_model_path={cur_model_path_trt}"
-        + f" --cand_model_path={cand_model_path_trt}"
-        + f" --res_write_path={eval_res_path}"
-        + f" --recorder_path={local_run_dir}"
-        + f" --cache_size={EVAL_CACHE_SIZE}"
-        + f" --num_games={min(NUM_EVAL_GAMES, SELFPLAY_BATCH_SIZE)}"
-        + f" --cur_n={n} --cur_use_puct=1 --cur_use_lcb=1"
-        + f" --cand_n={n} --cand_use_puct=1 --cand_use_lcb=1"
+    num_workers = len(GPU_IDS)
+    games_per_worker = min(
+        math.ceil(TARGET_EVAL_GAMES / num_workers), MAX_EVAL_GAMES_PER_WORKER
     )
-    logging.info(f"Running Eval Command:\n'{cmd}'")
-    exit_code = proc.run_proc(cmd, env=env)
-    logging.info(f"Eval Exited with Status {exit_code}")
+    worker_res_paths = [f"{eval_res_path}_{i}" for i in range(num_workers)]
 
-    # Upload Eval SGFs. This is safe because the process has terminated.
+    def run_worker(i: int):
+        worker_env = os.environ.copy()
+        worker_env["LD_PRELOAD"] = "/usr/local/lib/libmimalloc.so"
+        worker_env["CUDA_VISIBLE_DEVICES"] = str(GPU_IDS[i])
+        cmd = (
+            f"{eval_bin_path} --cur_model_path={cur_model_path_trt}"
+            + f" --cand_model_path={cand_model_path_trt}"
+            + f" --res_write_path={worker_res_paths[i]}"
+            + f" --recorder_path={local_run_dir}"
+            + f" --cache_size={EVAL_CACHE_SIZE}"
+            + f" --num_games={games_per_worker}"
+            + f" --cur_n={n} --cur_use_puct=1 --cur_use_lcb=1"
+            + f" --cand_n={n} --cand_use_puct=1 --cand_use_lcb=1"
+        )
+        logging.info(f"Running Eval Worker {i} (GPU {GPU_IDS[i]}):\n'{cmd}'")
+        exit_code = proc.run_proc(cmd, env=worker_env)
+        logging.info(f"Eval Worker {i} Exited with Status {exit_code}")
+
+    threads = [Thread(target=run_worker, args=(i,)) for i in range(num_workers)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # Upload Eval SGFs. This is safe because all processes have terminated.
     _, _, _, _, local_sgf_dir = fs.ensure_local_dirs(local_run_dir)
     eval_sgfs = local_sgf_dir.glob("*EVAL*.sgf")
     for sgf in eval_sgfs:
         fs.upload_sgf(run_id, sgf)
 
-    with open(eval_res_path) as f:
-        cand_rel_elo = float(f.read())
-        winner = EvalResult.CUR if cand_rel_elo < 30 else EvalResult.CAND
-        logging.info(f"Winner: {winner}, Cand Elo: {cand_rel_elo}")
-
-        return EvalResult(winner, cand_rel_elo)
+    elos = []
+    for res_path in worker_res_paths:
+        with open(res_path) as f:
+            elos.append(float(f.read()))
+    cand_rel_elo = sum(elos) / len(elos)
+    winner = EvalResult.CUR if cand_rel_elo < 30 else EvalResult.CAND
+    logging.info(f"Winner: {winner}, Cand Elo: {cand_rel_elo} (per-worker: {elos})")
+    return EvalResult(winner, cand_rel_elo)
 
 
 def loop(
@@ -239,7 +266,9 @@ def loop(
         with tf.device("/cpu:0"):
             batch_size = SELFPLAY_BATCH_SIZE
             model = model_utils.new_model(
-                name=f"p3achygo", model_config=config.model_config
+                name=f"p3achygo",
+                model_config=config.model_config,
+                optimizer=config.optimizer,
             )
             model(
                 tf.convert_to_tensor(
@@ -280,19 +309,23 @@ def loop(
         )
         return
 
-    num_gpus = len(tf.config.list_physical_devices("GPU"))
-    num_sp_workers = max(num_gpus, 1)
-    logging.info(f"Detected {num_gpus} GPU(s). Starting {num_sp_workers} self-play worker(s).")
+    logging.info(f"Starting {len(GPU_IDS)} self-play worker(s) on GPUs {GPU_IDS}.")
 
     def start_sp():
-        queues = [Queue() for _ in range(num_sp_workers)]
+        queues = [Queue() for _ in range(len(GPU_IDS))]
         threads = [
             Thread(
                 target=sp.loop,
-                args=(sp_bin_path, run_id, local_run_dir, SELFPLAY_BATCH_SIZE, queues[i]),
-                kwargs={"gpu_device": i if num_gpus > 0 else None},
+                args=(
+                    sp_bin_path,
+                    run_id,
+                    local_run_dir,
+                    SELFPLAY_BATCH_SIZE,
+                    queues[i],
+                ),
+                kwargs={"gpu_device": GPU_IDS[i]},
             )
-            for i in range(num_sp_workers)
+            for i in range(len(GPU_IDS))
         ]
         for t in threads:
             t.start()
@@ -396,6 +429,13 @@ def main(_):
     if FLAGS.bin_dir == "":
         logging.error("No --bin_dir specified.")
         return
+
+    global GPU_IDS
+    if FLAGS.gpu_ids:
+        GPU_IDS = [int(x.strip()) for x in FLAGS.gpu_ids.split(",")]
+    else:
+        GPU_IDS = list(range(len(tf.config.list_physical_devices("GPU")))) or [0]
+    logging.info(f"Using GPU pool: {GPU_IDS}")
 
     fs_mode = "local" if FLAGS.local_only else "gcs"
     chunk_source_path = FLAGS.chunk_dir if FLAGS.chunk_dir else FLAGS.local_run_dir
