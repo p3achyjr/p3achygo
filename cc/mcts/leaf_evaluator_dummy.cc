@@ -9,9 +9,7 @@ using ::game::Loc;
 using ::game::Scores;
 
 LeafEvaluator::LeafEvaluator(nn::NNInterface* nn_interface, int thread_id)
-    : nn_interface_(nn_interface),
-      thread_id_(thread_id),
-      score_weight_(kDefaultScoreWeight) {}
+    : slot_(nn_interface, 0), thread_id_(thread_id), score_params_({}) {}
 
 void LeafEvaluator::EvaluateRoot(core::Probability& probability,
                                  const game::Game& game, TreeNode* node,

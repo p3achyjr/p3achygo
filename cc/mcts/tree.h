@@ -55,6 +55,7 @@ struct TreeNode final {
   std::array<float, constants::kMaxMovesPerPosition> move_probs{};
   float init_outcome_est = 0;
   float init_score_est = 0;
+  float init_score_var = 0;  // Var[score] under the NN's predicted distribution.
   float init_util_est = 0;  // mix value estimate and score estimate.
 
   inline TreeNode* child(int a) const {

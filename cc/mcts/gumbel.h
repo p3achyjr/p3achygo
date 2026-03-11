@@ -49,6 +49,8 @@ struct GumbelSearchParams {
 class GumbelEvaluator final {
  public:
   GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id);
+  GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id,
+                  ScoreUtilityParams score_params);
   ~GumbelEvaluator() = default;
 
   // Disable Copy and Move.

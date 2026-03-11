@@ -3,12 +3,15 @@
 #include <algorithm>
 #include <chrono>
 #include <sstream>
+#include <tuple>
 
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "cc/constants/constants.h"
 #include "cc/core/file_log_sink.h"
+#include "cc/core/heap.h"
 #include "cc/core/probability.h"
+#include "cc/game/color.h"
 #include "cc/game/game.h"
 #include "cc/mcts/gumbel.h"
 #include "cc/mcts/node_table.h"
@@ -199,6 +202,10 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
     // Tree roots throughout game (if logging full trees).
     std::vector<TreeNode*> search_roots;
+
+    // Starting positions throughout game.
+    std::vector<std::tuple<Color, Board, game::Loc, float>>
+        positions_for_regret;
 
     // Number of moves for which to sample directly from the policy.
     int const num_moves_raw_policy =
@@ -391,6 +398,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       root_scores.push_back(root_score);
       klds.push_back(gumbel_res.kld);
       visit_counts.push_back(gumbel_res.visits);
+      positions_for_regret.push_back(
+          {color_to_move, game.board(), move, q_post});
       if (-std::abs(root_q_outcome) < kDownBadThreshold) {
         ++num_consecutive_down_bad_moves;
       } else {
@@ -582,6 +591,47 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
     LOG_TO_SINK(INFO, sink) << "Black Score=" << game.result().bscore
                             << "  White Score=" << game.result().wscore;
+
+    struct RegretCmp {
+      bool operator()(
+          const std::tuple<int, Color, Board, Loc, float, float, float>& e0,
+          const std::tuple<int, Color, Board, Loc, float, float, float>& e1) {
+        return std::get<4>(e0) < std::get<4>(e1);
+      }
+    };
+    core::Heap<std::tuple<int, Color, Board, Loc, float, float, float>,
+               RegretCmp>
+        regret_buffer(RegretCmp{});
+    for (int mv_num = 0; mv_num < positions_for_regret.size(); ++mv_num) {
+      const auto& [color, board, move, v] = positions_for_regret[mv_num];
+      const float z = game.result().winner == color ? 1.5 : -1.5;
+      float regret = 0;
+      for (int future_mv = mv_num; future_mv < positions_for_regret.size();
+           ++future_mv) {
+        const auto& [color_this_turn, _, __, v_this_turn] =
+            positions_for_regret[mv_num];
+        const float v_mult = color_this_turn == color ? 1 : -1;
+        const float local_regret = v_mult * v_this_turn - z;
+        regret +=
+            local_regret * local_regret * std::pow(0.995, future_mv - mv_num);
+      }
+      regret /= (positions_for_regret.size() - mv_num);
+      regret_buffer.PushHeap({mv_num, color, board, move, regret, v, z});
+
+      LOG(INFO) << "Regret: " << regret << ", Color: " << int(color)
+                << ", Move: " << move << ", Board:\n"
+                << game::ToString(board.position());
+    }
+
+    for (int i = 0; i < 10; ++i) {
+      const auto& [mv_num, color, board, move, regret, v, z] =
+          regret_buffer.PopHeap();
+      LOG(INFO) << "Regret Index: " << i << ", Regret: " << regret
+                << ", Color: " << int(color) << ", Move Num: " << mv_num
+                << ", Move: " << move << ", v: " << v << ", z: " << z
+                << ", Board:\n"
+                << game::ToString(board.position());
+    }
 
     auto begin = std::chrono::high_resolution_clock::now();
     game_recorder->RecordGame(thread_id, init_state.board, game, mcts_pis,
