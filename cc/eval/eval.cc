@@ -1,6 +1,7 @@
 #include "cc/eval/eval.h"
 
 #include <chrono>
+#include <optional>
 #include <sstream>
 
 #include "cc/constants/constants.h"
@@ -9,6 +10,7 @@
 #include "cc/game/game.h"
 #include "cc/mcts/gumbel.h"
 #include "cc/mcts/node_table.h"
+#include "cc/mcts/search.h"
 
 #define LOG_TO_SINK(severity, sink) LOG(severity).ToSinkOnly(&sink)
 
@@ -38,66 +40,124 @@ std::string ToString(const Winner& winner) {
   return winner == Winner::kCur ? "CUR" : "CAND";
 }
 
+// Converts a PlayerSearchConfig into Search::Params for parallel search.
+// The Gumbel path in PlayEvalGame does not use this; it is here so that
+// integrating parallel search is a mechanical substitution.
+mcts::Search::Params MakeSearchParams(const eval::PlayerSearchConfig& cfg) {
+  // Root selection policy: puct_root_policy takes priority over use_lcb.
+  mcts::PuctRootSelectionPolicy root_policy;
+  if (cfg.puct_root_policy == "visit_count") {
+    root_policy = mcts::PuctRootSelectionPolicy::kVisitCount;
+  } else if (cfg.puct_root_policy == "visit_count_sample") {
+    root_policy = mcts::PuctRootSelectionPolicy::kVisitCountSample;
+  } else if (cfg.puct_root_policy == "lcb" || cfg.puct_root_policy.empty()) {
+    // Empty = fall back to legacy use_lcb bool.
+    root_policy = (cfg.puct_root_policy == "lcb" || cfg.use_lcb)
+                      ? mcts::PuctRootSelectionPolicy::kLcb
+                      : mcts::PuctRootSelectionPolicy::kVisitCount;
+  } else {
+    root_policy = mcts::PuctRootSelectionPolicy::kLcb;  // safe default
+  }
+
+  // Q function.
+  mcts::QFnKind q_fn_kind;
+  if (cfg.q_fn == "identity") {
+    q_fn_kind = mcts::QFnKind::kIdentity;
+  } else if (cfg.q_fn == "virtual_loss_soft") {
+    q_fn_kind = mcts::QFnKind::kVirtualLossSoft;
+  } else {
+    q_fn_kind = mcts::QFnKind::kVirtualLoss;
+  }
+
+  // N function.
+  mcts::NFnKind n_fn_kind = (cfg.n_fn == "identity")
+                                ? mcts::NFnKind::kIdentity
+                                : mcts::NFnKind::kVirtualVisit;
+
+  // Collision policy.
+  mcts::CollisionPolicyKind collision_policy;
+  if (cfg.collision_policy == "retry") {
+    collision_policy = mcts::CollisionPolicyKind::kRetry;
+  } else if (cfg.collision_policy == "smart_retry") {
+    collision_policy = mcts::CollisionPolicyKind::kSmartRetry;
+  } else {
+    collision_policy = mcts::CollisionPolicyKind::kAbort;
+  }
+
+  // Collision detector.
+  mcts::CollisionDetectorKind collision_detector;
+  if (cfg.collision_detector == "n_in_flight") {
+    collision_detector = mcts::CollisionDetectorKind::kNInFlight;
+  } else if (cfg.collision_detector == "level_saturation") {
+    collision_detector = mcts::CollisionDetectorKind::kLevelSaturation;
+  } else if (cfg.collision_detector == "product") {
+    collision_detector = mcts::CollisionDetectorKind::kProduct;
+  } else {
+    collision_detector = mcts::CollisionDetectorKind::kNoOp;
+  }
+
+  return mcts::Search::Params{
+      .num_threads = cfg.num_threads_per_game,
+      .total_visit_budget = cfg.visit_budget,
+      .total_visit_time_ms = cfg.time_ms,
+      .puct_params =
+          mcts::PuctParams{
+              .kind = root_policy,
+              .c_puct = cfg.c_puct,
+              .c_puct_visit_scaling = cfg.c_puct_visit_scaling,
+              .c_puct_v_2 = cfg.c_puct_v_2,
+              .use_puct_v = cfg.use_puct_v,
+              .enable_var_scaling = cfg.var_scale_cpuct,
+              .tau = cfg.tau,
+          },
+      .q_fn_kind = q_fn_kind,
+      .n_fn_kind = n_fn_kind,
+      .descent_policy_kind = mcts::DescentPolicyKind::kDeterministic,
+      .collision_policy_kind = collision_policy,
+      .collision_detector_kind = collision_detector,
+      .vl_delta = cfg.vl_delta,
+      .max_collision_retries = cfg.max_collision_retries,
+  };
+}
+
 }  // namespace
 
-void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
+// Returns true when a player's config calls for the parallel mcts::Search path
+// (either >1 thread per game, or time-control which Gumbel does not support).
+static bool UsesParallelSearch(const eval::PlayerSearchConfig& cfg) {
+  return cfg.num_threads_per_game > 1 || cfg.time_ms > 0;
+}
+
+void PlayEvalGame(size_t seed, int game_id, NNInterface* cur_nn,
                   NNInterface* cand_nn, std::string logfile,
                   std::promise<EvalResult> result,
                   recorder::GameRecorder* recorder, EvalConfig config) {
   FileSink sink(logfile.c_str());
   Probability probability(seed);
   auto search_dur_ema = 0;
-  bool cur_is_black = thread_id % 2 == 0;
+  bool cur_is_black = game_id % 2 == 0;
   NNInterface* black_nn = cur_is_black ? cur_nn : cand_nn;
   NNInterface* white_nn = cur_is_black ? cand_nn : cur_nn;
 
-  // Unpack config.
-  std::string cur_name = config.cur_name;
-  std::string cand_name = config.cand_name;
-  int cur_n = config.cur_n;
-  int cur_k = config.cur_k;
-  int cand_n = config.cand_n;
-  int cand_k = config.cand_k;
+  // Per-color config references. black_cfg/white_cfg are stable for the game;
+  // active_cfg points to whichever color is to move each ply.
+  const eval::PlayerSearchConfig& black_cfg =
+      cur_is_black ? config.cur : config.cand;
+  const eval::PlayerSearchConfig& white_cfg =
+      cur_is_black ? config.cand : config.cur;
+  const eval::PlayerSearchConfig& cur_cfg = config.cur;
+  const eval::PlayerSearchConfig& cand_cfg = config.cand;
 
   // Setup eval game.
-  int n_b = cur_is_black ? cur_n : cand_n;
-  int k_b = cur_is_black ? cur_k : cand_k;
-  int n_w = cur_is_black ? cand_n : cur_n;
-  int k_w = cur_is_black ? cand_k : cur_k;
-  float noise_scaling_b =
-      cur_is_black ? config.cur_noise_scaling : config.cand_noise_scaling;
-  float noise_scaling_w =
-      cur_is_black ? config.cand_noise_scaling : config.cur_noise_scaling;
-  bool use_puct_b = cur_is_black ? config.cur_use_puct : config.cand_use_puct;
-  bool use_puct_w = cur_is_black ? config.cand_use_puct : config.cur_use_puct;
-  bool use_lcb_b = cur_is_black ? config.cur_use_lcb : config.cand_use_lcb;
-  bool use_lcb_w = cur_is_black ? config.cand_use_lcb : config.cur_use_lcb;
-  float c_puct_b = cur_is_black ? config.cur_c_puct : config.cand_c_puct;
-  float c_puct_w = cur_is_black ? config.cand_c_puct : config.cur_c_puct;
-  float var_scale_cpuct_b =
-      cur_is_black ? config.cur_var_scale_cpuct : config.cand_var_scale_cpuct;
-  float var_scale_cpuct_w =
-      cur_is_black ? config.cand_var_scale_cpuct : config.cur_var_scale_cpuct;
-  bool use_mcgs_b = cur_is_black ? config.cur_use_mcgs : config.cand_use_mcgs;
-  bool use_mcgs_w = cur_is_black ? config.cand_use_mcgs : config.cur_use_mcgs;
-  bool use_puct_v_b =
-      cur_is_black ? config.cur_use_puct_v : config.cand_use_puct_v;
-  bool use_puct_v_w =
-      cur_is_black ? config.cand_use_puct_v : config.cur_use_puct_v;
-  float c_puct_v_2_b =
-      cur_is_black ? config.cur_c_puct_v_2 : config.cand_c_puct_v_2;
-  float c_puct_v_2_w =
-      cur_is_black ? config.cand_c_puct_v_2 : config.cur_c_puct_v_2;
-
   Game game;
   std::unique_ptr<NodeTable> node_table_b;
-  if (use_mcgs_b) {
+  if (black_cfg.use_mcgs) {
     node_table_b = std::make_unique<McgsNodeTable>();
   } else {
     node_table_b = std::make_unique<MctsNodeTable>();
   }
   std::unique_ptr<NodeTable> node_table_w;
-  if (use_mcgs_w) {
+  if (white_cfg.use_mcgs) {
     node_table_w = std::make_unique<McgsNodeTable>();
   } else {
     node_table_w = std::make_unique<MctsNodeTable>();
@@ -112,8 +172,29 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
   // Track root history for tree logging
   std::vector<TreeNode*> root_history;
 
-  GumbelEvaluator gumbel_b(black_nn, thread_id);
-  GumbelEvaluator gumbel_w(white_nn, thread_id);
+  // Determine search path per color.
+  const bool black_uses_search = UsesParallelSearch(black_cfg);
+  const bool white_uses_search = UsesParallelSearch(white_cfg);
+
+  // task_offset for parallel search: each game owns a contiguous slice of
+  // thread IDs [game_id * N, (game_id+1) * N).  For Gumbel (1 thread/game)
+  // the NNInterface thread ID equals game_id, encoded via the legacy
+  // GumbelEvaluator(nn_interface, game_id) constructor.
+  std::optional<GumbelEvaluator> gumbel_b, gumbel_w;
+  std::optional<Search> search_b, search_w;
+  if (black_uses_search) {
+    search_b.emplace(
+        black_nn->MakeSlot(game_id * black_cfg.num_threads_per_game));
+  } else {
+    gumbel_b.emplace(black_nn, game_id);
+  }
+  if (white_uses_search) {
+    search_w.emplace(
+        white_nn->MakeSlot(game_id * white_cfg.num_threads_per_game));
+  } else {
+    gumbel_w.emplace(white_nn, game_id);
+  }
+
   auto color_to_move = BLACK;
   while (!game.IsGameOver()) {
     TreeNode*& player_tree = color_to_move == BLACK ? btree : wtree;
@@ -124,7 +205,10 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
         color_to_move == BLACK ? node_table_b.get() : node_table_w.get();
     NodeTable* opp_table =
         color_to_move == BLACK ? node_table_w.get() : node_table_b.get();
-    GumbelEvaluator& gumbel = color_to_move == BLACK ? gumbel_b : gumbel_w;
+    const bool active_uses_search =
+        color_to_move == BLACK ? black_uses_search : white_uses_search;
+    const eval::PlayerSearchConfig& active_cfg =
+        color_to_move == BLACK ? black_cfg : white_cfg;
 
     // NN statistics.
     float cur_qz_nn = cur_tree->init_outcome_est;
@@ -144,32 +228,37 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
     float cur_var_pre = VVar(cur_tree);
     float cand_var_pre = VVar(cand_tree);
 
-    // Search.
-    int n = color_to_move == BLACK ? n_b : n_w;
-    int k = color_to_move == BLACK ? k_b : k_w;
-    float noise_scaling =
-        color_to_move == BLACK ? noise_scaling_b : noise_scaling_w;
-    bool use_puct = color_to_move == BLACK ? use_puct_b : use_puct_w;
-    bool use_lcb = color_to_move == BLACK ? use_lcb_b : use_lcb_w;
-    float c_puct = color_to_move == BLACK ? c_puct_b : c_puct_w;
-    bool var_scale_cpuct =
-        color_to_move == BLACK ? var_scale_cpuct_b : var_scale_cpuct_w;
-    bool use_mcgs = color_to_move == BLACK ? use_mcgs_b : use_mcgs_w;
-    bool use_puct_v = color_to_move == BLACK ? use_puct_v_b : use_puct_v_w;
-    float c_puct_v_2 = color_to_move == BLACK ? c_puct_v_2_b : c_puct_v_2_w;
+    // Search: dispatch to mcts::Search (parallel/time-control) or Gumbel.
     auto begin = std::chrono::high_resolution_clock::now();
-    GumbelResult gumbel_res =
-        use_puct
-            ? gumbel.SearchRootPuct(
-                  probability, game, player_table, player_tree, color_to_move,
-                  n,
-                  PuctParams{use_lcb ? PuctRootSelectionPolicy::kLcb
-                                     : PuctRootSelectionPolicy::kVisitCount,
-                             c_puct, 0.45f, c_puct_v_2, use_puct_v,
-                             var_scale_cpuct, 1.0f})
-            : gumbel.SearchRoot(probability, game, player_table, player_tree,
-                                color_to_move,
-                                mcts::GumbelSearchParams{n, k, noise_scaling});
+    Loc move;
+    int num_aborted = 0, num_collisions = 0;
+    if (active_uses_search) {
+      Search& s = color_to_move == BLACK ? *search_b : *search_w;
+      Search::Result res = s.Run(probability, game, player_table, player_tree,
+                                 color_to_move, MakeSearchParams(active_cfg));
+      move = res.move;
+      num_aborted = res.num_aborted;
+      num_collisions = res.num_collisions;
+    } else {
+      GumbelEvaluator& gumbel =
+          color_to_move == BLACK ? *gumbel_b : *gumbel_w;
+      GumbelResult gumbel_res =
+          active_cfg.use_puct
+              ? gumbel.SearchRootPuct(
+                    probability, game, player_table, player_tree, color_to_move,
+                    active_cfg.n,
+                    PuctParams{active_cfg.use_lcb
+                                   ? PuctRootSelectionPolicy::kLcb
+                                   : PuctRootSelectionPolicy::kVisitCount,
+                               active_cfg.c_puct, 0.45f, active_cfg.c_puct_v_2,
+                               active_cfg.use_puct_v, active_cfg.var_scale_cpuct,
+                               1.0f})
+              : gumbel.SearchRoot(
+                    probability, game, player_table, player_tree, color_to_move,
+                    mcts::GumbelSearchParams{active_cfg.n, active_cfg.k,
+                                            active_cfg.noise_scaling});
+      move = gumbel_res.mcts_move;
+    }
     auto end = std::chrono::high_resolution_clock::now();
     if (VOutcome(player_tree) < kResignThreshold) {
       LOG_TO_SINK(INFO, sink) << "Player " << ToString(color_to_move)
@@ -191,7 +280,6 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
     float cand_var_post = VVar(cand_tree);
 
     // Commit move changes.
-    Loc move = gumbel_res.mcts_move;
     float move_q = Q(player_tree, move);
     game.PlayMove(move, color_to_move);
     color_to_move = OppositeColor(color_to_move);
@@ -235,12 +323,18 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
       std::string root_color = ToString(OppositeColor(color_to_move));
       std::stringstream s;
       s << "\n----- Move Num: " << game.num_moves() << " -----\n";
-      s << "N: " << n << ", K: " << k << ", Noise Scaling: " << noise_scaling
-        << ", PUCT: " << use_puct << ", LCB: " << use_lcb
-        << ", cPUCT: " << c_puct << ", cPUCT Var Scaling: " << var_scale_cpuct
-        << ", MCGS: " << use_mcgs << ", PUCT-V: " << use_puct_v
-        << ", cPUCT_2: " << c_puct_v_2 << "\n";
-      s << "Gumbel Move: " << move << ", q: " << move_q << "\n";
+      s << "N: " << active_cfg.n << ", K: " << active_cfg.k
+        << ", Noise Scaling: " << active_cfg.noise_scaling
+        << ", PUCT: " << active_cfg.use_puct
+        << ", LCB: " << active_cfg.use_lcb
+        << ", cPUCT: " << active_cfg.c_puct
+        << ", cPUCT Var Scaling: " << active_cfg.var_scale_cpuct
+        << ", MCGS: " << active_cfg.use_mcgs
+        << ", PUCT-V: " << active_cfg.use_puct_v
+        << ", cPUCT_2: " << active_cfg.c_puct_v_2 << "\n";
+      s << "Gumbel Move: " << move << ", q: " << move_q
+        << ", Aborts: " << num_aborted << ", Collisions: " << num_collisions
+        << "\n";
       s << "Last 5 Moves: " << game.move(game.num_moves() - 5) << ", "
         << game.move(game.num_moves() - 4) << ", "
         << game.move(game.num_moves() - 3) << ", "
@@ -287,8 +381,18 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
     }();
   }
 
-  cur_nn->UnregisterThread(thread_id);
-  cand_nn->UnregisterThread(thread_id);
+  // Unregister from NN interfaces. Parallel search tasks decrement the shared
+  // task counter; Gumbel threads decrement the registered-thread count.
+  if (UsesParallelSearch(config.cur)) {
+    cur_nn->UnregisterSearchTask();
+  } else {
+    cur_nn->UnregisterThread(game_id);
+  }
+  if (UsesParallelSearch(config.cand)) {
+    cand_nn->UnregisterSearchTask();
+  } else {
+    cand_nn->UnregisterThread(game_id);
+  }
   game.WriteResult();
 
   if (player_resigned != EMPTY) {
@@ -316,11 +420,11 @@ void PlayEvalGame(size_t seed, int thread_id, NNInterface* cur_nn,
             << (player_resigned != EMPTY ? "R"
                                          : absl::StrFormat("%.1f", score_diff))
             << ", Black Score: " << game_result.bscore
-            << ", White Score: " << game_result.wscore << " (" << thread_id
+            << ", White Score: " << game_result.wscore << " (" << game_id
             << ")";
 
-  const std::string& b_name = cur_is_black ? cur_name : cand_name;
-  const std::string& w_name = cur_is_black ? cand_name : cur_name;
-  recorder->RecordEvalGame(thread_id, game, b_name, w_name);
+  const std::string& b_name = black_cfg.name;
+  const std::string& w_name = white_cfg.name;
+  recorder->RecordEvalGame(game_id, game, b_name, w_name);
   result.set_value(EvalResult{winner, game.num_moves()});
 }

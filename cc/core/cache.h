@@ -38,12 +38,18 @@ class Cache final {
   }
 
   void Insert(const K& key, const V& val) {
+    if (size_ == 0) {
+      return;
+    }
     size_t hash = absl::HashOf(key);
     size_t tbl_index = hash % size_;
     cache_[tbl_index] = Entry{hash, val};
   }
 
   bool Contains(const K& key) {
+    if (size_ == 0) {
+      return false;
+    }
     size_t hash = absl::HashOf(key);
     size_t tbl_index = hash % size_;
     const std::optional<Entry>& elem = cache_[tbl_index];
@@ -55,6 +61,9 @@ class Cache final {
   }
 
   std::optional<V> Get(const K& key) {
+    if (size_ == 0) {
+      return std::nullopt;
+    }
     size_t hash = absl::HashOf(key);
     size_t tbl_index = hash % size_;
     const std::optional<Entry>& elem = cache_[tbl_index];

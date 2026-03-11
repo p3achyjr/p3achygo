@@ -66,20 +66,6 @@ float Ucb(const TreeNode* node, int action, float alpha) {
   return ConfidenceInterval(node, action, alpha).second;
 }
 
-void AdvanceState(TreeNode* node) {
-  if (node == nullptr) return;
-  switch (node->state) {
-    case TreeNodeState::kNew:
-      node->state = TreeNodeState::kNnEvaluated;
-      break;
-    case TreeNodeState::kNnEvaluated:
-      node->state = TreeNodeState::kExpanded;
-      break;
-    case TreeNodeState::kExpanded:
-      break;
-  }
-}
-
 #ifdef V_CATEGORICAL
 std::string VCategoricalHistogram(TreeNode* node) {
   if (node == nullptr) return "";

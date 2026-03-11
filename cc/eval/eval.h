@@ -4,6 +4,7 @@
 #include <future>
 #include <optional>
 
+#include "cc/eval/player_config.h"
 #include "cc/game/board.h"
 #include "cc/game/color.h"
 #include "cc/game/zobrist.h"
@@ -16,28 +17,8 @@ enum class Winner : uint8_t {
 };
 
 struct EvalConfig {
-  const std::string cur_name;
-  const std::string cand_name;
-  const int cur_n;
-  const int cur_k;
-  const int cand_n;
-  const int cand_k;
-  const float cur_noise_scaling;
-  const float cand_noise_scaling;
-  const bool cur_use_puct;
-  const bool cur_use_lcb;
-  const float cur_c_puct;
-  const bool cur_var_scale_cpuct;
-  const bool cand_use_puct;
-  const bool cand_use_lcb;
-  const float cand_c_puct;
-  const bool cand_var_scale_cpuct;
-  const bool cur_use_mcgs;
-  const bool cand_use_mcgs;
-  const bool cur_use_puct_v;
-  const bool cand_use_puct_v;
-  const float cur_c_puct_v_2;
-  const float cand_c_puct_v_2;
+  eval::PlayerSearchConfig cur;
+  eval::PlayerSearchConfig cand;
 };
 
 struct EvalResult {
@@ -46,7 +27,7 @@ struct EvalResult {
   int roots_shared;
 };
 
-void PlayEvalGame(size_t seed, int thread_id, nn::NNInterface* cur_nn,
+void PlayEvalGame(size_t seed, int game_id, nn::NNInterface* cur_nn,
                   nn::NNInterface* cand_nn, std::string logfile,
                   std::promise<EvalResult> result,
                   recorder::GameRecorder* recorder, EvalConfig config);

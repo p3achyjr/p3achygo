@@ -28,6 +28,7 @@ if(BUILD_BINARIES)
         engine_factory
         absl::flags
         absl::flags_parse
+        absl::flags_reflection
         absl::hash
         absl::log
         absl::check

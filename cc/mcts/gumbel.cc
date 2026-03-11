@@ -378,7 +378,8 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
       }
 
       // update qvalue
-      TreeNode* child = root->children[move_info.move_encoding];
+      TreeNode* child = root->children[move_info.move_encoding].load(
+          std::memory_order_relaxed);
       auto child_q = -V(child);
       move_info.qtransform = QTransform(child_q, MaxN(root));
     }
@@ -497,7 +498,7 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
   auto sample_action_from_visits =
       [&](const std::array<float, constants::kMaxMovesPerPosition>&
               visit_counts,
-          float tau) {
+          const float tau) {
         std::array<float, constants::kMaxMovesPerPosition> policy;
 
         // Compute empirical policy.
@@ -641,8 +642,6 @@ GumbelEvaluator::SearchPath GumbelEvaluator::Search(
   if (leaf_node->state == TreeNodeState::kNew) {
     leaf_evaluator_.EvaluateLeaf(probability, game, leaf_node, color_to_move,
                                  root_color, root_score_est);
-  } else {
-    leaf_node->n += 1;
   }
 
   if (game.IsGameOver() && !leaf_node->is_terminal) {
@@ -657,67 +656,42 @@ GumbelEvaluator::SearchPath GumbelEvaluator::Search(
 
 void GumbelEvaluator::Backward(SearchPath& path, bool use_idempotent_updates) {
   auto [_, leaf] = path.back();
-  float leaf_q = leaf->v;
-  float leaf_q_outcome = leaf->v_outcome;
+  float leaf_q = leaf->init_util_est;
+  float leaf_q_outcome = leaf->init_outcome_est;
   float leaf_score = leaf->init_score_est;
 
-  for (int i = path.size() - 2; i >= 0; --i) {
+  for (int i = path.size() - 1; i >= 0; --i) {
     auto [parent_action, parent] = path[i];
-    auto [child_action, child] = path[i + 1];
     float leaf_q_mult =
         leaf->color_to_move == parent->color_to_move ? 1.0f : -1.0f;
 
-    SingleBackup(parent, child, parent_action, leaf_q_mult * leaf_q,
-                 leaf_q_mult * leaf_q_outcome, leaf_q_mult * leaf_score,
+    SingleBackup(parent, parent_action, i == path.size() - 1,
+                 leaf_q_mult * leaf_q, leaf_q_mult * leaf_q_outcome,
+                 leaf_q_mult * leaf_score,
                  leaf_q_mult * use_idempotent_updates);
   }
 }
 
-void GumbelEvaluator::SingleBackup(TreeNode* node, TreeNode* child,
-                                   game::Loc action, float leaf_q,
+void GumbelEvaluator::SingleBackup(TreeNode* node, game::Loc action,
+                                   bool is_leaf, float leaf_q,
                                    float leaf_q_outcome, float leaf_score,
                                    bool is_idempotent) {
+  if (is_leaf) {
+    node->n += 1;
+    node->w = node->init_util_est;
+    node->w_outcome = node->init_outcome_est;
+    node->v = node->init_util_est;
+    node->v_outcome = node->init_outcome_est;
+    return;
+  }
+
   const int a = game::AsIndex(action, BOARD_LEN);
   float v_old = node->v, v_outcome_old = node->v_outcome, n_old = node->n;
   node->n += 1;
   node->child_visits[a] += 1;
   if (is_idempotent) {
     // recompute.
-    float w = node->init_util_est, w_outcome = node->init_outcome_est,
-          total_score = node->init_score_est;
-    for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
-      // flip signs.
-      w -= (node->child_visits[a] * V(node->child(a)));
-      w_outcome -= (node->child_visits[a] * VOutcome(node->child(a)));
-      total_score -= (node->child_visits[a] * Score(node->child(a)));
-    }
-    float v = w / node->n;
-    float v_outcome = w_outcome / node->n;
-    float score = total_score / node->n;
-    node->w = w;
-    node->w_outcome = w_outcome;
-    node->v = v;
-    node->v_outcome = v_outcome;
-    node->score = score;
-
-    // Variance of a mixture distribution.
-    // Var(Y) = (1/N) * sum(i : 0...k) ni(vi + (mi - m)^2)
-    float m2 = (node->init_util_est - v) * (node->init_util_est - v);
-    float m2_outcome = (node->init_outcome_est - v_outcome) *
-                       (node->init_outcome_est - v_outcome);
-    for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
-      if (node->child_visits[a] == 0) {
-        continue;
-      }
-
-      float dv = Q(node, a) - v;
-      float dv_outcome = QOutcome(node, a) - v_outcome;
-      m2 += node->child_visits[a] * (node->child(a)->v_var + dv * dv);
-      m2_outcome += node->child_visits[a] *
-                    (node->child(a)->v_outcome_var + dv_outcome * dv_outcome);
-    }
-    node->v_var = m2 / node->n;
-    node->v_outcome_var = m2_outcome / node->n;
+    RecomputeNodeStats(node);
   } else {
     // incremental
     node->w += leaf_q;
@@ -733,10 +707,10 @@ void GumbelEvaluator::SingleBackup(TreeNode* node, TreeNode* child,
         n_old * node->v_outcome_var +
         (leaf_q_outcome - v_outcome_old) * (leaf_q_outcome - node->v_outcome);
     node->v_outcome_var /= node->n;
-  }
-  int child_n = node->child_visits[a];
-  if (child_n > node->max_child_n) {
-    node->max_child_n = child_n;
+    int child_n = node->child_visits[a];
+    if (child_n > node->max_child_n) {
+      node->max_child_n = child_n;
+    }
   }
 
 #ifdef V_CATEGORICAL

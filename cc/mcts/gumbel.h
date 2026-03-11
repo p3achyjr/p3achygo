@@ -86,7 +86,7 @@ class GumbelEvaluator final {
   void Backward(SearchPath& path, bool use_idempotent_updates);
 
   // Single Backward Step.
-  void SingleBackup(TreeNode* node, TreeNode* child, game::Loc action,
+  void SingleBackup(TreeNode* node, game::Loc action, bool is_leaf,
                     float leaf_q, float leaf_q_outcome, float leaf_score,
                     bool is_idempotent = false);
 
