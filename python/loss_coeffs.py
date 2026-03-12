@@ -39,7 +39,7 @@ class LossCoeffs:
             0.4,  # q16
             0.3,  # q50
             0.005,  # gamma
-            5.0,  # q err
+            3.0,  # q err
             0.2,  # short-term score
             0.2,  # short-term score err
             4.0,  # soft policy

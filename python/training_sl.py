@@ -27,6 +27,7 @@ from model_config import ModelConfig, CONFIG_OPTIONS
 from pathlib import Path
 
 from loss_coeffs import LossCoeffs
+from optimizer import ConvMuon
 
 sys.stdout.reconfigure(line_buffering=True)  # pytype: disable=attribute-error
 sys.stderr.reconfigure(line_buffering=True)  # pytype: disable=attribute-error
@@ -96,7 +97,7 @@ def main(_):
         )
         optimizer = model.optimizer
     if optimizer is None and model.is_transformer:
-        optimizer = keras.optimizers.Muon(learning_rate=lr)
+        optimizer = ConvMuon(learning_rate=lr)
 
     # setup train ds.
     train_ds = tf.data.Dataset.from_tensor_slices(train_shards)
