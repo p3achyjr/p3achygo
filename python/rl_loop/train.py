@@ -13,6 +13,7 @@ from model import P3achyGoModel
 from rl_loop.config import RunConfig
 from weight_snapshot import WeightSnapshotManager
 from loss_coeffs import LossCoeffs
+from optimizer import ConvMuon
 
 EPOCHS_PER_GEN = 1
 MOMENTUM = 0.9
@@ -92,10 +93,10 @@ def train_one_gen(
     ds = ds.prefetch(tf.data.AUTOTUNE)
 
     if not optimizer:
-        if config.optimizer == 'muon':
-            optimizer = keras.optimizers.Muon(
+        if config.optimizer == "muon":
+            optimizer = ConvMuon(
                 learning_rate=lr_schedule,
-                exclude_layers=[r".*value_head\/.*"],
+                exclude_layers=[r".*policy_head\/.*", r".*value_head\/.*"],
                 adam_weight_decay=0.01,
             )
         else:
@@ -108,7 +109,7 @@ def train_one_gen(
         if is_gpu:
             optimizer = keras.mixed_precision.LossScaleOptimizer(optimizer)
 
-    inner_optimizer = getattr(optimizer, 'inner_optimizer', optimizer)
+    inner_optimizer = getattr(optimizer, "inner_optimizer", optimizer)
     logging.info(f"Optimizer: {type(inner_optimizer).__name__}")
 
     ss_manager = WeightSnapshotManager(get_ss_timestamps(num_batches))
@@ -119,9 +120,9 @@ def train_one_gen(
         loss_coeffs.w_q_score *= 0.5
         loss_coeffs.w_q_score_err *= 0.5
         loss_coeffs.w_pi_soft *= 0.25
-    if isinstance(inner_optimizer, keras.optimizers.Muon):
+    if isinstance(inner_optimizer, ConvMuon):
         # observed severe overfitting for outcome head.
-        loss_coeffs.w_outcome *= 0.25
+        loss_coeffs.w_outcome *= 0.4
 
     logging.info(f"Loss Coefficients: {loss_coeffs}")
     old_batch_num = batch_num
