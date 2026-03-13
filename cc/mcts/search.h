@@ -22,6 +22,7 @@ using SearchPath = absl::InlinedVector<PathElem, 128>;
 
 enum class DescentPolicyKind : uint8_t {
   kDeterministic = 0,
+  kBuUct = 1,
 };
 
 enum class CollisionPolicyKind : uint8_t {
@@ -74,6 +75,10 @@ struct GlobalSearchState {
 
 class Search final {
  public:
+  enum class Mode {
+    kConcurrent = 0,
+    kBatch = 1,
+  };
   struct Params {
     int num_threads;
     int total_visit_budget;
@@ -84,8 +89,10 @@ class Search final {
     DescentPolicyKind descent_policy_kind;
     CollisionPolicyKind collision_policy_kind;
     CollisionDetectorKind collision_detector_kind;
-    float vl_delta = -1.0f;
+    float vl_delta = -1.5f;
     int max_collision_retries = 4;
+    float max_o_ratio = 0.8f;
+    Mode mode = Search::Mode::kConcurrent;
   };
   struct Result {
     game::Loc move;
@@ -153,6 +160,65 @@ class DeterministicDescentPolicy final {
 };
 
 /*
+ * Define O'(s, a) = O(s, a) / n, where n is the number of rollouts so far.
+ * This descent policy prevents us from descending into nodes where O'(s, a) is
+ * too large.
+ */
+template <typename QFn, typename NFn>
+class BuUctDescentPolicy final {
+ public:
+  BuUctDescentPolicy(PuctParams puct_params, const QFn& q_fn, const NFn& n_fn,
+                     const float max_o)
+      : puct_scorer_(puct_params, q_fn, n_fn), max_o_(max_o) {}
+  ~BuUctDescentPolicy() = default;
+
+  inline DescentStep Run(const GlobalSearchState& global_search_state,
+                         const TreeNode* node, const game::Game& game,
+                         game::Color color) {
+    PuctScores pucts = puct_scorer_.ComputeScores(node);
+    std::sort(pucts.begin(), pucts.end(), [](const auto& p0, const auto& p1) {
+      return p0.second > p1.second;
+    });
+
+    std::array<std::pair<int, float>, 4> top_scores;
+    int ranking = 0;
+    for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
+      if (ranking >= top_scores.size()) {
+        break;
+      }
+
+      auto [a, puct] = pucts[i];
+      const TreeNode* child = node->children[a].load(std::memory_order_acquire);
+      if (child != nullptr) {
+        const float n = child->n;
+        const float n_in_flight =
+            child->n_in_flight.load(std::memory_order_acquire);
+        const float sum_n_in_flights =
+            child->sum_n_in_flights.load(std::memory_order_acquire);
+        const float o = sum_n_in_flights / (n + n_in_flight);
+        if (o > max_o_) {
+          continue;
+        }
+      }
+
+      if (game.IsValidMove(a, color)) {
+        top_scores[ranking] = {a, puct};
+        ++ranking;
+      }
+    }
+
+    for (int r = ranking; r < top_scores.size(); ++r) {
+      top_scores[r] = {game::kNoopLoc, -1000};
+    }
+    return {game::AsLoc(top_scores[0].first), top_scores};
+  }
+
+ private:
+  const PuctScorer<QFn, NFn> puct_scorer_;
+  const float max_o_;
+};
+
+/*
  * Always aborts collisions.
  */
 class AbortCollisionPolicy final {
@@ -214,14 +280,13 @@ class SmartRetryCollisionPolicy final {
     float min_diff = std::numeric_limits<float>::max();
     for (int i = 0; i < search_path.size(); ++i) {
       const auto& [node, move, top_actions] = search_path[i];
-      if (move == game::kNoopLoc || top_actions[0].first < 0 ||
-          top_actions[1].first < 0) {
+      if (move == game::kNoopLoc || top_actions[1].first < 0) {
         continue;
       }
 
       const float diff =
           std::abs(top_actions[0].second - top_actions[1].second);
-      if (std::abs(top_actions[0].second - top_actions[1].second) < min_diff) {
+      if (diff < min_diff) {
         min_index = i;
         min_diff = diff;
       }
@@ -236,7 +301,9 @@ class SmartRetryCollisionPolicy final {
     const auto& [node, move, top_actions] = search_path[min_index];
     // if we retry again from here, the forked move is the best move.
     const auto new_move = game::AsLoc(top_actions[1].first);
-    const TopActions new_top_actions = {top_actions[1],
+    // keep top_actions[0] as the top action as |p0 - pk| is what we want, not
+    // |p_{k - 1} - pk|. We cannot reselect the top move, so this is correct.
+    const TopActions new_top_actions = {top_actions[0],
                                         top_actions[2],
                                         top_actions[3],
                                         {game::kNoopLoc, -10000}};
@@ -249,15 +316,90 @@ class SmartRetryCollisionPolicy final {
   inline void Reset() { num_retries_ = 0; }
 
  private:
-  struct Cmp {
-    bool operator()(const std::pair<int, float>& e0,
-                    const std::pair<int, float>& e1) {
-      return e0.second > e1.second;
+  const int max_num_retries_;
+  int num_retries_ = 0;
+};
+
+/*
+ * Retries by attempting to find the next-best path.
+ */
+class GlobalSmartRetryCollisionPolicy final {
+ public:
+  GlobalSmartRetryCollisionPolicy(const int max_num_retries)
+      : max_num_retries_(max_num_retries), fork_points_(ForkCmp{}){};
+  ~GlobalSmartRetryCollisionPolicy() = default;
+  inline CollisionResult Handle(const GlobalSearchState& global_search_state,
+                                const SearchPath& search_path) {
+    if (num_retries_ >= max_num_retries_) {
+      return {CollisionResult::Action::kAbort, std::nullopt};
+    }
+    const int retry_index = num_retries_;
+    ++num_retries_;
+    if (search_path.size() <= 1) {
+      return {CollisionResult::Action::kAbort, std::nullopt};
+    }
+
+    // first add everything to the priority queue. cannot fork at leaf, so skip.
+    search_paths_.push_back(search_path);
+    for (int path_index = 0; path_index < search_path.size() - 1;
+         ++path_index) {
+      const auto& [node, move, top_actions] = search_path[path_index];
+      if (stored_fork_points_.contains(node) || move == game::kNoopLoc) {
+        continue;
+      }
+
+      stored_fork_points_.insert(node);
+      for (int puct_index = 1; puct_index < top_actions.size(); ++puct_index) {
+        if (top_actions[puct_index].first < 0) {
+          continue;
+        }
+
+        const float diff =
+            std::abs(top_actions[0].second - top_actions[puct_index].second);
+        fork_points_.PushHeap({diff, retry_index, path_index, puct_index});
+      }
+    }
+
+    if (fork_points_.Size() == 0) {
+      return {CollisionResult::Action::kAbort, std::nullopt};
+    }
+
+    // get the best fork point.
+    const auto [_, path_num, path_index, puct_index] = fork_points_.PopHeap();
+
+    // reconstruct path.
+    SearchPath path_prefix(search_paths_[path_num].begin(),
+                           search_paths_[path_num].begin() + path_index + 1);
+    auto& [node, old_move, top_actions] = path_prefix.back();
+    path_prefix.back() = {node,
+                          game::AsLoc(top_actions[puct_index].first, BOARD_LEN),
+                          top_actions};
+    return {CollisionResult::Action::kRetry, path_prefix};
+  }
+
+  inline void Reset() {
+    num_retries_ = 0;
+    search_paths_.clear();
+    fork_points_.Clear();
+    stored_fork_points_.clear();
+  }
+
+ private:
+  // priority queue of fork points from all previous paths.
+  // (puct_diff, path_num, path_index, puct_index)
+  using ForkElem = std::tuple<float, int, int, int>;
+  struct ForkCmp final {
+    bool operator()(const ForkElem& e0, const ForkElem& e1) {
+      return std::get<0>(e0) > std::get<0>(e1);
     }
   };
   const int max_num_retries_;
   int num_retries_ = 0;
+  absl::InlinedVector<SearchPath, 4> search_paths_;
+  core::Heap<ForkElem, ForkCmp> fork_points_;
+  absl::flat_hash_set<TreeNode*> stored_fork_points_;
 };
+
 /*
  * Various collision detector policies.
  * These fire during descent at any already-evaluated node, before a leaf is

@@ -68,17 +68,10 @@ class PuctScorer final {
         n_fn_(n_fn){};
 
   static inline float ScaleCPuct(float c_puct, const float c_puct_visit_scaling,
-                                 const int n, const bool enable_var_scaling,
-                                 const float var) {
+                                 const int n) {
     const float c_puct_visit_scaling_term =
         c_puct_visit_scaling * std::log((n + 500.0f) / 500.0f);
     c_puct += c_puct_visit_scaling_term;
-    if (enable_var_scaling && n > 3) {
-      static constexpr float kBaseStdDev = 0.15;
-      float stddev = var == 0 ? kBaseStdDev : std::sqrt(var);
-      float scale = stddev / kBaseStdDev;
-      c_puct *= scale;
-    }
     return c_puct;
   }
 
@@ -123,10 +116,8 @@ class PuctScorer final {
     const float v_fpu = v - kFPU * std::sqrt(p_explored);
 
     // Scale c_puct.
-    const float c_puct = ScaleCPuct(c_puct_, c_puct_visit_scaling_, n,
-                                    enable_var_scaling_, v_var);
-    const float c_puct_v_2 =
-        ScaleCPuct(c_puct_v_2_, c_puct_visit_scaling_, n, false, v_var);
+    const float c_puct = ScaleCPuct(c_puct_, c_puct_visit_scaling_, n);
+    const float c_puct_v_2 = ScaleCPuct(c_puct_v_2_, c_puct_visit_scaling_, n);
 
     // Finally, compute PUCT values.
     // Compute PUCT values.
@@ -142,28 +133,58 @@ class PuctScorer final {
     }();
     std::array<std::pair<int, float>, constants::kMaxMovesPerPosition> pucts{};
     for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+      // Katago-style root variance scaling. I have no intuition as to why this
+      // works -- it strongly compresses c_puct on most nodes.
+      const float c_puct_var_parent_scale_factor = [&]() {
+        if (n < 3) {
+          return 1.0;
+        }
+        const float stddev = std::sqrt(v_var);
+        const float interpolated_stddev =
+            (0.8 + v_var * child_visits[a]) / (child_visits[a] + 2);
+        return 1.0 + 0.85 * (interpolated_stddev / 0.4);
+      }();
+      // Gives children with high variance an extra exploration bonus. Less
+      // principled version of PUCT-V.
+      const float c_puct_var_child_scale_factor = [&]() {
+        const int child_n = child_visits[a];
+        if (child_visits[a] < 3 || n < 3) {
+          return 1.0f;
+        }
+        constexpr int kPriorWeight = 3;
+        return (kPriorWeight + child_n * std::sqrt(qvars[a] / v_var)) /
+               float(kPriorWeight + child_n);
+      }();
+      const float c_puct_var_scale_factor = c_puct_var_child_scale_factor;
       const float canonical_child_n =
           n_fn_(child_visits[a], child_visits_in_flight[a]);
       const float canonical_q =
           q_fn_(child_visits[a] > 0 ? qs[a] : v_fpu, child_visits[a],
                 child_visits_in_flight[a]);
-      const auto compute_u = [&]() {
-        if (use_puct_v_) {
-          float var = child_visits[a] < 3 ? (n < 3 ? 1.0f : v_var) : qvars[a];
-          float stddev = std::sqrt(var);
-          float var_scale_term =
-              node->move_probs[a] * stddev *
-              (std::sqrt(canonical_n) / (1 + canonical_child_n));
-          float n_scale_term =
-              node->move_probs[a] * std::log(n) / (1 + canonical_child_n);
-          return c_puct * var_scale_term + c_puct_v_2 * n_scale_term;
-        } else {
-          return c_puct * node->move_probs[a] *
-                 (std::sqrt(canonical_n) / (1 + canonical_child_n));
-        }
+
+      // PUCT-V formula.
+      const auto compute_puct_v_explore_term = [&]() {
+        float var = child_visits[a] < 3 ? (n < 3 ? 1.0f : v_var) : qvars[a];
+        float stddev = std::sqrt(var);
+        float var_scale_term =
+            node->move_probs[a] * stddev *
+            (std::sqrt(canonical_n) / (1 + canonical_child_n));
+        float n_scale_term = node->move_probs[a] * std::log(canonical_n) /
+                             (1 + canonical_child_n);
+        return c_puct * var_scale_term + c_puct_v_2 * n_scale_term;
       };
-      float u = compute_u();
-      pucts[a] = {a, u + canonical_q};
+
+      // PUCT formula.
+      const auto compute_puct_explore_term = [&]() {
+        return c_puct * c_puct_var_scale_factor * node->move_probs[a] *
+               (std::sqrt(canonical_n) / (1 + canonical_child_n));
+      };
+      const auto compute_explore_term = [&]() {
+        return use_puct_v_ ? compute_puct_v_explore_term()
+                           : compute_puct_explore_term();
+      };
+      const float puct_explore_term = compute_explore_term();
+      pucts[a] = {a, puct_explore_term + canonical_q};
     }
     return pucts;
   }
@@ -229,11 +250,7 @@ class PuctSearchPolicy : public SearchPolicy {
                              game::Color color_to_move) const override;
 
  private:
-  const float c_puct_;
-  const float c_puct_visit_scaling_;
-  const bool enable_var_scaling_;
-  const float c_puct_v_2_;
-  const bool use_puct_v_;
+  const PuctParams params_;
 };
 
 /*

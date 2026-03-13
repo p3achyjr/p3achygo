@@ -23,7 +23,7 @@ inline bool operator==(const Move& x, const Move& y) {
 inline std::ostream& operator<<(std::ostream& os, const Move& move) {
   char col_encoding =
       move.color == BLACK ? 'B' : (move.color == WHITE ? 'W' : 'E');
-  return os << col_encoding << ": " << move.loc;
+  return os << col_encoding << move.loc;
 }
 
 template <typename H>

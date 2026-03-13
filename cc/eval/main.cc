@@ -206,7 +206,6 @@ int main(int argc, char** argv) {
     LOG(ERROR) << "--num_games Not Specified.";
     return 1;
   }
-  CHECK(num_games % 2 == 0);
 
   int perms =
       S_IRUSR | S_IWUSR | S_IXUSR | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH;

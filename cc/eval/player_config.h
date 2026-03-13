@@ -45,10 +45,6 @@ struct PlayerSearchConfig {
   // Number of parallel search worker threads per game.
   int num_threads_per_game = 1;
 
-  // Hard visit ceiling. In practice time_ms controls termination;
-  // set this large enough that it is never the binding constraint.
-  int visit_budget = 1 << 20;
-
   // Time control (ms). 0 = disabled; use visit_budget instead.
   int time_ms = 0;
 
@@ -71,6 +67,15 @@ struct PlayerSearchConfig {
   // Maximum number of collision retries before aborting. Used by "retry" and
   // "smart_retry" collision policies.
   int max_collision_retries = 4;
+
+  // Search mode: "concurrent" | "batch"
+  std::string search_mode = "concurrent";
+
+  // Descent policy: "deterministic" | "bu_uct"
+  std::string descent_policy = "deterministic";
+
+  // BuUct descent: maximum allowed ratio of in-flight visits to total visits.
+  float max_o_ratio = 1.0f;
 };
 
 namespace internal {
@@ -150,8 +155,6 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
     // Parallel search knobs
     else if (key == "num_threads_per_game")
       cfg.num_threads_per_game = std::stoi(val);
-    else if (key == "visit_budget")
-      cfg.visit_budget = std::stoi(val);
     else if (key == "time_ms")
       cfg.time_ms = std::stoi(val);
     else if (key == "q_fn")
@@ -166,6 +169,12 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.vl_delta = std::stof(val);
     else if (key == "max_collision_retries")
       cfg.max_collision_retries = std::stoi(val);
+    else if (key == "search_mode")
+      cfg.search_mode = val;
+    else if (key == "descent_policy")
+      cfg.descent_policy = val;
+    else if (key == "max_o_ratio")
+      cfg.max_o_ratio = std::stof(val);
     // Unknown keys are silently ignored.
   }
   return cfg;

@@ -39,35 +39,9 @@ namespace {
 using namespace ::mcts;
 using namespace ::nn;
 
-// Engine stub: returns uniform probabilities and neutral value estimates.
-class NullEngine final : public nn::Engine {
- public:
-  Kind kind() override { return Kind::kUnknown; }
-  std::string path() override { return "null"; }
-  void LoadBatch(int, const nn::GoFeatures&) override {}
-  void RunInference() override {}
-  void GetBatch(int, nn::NNInferResult& result) override {
-    result.move_probs.fill(1.0f / constants::kMaxMovesPerPosition);
-    result.move_logits.fill(0.0f);
-    result.value_probs.fill(1.0f / constants::kNumValueLogits);
-    result.score_probs.fill(1.0f / constants::kNumScoreLogits);
-  }
-  void GetOwnership(int,
-                    std::array<float, constants::kNumBoardLocs>& own) override {
-    own.fill(0.0f);
-  }
-};
-
 std::unique_ptr<nn::Engine> MakeEngine(const std::string& path,
                                        int batch_size) {
-  if (path.empty()) {
-    LOG(WARNING) << "No engine path provided; using NullEngine.";
-    return std::make_unique<NullEngine>();
-  }
-  if (!std::filesystem::exists(path)) {
-    LOG(WARNING) << "Engine path not found: " << path << "; using NullEngine.";
-    return std::make_unique<NullEngine>();
-  }
+  CHECK(!path.empty()) << "No engine path provided.";
   nn::Engine::Kind kind = nn::KindFromEnginePath(path);
   int version = nn::GetVersionFromModelPath(path);
   return nn::CreateEngine(kind, path, batch_size, version);
@@ -100,9 +74,10 @@ Search::Params MakeParams(int num_threads, int time_ms, mcts::QFnKind q_fn_kind,
       .puct_params = PuctParams{PuctRootSelectionPolicy::kVisitCount},
       .q_fn_kind = q_fn_kind,
       .n_fn_kind = n_fn_kind,
-      .descent_policy_kind = mcts::DescentPolicyKind::kDeterministic,
+      .descent_policy_kind = mcts::DescentPolicyKind::kBuUct,
       .collision_policy_kind = collision_policy_kind,
       .collision_detector_kind = mcts::CollisionDetectorKind::kNoOp,
+      .mode = mcts::Search::Mode::kConcurrent,
   };
 }
 
@@ -133,8 +108,8 @@ int main(int argc, char** argv) {
 
   game::Game game;
   core::Probability probability;
-  McgsNodeTable table_p0;
-  McgsNodeTable table_p1;
+  MctsNodeTable table_p0;
+  MctsNodeTable table_p1;
   game::Color color = BLACK;
 
   TreeNode* root_p0 =
@@ -170,8 +145,9 @@ int main(int argc, char** argv) {
     LOG(INFO) << "Move " << move_num << " " << (color == BLACK ? "B" : "W")
               << ": " << move << "  visits=" << result.num_visits
               << "  aborted=" << result.num_aborted
-              << "  time=" << result.time_ms << "ms"
-              << "  v=" << active_root->v << ", board:\n"
+              << "  collided=" << result.num_collisions
+              << "  time=" << result.time_ms << "ms" << "  v=" << active_root->v
+              << ", board:\n"
               << game::ToString(game.board().position()) << "\n";
     color = game::OppositeColor(color);
 

@@ -5,6 +5,7 @@
 #include <cuda_runtime_api.h>
 #include <driver_types.h>
 
+#include <cstdlib>
 #include <numeric>
 #include <unordered_map>
 
@@ -69,7 +70,11 @@ class TrtEngineImpl : public TrtEngine {
   const std::array<int, 2> score_shape_;
 
   // CUDA Graph Stuff
+  void TryCaptureGraph();  // assumes one warmup enqueueV3 has already been run
+  void DestroyGraph();
+
   bool cuda_graph_initialized_ = false;
+  bool should_retry_capture_ = false;
   cudaGraph_t cuda_graph_{};
   cudaGraphExec_t cuda_graph_exec_{};
 };
@@ -127,7 +132,7 @@ TrtEngineImpl::TrtEngineImpl(std::string path, int batch_size, int version)
   }
 
   // Need to do this first according to API.
-  exec_context_->setOptimizationProfileAsync(0, cudaStreamPerThread);
+  exec_context_->setOptimizationProfileAsync(0, stream_);
   cudaStreamSynchronize(stream_);
 
   // Configure inputs for execution context.
@@ -151,34 +156,10 @@ TrtEngineImpl::TrtEngineImpl(std::string path, int batch_size, int version)
                                  input_scores.dims);
   }
 
-  {
-    // Attempt CUDA Graph Capture.
-    LOG(INFO) << "Attempting CUDA Graph Capture for TRT Engine.";
-    CHECK(exec_context_->enqueueV3(stream_));
-    if (cudaStreamBeginCapture(stream_, cudaStreamCaptureModeGlobal) !=
-        cudaSuccess) {
-      return;
-    }
-
-    CHECK(exec_context_->enqueueV3(stream_));
-    if (cudaStreamEndCapture(stream_, &cuda_graph_) != cudaSuccess) {
-      auto err = cudaGetLastError();
-      LOG(WARNING) << "CUDA Graph Capture Failed: " << cudaGetErrorName(err)
-                   << ", " << cudaGetErrorString(err);
-      return;
-    }
-
-    if (cudaGraphInstantiate(&cuda_graph_exec_, cuda_graph_, 0) !=
-        cudaSuccess) {
-      auto err = cudaGetLastError();
-      LOG(WARNING) << "CUDA Graph Instantation Failed: "
-                   << cudaGetErrorName(err) << ", " << cudaGetErrorString(err);
-      return;
-    }
-
-    cuda_graph_initialized_ = true;
-    LOG(INFO) << "CUDA Graph Capture Succeeded for TRT Engine.";
-  }
+  // Warmup run before capture.
+  CHECK(exec_context_->enqueueV3(stream_));
+  cudaStreamSynchronize(stream_);
+  TryCaptureGraph();
 }
 
 TrtEngineImpl::~TrtEngineImpl() {
@@ -187,10 +168,52 @@ TrtEngineImpl::~TrtEngineImpl() {
     cudaFree(buf_handle.device_buf);
   }
 
+  DestroyGraph();
+}
+
+void TrtEngineImpl::DestroyGraph() {
   if (cuda_graph_initialized_) {
     cudaGraphExecDestroy(cuda_graph_exec_);
     cudaGraphDestroy(cuda_graph_);
+    cuda_graph_initialized_ = false;
   }
+}
+
+void TrtEngineImpl::TryCaptureGraph() {
+  const char* env = std::getenv("TRT_CUDA_GRAPH");
+  if (env != nullptr) {
+    std::string val(env);
+    if (val == "0" || val == "false" || val == "no" || val == "off") {
+      LOG(INFO) << "CUDA Graph Capture disabled via TRT_CUDA_GRAPH=" << val;
+      return;
+    }
+  }
+  LOG(INFO) << "Attempting CUDA Graph Capture for TRT Engine.";
+  if (cudaStreamBeginCapture(stream_, cudaStreamCaptureModeGlobal) !=
+      cudaSuccess) {
+    LOG(WARNING) << "CUDA Graph Capture Failed: could not begin capture.";
+    return;
+  }
+
+  CHECK(exec_context_->enqueueV3(stream_));
+
+  if (cudaStreamEndCapture(stream_, &cuda_graph_) != cudaSuccess) {
+    auto err = cudaGetLastError();
+    LOG(WARNING) << "CUDA Graph Capture Failed: " << cudaGetErrorName(err)
+                 << ", " << cudaGetErrorString(err);
+    return;
+  }
+
+  if (cudaGraphInstantiate(&cuda_graph_exec_, cuda_graph_, 0) != cudaSuccess) {
+    auto err = cudaGetLastError();
+    LOG(WARNING) << "CUDA Graph Instantiation Failed: " << cudaGetErrorName(err)
+                 << ", " << cudaGetErrorString(err);
+    cudaGraphDestroy(cuda_graph_);
+    return;
+  }
+
+  cuda_graph_initialized_ = true;
+  LOG(INFO) << "CUDA Graph Capture Succeeded for TRT Engine.";
 }
 
 void TrtEngineImpl::LoadBatch(int batch_id, const GoFeatures& features) {
@@ -230,9 +253,22 @@ void TrtEngineImpl::RunInference() {
                   input_scores.size, cudaMemcpyHostToDevice, stream_);
   if (cuda_graph_initialized_) {
     auto err = cudaGraphLaunch(cuda_graph_exec_, stream_);
-    CHECK(err == cudaSuccess)
-        << "CUDA Graph Launch Failed: " << cudaGetErrorName(err) << ", "
-        << cudaGetErrorString(err);
+    if (err != cudaSuccess) {
+      cudaGetLastError();  // clear error state
+      DestroyGraph();
+      // cudaErrorIllegalAddress is a sticky context error: the entire CUDA
+      // context is poisoned and enqueueV3 will fail too. Recovery requires
+      // cudaDeviceReset() + full engine reload, but that also frees the pinned
+      // batch buffers so LoadBatch() would need to re-run — not possible here.
+      // TODO: make RunInference() return bool and retry at NNInterface level.
+      LOG_IF(FATAL, err == cudaErrorIllegalAddress)
+          << "CUDA context poisoned (" << cudaGetErrorName(err)
+          << "); engine reload requires interface change to recover.";
+      LOG(WARNING) << "CUDA Graph Launch Failed (" << cudaGetErrorName(err)
+                   << "), falling back to enqueueV3";
+      should_retry_capture_ = true;
+      CHECK(exec_context_->enqueueV3(stream_));
+    }
   } else {
     CHECK(exec_context_->enqueueV3(stream_));
   }
@@ -247,6 +283,11 @@ void TrtEngineImpl::RunInference() {
   cudaMemcpyAsync(output_score.host_buf, output_score.device_buf,
                   output_score.size, cudaMemcpyDeviceToHost, stream_);
   cudaStreamSynchronize(stream_);
+
+  if (should_retry_capture_) {
+    should_retry_capture_ = false;
+    TryCaptureGraph();
+  }
 }
 
 void TrtEngineImpl::GetBatch(int batch_id, NNInferResult& result) {
