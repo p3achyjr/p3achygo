@@ -470,47 +470,47 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         std::string root_color = ToString(OppositeColor(color_to_move));
         std::stringstream s;
         s << "\n----- Move Num: " << game.num_moves() << " -----\n";
-        s << "N: " << gumbel_n << ", K: " << gumbel_k
-          << ", Select Move Prob: " << select_move_prob
-          << ", Add Init State Prob: " << add_init_state_prob
-          << ", Trainable: " << is_move_selected_for_training
-          << ", Over Search: " << is_move_over_search
-          << ", Visits: " << gumbel_res.visits << "\n";
-        s << "Last 5 Moves: " << game.move(game.num_moves() - 5) << ", "
-          << game.move(game.num_moves() - 4) << ", "
-          << game.move(game.num_moves() - 3) << ", "
-          << game.move(game.num_moves() - 2) << ", "
+        s << "N=" << gumbel_n << "  K=" << gumbel_k
+          << "  Select Move Prob=" << select_move_prob
+          << "  Add Init State Prob=" << add_init_state_prob
+          << "  Trainable=" << is_move_selected_for_training
+          << "  Over Search=" << is_move_over_search
+          << "  Visits=" << gumbel_res.visits << "\n";
+        s << "Last 5 Moves: " << game.move(game.num_moves() - 5) << "  "
+          << game.move(game.num_moves() - 4) << "  "
+          << game.move(game.num_moves() - 3) << "  "
+          << game.move(game.num_moves() - 2) << "  "
           << game.move(game.num_moves() - 1) << "\n";
-        s << "(" << root_color << ") NN Stats :\n  Q_z: " << qz_nn
-          << "\n  Score: " << score_nn << "\n";
-        s << "(" << root_color << ") Pre-Search Stats :\n  N: " << n_pre
-          << "\n  Q: " << q_pre << "\n  Q_z: " << qz_pre << "\n";
-        s << "(" << root_color << ") Post-Search Stats :\n  N: " << n_post
-          << "\n  Q: " << q_post << "\n  Q_z: " << root_q_outcome << "\n";
-        s << "Raw NN Move: " << mv_to_string(nn_move) << "\n  n: " << nn_move_n
-          << "\n  q: " << nn_move_q << "\n  qz: " << nn_move_qz << "\n";
-        s << "Gumbel Move: " << mv_to_string(move) << "\n  n: " << move_n
-          << "\n  q: " << move_q << "\n  qz: " << move_qz << "\n";
+        s << "(" << root_color << ") NN Stats\n  Qz = " << qz_nn
+          << "\n  Score = " << score_nn << "\n";
+        s << "(" << root_color << ") Pre-Search Stats\n  N = " << n_pre
+          << "\n  Q = " << q_pre << "\n  Qz = " << qz_pre << "\n";
+        s << "(" << root_color << ") Post-Search Stats\n  N = " << n_post
+          << "\n  Q = " << q_post << "\n  Qz = " << root_q_outcome << "\n";
+        s << "Raw NN Move=" << mv_to_string(nn_move) << "\n  n = " << nn_move_n
+          << "\n  q = " << nn_move_q << "\n  qz = " << nn_move_qz << "\n";
+        s << "Gumbel Move=" << mv_to_string(move) << "\n  n = " << move_n
+          << "\n  q = " << move_q << "\n  qz = " << move_qz << "\n";
         if (!gumbel_res.child_stats.empty()) {
           s << "Considered Moves:\n";
           for (const ChildStats& mv_stats : gumbel_res.child_stats) {
             s << "  " << mv_to_string(mv_stats.move)
-              << ", p: " << absl::StrFormat("%.3f", mv_stats.prob)
-              << ", n: " << absl::StrFormat("%d", mv_stats.n)
-              << ", q: " << absl::StrFormat("%.3f", mv_stats.q)
-              << ", qz: " << absl::StrFormat("%.3f", mv_stats.qz)
-              << ", score: " << absl::StrFormat("%.3f", mv_stats.score) << "\n";
+              << "  p=" << absl::StrFormat("%.3f", mv_stats.prob)
+              << "  n=" << absl::StrFormat("%d", mv_stats.n)
+              << "  q=" << absl::StrFormat("%.3f", mv_stats.q)
+              << "  qz=" << absl::StrFormat("%.3f", mv_stats.qz)
+              << "  score=" << absl::StrFormat("%.3f", mv_stats.score) << "\n";
           }
         }
         s << "(" << ToString(root_node->color_to_move)
-          << ") Next Root Visits: " << root_node->n
-          << " Value: " << root_node->v << " Outcome: " << root_node->v_outcome
-          << " Score: " << root_node->init_score_est << "\n";
+          << ") Next Root  N=" << root_node->n
+          << "  Q=" << root_node->v << "  Qz=" << root_node->v_outcome
+          << "  Score=" << root_node->init_score_est << "\n";
         s << "Board:\n" << game.board() << "\n";
-        s << "Nodes Reaped: " << num_nodes_reaped
-          << ", Reap Time: " << reap_time_us << "us\n";
+        s << "Nodes Reaped=" << num_nodes_reaped
+          << "  Reap Time=" << reap_time_us << "us\n";
         s << "Search Took " << search_dur
-          << "ms. Average For Game: " << search_dur_avg << "ms.\n";
+          << "ms  Average For Game=" << search_dur_avg << "ms\n";
 
         LOG_TO_SINK(INFO, sink) << s.str();
       }
@@ -580,8 +580,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
     game.WriteResult();
 
-    LOG_TO_SINK(INFO, sink) << "Black Score: " << game.result().bscore;
-    LOG_TO_SINK(INFO, sink) << "White Score: " << game.result().wscore;
+    LOG_TO_SINK(INFO, sink) << "Black Score=" << game.result().bscore
+                            << "  White Score=" << game.result().wscore;
 
     auto begin = std::chrono::high_resolution_clock::now();
     game_recorder->RecordGame(thread_id, init_state.board, game, mcts_pis,

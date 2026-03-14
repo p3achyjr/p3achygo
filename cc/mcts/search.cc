@@ -7,6 +7,8 @@
 #include <vector>
 
 #include "cc/constants/constants.h"
+#include "cc/core/probability.h"
+#include "cc/game/color.h"
 #include "cc/game/loc.h"
 #include "cc/game/move.h"
 #include "cc/mcts/leaf_evaluator.h"
@@ -23,6 +25,46 @@ namespace {
 using namespace ::game;
 using namespace ::nn;
 
+// Definitions for topological backprop. Keyed by (depth, node, action,
+// is_leaf).
+using BackupElem = std::tuple<int, TreeNode*, Loc, bool>;
+struct BackupCmp final {
+  bool operator()(const BackupElem& e0, const BackupElem& e1) {
+    return std::get<0>(e0) < std::get<0>(e1);
+  }
+};
+using BackupPriorityQueue = core::Heap<BackupElem, BackupCmp>;
+
+void FetchLeafEval(GlobalSearchState& global_state,
+                   LeafEvaluator* leaf_evaluator, TreeNode* leaf, Game& game,
+                   Color color_to_move, Color root_color, float root_score_est,
+                   bool needs_nn_eval) {
+  if (needs_nn_eval) {
+    leaf_evaluator->FetchLeafEval(leaf, game, color_to_move, root_color,
+                                  root_score_est);
+    absl::MutexLock l(&global_state.mu);
+    global_state.pending--;
+  }
+
+  if (game.IsGameOver()) {
+    game::Scores scores = game.GetScores();
+    leaf_evaluator->EvaluateTerminal(scores, leaf, color_to_move, root_color,
+                                     root_score_est);
+  }
+}
+
+void UnsafeGlobalStateReset(GlobalSearchState& global_state) {
+  global_state.descent_remaining = global_state.num_workers;
+  global_state.did_signal = false;
+  for (auto& p : global_state.pending_each_level) {
+    p.store(0, std::memory_order_relaxed);
+  }
+  global_state.round_remaining = global_state.num_workers;
+  global_state.round_parity = !global_state.round_parity;
+  global_state.should_stop_this_round =
+      global_state.should_stop.load(std::memory_order_relaxed);
+}
+
 template <typename DescentPolicy, typename CollisionPolicy,
           typename CollisionDetector>
 std::pair<SearchPath, std::optional<CollisionResult>> Descend(
@@ -32,13 +74,16 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
     CollisionPolicy& collision_policy,
     const CollisionDetector& collision_detector, Game& game,
     NodeTable* node_table, TreeNode* const root, game::Color root_color,
-    const float root_score_est, const SearchPath&& path_prefix) {
+    const float root_score_est, const SearchPath& path_prefix,
+    const bool block_on_leaf_eval = true) {
   const auto on_collision = [&](SearchPath& colliding_path)
       -> std::pair<SearchPath, std::optional<CollisionResult>> {
     // undo n_in_flight for every node on the path.
     for (auto& [node, loc, actions] : colliding_path) {
-      const int old_n_in_flight =
+      const float old_n_in_flight =
           node->n_in_flight.fetch_sub(1, std::memory_order_release);
+      node->sum_n_in_flights.fetch_sub(old_n_in_flight - 1,
+                                       std::memory_order_release);
     }
     return {colliding_path,
             collision_policy.Handle(global_state, colliding_path)};
@@ -46,8 +91,10 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
 
   CHECK(path_prefix.size() == 0 || std::get<0>(path_prefix[0]) == root);
   Color color_to_move = root_color;
-  int root_n_in_flight =
+  const int root_n_in_flight =
       root->n_in_flight.fetch_add(1, std::memory_order_release);
+  const int root_total_n_in_flight = root->sum_n_in_flights.fetch_add(
+      root_n_in_flight, std::memory_order_release);
 
   SearchPath path = {};
   TreeNode* cur_node = root;
@@ -61,6 +108,7 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
       return on_collision(path);
     }
     int child_n_in_flight = -1;
+    int child_sum_in_flights = -1;
     game::Loc next_move = game::kNoopLoc;
     TopActions next_top_actions{};
     TreeNode* child = nullptr;
@@ -80,12 +128,16 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
       if (child != nullptr) {
         child_n_in_flight =
             child->n_in_flight.fetch_add(1, std::memory_order_acq_rel);
+        child_sum_in_flights = child->sum_n_in_flights.fetch_add(
+            child_n_in_flight, std::memory_order_release);
       } else {
         // leaf case.
         child = node_table->GetOrCreateGuarded(
             game.board().hash(), color_to_move, game.IsGameOver());
         child_n_in_flight =
             child->n_in_flight.fetch_add(1, std::memory_order_acq_rel);
+        child_sum_in_flights = child->sum_n_in_flights.fetch_add(
+            child_n_in_flight, std::memory_order_release);
         cur_node->children[next_move].store(child, std::memory_order_relaxed);
         if (child->state.load(std::memory_order_relaxed) ==
             TreeNodeState::kNew) {
@@ -106,16 +158,17 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
       }
     }
 
-    // Detector-triggered collision: abort before descending into child.
+    // Detector-triggered collision.
     if (collision_detector.IsCollision(global_state, child_n_in_flight,
-                                       (int)path.size())) {
-      child->n_in_flight.fetch_sub(1, std::memory_order_acq_rel);
+                                       (int)path.size() + 1)) {
+      path.push_back({child, game::kNoopLoc, {}});
       return on_collision(path);
     }
 
     // Continue descent.
     CHECK(child != nullptr);
     cur_node = child;
+    const float child_n = child->n;
 
     // terminal node case.
     if (game.IsGameOver() || child->is_terminal) {
@@ -170,20 +223,40 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
     }
   }
 
-  if (needs_nn_eval) {
-    leaf_evaluator->FetchLeafEval(leaf, game, color_to_move, root_color,
-                                  root_score_est);
-    absl::MutexLock l(&global_state.mu);
-    global_state.pending--;
-  }
-
-  if (game.IsGameOver()) {
-    game::Scores scores = game.GetScores();
-    leaf_evaluator->EvaluateTerminal(scores, leaf, color_to_move, root_color,
-                                     root_score_est);
+  if (block_on_leaf_eval) {
+    FetchLeafEval(global_state, leaf_evaluator, leaf, game, color_to_move,
+                  root_color, root_score_est, needs_nn_eval);
   }
 
   return {path, std::nullopt};
+}
+
+// Not thread safe. Mirrors BackupStep: always increments n and child_visits,
+// decrements n_in_flight, and only calls RecomputeNodeStats (or sets leaf
+// values) on the last pop for each node (old n_in_flight == 1). The heap
+// processes nodes deepest-first, so all children of a node are guaranteed to
+// be fully updated before the node itself is finalized.
+void TopologicalBackup(BackupPriorityQueue& backup_pq) {
+  while (backup_pq.Size() > 0) {
+    auto [_, node, action, is_leaf] = backup_pq.PopHeap();
+    node->n += 1;
+    if (!is_leaf) {
+      node->child_visits[game::AsIndex(action, BOARD_LEN)] += 1;
+    }
+    const int old_n_in_flight =
+        node->n_in_flight.fetch_sub(1, std::memory_order_acq_rel);
+    if (old_n_in_flight == 1) {
+      if (is_leaf) {
+        node->w = node->init_util_est;
+        node->w_outcome = node->init_outcome_est;
+        node->v = node->init_util_est;
+        node->v_outcome = node->init_outcome_est;
+      } else {
+        RecomputeNodeStats(node);
+      }
+      node->is_pending_update.store(false, std::memory_order_relaxed);
+    }
+  }
 }
 
 void BackupStep(int worker_id, TreeNode* node, game::Loc action, bool is_leaf) {
@@ -302,7 +375,7 @@ void SearchTask(const int worker_id, core::Probability& prob,
             Descend(worker_id, prob, global_state, slot, &leaf_evaluator,
                     descent_policy, collision_policy, collision_detector,
                     retry_game, node_table, root, color_to_move,
-                    root->init_score_est, std::move(retry_path_prefix));
+                    root->init_score_est, retry_path_prefix);
         search_path = retry_path;
         collision_result = retry_collision;
       }
@@ -340,15 +413,7 @@ void SearchTask(const int worker_id, core::Probability& prob,
       absl::MutexLock l(&global_state.mu);
       if (--global_state.round_remaining == 0) {
         // Last worker through: reset for next round.
-        global_state.descent_remaining = global_state.num_workers;
-        global_state.did_signal = false;
-        for (auto& p : global_state.pending_each_level) {
-          p.store(0, std::memory_order_relaxed);
-        }
-        global_state.round_remaining = global_state.num_workers;
-        global_state.round_parity = !global_state.round_parity;
-        global_state.should_stop_this_round =
-            global_state.should_stop.load(std::memory_order_relaxed);
+        UnsafeGlobalStateReset(global_state);
       }
       // Wait for round_parity to flip (indicating the round has ended and
       // state has been reset for the next round).
@@ -387,6 +452,161 @@ void SpawnSearchTasks(GlobalSearchState& global_state, NNInterface::Slot slot,
   for (auto& w : workers) w.join();
 }
 
+template <typename DescentPolicy, typename CollisionPolicy,
+          typename CollisionDetector>
+void BatchSearch(GlobalSearchState& global_state, NNInterface::Slot slot,
+                 DescentPolicy& _descent_policy,
+                 CollisionPolicy _collision_policy_proto,
+                 CollisionDetector _collision_detector, Game& game,
+                 NodeTable* node_table, TreeNode* root,
+                 game::Color color_to_move, int batch_size,
+                 PuctParams puct_params) {
+  // Currently ignores policies and does a priority-first search.
+  // TODO: Assess whether we should use the policies.
+  const bool is_graph = node_table->is_graph();
+  const auto should_stop = [&]() {
+    return global_state.should_stop ||
+           global_state.total_num_visits >= global_state.visit_budget;
+  };
+  core::Probability prob;
+
+  // no-op policy.
+  auto n_fn = IdentityN{};
+  auto q_fn = IdentityQ{};
+  auto descent_policy = DeterministicDescentPolicy(puct_params, q_fn, n_fn);
+  auto collision_policy = AbortCollisionPolicy();
+  auto collision_detector = NoOpCollisionDetector();
+
+  // aborts
+  absl::InlinedVector<bool, 32> did_abort(batch_size, false);
+  absl::InlinedVector<Game, 32> worker_games(batch_size);
+
+  // priority queue of fork points from all previous paths.
+  // (puct_diff, path_num, path_index, puct_index)
+  using ForkElem = std::tuple<float, int, int, int>;
+  struct ForkCmp final {
+    bool operator()(const ForkElem& e0, const ForkElem& e1) {
+      return std::get<0>(e0) > std::get<0>(e1);
+    }
+  };
+  core::Heap<ForkElem, ForkCmp> fork_points(ForkCmp{});
+  absl::flat_hash_set<TreeNode*> stored_fork_points;
+
+  // all search paths accumulated in a single round.
+  std::vector<SearchPath> search_paths(batch_size);
+
+  // priority queue of backprop elements.
+  BackupPriorityQueue backup_pq(BackupCmp{});
+
+  // search loop.
+  while (!should_stop()) {
+    // descent.
+    for (int worker_id = 0; worker_id < batch_size; ++worker_id) {
+      LeafEvaluator leaf_evaluator(slot, worker_id);
+      Game search_game = game;
+      SearchPath search_prefix = [&]() -> SearchPath {
+        if (fork_points.Size() == 0) {
+          return {};
+        }
+
+        const auto [diff, path_num, path_index, puct_index] =
+            fork_points.PopHeap();
+        SearchPath path_prefix(search_paths[path_num].begin(),
+                               search_paths[path_num].begin() + path_index + 1);
+        const auto& [fork_node, fork_move, fork_actions] = path_prefix.back();
+        const Loc new_move = game::AsLoc(fork_actions[puct_index].first);
+        path_prefix.back() = {fork_node, new_move, fork_actions};
+        return path_prefix;
+      }();
+      auto [search_path, collision_result] = Descend(
+          worker_id, prob, global_state, slot, &leaf_evaluator, descent_policy,
+          collision_policy, collision_detector, search_game, node_table, root,
+          color_to_move, root->init_score_est, search_prefix,
+          /*block_on_leaf_eval=*/false);
+      worker_games[worker_id] = search_game;
+      if (collision_result.has_value()) {
+        did_abort[worker_id] = true;
+        global_state.descent_remaining--;
+        global_state.total_num_aborted.fetch_add(1, std::memory_order_relaxed);
+        global_state.total_num_collisions.fetch_add(1,
+                                                    std::memory_order_relaxed);
+        continue;
+      }
+
+      search_paths[worker_id] = search_path;
+
+      // add to fork points and backprop nodes.
+      for (int path_index = 0; path_index < search_path.size(); ++path_index) {
+        const auto& [node, mv, top_actions] = search_path[path_index];
+        backup_pq.PushHeap(
+            {path_index, node, mv, path_index == search_path.size() - 1});
+
+        // leaf nodes have no valid top_actions; skip fork-point collection.
+        if (mv == game::kNoopLoc) continue;
+
+        // do not re-add this node to fork points.
+        if (stored_fork_points.contains(node)) {
+          continue;
+        }
+
+        for (int puct_index = 1; puct_index < top_actions.size();
+             ++puct_index) {
+          if (top_actions[puct_index].first < 0) {
+            continue;
+          }
+          const float diff =
+              std::abs(top_actions[0].second - top_actions[puct_index].second);
+          fork_points.PushHeap({diff, worker_id, path_index, puct_index});
+        }
+
+        stored_fork_points.insert(node);
+      }
+    }
+
+    if (!global_state.did_signal && global_state.pending > 0) {
+      slot.SignalReadyForInference();
+    }
+
+    // one of the descenders should have signalled. Fetch.
+    for (int worker_id = 0; worker_id < batch_size; ++worker_id) {
+      if (did_abort[worker_id]) {
+        continue;
+      }
+      LeafEvaluator leaf_evaluator(slot, worker_id);
+      auto& search_path = search_paths[worker_id];
+      auto& game = worker_games[worker_id];
+      auto& [leaf, _mv, _actions] = search_path.back();
+      const TreeNodeState leaf_state =
+          leaf->state.load(std::memory_order_relaxed);
+      const bool needs_nn_eval =
+          (leaf_state != TreeNodeState::kNnEvaluated) && !game.IsGameOver();
+      Color root_color = color_to_move;
+      Color leaf_color = search_path.size() % 2 == 1
+                             ? root_color
+                             : game::OppositeColor(root_color);
+      FetchLeafEval(global_state, &leaf_evaluator, leaf, game, leaf_color,
+                    root_color, root->init_score_est, needs_nn_eval);
+      global_state.total_num_visits.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    // topological backprop.
+    TopologicalBackup(backup_pq);
+
+    // reset state.
+    fork_points.Clear();
+    stored_fork_points.clear();
+    backup_pq.Clear();
+    for (int worker_id = 0; worker_id < batch_size; ++worker_id) {
+      did_abort[worker_id] = false;
+      search_paths[worker_id] = {};
+      // don't bother clearing games as constructing games is expensive.
+    }
+
+    // reset search control
+    UnsafeGlobalStateReset(global_state);
+  }
+}
+
 // Dispatches QFn and NFn independently — O(N_q + N_n) cases rather than
 // O(N_q × N_n). The cross-product of instantiations is still produced by the
 // compiler, but the dispatch code doesn't grow with it.
@@ -398,11 +618,33 @@ void RunWithCollision(GlobalSearchState& global_state, NNInterface::Slot slot,
                       CollisionDetector collision_detector,
                       const Search::Params& params) {
   auto with_nfn = [&](auto qfn, auto nfn) {
-    DeterministicDescentPolicy<decltype(qfn), decltype(nfn)> dp(
-        params.puct_params, qfn, nfn);
-    SpawnSearchTasks(global_state, slot, dp, collision_policy,
-                     collision_detector, game, node_table, root, color_to_move,
-                     params.num_threads);
+    if (params.descent_policy_kind == DescentPolicyKind::kBuUct) {
+      const float max_o =
+          params.max_o_ratio * (float(global_state.num_workers - 1) / 2.0f);
+      BuUctDescentPolicy<decltype(qfn), decltype(nfn)> dp(params.puct_params,
+                                                          qfn, nfn, max_o);
+      if (params.mode == Search::Mode::kConcurrent) {
+        SpawnSearchTasks(global_state, slot, dp, collision_policy,
+                         collision_detector, game, node_table, root,
+                         color_to_move, params.num_threads);
+      } else {
+        BatchSearch(global_state, slot, dp, collision_policy,
+                    collision_detector, game, node_table, root, color_to_move,
+                    params.num_threads, params.puct_params);
+      }
+    } else {
+      DeterministicDescentPolicy<decltype(qfn), decltype(nfn)> dp(
+          params.puct_params, qfn, nfn);
+      if (params.mode == Search::Mode::kConcurrent) {
+        SpawnSearchTasks(global_state, slot, dp, collision_policy,
+                         collision_detector, game, node_table, root,
+                         color_to_move, params.num_threads);
+      } else {
+        BatchSearch(global_state, slot, dp, collision_policy,
+                    collision_detector, game, node_table, root, color_to_move,
+                    params.num_threads, params.puct_params);
+      }
+    }
   };
 
   auto with_qfn = [&](auto qfn) {
@@ -510,16 +752,6 @@ Search::Result Search::Run(core::Probability& probability, Game& game,
     leaf_evaluator.QueueEval(probability, game, color_to_move);
     slot_.SignalReadyForInference();
     leaf_evaluator.FetchRootEval(root, game, color_to_move);
-
-    std::array<std::pair<int, float>, constants::kMaxMovesPerPosition> policy;
-    for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
-      policy[a] = {a, root->move_probs[a]};
-    }
-    std::sort(
-        policy.begin(), policy.end(),
-        [](const std::pair<int, float>& e0, const std::pair<int, float>& e1) {
-          return e0.second > e1.second;
-        });
   }
 
   std::promise<void> done_promise;

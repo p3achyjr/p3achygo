@@ -96,9 +96,13 @@ mcts::Search::Params MakeSearchParams(const eval::PlayerSearchConfig& cfg) {
     collision_detector = mcts::CollisionDetectorKind::kNoOp;
   }
 
+  mcts::Search::Mode mode = (cfg.search_mode == "batch")
+                                ? mcts::Search::Mode::kBatch
+                                : mcts::Search::Mode::kConcurrent;
+
   return mcts::Search::Params{
       .num_threads = cfg.num_threads_per_game,
-      .total_visit_budget = cfg.visit_budget,
+      .total_visit_budget = cfg.time_ms > 0 ? 1 << 20 : cfg.n,
       .total_visit_time_ms = cfg.time_ms,
       .puct_params =
           mcts::PuctParams{
@@ -112,11 +116,15 @@ mcts::Search::Params MakeSearchParams(const eval::PlayerSearchConfig& cfg) {
           },
       .q_fn_kind = q_fn_kind,
       .n_fn_kind = n_fn_kind,
-      .descent_policy_kind = mcts::DescentPolicyKind::kDeterministic,
+      .descent_policy_kind = (cfg.descent_policy == "bu_uct")
+                                 ? mcts::DescentPolicyKind::kBuUct
+                                 : mcts::DescentPolicyKind::kDeterministic,
       .collision_policy_kind = collision_policy,
       .collision_detector_kind = collision_detector,
       .vl_delta = cfg.vl_delta,
       .max_collision_retries = cfg.max_collision_retries,
+      .max_o_ratio = cfg.max_o_ratio,
+      .mode = mode,
   };
 }
 
@@ -195,6 +203,13 @@ void PlayEvalGame(size_t seed, int game_id, NNInterface* cur_nn,
     gumbel_w.emplace(white_nn, game_id);
   }
 
+  int cur_total_visits = 0;
+  int cand_total_visits = 0;
+  float cur_total_time = 0;
+  float cand_total_time = 0;
+  int cur_turns = 0;
+  int cand_turns = 0;
+
   auto color_to_move = BLACK;
   while (!game.IsGameOver()) {
     TreeNode*& player_tree = color_to_move == BLACK ? btree : wtree;
@@ -260,6 +275,12 @@ void PlayEvalGame(size_t seed, int game_id, NNInterface* cur_nn,
       move = gumbel_res.mcts_move;
     }
     auto end = std::chrono::high_resolution_clock::now();
+    auto search_dur =
+        std::chrono::duration_cast<std::chrono::milliseconds>(end - begin)
+            .count();
+    search_dur_ema = search_dur_ema == 0
+                         ? search_dur
+                         : (search_dur_ema * 0.9 + search_dur * 0.1);
     if (VOutcome(player_tree) < kResignThreshold) {
       LOG_TO_SINK(INFO, sink) << "Player " << ToString(color_to_move)
                               << " Resigned. Qz: " << VOutcome(player_tree);
@@ -278,6 +299,18 @@ void PlayEvalGame(size_t seed, int game_id, NNInterface* cur_nn,
     float cand_score_post = Score(cand_tree);
     float cur_var_post = VVar(cur_tree);
     float cand_var_post = VVar(cand_tree);
+    const int num_visits = cur_n_post > cur_n_pre ? cur_n_post - cur_n_pre
+                                                  : cand_n_post - cand_n_pre;
+    const bool active_is_cur = (color_to_move == BLACK) == cur_is_black;
+    if (active_is_cur) {
+      cur_total_visits += static_cast<int>(cur_n_post - cur_n_pre);
+      cur_total_time += search_dur;
+      ++cur_turns;
+    } else {
+      cand_total_visits += static_cast<int>(cand_n_post - cand_n_pre);
+      cand_total_time += search_dur;
+      ++cand_turns;
+    }
 
     // Commit move changes.
     float move_q = Q(player_tree, move);
@@ -310,72 +343,77 @@ void PlayEvalGame(size_t seed, int game_id, NNInterface* cur_nn,
     player_tree = next_player;
     opp_tree = next_opp;
 
-    // Time.
-    auto search_dur =
-        std::chrono::duration_cast<std::chrono::microseconds>(end - begin)
-            .count();
-    search_dur_ema = search_dur_ema == 0
-                         ? search_dur
-                         : (search_dur_ema * 0.9 + search_dur * 0.1);
-
     // Log.
     [&]() {
       std::string root_color = ToString(OppositeColor(color_to_move));
       std::stringstream s;
       s << "\n----- Move Num: " << game.num_moves() << " -----\n";
-      s << "N: " << active_cfg.n << ", K: " << active_cfg.k
-        << ", Noise Scaling: " << active_cfg.noise_scaling
-        << ", PUCT: " << active_cfg.use_puct
-        << ", LCB: " << active_cfg.use_lcb
-        << ", cPUCT: " << active_cfg.c_puct
-        << ", cPUCT Var Scaling: " << active_cfg.var_scale_cpuct
-        << ", MCGS: " << active_cfg.use_mcgs
-        << ", PUCT-V: " << active_cfg.use_puct_v
-        << ", cPUCT_2: " << active_cfg.c_puct_v_2 << "\n";
-      s << "Gumbel Move: " << move << ", q: " << move_q
-        << ", Aborts: " << num_aborted << ", Collisions: " << num_collisions
+      s << "N=" << active_cfg.n << "  K=" << active_cfg.k
+        << "  Noise Scaling=" << active_cfg.noise_scaling
+        << "  PUCT=" << active_cfg.use_puct << "  LCB=" << active_cfg.use_lcb
+        << "  cPUCT=" << active_cfg.c_puct
+        << "  cPUCT Var Scaling=" << active_cfg.var_scale_cpuct
+        << "  MCGS=" << active_cfg.use_mcgs
+        << "  PUCT-V=" << active_cfg.use_puct_v
+        << "  cPUCT_2=" << active_cfg.c_puct_v_2 << "\n";
+      s << "MCTS Move=" << move << "  q=" << move_q << "  Visits=" << num_visits
+        << "  Aborts=" << num_aborted << "  Collisions=" << num_collisions
         << "\n";
-      s << "Last 5 Moves: " << game.move(game.num_moves() - 5) << ", "
-        << game.move(game.num_moves() - 4) << ", "
-        << game.move(game.num_moves() - 3) << ", "
-        << game.move(game.num_moves() - 2) << ", "
+      s << "Avg Visits/Turn — Cur="
+        << (cur_turns > 0 ? static_cast<float>(cur_total_visits) / cur_turns
+                          : 0.0f)
+        << " (" << cur_turns << " turns)  Cand="
+        << (cand_turns > 0 ? static_cast<float>(cand_total_visits) / cand_turns
+                           : 0.0f)
+        << " (" << cand_turns << " turns)\n";
+      s << "Avg Time/Turn — Cur="
+        << (cur_turns > 0 ? static_cast<float>(cur_total_time) / cur_turns
+                          : 0.0f)
+        << "ms (" << cur_turns << " turns)  Cand="
+        << (cand_turns > 0 ? static_cast<float>(cand_total_time) / cand_turns
+                           : 0.0f)
+        << "ms" << " (" << cand_turns << " turns)\n";
+      s << "Last 5 Moves: " << game.move(game.num_moves() - 5) << "  "
+        << game.move(game.num_moves() - 4) << "  "
+        << game.move(game.num_moves() - 3) << "  "
+        << game.move(game.num_moves() - 2) << "  "
         << game.move(game.num_moves() - 1) << "\n";
-      s << "Cur Color: " << (cur_is_black ? ToString(BLACK) : ToString(WHITE))
-        << ", Cand Color: "
-        << (cur_is_black ? ToString(WHITE) : ToString(BLACK)) << "\n";
-      s << "(" << root_color << ") Cur Tree NN Stats:\n  Q_z: " << cur_qz_nn
-        << "\n  Score: " << cur_score_est_nn << "\n";
+      s << "Cur Color=" << (cur_is_black ? ToString(BLACK) : ToString(WHITE))
+        << "  Cand Color=" << (cur_is_black ? ToString(WHITE) : ToString(BLACK))
+        << "\n";
+      s << "(" << root_color << ") Cur Tree NN Stats\n  Qz = " << cur_qz_nn
+        << "\n  Score = " << cur_score_est_nn << "\n";
       s << "(" << root_color
-        << ") Cur Tree Stats, Pre-Search :\n  N: " << cur_n_pre
-        << "\n  Q: " << cur_q_pre << "\n  Q_z: " << cur_q_outcome_pre
-        << "\n  Score: " << cur_score_pre << ", Variance: " << cur_var_pre
+        << ") Cur Tree Stats, Pre-Search\n  N = " << cur_n_pre
+        << "\n  Q = " << cur_q_pre << "\n  Qz = " << cur_q_outcome_pre
+        << "\n  Stddev = " << std::sqrt(cur_var_pre) << "\n  Score = " << cur_score_pre
         << "\n";
       s << "(" << root_color
-        << ") Cur Tree Stats, Post-Search :\n  N: " << cur_n_post
-        << "\n  Q: " << cur_q_post << "\n  Q_z: " << cur_q_outcome_post
-        << "\n  Score: " << cur_score_post << ", Variance: " << cur_var_post
+        << ") Cur Tree Stats, Post-Search\n  N = " << cur_n_post
+        << "\n  Q = " << cur_q_post << "\n  Qz = " << cur_q_outcome_post
+        << "\n  Stddev = " << std::sqrt(cur_var_post) << "\n  Score = " << cur_score_post
         << "\n";
-      s << "(" << root_color << ") Cand Tree NN Stat:\n  Q_z: " << cand_qz_nn
-        << "\n  Score: " << cand_score_est_nn << "\n";
+      s << "(" << root_color << ") Cand Tree NN Stat:\n  Qz = " << cand_qz_nn
+        << "\n  Score = " << cand_score_est_nn << "\n";
       s << "(" << root_color
-        << ") Cand Tree Stats, Pre-Search :\n  N: " << cand_n_pre
-        << "\n  Q: " << cand_q_pre << "\n  Q_z: " << cand_q_outcome_pre
-        << "\n  Score: " << cand_score_pre << ", Variance: " << cand_var_pre
+        << ") Cand Tree Stats, Pre-Search\n  N = " << cand_n_pre
+        << "\n  Q = " << cand_q_pre << "\n  Qz = " << cand_q_outcome_pre
+        << "\n  Stddev = " << std::sqrt(cand_var_pre) << "\n  Score = " << cand_score_pre
         << "\n";
       s << "(" << root_color
-        << ") Cand Tree Stats, Post-Search :\n  N: " << cand_n_post
-        << "\n  Q: " << cand_q_post << "\n  Q_z: " << cand_q_outcome_post
-        << "\n  Score: " << cand_score_post << ", Variance: " << cand_var_post
+        << ") Cand Tree Stats, Post-Search\n  N = " << cand_n_post
+        << "\n  Q = " << cand_q_post << "\n  Qz = " << cand_q_outcome_post
+        << "\n  Stddev = " << std::sqrt(cand_var_post) << "\n  Score = " << cand_score_post
         << "\n";
-      s << "Player to Move: " << ToString(color_to_move) << ", "
+      s << "Player to Move=" << ToString(color_to_move) << ", "
         << (color_to_move == BLACK ? (cur_is_black ? "CUR" : "CAND")
                                    : (cur_is_black ? "CAND" : "CUR"))
         << "\n";
       s << "Board:\n" << game.board() << "\n";
       s << "Nodes Reaped: " << num_nodes_reaped
         << ", Reap Time: " << reap_time_us << "us\n";
-      s << "Search Took " << search_dur << "us. Search EMA: " << search_dur_ema
-        << "us.\n";
+      s << "Search Took " << search_dur << "ms. Search EMA: " << search_dur_ema
+        << "ms.\n";
 
       LOG_TO_SINK(INFO, sink) << s.str();
     }();

@@ -286,6 +286,12 @@ class Board final {
   Board(bool prohibit_pass_alive, float komi = 7.5);
   ~Board() = default;
 
+  Board& operator=(const Board& other) {
+    this->~Board();
+    new (this) Board(other);
+    return *this;
+  }
+
   inline int at(int i, int j) const { return board_[i * BOARD_LEN + j]; }
   inline float komi() const { return komi_; }
   inline Zobrist::Hash hash() const { return hash_; }

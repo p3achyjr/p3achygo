@@ -69,6 +69,7 @@ struct TreeNode final {
   absl::Mutex mu;
   std::atomic<int> n_in_flight = 0;
   std::atomic<bool> is_pending_update = false;
+  std::atomic<int> sum_n_in_flights = 0;
 };
 
 inline float N(const TreeNode* node) { return node == nullptr ? 0 : node->n; }

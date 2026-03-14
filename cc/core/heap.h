@@ -39,6 +39,8 @@ class Heap {
     Evict();
   }
 
+  void Clear() { data_.clear(); }
+
  private:
   void Evict() {
     while (data_.size() > max_size_) {
