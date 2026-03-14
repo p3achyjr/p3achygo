@@ -4,7 +4,6 @@ add_library(self_play
     self_play_thread.cc
     self_play_thread.h
     book.h
-    go_exploit_buffer.h
 )
 target_link_libraries(self_play PUBLIC
     trt_deps

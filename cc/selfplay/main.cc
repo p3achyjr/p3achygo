@@ -20,7 +20,7 @@
 #include "cc/nn/nn_interface.h"
 #include "cc/recorder/dir.h"
 #include "cc/recorder/game_recorder.h"
-#include "cc/selfplay/go_exploit_buffer.h"
+#include "cc/selfplay/reuse_buffer.h"
 #include "cc/selfplay/self_play_thread.h"
 
 ABSL_FLAG(std::string, model_path, "", "Path to model.");
@@ -42,6 +42,8 @@ ABSL_FLAG(int, gumbel_default_k, 5,
           "Number of Low Playout Cap Randomization moves to sample.");
 ABSL_FLAG(int, gumbel_default_n, 32,
           "Number of Low Playout Cap Randomization visits.");
+ABSL_FLAG(bool, use_regret_buffer, false,
+          "Use regret-guided state reuse buffer instead of uniform GoExploit.");
 
 void WaitForSignal() {
   // any line from stdin is a shutdown signal.
@@ -105,9 +107,15 @@ int main(int argc, char** argv) {
                                      absl::GetFlag(FLAGS_flush_interval),
                                      absl::GetFlag(FLAGS_gen), worker_id);
 
-  // initialize Go-Exploit buffer.
-  std::unique_ptr<selfplay::GoExploitBuffer> go_exploit_buffer =
-      std::make_unique<selfplay::GoExploitBuffer>();
+  // initialize reuse buffer (uniform GoExploit or regret-guided).
+  std::unique_ptr<selfplay::ReuseBuffer> reuse_buffer;
+  if (absl::GetFlag(FLAGS_use_regret_buffer)) {
+    reuse_buffer.reset(
+        static_cast<selfplay::ReuseBuffer*>(new selfplay::RegretGuidedBuffer()));
+  } else {
+    reuse_buffer.reset(static_cast<selfplay::ReuseBuffer*>(
+        new selfplay::GoExploitReuseBuffer()));
+  }
 
   std::vector<std::string> sink_names;
   for (int thread_id = 0; thread_id < num_threads; ++thread_id) {
@@ -119,7 +127,7 @@ int main(int argc, char** argv) {
     size_t seed = absl::HashOf(worker_id, thread_id);
     std::thread thread(
         selfplay::Run, seed, thread_id, nn_interface.get(), game_recorder.get(),
-        go_exploit_buffer.get(), sink_names[thread_id],
+        reuse_buffer.get(), sink_names[thread_id],
         selfplay::SPConfig{
             absl::GetFlag(FLAGS_max_moves),
             selfplay::GumbelParams{absl::GetFlag(FLAGS_gumbel_selected_n),

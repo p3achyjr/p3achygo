@@ -18,7 +18,7 @@
 #include "cc/mcts/tree.h"
 #include "cc/recorder/game_recorder.h"
 #include "cc/selfplay/book.h"
-#include "cc/selfplay/go_exploit_buffer.h"
+#include "cc/selfplay/reuse_buffer.h"
 
 #define LOG_TO_SINK(severity, sink) LOG(severity).ToSinkOnly(&sink)
 
@@ -72,31 +72,22 @@ static constexpr float kNumDownBadMovesThreshold = 5;
 // Whether the thread should continue running.
 static std::atomic<bool> running = true;
 
-void AddNewInitState(GoExploitBuffer* buffer, const Game& game,
-                     Color color_to_move) {
-  Board board = game.board();
+void AddNewInitState(ReuseBuffer* buffer, const Game& game, const Board& board,
+                     Color color_to_move, int abs_move_num,
+                     float regret = 0.0f) {
   absl::InlinedVector<Move, constants::kMaxGameLen> last_moves;
   for (int off = constants::kNumLastMoves; off > 0; --off) {
-    Move last_move = game.moves()[game.moves().size() - off];
-    last_moves.emplace_back(last_move);
+    // game.move() handles the kMoveOffset, so abs_move_num - off can be as
+    // low as -kMoveOffset (accessing the initial last_moves noops).
+    last_moves.emplace_back(game.move(abs_move_num - off));
   }
-
   CHECK(last_moves.size() == constants::kNumLastMoves);
-  CHECK(last_moves[last_moves.size() - 5] ==
-        game.moves()[game.moves().size() - 5]);
-  CHECK(last_moves[last_moves.size() - 4] ==
-        game.moves()[game.moves().size() - 4]);
-  CHECK(last_moves[last_moves.size() - 3] ==
-        game.moves()[game.moves().size() - 3]);
-  CHECK(last_moves[last_moves.size() - 2] ==
-        game.moves()[game.moves().size() - 2]);
-  CHECK(last_moves[last_moves.size() - 1] ==
-        game.moves()[game.moves().size() - 1]);
 
-  buffer->Add(InitState{board, last_moves, color_to_move, game.num_moves()});
+  buffer->Add(InitState{board, last_moves, color_to_move, abs_move_num},
+              regret);
 }
 
-InitState GetInitState(Probability& probability, GoExploitBuffer* buffer) {
+InitState GetInitState(Probability& probability, ReuseBuffer* buffer) {
   const float komi = std::round(7.0f + std::min(probability.Gaussian(), 3.0f)) +
                      (probability.Uniform() < 0.5f ? 0.5f : -0.5f);
   InitState s0 =
@@ -155,7 +146,7 @@ std::string ToString(const Color& color) {
 }  // namespace
 
 void Run(size_t seed, int thread_id, NNInterface* nn_interface,
-         GameRecorder* game_recorder, GoExploitBuffer* go_exploit_buffer,
+         GameRecorder* game_recorder, ReuseBuffer* reuse_buffer,
          std::string logfile, SPConfig config) {
   FileSink sink(logfile.c_str());
   Probability probability(seed);
@@ -163,7 +154,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
   // Main loop.
   while (true) {
     // Populate initial state either from seen states or s_0.
-    InitState init_state = GetInitState(probability, go_exploit_buffer);
+    InitState init_state = GetInitState(probability, reuse_buffer);
 
     // Game state.
     Game game(init_state.board, init_state.last_moves);
@@ -204,7 +195,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     std::vector<TreeNode*> search_roots;
 
     // Starting positions throughout game.
-    std::vector<std::tuple<Color, Board, game::Loc, float>>
+    std::vector<std::tuple<Color, Board, game::Loc, float, bool>>
         positions_for_regret;
 
     // Number of moves for which to sample directly from the policy.
@@ -398,8 +389,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       root_scores.push_back(root_score);
       klds.push_back(gumbel_res.kld);
       visit_counts.push_back(gumbel_res.visits);
-      positions_for_regret.push_back(
-          {color_to_move, game.board(), move, q_post});
+      positions_for_regret.push_back({color_to_move, game.board(), move, q_post,
+                                      /*is_eligible=*/move_n != 0});
       if (-std::abs(root_q_outcome) < kDownBadThreshold) {
         ++num_consecutive_down_bad_moves;
       } else {
@@ -461,8 +452,10 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         return p;
       }(root_q_outcome);
 
-      if (probability.Uniform() < add_init_state_prob) {
-        AddNewInitState(go_exploit_buffer, game, color_to_move);
+      if (probability.Uniform() < add_init_state_prob &&
+          reuse_buffer->AllowsMidGameAdd()) {
+        AddNewInitState(reuse_buffer, game, game.board(), color_to_move,
+                        game.num_moves());
       }
 
       auto search_dur =
@@ -599,38 +592,74 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         return std::get<4>(e0) < std::get<4>(e1);
       }
     };
+
+    // Find the positions with the most "regret".
+    // The rough intuition for "regret" is the positions that led to the biggest
+    // loss in winrate. It is implemented by taking an EMA of value loss over a
+    // 50-move horizon.
+    //
+    // EMA decay per step and lookahead horizon. Effective
+    // weight at step k = kRegretEmaDecay^k; horizon where weight drops to ~5%
+    // is log(0.05)/log(kRegretEmaDecay) steps.
+    static constexpr float kRegretEmaDecay = 0.94f;  // ~50 step horizon
+    static constexpr int kRegretHorizon = 50;
+
     core::Heap<std::tuple<int, Color, Board, Loc, float, float, float>,
                RegretCmp>
         regret_buffer(RegretCmp{});
-    for (int mv_num = 0; mv_num < positions_for_regret.size(); ++mv_num) {
-      const auto& [color, board, move, v] = positions_for_regret[mv_num];
-      const float z = game.result().winner == color ? 1.5 : -1.5;
-      float regret = 0;
-      for (int future_mv = mv_num; future_mv < positions_for_regret.size();
-           ++future_mv) {
-        const auto& [color_this_turn, _, __, v_this_turn] =
-            positions_for_regret[mv_num];
-        const float v_mult = color_this_turn == color ? 1 : -1;
-        const float local_regret = v_mult * v_this_turn - z;
-        regret +=
-            local_regret * local_regret * std::pow(0.995, future_mv - mv_num);
+    for (int mv_num = 0; mv_num < (int)positions_for_regret.size(); ++mv_num) {
+      const auto& [color, board, move, v, is_eligible] =
+          positions_for_regret[mv_num];
+      if (!is_eligible) {
+        continue;
       }
-      regret /= (positions_for_regret.size() - mv_num);
-      regret_buffer.PushHeap({mv_num, color, board, move, regret, v, z});
 
-      LOG(INFO) << "Regret: " << regret << ", Color: " << int(color)
-                << ", Move: " << move << ", Board:\n"
-                << game::ToString(board.position());
+      const float z = game.result().winner == color ? 1.5f : -1.5f;
+
+      // Weighted average of future Q values from color's perspective.
+      float future_v_avg = 0.0f;
+      float weight = 1.0f;
+      float weight_sum = 0.0f;
+      for (int k = 1;
+           k < kRegretHorizon && mv_num + k < (int)positions_for_regret.size();
+           ++k) {
+        const auto& [ck, bk, mk, vk, ek] = positions_for_regret[mv_num + k];
+        weight *= kRegretEmaDecay;
+        if (!ek) continue;
+        const float vk_color = (ck == color) ? vk : -vk;
+        future_v_avg += weight * vk_color;
+        weight_sum += weight;
+      }
+      if (weight_sum > 0.0f) future_v_avg /= weight_sum;
+
+      // Regret = drop in color's Q over the horizon. High = blunder occurred.
+      float regret = v - future_v_avg;
+
+      // Skip positions that are too won/lost: the same attenuation used for
+      // GoExploit. Linearly attenuate from |v|=0.5 to 0 at |v|=0.9.
+      float regret_add_prob = [](float v) {
+        static constexpr float kMaxV = 0.9f;
+        static constexpr float kAnnealStart = 0.5f;
+        if (std::abs(v) > kMaxV) return 0.0f;
+        if (std::abs(v) <= kAnnealStart) return 1.0f;
+        return (kMaxV - std::abs(v)) / (kMaxV - kAnnealStart);
+      }(v);
+      if (probability.Uniform() >= regret_add_prob) continue;
+
+      regret_buffer.PushHeap({mv_num, color, board, move, regret, v, z});
     }
 
-    for (int i = 0; i < 10; ++i) {
-      const auto& [mv_num, color, board, move, regret, v, z] =
+    CHECK(positions_for_regret.size() == (size_t)game.num_moves())
+        << "positions_for_regret size " << positions_for_regret.size()
+        << " != game.num_moves() " << game.num_moves();
+
+    // Add the top-3 highest-regret positions to the reuse buffer.
+    // mv_num is 0-indexed from game start (same scale as game.num_moves()),
+    // so it can be passed directly to AddNewInitState as abs_move_num.
+    for (int i = 0; i < 3 && regret_buffer.Size() > 0; ++i) {
+      const auto [mv_num, color, board, move, regret, v, z] =
           regret_buffer.PopHeap();
-      LOG(INFO) << "Regret Index: " << i << ", Regret: " << regret
-                << ", Color: " << int(color) << ", Move Num: " << mv_num
-                << ", Move: " << move << ", v: " << v << ", z: " << z
-                << ", Board:\n"
-                << game::ToString(board.position());
+      AddNewInitState(reuse_buffer, game, board, color, mv_num, regret);
     }
 
     auto begin = std::chrono::high_resolution_clock::now();

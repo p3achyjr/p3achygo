@@ -27,6 +27,7 @@ cc_library(
     hdrs = [
         "book.h",
         "go_exploit_buffer.h",
+        "reuse_buffer.h",
         "self_play_thread.h",
     ],
     deps = [
@@ -40,5 +41,6 @@ cc_library(
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
     ],
 )
