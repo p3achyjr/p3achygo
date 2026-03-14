@@ -7,6 +7,7 @@
 #include "absl/container/inlined_vector.h"
 #include "absl/synchronization/mutex.h"
 #include "cc/constants/constants.h"
+#include "cc/core/heap.h"
 #include "cc/core/ring_buffer.h"
 #include "cc/game/game.h"
 
@@ -17,7 +18,12 @@ struct InitState {
   absl::InlinedVector<game::Move, constants::kMaxGameLen> last_moves;
   game::Color color_to_move;
   int move_num;
+  // If true, the game started from this state should use full search params
+  // and force all moves to be trainable.
+  bool force_full_search = false;
 };
+
+enum class BufferType { kGoExploit, kRegret };
 
 // Abstract interface for state reuse buffers.
 class ReuseBuffer {
@@ -25,22 +31,23 @@ class ReuseBuffer {
   virtual ~ReuseBuffer() = default;
   virtual void Add(InitState state, float regret) = 0;
   virtual std::optional<InitState> Get() = 0;
-  // Whether to add states mid-game (via AddNewInitState).
-  virtual bool AllowsMidGameAdd() const { return true; }
+  virtual BufferType GetType() const = 0;
 };
 
 // Ignores regret, uniform random sampling.
 class GoExploitReuseBuffer final : public ReuseBuffer {
  public:
-  void Add(InitState state, float /*regret*/) {
+  void Add(InitState state, float /*regret*/) override {
     absl::MutexLock l(&mu_);
     buffer_.Append(state);
   }
 
-  std::optional<InitState> Get() {
+  std::optional<InitState> Get() override {
     absl::MutexLock l(&mu_);
     return buffer_.PopRandom();
   }
+
+  BufferType GetType() const override { return BufferType::kGoExploit; }
 
  private:
   core::RingBuffer<InitState, constants::kGoExploitBufferSize> buffer_
@@ -53,32 +60,23 @@ class GoExploitReuseBuffer final : public ReuseBuffer {
 class RegretGuidedBuffer final : public ReuseBuffer {
  public:
   explicit RegretGuidedBuffer(int capacity = constants::kGoExploitBufferSize)
-      : capacity_(capacity) {}
+      : regret_pq_(kMaxCmp, capacity) {}
 
   void Add(InitState state, float regret) override {
     absl::MutexLock l(&mu_);
-    if ((int)entries_.size() < capacity_) {
-      entries_.push_back({std::move(state), regret});
-      std::push_heap(entries_.begin(), entries_.end(), kMaxCmp);
-    } else {
-      // Evict lowest-regret entry if new entry has higher regret.
-      int min_idx = MinRegretIndexLocked();
-      if (regret > entries_[min_idx].regret) {
-        entries_[min_idx] = {std::move(state), regret};
-        std::make_heap(entries_.begin(), entries_.end(), kMaxCmp);
-      }
-    }
+    regret_pq_.PushHeap(Entry{state, regret});
   }
 
-  // Returns and removes the highest-regret state.
+  // Returns and removes the highest-regret state, with force_full_search set.
   std::optional<InitState> Get() override {
     absl::MutexLock l(&mu_);
-    if (entries_.empty()) return std::nullopt;
-    std::pop_heap(entries_.begin(), entries_.end(), kMaxCmp);
-    InitState result = std::move(entries_.back().state);
-    entries_.pop_back();
-    return result;
+    if (regret_pq_.Size() <= 0) return std::nullopt;
+    InitState state = regret_pq_.PopHeap().state;
+    state.force_full_search = true;
+    return state;
   }
+
+  BufferType GetType() const override { return BufferType::kRegret; }
 
  private:
   struct Entry {
@@ -93,18 +91,7 @@ class RegretGuidedBuffer final : public ReuseBuffer {
   };
   static constexpr MaxCmp kMaxCmp{};
 
-  int MinRegretIndexLocked() const ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
-    int min_idx = 0;
-    for (int i = 1; i < (int)entries_.size(); ++i) {
-      if (entries_[i].regret < entries_[min_idx].regret) min_idx = i;
-    }
-    return min_idx;
-  }
-
-  bool AllowsMidGameAdd() const override { return false; }
-
-  const int capacity_;
-  std::vector<Entry> entries_ ABSL_GUARDED_BY(mu_);
+  core::Heap<Entry, MaxCmp> regret_pq_;
   absl::Mutex mu_;
 };
 
