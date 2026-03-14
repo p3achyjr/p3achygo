@@ -40,6 +40,15 @@ std::string ToString(const Winner& winner) {
   return winner == Winner::kCur ? "CUR" : "CAND";
 }
 
+mcts::ScoreUtilityParams MakeScoreUtilityParams(
+    const eval::PlayerSearchConfig& cfg) {
+  mcts::ScoreUtilityMode mode = cfg.score_utility_mode == "integral"
+                                    ? mcts::ScoreUtilityMode::kIntegral
+                                    : mcts::ScoreUtilityMode::kDirect;
+  return mcts::ScoreUtilityParams{.score_weight = cfg.score_weight,
+                                  .mode = mode};
+}
+
 // Converts a PlayerSearchConfig into Search::Params for parallel search.
 // The Gumbel path in PlayEvalGame does not use this; it is here so that
 // integrating parallel search is a mechanical substitution.
@@ -125,6 +134,7 @@ mcts::Search::Params MakeSearchParams(const eval::PlayerSearchConfig& cfg) {
       .max_collision_retries = cfg.max_collision_retries,
       .max_o_ratio = cfg.max_o_ratio,
       .mode = mode,
+      .score_util_params = MakeScoreUtilityParams(cfg),
   };
 }
 
@@ -194,13 +204,13 @@ void PlayEvalGame(size_t seed, int game_id, NNInterface* cur_nn,
     search_b.emplace(
         black_nn->MakeSlot(game_id * black_cfg.num_threads_per_game));
   } else {
-    gumbel_b.emplace(black_nn, game_id);
+    gumbel_b.emplace(black_nn, game_id, MakeScoreUtilityParams(black_cfg));
   }
   if (white_uses_search) {
     search_w.emplace(
         white_nn->MakeSlot(game_id * white_cfg.num_threads_per_game));
   } else {
-    gumbel_w.emplace(white_nn, game_id);
+    gumbel_w.emplace(white_nn, game_id, MakeScoreUtilityParams(white_cfg));
   }
 
   int cur_total_visits = 0;
@@ -255,8 +265,7 @@ void PlayEvalGame(size_t seed, int game_id, NNInterface* cur_nn,
       num_aborted = res.num_aborted;
       num_collisions = res.num_collisions;
     } else {
-      GumbelEvaluator& gumbel =
-          color_to_move == BLACK ? *gumbel_b : *gumbel_w;
+      GumbelEvaluator& gumbel = color_to_move == BLACK ? *gumbel_b : *gumbel_w;
       GumbelResult gumbel_res =
           active_cfg.use_puct
               ? gumbel.SearchRootPuct(
@@ -266,12 +275,12 @@ void PlayEvalGame(size_t seed, int game_id, NNInterface* cur_nn,
                                    ? PuctRootSelectionPolicy::kLcb
                                    : PuctRootSelectionPolicy::kVisitCount,
                                active_cfg.c_puct, 0.45f, active_cfg.c_puct_v_2,
-                               active_cfg.use_puct_v, active_cfg.var_scale_cpuct,
-                               1.0f})
+                               active_cfg.use_puct_v,
+                               active_cfg.var_scale_cpuct, 1.0f})
               : gumbel.SearchRoot(
                     probability, game, player_table, player_tree, color_to_move,
                     mcts::GumbelSearchParams{active_cfg.n, active_cfg.k,
-                                            active_cfg.noise_scaling});
+                                             active_cfg.noise_scaling});
       move = gumbel_res.mcts_move;
     }
     auto end = std::chrono::high_resolution_clock::now();
@@ -321,12 +330,14 @@ void PlayEvalGame(size_t seed, int game_id, NNInterface* cur_nn,
     TreeNode* next_player = player_tree->children[move];
     TreeNode* next_opp = opp_tree->children[move];
     if (!next_player) {
-      // After the move, it's the opponent's turn (color_to_move was already flipped)
+      // After the move, it's the opponent's turn (color_to_move was already
+      // flipped)
       next_player = player_table->GetOrCreate(game.board().hash(),
                                               color_to_move, game.IsGameOver());
     }
     if (!next_opp) {
-      // After the move, it's the opponent's turn (color_to_move was already flipped)
+      // After the move, it's the opponent's turn (color_to_move was already
+      // flipped)
       next_opp = opp_table->GetOrCreate(game.board().hash(), color_to_move,
                                         game.IsGameOver());
     }
@@ -386,25 +397,25 @@ void PlayEvalGame(size_t seed, int game_id, NNInterface* cur_nn,
       s << "(" << root_color
         << ") Cur Tree Stats, Pre-Search\n  N = " << cur_n_pre
         << "\n  Q = " << cur_q_pre << "\n  Qz = " << cur_q_outcome_pre
-        << "\n  Stddev = " << std::sqrt(cur_var_pre) << "\n  Score = " << cur_score_pre
-        << "\n";
+        << "\n  Stddev = " << std::sqrt(cur_var_pre)
+        << "\n  Score = " << cur_score_pre << "\n";
       s << "(" << root_color
         << ") Cur Tree Stats, Post-Search\n  N = " << cur_n_post
         << "\n  Q = " << cur_q_post << "\n  Qz = " << cur_q_outcome_post
-        << "\n  Stddev = " << std::sqrt(cur_var_post) << "\n  Score = " << cur_score_post
-        << "\n";
+        << "\n  Stddev = " << std::sqrt(cur_var_post)
+        << "\n  Score = " << cur_score_post << "\n";
       s << "(" << root_color << ") Cand Tree NN Stat:\n  Qz = " << cand_qz_nn
         << "\n  Score = " << cand_score_est_nn << "\n";
       s << "(" << root_color
         << ") Cand Tree Stats, Pre-Search\n  N = " << cand_n_pre
         << "\n  Q = " << cand_q_pre << "\n  Qz = " << cand_q_outcome_pre
-        << "\n  Stddev = " << std::sqrt(cand_var_pre) << "\n  Score = " << cand_score_pre
-        << "\n";
+        << "\n  Stddev = " << std::sqrt(cand_var_pre)
+        << "\n  Score = " << cand_score_pre << "\n";
       s << "(" << root_color
         << ") Cand Tree Stats, Post-Search\n  N = " << cand_n_post
         << "\n  Q = " << cand_q_post << "\n  Qz = " << cand_q_outcome_post
-        << "\n  Stddev = " << std::sqrt(cand_var_post) << "\n  Score = " << cand_score_post
-        << "\n";
+        << "\n  Stddev = " << std::sqrt(cand_var_post)
+        << "\n  Score = " << cand_score_post << "\n";
       s << "Player to Move=" << ToString(color_to_move) << ", "
         << (color_to_move == BLACK ? (cur_is_black ? "CUR" : "CAND")
                                    : (cur_is_black ? "CAND" : "CUR"))

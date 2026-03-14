@@ -3,7 +3,7 @@
 
 #include "cc/nn/nn_interface.h"
 #include "cc/recorder/game_recorder.h"
-#include "cc/selfplay/go_exploit_buffer.h"
+#include "cc/selfplay/reuse_buffer.h"
 
 namespace selfplay {
 
@@ -19,9 +19,8 @@ struct SPConfig {
 };
 
 void Run(size_t seed, int thread_id, nn::NNInterface* nn_interface,
-         recorder::GameRecorder* game_recorder,
-         GoExploitBuffer* go_exploit_buffer, std::string logfile,
-         SPConfig config);
+         recorder::GameRecorder* game_recorder, ReuseBuffer* reuse_buffer,
+         std::string logfile, SPConfig config);
 
 void SignalStop();
 bool IsRunning();

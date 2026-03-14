@@ -9,14 +9,23 @@
 
 namespace mcts {
 
+enum class ScoreUtilityMode : uint8_t { kDirect = 0, kIntegral = 1 };
+
+struct ScoreUtilityParams {
+  float score_weight = kDefaultScoreWeight;
+  ScoreUtilityMode mode = ScoreUtilityMode::kDirect;
+};
+
 /*
  * Wrapper Class for Leaf Evaluation. Mainly useful for testing.
  */
 class LeafEvaluator final {
  public:
-  // Convenience constructor for task_offset=0.
+  // Convenience constructors use default ScoreUtilityParams.
   LeafEvaluator(nn::NNInterface* nn_interface, int thread_id);
   LeafEvaluator(nn::NNInterface::Slot slot, int thread_id);
+  LeafEvaluator(nn::NNInterface::Slot slot, int thread_id,
+                ScoreUtilityParams score_params);
   ~LeafEvaluator() = default;
 
   // Disable Copy and Move.
@@ -57,9 +66,12 @@ class LeafEvaluator final {
                      game::Color color_to_move);
 
  private:
+  float ScoreUtility(float score_est, float score_stddev,
+                     float root_score_est) const;
+
   nn::NNInterface::Slot slot_;
   int thread_id_;
-  const float score_weight_;
+  const ScoreUtilityParams score_params_;
 };
 }  // namespace mcts
 

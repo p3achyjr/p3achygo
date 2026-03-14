@@ -163,6 +163,10 @@ Loc GumbelNonRootSearchPolicy::SelectNextAction(const TreeNode* node,
 GumbelEvaluator::GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id)
     : leaf_evaluator_(nn_interface, thread_id) {}
 
+GumbelEvaluator::GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id,
+                                  ScoreUtilityParams score_params)
+    : leaf_evaluator_(nn_interface->MakeSlot(0), thread_id, score_params) {}
+
 // `n`: total number of simulations.
 // `k`: initial number of actions selected.
 // `n` must be >= `klogk`.

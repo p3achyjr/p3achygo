@@ -4,6 +4,8 @@
 #include <stdexcept>
 #include <string>
 
+#include "cc/mcts/constants.h"
+
 namespace eval {
 
 /*
@@ -36,6 +38,11 @@ struct PlayerSearchConfig {
   // Legacy bool kept for backward compat with existing config files.
   // Ignored when puct_root_policy is non-empty.
   bool use_lcb = true;
+
+  // Score utility
+  float score_weight = mcts::kDefaultScoreWeight;
+  // "direct" | "integral"
+  std::string score_utility_mode = "direct";
 
   // Other
   bool use_mcgs = false;
@@ -149,6 +156,11 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.puct_root_policy = val;
     else if (key == "use_lcb")
       cfg.use_lcb = internal::ParseBool(val);
+    // Score utility
+    else if (key == "score_weight")
+      cfg.score_weight = std::stof(val);
+    else if (key == "score_utility_mode")
+      cfg.score_utility_mode = val;
     // Other
     else if (key == "use_mcgs")
       cfg.use_mcgs = internal::ParseBool(val);

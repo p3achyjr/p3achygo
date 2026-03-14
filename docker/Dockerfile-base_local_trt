@@ -1,4 +1,4 @@
-FROM nvcr.io/nvidia/cuda:13.0.0-devel-ubuntu22.04
+FROM nvcr.io/nvidia/cuda:13.0.0-devel-ubuntu24.04
 
 RUN apt update && apt-get install -y \
   apt-transport-https \
@@ -13,18 +13,13 @@ RUN apt update && apt-get install -y \
   python3 \
   python3-pip \
   python3-dev \
+  python-is-python3 \
   libboost-all-dev
 
 # Install google-cloud-sdk.
 RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] http://packages.cloud.google.com/apt cloud-sdk main" \
   | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list && curl https://packages.cloud.google.com/apt/doc/apt-key.gpg \
   | apt-key --keyring /usr/share/keyrings/cloud.google.gpg  add - && apt-get update -y && apt-get install google-cloud-cli -y
-
-# Install LLVM.
-RUN wget https://apt.llvm.org/llvm.sh && \
-  chmod +x llvm.sh && \
-  ./llvm.sh 16 && \
-  rm llvm.sh
 
 # Install Bazel.
 # RUN wget https://github.com/bazelbuild/bazelisk/releases/download/v1.16.0/bazelisk-linux-amd64 && \
@@ -52,20 +47,20 @@ RUN git clone https://github.com/microsoft/mimalloc.git && \
   rm -rf mimalloc
 
 # Install CUDA 12.3 toolkit for TensorFlow 2.16 compatibility (alongside CUDA 13.0 from base image)
-RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb && \
-  dpkg -i cuda-keyring_1.1-1_all.deb && \
-  apt-get update && \
-  apt-get install -y cuda-toolkit-12-3 libcudnn8 libcudnn8-dev && \
-  rm cuda-keyring_1.1-1_all.deb
+# RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb && \
+#   dpkg -i cuda-keyring_1.1-1_all.deb && \
+#   apt-get update && \
+#   apt-get install -y cuda-toolkit-12-3 libcudnn8 libcudnn8-dev && \
+#   rm cuda-keyring_1.1-1_all.deb
 
 # Install TensorFlow 2.16
-RUN pip3 install tensorflow==2.16.* nvidia-cudnn-cu12==8.9.*
+RUN pip install tensorflow==2.16.* --break-system-packages
 
 # Create non-root user with matching UID/GID for host compatibility
-ARG UID=1000
-ARG GID=1000
-RUN groupadd -g $GID user && \
-  useradd -u $UID -g $GID -m -s /bin/bash user
+# ARG UID=1000
+# ARG GID=1000
+# RUN groupadd -g $GID user || true && \
+#   useradd -u $UID -g $GID -m -s /bin/bash user
 
 # Setup environment
 ENV PYTHONPATH=/app/python
@@ -73,8 +68,8 @@ ENV LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
 ENV PATH=/usr/lib/llvm-16/bin:$PATH
 
 # CUDA 12.3 paths for TensorFlow
-ENV LD_LIBRARY_PATH=/usr/local/cuda-12.3/lib64:$LD_LIBRARY_PATH
-ENV PATH=/usr/local/cuda-12.3/bin:$PATH
+# ENV LD_LIBRARY_PATH=/usr/local/cuda-12.3/lib64:$LD_LIBRARY_PATH
+# ENV PATH=/usr/local/cuda-12.3/bin:$PATH
 
 # TensorRT and TensorRT-RTX paths (mounted at runtime)
 # Mount points: /opt/tensorrt and /opt/tensorrt-rtx

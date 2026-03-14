@@ -44,7 +44,14 @@ class Heap {
  private:
   void Evict() {
     while (data_.size() > max_size_) {
-      PopHeap();
+      // Find the lowest-priority element (O(n)) and swap it to the back,
+      // then pop and restore the heap property with make_heap (O(n)).
+      // std::min_element with cmp_ finds the element that cmp_ considers
+      // least, i.e. the one we most want to evict.
+      auto min_it = std::min_element(data_.begin(), data_.end(), cmp_);
+      std::iter_swap(min_it, std::prev(data_.end()));
+      data_.pop_back();
+      std::make_heap(data_.begin(), data_.end(), cmp_);
     }
   }
   std::vector<T> data_;

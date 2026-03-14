@@ -21,6 +21,7 @@
 #include "absl/log/log.h"
 #include "absl/strings/str_format.h"
 #include "cc/constants/constants.h"
+#include "cc/mcts/constants.h"
 #include "cc/core/elo.h"
 #include "cc/core/filepath.h"
 #include "cc/eval/eval.h"
@@ -70,6 +71,10 @@ ABSL_FLAG(
     "Whether to use Monte-Carlo Graph Search (transposition table) for cur.");
 ABSL_FLAG(bool, cur_use_puct_v, false, "Whether to use PUCT-V for cur.");
 ABSL_FLAG(float, cur_c_puct_v_2, 3.0, "cur c_puct_v_2 scaling.");
+ABSL_FLAG(float, cur_score_weight, mcts::kDefaultScoreWeight,
+          "Score utility weight for cur.");
+ABSL_FLAG(std::string, cur_score_utility_mode, "direct",
+          "Score utility mode for cur: 'direct' or 'integral'.");
 ABSL_FLAG(int, cand_n, kDefaultGumbelN, "N for candidate player");
 ABSL_FLAG(int, cand_k, kDefaultGumbelK, "K for candidate player");
 ABSL_FLAG(float, cand_noise_scaling, 1.0f, "Cand gumbel noise scaling");
@@ -83,6 +88,10 @@ ABSL_FLAG(
     "Whether to use Monte-Carlo Graph Search (transposition table) for cand.");
 ABSL_FLAG(bool, cand_use_puct_v, false, "Whether to use PUCT-V for cand.");
 ABSL_FLAG(float, cand_c_puct_v_2, 3.0, "cand c_puct_v_2 scaling.");
+ABSL_FLAG(float, cand_score_weight, mcts::kDefaultScoreWeight,
+          "Score utility weight for cand.");
+ABSL_FLAG(std::string, cand_score_utility_mode, "direct",
+          "Score utility mode for cand: 'direct' or 'integral'.");
 
 float ConfidenceDelta(float z_score, float num_sims, float wr) {
   return z_score * std::sqrt(wr * (1 - wr) / num_sims);
@@ -116,6 +125,10 @@ void ApplyCurCommandLineFlags(eval::PlayerSearchConfig& cfg) {
     cfg.use_puct_v = absl::GetFlag(FLAGS_cur_use_puct_v);
   if (IsOnCommandLine("cur_c_puct_v_2"))
     cfg.c_puct_v_2 = absl::GetFlag(FLAGS_cur_c_puct_v_2);
+  if (IsOnCommandLine("cur_score_weight"))
+    cfg.score_weight = absl::GetFlag(FLAGS_cur_score_weight);
+  if (IsOnCommandLine("cur_score_utility_mode"))
+    cfg.score_utility_mode = absl::GetFlag(FLAGS_cur_score_utility_mode);
 }
 
 // Same for cand_* flags.
@@ -138,6 +151,10 @@ void ApplyCandCommandLineFlags(eval::PlayerSearchConfig& cfg) {
     cfg.use_puct_v = absl::GetFlag(FLAGS_cand_use_puct_v);
   if (IsOnCommandLine("cand_c_puct_v_2"))
     cfg.c_puct_v_2 = absl::GetFlag(FLAGS_cand_c_puct_v_2);
+  if (IsOnCommandLine("cand_score_weight"))
+    cfg.score_weight = absl::GetFlag(FLAGS_cand_score_weight);
+  if (IsOnCommandLine("cand_score_utility_mode"))
+    cfg.score_utility_mode = absl::GetFlag(FLAGS_cand_score_utility_mode);
 }
 
 // Builds a PlayerSearchConfig from the cur_* flags (all fields, no file).
@@ -153,6 +170,8 @@ eval::PlayerSearchConfig CurConfigFromFlags() {
   cfg.use_mcgs = absl::GetFlag(FLAGS_cur_use_mcgs);
   cfg.use_puct_v = absl::GetFlag(FLAGS_cur_use_puct_v);
   cfg.c_puct_v_2 = absl::GetFlag(FLAGS_cur_c_puct_v_2);
+  cfg.score_weight = absl::GetFlag(FLAGS_cur_score_weight);
+  cfg.score_utility_mode = absl::GetFlag(FLAGS_cur_score_utility_mode);
   return cfg;
 }
 
@@ -169,6 +188,8 @@ eval::PlayerSearchConfig CandConfigFromFlags() {
   cfg.use_mcgs = absl::GetFlag(FLAGS_cand_use_mcgs);
   cfg.use_puct_v = absl::GetFlag(FLAGS_cand_use_puct_v);
   cfg.c_puct_v_2 = absl::GetFlag(FLAGS_cand_c_puct_v_2);
+  cfg.score_weight = absl::GetFlag(FLAGS_cand_score_weight);
+  cfg.score_utility_mode = absl::GetFlag(FLAGS_cand_score_utility_mode);
   return cfg;
 }
 

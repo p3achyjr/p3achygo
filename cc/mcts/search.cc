@@ -316,8 +316,9 @@ void SearchTask(const int worker_id, core::Probability& prob,
                 CollisionPolicy& collision_policy,
                 const CollisionDetector& collision_detector, Game& game,
                 NodeTable* node_table, TreeNode* const root,
-                game::Color color_to_move) {
-  LeafEvaluator leaf_evaluator(slot, worker_id);
+                game::Color color_to_move,
+                ScoreUtilityParams score_util_params) {
+  LeafEvaluator leaf_evaluator(slot, worker_id, score_util_params);
   const auto should_stop = [&global_state]() {
     if (global_state.should_stop_this_round) {
       return true;
@@ -439,14 +440,16 @@ void SpawnSearchTasks(GlobalSearchState& global_state, NNInterface::Slot slot,
                       CollisionPolicy collision_policy_proto,
                       CollisionDetector collision_detector, Game& game,
                       NodeTable* node_table, TreeNode* root,
-                      game::Color color_to_move, int num_threads) {
+                      game::Color color_to_move, int num_threads,
+                      ScoreUtilityParams score_util_params) {
   std::vector<std::thread> workers;
   workers.reserve(num_threads);
   for (int worker_id = 0; worker_id < num_threads; ++worker_id) {
     workers.emplace_back([&, worker_id, cp = collision_policy_proto]() mutable {
       core::Probability prob;
       SearchTask(worker_id, prob, global_state, slot, descent_policy, cp,
-                 collision_detector, game, node_table, root, color_to_move);
+                 collision_detector, game, node_table, root, color_to_move,
+                 score_util_params);
     });
   }
   for (auto& w : workers) w.join();
@@ -626,7 +629,8 @@ void RunWithCollision(GlobalSearchState& global_state, NNInterface::Slot slot,
       if (params.mode == Search::Mode::kConcurrent) {
         SpawnSearchTasks(global_state, slot, dp, collision_policy,
                          collision_detector, game, node_table, root,
-                         color_to_move, params.num_threads);
+                         color_to_move, params.num_threads,
+                         params.score_util_params);
       } else {
         BatchSearch(global_state, slot, dp, collision_policy,
                     collision_detector, game, node_table, root, color_to_move,
@@ -638,7 +642,8 @@ void RunWithCollision(GlobalSearchState& global_state, NNInterface::Slot slot,
       if (params.mode == Search::Mode::kConcurrent) {
         SpawnSearchTasks(global_state, slot, dp, collision_policy,
                          collision_detector, game, node_table, root,
-                         color_to_move, params.num_threads);
+                         color_to_move, params.num_threads,
+                         params.score_util_params);
       } else {
         BatchSearch(global_state, slot, dp, collision_policy,
                     collision_detector, game, node_table, root, color_to_move,
@@ -748,7 +753,7 @@ Search::Result Search::Run(core::Probability& probability, Game& game,
 
   // initialize root if not already initialized.
   if (root->state.load(std::memory_order_relaxed) == TreeNodeState::kNew) {
-    LeafEvaluator leaf_evaluator(slot_, 0);
+    LeafEvaluator leaf_evaluator(slot_, 0, params.score_util_params);
     leaf_evaluator.QueueEval(probability, game, color_to_move);
     slot_.SignalReadyForInference();
     leaf_evaluator.FetchRootEval(root, game, color_to_move);

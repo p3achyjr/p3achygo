@@ -8,6 +8,7 @@
 #include "absl/synchronization/mutex.h"
 #include "cc/core/heap.h"
 #include "cc/game/loc.h"
+#include "cc/mcts/leaf_evaluator.h"
 #include "cc/mcts/node_table.h"
 #include "cc/mcts/search_policy.h"
 #include "cc/mcts/search_policy_parallel.h"
@@ -93,6 +94,7 @@ class Search final {
     int max_collision_retries = 4;
     float max_o_ratio = 0.8f;
     Mode mode = Search::Mode::kConcurrent;
+    ScoreUtilityParams score_util_params;
   };
   struct Result {
     game::Loc move;
