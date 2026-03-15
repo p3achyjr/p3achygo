@@ -27,9 +27,9 @@ struct EvalResult {
   int roots_shared;
 };
 
-void PlayEvalGame(size_t seed, int game_id, nn::NNInterface* cur_nn,
-                  nn::NNInterface* cand_nn, std::string logfile,
-                  std::promise<EvalResult> result,
+void PlayEvalGame(size_t seed, int game_id, int total_num_workers,
+                  nn::NNInterface* cur_nn, nn::NNInterface* cand_nn,
+                  std::string logfile, std::promise<EvalResult> result,
                   recorder::GameRecorder* recorder, EvalConfig config);
 
 #endif  // EVAL_EVAL_H_

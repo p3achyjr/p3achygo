@@ -75,6 +75,10 @@ ABSL_FLAG(float, cur_score_weight, mcts::kDefaultScoreWeight,
           "Score utility weight for cur.");
 ABSL_FLAG(std::string, cur_score_utility_mode, "direct",
           "Score utility mode for cur: 'direct' or 'integral'.");
+ABSL_FLAG(bool, cur_use_bias_cache, false,
+          "Whether to use bias cache for cur.");
+ABSL_FLAG(float, cur_bias_cache_alpha, 0.8f, "Bias cache alpha for cur.");
+ABSL_FLAG(float, cur_bias_cache_lambda, 0.4f, "Bias cache lambda for cur.");
 ABSL_FLAG(int, cand_n, kDefaultGumbelN, "N for candidate player");
 ABSL_FLAG(int, cand_k, kDefaultGumbelK, "K for candidate player");
 ABSL_FLAG(float, cand_noise_scaling, 1.0f, "Cand gumbel noise scaling");
@@ -92,6 +96,10 @@ ABSL_FLAG(float, cand_score_weight, mcts::kDefaultScoreWeight,
           "Score utility weight for cand.");
 ABSL_FLAG(std::string, cand_score_utility_mode, "direct",
           "Score utility mode for cand: 'direct' or 'integral'.");
+ABSL_FLAG(bool, cand_use_bias_cache, false,
+          "Whether to use bias cache for cand.");
+ABSL_FLAG(float, cand_bias_cache_alpha, 0.8f, "Bias cache alpha for cand.");
+ABSL_FLAG(float, cand_bias_cache_lambda, 0.4f, "Bias cache lambda for cand.");
 
 float ConfidenceDelta(float z_score, float num_sims, float wr) {
   return z_score * std::sqrt(wr * (1 - wr) / num_sims);
@@ -129,6 +137,12 @@ void ApplyCurCommandLineFlags(eval::PlayerSearchConfig& cfg) {
     cfg.score_weight = absl::GetFlag(FLAGS_cur_score_weight);
   if (IsOnCommandLine("cur_score_utility_mode"))
     cfg.score_utility_mode = absl::GetFlag(FLAGS_cur_score_utility_mode);
+  if (IsOnCommandLine("cur_use_bias_cache"))
+    cfg.use_bias_cache = absl::GetFlag(FLAGS_cur_use_bias_cache);
+  if (IsOnCommandLine("cur_bias_cache_alpha"))
+    cfg.bias_cache_alpha = absl::GetFlag(FLAGS_cur_bias_cache_alpha);
+  if (IsOnCommandLine("cur_bias_cache_lambda"))
+    cfg.bias_cache_lambda = absl::GetFlag(FLAGS_cur_bias_cache_lambda);
 }
 
 // Same for cand_* flags.
@@ -155,6 +169,12 @@ void ApplyCandCommandLineFlags(eval::PlayerSearchConfig& cfg) {
     cfg.score_weight = absl::GetFlag(FLAGS_cand_score_weight);
   if (IsOnCommandLine("cand_score_utility_mode"))
     cfg.score_utility_mode = absl::GetFlag(FLAGS_cand_score_utility_mode);
+  if (IsOnCommandLine("cand_use_bias_cache"))
+    cfg.use_bias_cache = absl::GetFlag(FLAGS_cand_use_bias_cache);
+  if (IsOnCommandLine("cand_bias_cache_alpha"))
+    cfg.bias_cache_alpha = absl::GetFlag(FLAGS_cand_bias_cache_alpha);
+  if (IsOnCommandLine("cand_bias_cache_lambda"))
+    cfg.bias_cache_lambda = absl::GetFlag(FLAGS_cand_bias_cache_lambda);
 }
 
 // Builds a PlayerSearchConfig from the cur_* flags (all fields, no file).
@@ -172,6 +192,9 @@ eval::PlayerSearchConfig CurConfigFromFlags() {
   cfg.c_puct_v_2 = absl::GetFlag(FLAGS_cur_c_puct_v_2);
   cfg.score_weight = absl::GetFlag(FLAGS_cur_score_weight);
   cfg.score_utility_mode = absl::GetFlag(FLAGS_cur_score_utility_mode);
+  cfg.use_bias_cache = absl::GetFlag(FLAGS_cur_use_bias_cache);
+  cfg.bias_cache_alpha = absl::GetFlag(FLAGS_cur_bias_cache_alpha);
+  cfg.bias_cache_lambda = absl::GetFlag(FLAGS_cur_bias_cache_lambda);
   return cfg;
 }
 
@@ -190,6 +213,9 @@ eval::PlayerSearchConfig CandConfigFromFlags() {
   cfg.c_puct_v_2 = absl::GetFlag(FLAGS_cand_c_puct_v_2);
   cfg.score_weight = absl::GetFlag(FLAGS_cand_score_weight);
   cfg.score_utility_mode = absl::GetFlag(FLAGS_cand_score_utility_mode);
+  cfg.use_bias_cache = absl::GetFlag(FLAGS_cand_use_bias_cache);
+  cfg.bias_cache_alpha = absl::GetFlag(FLAGS_cand_bias_cache_alpha);
+  cfg.bias_cache_lambda = absl::GetFlag(FLAGS_cand_bias_cache_lambda);
   return cfg;
 }
 
@@ -329,8 +355,8 @@ int main(int argc, char** argv) {
     eval_results.emplace_back(eval_result.get_future());
 
     size_t seed = absl::HashOf(time, game_id);
-    std::thread thread(PlayEvalGame, seed, game_id, cur_nn_interface.get(),
-                       cand_nn_interface.get(),
+    std::thread thread(PlayEvalGame, seed, game_id, num_games,
+                       cur_nn_interface.get(), cand_nn_interface.get(),
                        absl::StrFormat("/tmp/eval%d_log.txt", game_id),
                        std::move(eval_result), game_recorder.get(), config);
     threads.emplace_back(std::move(thread));

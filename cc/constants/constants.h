@@ -26,6 +26,10 @@
 #define WHITE -1
 #endif
 
+#ifndef OFF_BOARD
+#define OFF_BOARD 2
+#endif
+
 namespace constants {
 
 /* Maximum number of board locations */

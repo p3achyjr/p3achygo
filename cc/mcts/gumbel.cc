@@ -11,6 +11,7 @@
 #include "cc/game/board.h"
 #include "cc/game/game.h"
 #include "cc/game/loc.h"
+#include "cc/mcts/bias_cache.h"
 #include "cc/mcts/node_table.h"
 #include "cc/mcts/tree.h"
 #include "cc/nn/nn_interface.h"
@@ -167,6 +168,12 @@ GumbelEvaluator::GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id,
                                   ScoreUtilityParams score_params)
     : leaf_evaluator_(nn_interface->MakeSlot(0), thread_id, score_params) {}
 
+GumbelEvaluator::GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id,
+                                 ScoreUtilityParams score_params,
+                                 BiasCache* bias_cache)
+    : leaf_evaluator_(nn_interface->MakeSlot(0), thread_id, score_params),
+      bias_cache_(bias_cache) {}
+
 // `n`: total number of simulations.
 // `k`: initial number of actions selected.
 // `n` must be >= `klogk`.
@@ -187,6 +194,7 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
 
   if (root->state == TreeNodeState::kNew) {
     leaf_evaluator_.EvaluateRoot(probability, game, root, color_to_move);
+    AssignBiasCacheEntry(game, root);
   }
 
   auto num_moves = constants::kMaxMovesPerPosition;
@@ -359,9 +367,15 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
                    root->init_score_est, &search_policy);
 
         // update tree
-        Backward(search_path,
-                 /*use_idempotent_updates=*/node_table->is_graph());
+        const bool use_idempotent_updates =
+            node_table->is_graph() || (bias_cache_ != nullptr);
+        Backward(search_path, use_idempotent_updates);
         root->child_visits[move_info.move_encoding] += 1;
+#if 0
+        if (root->child_visits[move_info.move_encoding] > root->max_child_n) {
+          root->max_child_n = root->child_visits[move_info.move_encoding];
+        }
+#endif
         ++visits_spent;
       }
 
@@ -557,7 +571,9 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
     SearchPath search_path =
         Search(probability, search_game, node_table, root, color_to_move,
                color_to_move, root->init_score_est, &search_policy);
-    Backward(search_path, /*use_idempotent_updates=*/node_table->is_graph());
+    const bool use_idempotent_updates =
+        node_table->is_graph() || (bias_cache_ != nullptr);
+    Backward(search_path, use_idempotent_updates);
   }
 
   // Build result.
@@ -617,6 +633,7 @@ GumbelEvaluator::SearchPath GumbelEvaluator::Search(
     // leaf node. evaluate and return.
     leaf_evaluator_.EvaluateLeaf(probability, game, node, color_to_move,
                                  root_color, root_score_est);
+    AssignBiasCacheEntry(game, node);
     return path;
   }
 
@@ -655,7 +672,18 @@ GumbelEvaluator::SearchPath GumbelEvaluator::Search(
                                      root_color, root_score_est);
   }
 
+  AssignBiasCacheEntry(game, leaf_node);
+
   return path;
+}
+
+void GumbelEvaluator::AssignBiasCacheEntry(const game::Game& game,
+                                           TreeNode* node) {
+  if (!bias_cache_) return;
+  std::optional<LocalPattern> local_pattern =
+      LocalPattern::FromCurrentPosition(game);
+  if (!local_pattern.has_value()) return;
+  node->bias_cache_entry = bias_cache_->GetOrCreate(*local_pattern);
 }
 
 void GumbelEvaluator::Backward(SearchPath& path, bool use_idempotent_updates) {
@@ -671,8 +699,7 @@ void GumbelEvaluator::Backward(SearchPath& path, bool use_idempotent_updates) {
 
     SingleBackup(parent, parent_action, i == path.size() - 1,
                  leaf_q_mult * leaf_q, leaf_q_mult * leaf_q_outcome,
-                 leaf_q_mult * leaf_score,
-                 leaf_q_mult * use_idempotent_updates);
+                 leaf_q_mult * leaf_score, use_idempotent_updates);
   }
 }
 
@@ -695,7 +722,10 @@ void GumbelEvaluator::SingleBackup(TreeNode* node, game::Loc action,
   node->child_visits[a] += 1;
   if (is_idempotent) {
     // recompute.
-    RecomputeNodeStats(node);
+    const float obs_bias = bias_cache_ != nullptr && node->bias_cache_entry
+                               ? bias_cache_->UpdateAndFetch(node)
+                               : 0.0f;
+    RecomputeNodeStats(node, obs_bias);
   } else {
     // incremental
     node->w += leaf_q;

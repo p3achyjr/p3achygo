@@ -4,6 +4,7 @@
 #include "cc/core/probability.h"
 #include "cc/game/color.h"
 #include "cc/game/game.h"
+#include "cc/mcts/bias_cache.h"
 #include "cc/mcts/leaf_evaluator.h"
 #include "cc/mcts/node_table.h"
 #include "cc/mcts/search_policy.h"
@@ -51,6 +52,8 @@ class GumbelEvaluator final {
   GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id);
   GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id,
                   ScoreUtilityParams score_params);
+  GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id,
+                  ScoreUtilityParams score_params, BiasCache* bias_cache);
   ~GumbelEvaluator() = default;
 
   // Disable Copy and Move.
@@ -92,8 +95,12 @@ class GumbelEvaluator final {
                     float leaf_q, float leaf_q_outcome, float leaf_score,
                     bool is_idempotent = false);
 
+  // Assigns bias_cache_entry to node based on the current game position.
+  void AssignBiasCacheEntry(const game::Game& game, TreeNode* node);
+
   // Leaf Evaluation module.
   LeafEvaluator leaf_evaluator_;
+  BiasCache* bias_cache_ = nullptr;
 };
 
 }  // namespace mcts
