@@ -1,6 +1,9 @@
 #pragma once
 
 #include <atomic>
+#include <cmath>
+#include <iomanip>
+#include <sstream>
 
 #include "absl/log/log.h"
 #include "cc/constants/constants.h"
@@ -75,7 +78,8 @@ class PuctScorer final {
     return c_puct;
   }
 
-  inline PuctScores ComputeScores(const TreeNode* node) const {
+  inline PuctScores ComputeScores(const TreeNode* node,
+                                  const game::Game* game = nullptr) const {
     constexpr float kFPU = 0.2f;
     DCHECK(node->state != TreeNodeState::kNew);
 
@@ -135,7 +139,7 @@ class PuctScorer final {
     for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
       // Katago-style root variance scaling. I have no intuition as to why this
       // works -- it strongly compresses c_puct on most nodes.
-      const float c_puct_var_parent_scale_factor = [&]() {
+      const auto c_puct_var_parent_scale_factor = [&]() {
         if (n < 3) {
           return 1.0;
         }
@@ -143,19 +147,22 @@ class PuctScorer final {
         const float interpolated_stddev =
             (0.8 + v_var * child_visits[a]) / (child_visits[a] + 2);
         return 1.0 + 0.85 * (interpolated_stddev / 0.4);
-      }();
+      };
       // Gives children with high variance an extra exploration bonus. Less
       // principled version of PUCT-V.
-      const float c_puct_var_child_scale_factor = [&]() {
+      const auto c_puct_var_child_scale_factor = [&]() {
         const int child_n = child_visits[a];
         if (child_visits[a] < 3 || n < 3) {
           return 1.0f;
         }
-        constexpr int kPriorWeight = 3;
+        constexpr int kPriorVisits = 0;
+        constexpr float kPriorScale = 1.0f;
+        constexpr float kPriorWeight = kPriorVisits * kPriorScale;
         return (kPriorWeight + child_n * std::sqrt(qvars[a] / v_var)) /
                float(kPriorWeight + child_n);
-      }();
-      const float c_puct_var_scale_factor = c_puct_var_child_scale_factor;
+      };
+      const float c_puct_var_scale_factor =
+          enable_var_scaling_ ? c_puct_var_child_scale_factor() : 1.0f;
       const float canonical_child_n =
           n_fn_(child_visits[a], child_visits_in_flight[a]);
       const float canonical_q =
@@ -186,6 +193,92 @@ class PuctScorer final {
       const float puct_explore_term = compute_explore_term();
       pucts[a] = {a, puct_explore_term + canonical_q};
     }
+#if 0
+    // Debug: log top-10 actions by (cbrt(child_m3) - cbrt(parent_m3)) /
+    // stddev(parent). This normalizes m3 to L1 domain and scales by the
+    // parent's spread. Child values are in the child's own frame (not
+    // sign-flipped).
+    std::string log_str = [&]() {
+      if (n < 3 || v_var < 1e-8f) return std::string{};
+      const float parent_stddev = std::sqrt(v_var);
+      const float parent_cbrt_m3 = std::cbrt(node->v_m3);
+
+      struct Entry {
+        int a;
+        float score;
+        float child_cbrt_m3;
+        float child_stddev;
+        float stddev_ratio;
+        float child_v;
+      };
+      std::array<Entry, constants::kMaxMovesPerPosition> entries;
+      int num_valid = 0;
+      for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+        const TreeNode* child = node->child(a);
+        if (child == nullptr || child->n < 3 || child->v_var < 1e-8f) continue;
+        const float child_stddev = std::sqrt(child->v_var);
+        const float child_cbrt_m3 = std::cbrt(-child->v_m3);
+        const float score = (child_cbrt_m3 - parent_cbrt_m3) / parent_stddev;
+        entries[num_valid++] = {a, score, child_cbrt_m3, child_stddev,
+                                child_stddev / parent_stddev, -child->v};
+      }
+
+      const int top_k = std::min(num_valid, 10);
+      if (top_k < 5) return std::string{};
+
+      const auto log_entries =
+          [&](std::ostringstream& ss,
+              std::array<Entry, constants::kMaxMovesPerPosition>& arr, int k) {
+            for (int i = 0; i < k; ++i) {
+              const auto& e = arr[i];
+              ss << "  [a=" << game::AsLoc(e.a) << " n=" << child_visits[e.a]
+                 << " v=" << e.child_v
+                 << " score=" << e.score << " child_cbrt_m3=" << e.child_cbrt_m3
+                 << " child_stddev=" << e.child_stddev
+                 << " stddev_ratio=" << e.stddev_ratio << "]\n";
+            }
+          };
+
+      const float parent_v = node->v;
+      std::ostringstream ss;
+      ss << std::fixed << std::setprecision(4);
+      ss << "top m3 shift (n=" << n << " v=" << parent_v
+         << " parent_stddev=" << parent_stddev
+         << " parent_cbrt_m3=" << parent_cbrt_m3 << "):\n";
+      std::sort(entries.begin(), entries.begin() + num_valid,
+                [](const auto& x, const auto& y) { return x.score > y.score; });
+      log_entries(ss, entries, top_k);
+
+      ss << "top stddev_ratio:\n";
+      std::sort(entries.begin(), entries.begin() + num_valid,
+                [](const auto& x, const auto& y) {
+                  return x.stddev_ratio > y.stddev_ratio;
+                });
+      log_entries(ss, entries, top_k);
+
+      ss << "top puct:\n";
+      PuctScores pucts_sorted = pucts;
+      std::sort(
+          pucts_sorted.begin(), pucts_sorted.end(),
+          [](const auto& x, const auto& y) { return x.second > y.second; });
+      for (int i = 0; i < top_k; ++i) {
+        auto [a, puct_score] = pucts_sorted[i];
+        const TreeNode* child = node->child(a);
+        ss << "  [a=" << game::AsLoc(a) << " n=" << child_visits[a]
+           << " v=" << (child ? -child->v : 0.0f)
+           << " puct=" << puct_score << "]\n";
+      }
+      if (game) {
+        ss << "last_move=" << game->move(game->num_moves() - 1) << "\n"
+           << game::ToString(game->board().position()) << "\n";
+      }
+      return ss.str();
+    }();
+    if (log_str != "") {
+      LOG(INFO) << log_str;
+    }
+#endif
+
     return pucts;
   }
   std::array<std::pair<int, float>, 4> TopScores(
@@ -217,7 +310,7 @@ class PuctScorer final {
 
   game::Loc TopMove(const TreeNode* node, const game::Game& game,
                     game::Color color_to_move) const {
-    PuctScores pucts = ComputeScores(node);
+    PuctScores pucts = ComputeScores(node, &game);
     std::sort(pucts.begin(), pucts.end(), [](const auto& p0, const auto& p1) {
       return p0.second > p1.second;
     });

@@ -734,6 +734,19 @@ void GumbelEvaluator::SingleBackup(TreeNode* node, game::Loc action,
     node->v_outcome = node->w_outcome / node->n;
     node->score = leaf_score * (1.0f / N(node)) +
                   node->score * ((N(node) - 1.0f) / N(node));
+    // Update 3rd moment.
+    const auto compute_m3 = [](const double m3, const double m2, const double d,
+                               const double n) {
+      const double d3 = d * d * d;
+      return m3 + ((n * n - 1) * d3 / (n * n)) - (3 * d * m2 / n);
+    };
+    const float m3 = compute_m3(node->v_m3 * n_old, node->v_var * n_old,
+                                leaf_q - node->v, n_old);
+    const float m3_outcome =
+        compute_m3(node->v_outcome_m3 * n_old, node->v_outcome_var * n_old,
+                   leaf_q_outcome - node->v_outcome, n_old);
+    node->v_m3 = m3 / node->n;
+    node->v_outcome_m3 = m3_outcome / node->n;
     // Update variance.
     node->v_var = n_old * node->v_var + (leaf_q - v_old) * (leaf_q - node->v);
     node->v_var /= node->n;
