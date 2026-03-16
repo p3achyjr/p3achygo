@@ -46,6 +46,9 @@ struct PlayerSearchConfig {
 
   // Other
   bool use_mcgs = false;
+  bool use_bias_cache = false;
+  float bias_cache_alpha = 0.8f;
+  float bias_cache_lambda = 0.4f;
 
   // --- Config-file-only parallel search knobs (no-op for Gumbel) ---
 
@@ -164,6 +167,12 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
     // Other
     else if (key == "use_mcgs")
       cfg.use_mcgs = internal::ParseBool(val);
+    else if (key == "use_bias_cache")
+      cfg.use_bias_cache = internal::ParseBool(val);
+    else if (key == "bias_cache_alpha")
+      cfg.bias_cache_alpha = std::stof(val);
+    else if (key == "bias_cache_lambda")
+      cfg.bias_cache_lambda = std::stof(val);
     // Parallel search knobs
     else if (key == "num_threads_per_game")
       cfg.num_threads_per_game = std::stoi(val);

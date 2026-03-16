@@ -20,7 +20,16 @@ enum class TreeNodeState {
 
 struct TreeNode final {
   TreeNode(game::Zobrist::Hash board_hash) : board_hash(board_hash) {};
-  ~TreeNode() = default;
+  ~TreeNode() {
+    constexpr float kBiasCacheForgetWeight = 0.8f;
+    if (!bias_cache_entry) {
+      return;
+    }
+
+    // TODO: make this thread-safe with BiasCache updates.
+    bias_cache_entry->first -= (kBiasCacheForgetWeight * last_obs_bias_term);
+    bias_cache_entry->second -= (kBiasCacheForgetWeight * last_weight_term);
+  }
 
   const game::Zobrist::Hash board_hash;
   std::atomic<TreeNodeState> state = TreeNodeState::kNew;
@@ -65,6 +74,12 @@ struct TreeNode final {
 
     return children[a].load(std::memory_order_relaxed);
   }
+
+  // Bias cache stuff.
+  using BiasCacheEntry = std::pair<float, float>;
+  std::shared_ptr<BiasCacheEntry> bias_cache_entry;
+  float last_obs_bias_term = 0;
+  float last_weight_term = 0;
 
   // Parallel search stuff.
   absl::Mutex mu;
@@ -153,8 +168,9 @@ inline void AdvanceState(TreeNode* node) {
   node->state.store(TreeNodeState::kNnEvaluated, std::memory_order_release);
 }
 
-inline void RecomputeNodeStats(TreeNode* node) {
-  float w = node->init_util_est, w_outcome = node->init_outcome_est,
+inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f) {
+  const float adj_init_util_est = node->init_util_est - obs_bias;
+  float w = adj_init_util_est, w_outcome = node->init_outcome_est,
         total_score = node->init_score_est;
   int max_child_n = 0;
   for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
@@ -175,7 +191,7 @@ inline void RecomputeNodeStats(TreeNode* node) {
 
   // Variance of a mixture distribution.
   // Var(Y) = (1/N) * sum(i : 0...k) ni(vi + (mi - m)^2)
-  float m2 = (node->init_util_est - v) * (node->init_util_est - v);
+  float m2 = (adj_init_util_est - v) * (adj_init_util_est - v);
   float m2_outcome = (node->init_outcome_est - v_outcome) *
                      (node->init_outcome_est - v_outcome);
   for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {

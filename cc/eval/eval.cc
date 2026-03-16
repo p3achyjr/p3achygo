@@ -8,6 +8,7 @@
 #include "cc/core/file_log_sink.h"
 #include "cc/core/probability.h"
 #include "cc/game/game.h"
+#include "cc/mcts/bias_cache.h"
 #include "cc/mcts/gumbel.h"
 #include "cc/mcts/node_table.h"
 #include "cc/mcts/search.h"
@@ -146,9 +147,9 @@ static bool UsesParallelSearch(const eval::PlayerSearchConfig& cfg) {
   return cfg.num_threads_per_game > 1 || cfg.time_ms > 0;
 }
 
-void PlayEvalGame(size_t seed, int game_id, NNInterface* cur_nn,
-                  NNInterface* cand_nn, std::string logfile,
-                  std::promise<EvalResult> result,
+void PlayEvalGame(size_t seed, int game_id, int total_num_workers,
+                  NNInterface* cur_nn, NNInterface* cand_nn,
+                  std::string logfile, std::promise<EvalResult> result,
                   recorder::GameRecorder* recorder, EvalConfig config) {
   FileSink sink(logfile.c_str());
   Probability probability(seed);
@@ -198,19 +199,31 @@ void PlayEvalGame(size_t seed, int game_id, NNInterface* cur_nn,
   // thread IDs [game_id * N, (game_id+1) * N).  For Gumbel (1 thread/game)
   // the NNInterface thread ID equals game_id, encoded via the legacy
   // GumbelEvaluator(nn_interface, game_id) constructor.
+  std::optional<BiasCache> bias_cache_b, bias_cache_w;
+  if (black_cfg.use_bias_cache)
+    bias_cache_b.emplace(black_cfg.bias_cache_alpha,
+                         black_cfg.bias_cache_lambda);
+  if (white_cfg.use_bias_cache)
+    bias_cache_w.emplace(white_cfg.bias_cache_alpha,
+                         white_cfg.bias_cache_lambda);
+
   std::optional<GumbelEvaluator> gumbel_b, gumbel_w;
   std::optional<Search> search_b, search_w;
   if (black_uses_search) {
     search_b.emplace(
-        black_nn->MakeSlot(game_id * black_cfg.num_threads_per_game));
+        black_nn->MakeSlot(game_id * black_cfg.num_threads_per_game),
+        bias_cache_b ? &*bias_cache_b : nullptr);
   } else {
-    gumbel_b.emplace(black_nn, game_id, MakeScoreUtilityParams(black_cfg));
+    gumbel_b.emplace(black_nn, game_id, MakeScoreUtilityParams(black_cfg),
+                     bias_cache_b ? &*bias_cache_b : nullptr);
   }
   if (white_uses_search) {
     search_w.emplace(
-        white_nn->MakeSlot(game_id * white_cfg.num_threads_per_game));
+        white_nn->MakeSlot(game_id * white_cfg.num_threads_per_game),
+        bias_cache_w ? &*bias_cache_w : nullptr);
   } else {
-    gumbel_w.emplace(white_nn, game_id, MakeScoreUtilityParams(white_cfg));
+    gumbel_w.emplace(white_nn, game_id, MakeScoreUtilityParams(white_cfg),
+                     bias_cache_w ? &*bias_cache_w : nullptr);
   }
 
   int cur_total_visits = 0;
@@ -234,10 +247,14 @@ void PlayEvalGame(size_t seed, int game_id, NNInterface* cur_nn,
         color_to_move == BLACK ? black_uses_search : white_uses_search;
     const eval::PlayerSearchConfig& active_cfg =
         color_to_move == BLACK ? black_cfg : white_cfg;
+    std::optional<BiasCache>& active_bias_cache =
+        color_to_move == BLACK ? bias_cache_b : bias_cache_w;
 
     // NN statistics.
+    float cur_q_nn = cur_tree->init_util_est;
     float cur_qz_nn = cur_tree->init_outcome_est;
     float cur_score_est_nn = cur_tree->init_score_est;
+    float cand_q_nn = cand_tree->init_util_est;
     float cand_qz_nn = cand_tree->init_outcome_est;
     float cand_score_est_nn = cand_tree->init_score_est;
 
@@ -300,10 +317,20 @@ void PlayEvalGame(size_t seed, int game_id, NNInterface* cur_nn,
     // Post-search statistics.
     float cur_n_post = N(cur_tree);
     float cur_q_post = V(cur_tree);
+    float cur_q_nn_adj = cur_tree->bias_cache_entry
+                             ? cur_q_nn - active_cfg.bias_cache_lambda *
+                                              (cur_tree->last_obs_bias_term /
+                                               cur_tree->last_weight_term)
+                             : cur_q_nn;
     float cur_q_outcome_post = VOutcome(cur_tree);
     float cur_score_post = Score(cur_tree);
     float cand_n_post = N(cand_tree);
     float cand_q_post = V(cand_tree);
+    float cand_q_nn_adj = cand_tree->bias_cache_entry
+                              ? cand_q_nn - active_cfg.bias_cache_lambda *
+                                                (cand_tree->last_obs_bias_term /
+                                                 cand_tree->last_weight_term)
+                              : cand_q_nn;
     float cand_q_outcome_post = VOutcome(cand_tree);
     float cand_score_post = Score(cand_tree);
     float cur_var_post = VVar(cur_tree);
@@ -342,6 +369,7 @@ void PlayEvalGame(size_t seed, int game_id, NNInterface* cur_nn,
                                         game.IsGameOver());
     }
 
+    // Reap tree.
     int num_nodes_reaped = 0, reap_time_us = 0;
     auto reap_begin = std::chrono::steady_clock::now();
     num_nodes_reaped += player_table->Reap(next_player);
@@ -350,6 +378,12 @@ void PlayEvalGame(size_t seed, int game_id, NNInterface* cur_nn,
     reap_time_us = std::chrono::duration_cast<std::chrono::microseconds>(
                        reap_end - reap_begin)
                        .count();
+
+    // Then reap bias cache.
+    uint32_t num_bias_cache_entries_pruned = 0;
+    if (active_bias_cache.has_value()) {
+      num_bias_cache_entries_pruned = active_bias_cache->PruneUnused();
+    }
 
     player_tree = next_player;
     opp_tree = next_opp;
@@ -392,7 +426,8 @@ void PlayEvalGame(size_t seed, int game_id, NNInterface* cur_nn,
       s << "Cur Color=" << (cur_is_black ? ToString(BLACK) : ToString(WHITE))
         << "  Cand Color=" << (cur_is_black ? ToString(WHITE) : ToString(BLACK))
         << "\n";
-      s << "(" << root_color << ") Cur Tree NN Stats\n  Qz = " << cur_qz_nn
+      s << "(" << root_color << ") Cur Tree NN Stats\n  Q = " << cur_q_nn
+        << "  Qadj = " << cur_q_nn_adj << "  Qz = " << cur_qz_nn
         << "\n  Score = " << cur_score_est_nn << "\n";
       s << "(" << root_color
         << ") Cur Tree Stats, Pre-Search\n  N = " << cur_n_pre
@@ -404,7 +439,8 @@ void PlayEvalGame(size_t seed, int game_id, NNInterface* cur_nn,
         << "\n  Q = " << cur_q_post << "\n  Qz = " << cur_q_outcome_post
         << "\n  Stddev = " << std::sqrt(cur_var_post)
         << "\n  Score = " << cur_score_post << "\n";
-      s << "(" << root_color << ") Cand Tree NN Stat:\n  Qz = " << cand_qz_nn
+      s << "(" << root_color << ") Cand Tree NN Stat:\n  Q = " << cand_q_nn
+        << "  Qadj = " << cand_q_nn_adj << "  Qz = " << cand_qz_nn
         << "\n  Score = " << cand_score_est_nn << "\n";
       s << "(" << root_color
         << ") Cand Tree Stats, Pre-Search\n  N = " << cand_n_pre
@@ -420,9 +456,11 @@ void PlayEvalGame(size_t seed, int game_id, NNInterface* cur_nn,
         << (color_to_move == BLACK ? (cur_is_black ? "CUR" : "CAND")
                                    : (cur_is_black ? "CAND" : "CUR"))
         << "\n";
-      s << "Board:\n" << game.board() << "\n";
-      s << "Nodes Reaped: " << num_nodes_reaped
-        << ", Reap Time: " << reap_time_us << "us\n";
+      s << game.board() << "\n";
+      s << "Nodes Reaped = " << num_nodes_reaped
+        << "  Reap Time = " << reap_time_us << "us\n";
+      s << "Bias Cache Entries Reaped = " << num_bias_cache_entries_pruned
+        << "\n";
       s << "Search Took " << search_dur << "ms. Search EMA: " << search_dur_ema
         << "ms.\n";
 

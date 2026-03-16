@@ -35,6 +35,21 @@ struct BackupCmp final {
 };
 using BackupPriorityQueue = core::Heap<BackupElem, BackupCmp>;
 
+void AssignBiasCacheEntry(BiasCache* bias_cache, const game::Game& game,
+                          TreeNode* node) {
+  if (!bias_cache) return;
+  std::optional<LocalPattern> local_pattern =
+      LocalPattern::FromCurrentPosition(game);
+  if (!local_pattern.has_value()) return;
+  node->bias_cache_entry = bias_cache->GetOrCreate(*local_pattern);
+}
+
+float FetchObsBias(BiasCache* bias_cache, TreeNode* node) {
+  return bias_cache != nullptr && node->bias_cache_entry
+             ? bias_cache->UpdateAndFetch(node)
+             : 0.0f;
+}
+
 void FetchLeafEval(GlobalSearchState& global_state,
                    LeafEvaluator* leaf_evaluator, TreeNode* leaf, Game& game,
                    Color color_to_move, Color root_color, float root_score_est,
@@ -228,6 +243,8 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
                   root_color, root_score_est, needs_nn_eval);
   }
 
+  AssignBiasCacheEntry(global_state.bias_cache, game, leaf);
+
   return {path, std::nullopt};
 }
 
@@ -236,7 +253,7 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
 // values) on the last pop for each node (old n_in_flight == 1). The heap
 // processes nodes deepest-first, so all children of a node are guaranteed to
 // be fully updated before the node itself is finalized.
-void TopologicalBackup(BackupPriorityQueue& backup_pq) {
+void TopologicalBackup(BackupPriorityQueue& backup_pq, BiasCache* bias_cache) {
   while (backup_pq.Size() > 0) {
     auto [_, node, action, is_leaf] = backup_pq.PopHeap();
     node->n += 1;
@@ -252,14 +269,16 @@ void TopologicalBackup(BackupPriorityQueue& backup_pq) {
         node->v = node->init_util_est;
         node->v_outcome = node->init_outcome_est;
       } else {
-        RecomputeNodeStats(node);
+        const float obs_bias = FetchObsBias(bias_cache, node);
+        RecomputeNodeStats(node, obs_bias);
       }
       node->is_pending_update.store(false, std::memory_order_relaxed);
     }
   }
 }
 
-void BackupStep(int worker_id, TreeNode* node, game::Loc action, bool is_leaf) {
+void BackupStep(int worker_id, TreeNode* node, game::Loc action, bool is_leaf,
+                BiasCache* bias_cache) {
   // While running backup, we want to preserve the following invariant:
   // - When updating the stats for any node, that node's children are fully
   // updated.
@@ -293,18 +312,20 @@ void BackupStep(int worker_id, TreeNode* node, game::Loc action, bool is_leaf) {
       node->v = node->init_util_est;
       node->v_outcome = node->init_outcome_est;
     } else {
-      RecomputeNodeStats(node);
+      const float obs_bias = FetchObsBias(bias_cache, node);
+      RecomputeNodeStats(node, obs_bias);
     }
     node->is_pending_update.store(false, std::memory_order_release);
   }
 }
 
-void Backup(int worker_id, SearchPath& search_path) {
+void Backup(int worker_id, SearchPath& search_path, BiasCache* bias_cache) {
   // Can ignore the last node in the path because it is either a leaf or
   // terminal, from the perspective of this path.
   for (int i = search_path.size() - 1; i >= 0; --i) {
     auto& [node, action, _] = search_path[i];
-    BackupStep(worker_id, node, action, i == (int)search_path.size() - 1);
+    BackupStep(worker_id, node, action, i == (int)search_path.size() - 1,
+               bias_cache);
   }
 }
 
@@ -398,7 +419,7 @@ void SearchTask(const int worker_id, core::Probability& prob,
     if (!collision_result.has_value()) {
       // We must keep the invariant that all collisions retry until abort before
       // reaching here.
-      Backup(worker_id, search_path);
+      Backup(worker_id, search_path, global_state.bias_cache);
     }
 
     // Count this descent as a visit only if we successfully reached a leaf.
@@ -593,7 +614,7 @@ void BatchSearch(GlobalSearchState& global_state, NNInterface::Slot slot,
     }
 
     // topological backprop.
-    TopologicalBackup(backup_pq);
+    TopologicalBackup(backup_pq, global_state.bias_cache);
 
     // reset state.
     fork_points.Clear();
@@ -705,7 +726,10 @@ void RunWithDetector(GlobalSearchState& global_state, NNInterface::Slot slot,
 
 }  // namespace
 
-Search::Search(NNInterface::Slot slot) : slot_(slot) {
+Search::Search(NNInterface::Slot slot) : Search(slot, nullptr) {}
+
+Search::Search(NNInterface::Slot slot, BiasCache* bias_cache)
+    : slot_(slot), bias_cache_(bias_cache) {
   CHECK(slot_.signal_kind() == NNInterface::SignalKind::kExplicit);
 }
 
@@ -744,6 +768,7 @@ Search::Result Search::Run(core::Probability& probability, Game& game,
     global_search_state.descent_remaining = params.num_threads;
     global_search_state.round_remaining = params.num_threads;
     global_search_state.max_pending_each_level = 100000;
+    global_search_state.bias_cache = bias_cache_;
   }
 
   if (game.IsGameOver()) {
@@ -757,6 +782,7 @@ Search::Result Search::Run(core::Probability& probability, Game& game,
     leaf_evaluator.QueueEval(probability, game, color_to_move);
     slot_.SignalReadyForInference();
     leaf_evaluator.FetchRootEval(root, game, color_to_move);
+    AssignBiasCacheEntry(global_search_state.bias_cache, game, root);
   }
 
   std::promise<void> done_promise;

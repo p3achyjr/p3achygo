@@ -10,6 +10,7 @@ namespace mcts {
 using namespace ::game;
 
 uint32_t MctsNodeTable::Reap(TreeNode* new_root) {
+  absl::MutexLock l(&mu_);
   if (new_root == nullptr) {
     return 0;
   }
@@ -39,6 +40,7 @@ uint32_t MctsNodeTable::Reap(TreeNode* new_root) {
 }
 
 uint32_t McgsNodeTable::Reap(TreeNode* new_root) {
+  absl::MutexLock l(&mu_);
   if (new_root == nullptr) {
     return 0;
   }

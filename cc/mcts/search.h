@@ -8,6 +8,7 @@
 #include "absl/synchronization/mutex.h"
 #include "cc/core/heap.h"
 #include "cc/game/loc.h"
+#include "cc/mcts/bias_cache.h"
 #include "cc/mcts/leaf_evaluator.h"
 #include "cc/mcts/node_table.h"
 #include "cc/mcts/search_policy.h"
@@ -72,6 +73,9 @@ struct GlobalSearchState {
   std::atomic<int> total_num_collisions = 0;
   std::atomic<bool> should_stop = false;
   bool should_stop_this_round = false;
+
+  // Optional bias cache
+  BiasCache* bias_cache = nullptr;
 };
 
 class Search final {
@@ -104,6 +108,7 @@ class Search final {
     size_t time_ms;
   };
   explicit Search(nn::NNInterface::Slot slot);
+  explicit Search(nn::NNInterface::Slot slot, BiasCache* bias_cache);
   ~Search() = default;
   // Disable Copy and Move.
   Search(Search const&) = delete;
@@ -117,6 +122,7 @@ class Search final {
 
  private:
   nn::NNInterface::Slot slot_;
+  BiasCache* bias_cache_ = nullptr;
 };
 
 /*

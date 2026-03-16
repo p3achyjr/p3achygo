@@ -287,6 +287,10 @@ class Board final {
   ~Board() = default;
 
   Board& operator=(const Board& other) {
+    if (*this == other) {
+      return *this;
+    }
+
     this->~Board();
     new (this) Board(other);
     return *this;
@@ -305,6 +309,10 @@ class Board final {
 
   inline BoardData GetStonesInAtari() const {
     return GetStonesWithLiberties(1);
+  }
+
+  inline bool IsInAtari(Loc loc) const {
+    return group_tracker_.LibertiesForGroupAt(loc) == 1;
   }
 
   inline void SetKomi(float komi) { komi_ = komi; }
@@ -338,9 +346,6 @@ class Board final {
   inline void SetLoc(Loc loc, Color color) { board_[loc] = color; }
 
   bool IsSelfCapture(Loc loc, Color color) const;
-  inline bool IsInAtari(Loc loc) const {
-    return group_tracker_.LibertiesForGroupAt(loc) == 1;
-  }
 
   std::pair<float, std::array<Color, BOARD_LEN * BOARD_LEN>> ScoreAndOwnership(
       Color color) const;
