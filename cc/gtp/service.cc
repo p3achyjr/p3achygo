@@ -141,7 +141,7 @@ ServiceImpl::ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
     : nn_interface_(std::move(nn_interface)),
       gumbel_evaluator_(std::move(gumbel_evaluator)),
       game_(std::make_unique<Game>(false /* prohibit_pass_alive */)),
-      node_table_(std::make_unique<McgsNodeTable>()),
+      node_table_(std::make_unique<MctsNodeTable>()),
       current_color_(BLACK),
       n_(n),
       k_(k),
@@ -430,13 +430,15 @@ GumbelResult ServiceImpl::GenMoveCommon(Color color) {
   }
 
   GumbelResult search_result =
-      use_puct_
-          ? gumbel_evaluator_->SearchRootPuct(
-                probability_, *game_, node_table_.get(), current_root(), color,
-                n_, PuctParams{PuctRootSelectionPolicy::kLcb, 1.0f, 0.45f})
-          : gumbel_evaluator_->SearchRoot(
-                probability_, *game_, node_table_.get(), current_root(), color,
-                mcts::GumbelSearchParams{n_, k_, 0.0f});
+      use_puct_ ? gumbel_evaluator_->SearchRootPuct(
+                      probability_, *game_, node_table_.get(), current_root(),
+                      color, n_,
+                      PuctParams::Builder()
+                          .set_kind(PuctRootSelectionPolicy::kLcb)
+                          .build())
+                : gumbel_evaluator_->SearchRoot(
+                      probability_, *game_, node_table_.get(), current_root(),
+                      color, mcts::GumbelSearchParams{n_, k_, 0.0f});
   return search_result;
 }
 

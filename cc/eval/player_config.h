@@ -49,6 +49,9 @@ struct PlayerSearchConfig {
   bool use_bias_cache = false;
   float bias_cache_alpha = 0.8f;
   float bias_cache_lambda = 0.4f;
+  bool enable_m3_bonus = false;
+  int var_scale_prior_visits = 0;
+  int m3_prior_visits = 20;
 
   // --- Config-file-only parallel search knobs (no-op for Gumbel) ---
 
@@ -173,6 +176,12 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.bias_cache_alpha = std::stof(val);
     else if (key == "bias_cache_lambda")
       cfg.bias_cache_lambda = std::stof(val);
+    else if (key == "enable_m3_bonus")
+      cfg.enable_m3_bonus = internal::ParseBool(val);
+    else if (key == "var_scale_prior_visits")
+      cfg.var_scale_prior_visits = std::stoi(val);
+    else if (key == "m3_prior_visits")
+      cfg.m3_prior_visits = std::stoi(val);
     // Parallel search knobs
     else if (key == "num_threads_per_game")
       cfg.num_threads_per_game = std::stoi(val);

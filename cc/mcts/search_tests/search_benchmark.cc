@@ -108,7 +108,9 @@ Search::Params MakeParams(int num_threads, int visit_budget) {
       .num_threads = num_threads,
       .total_visit_budget = visit_budget,
       .total_visit_time_ms = 0,
-      .puct_params = PuctParams{PuctRootSelectionPolicy::kVisitCount},
+      .puct_params = PuctParams::Builder()
+                        .set_kind(PuctRootSelectionPolicy::kVisitCount)
+                        .build(),
       .q_fn_kind = mcts::QFnKind::kIdentity,
       .n_fn_kind = mcts::NFnKind::kVirtualVisit,
       .descent_policy_kind = mcts::DescentPolicyKind::kDeterministic,
@@ -171,7 +173,9 @@ void BenchSerialPuct(int visit_budget, int num_trials) {
     total_ms += TimeMs([&] {
       result = evaluator.SearchRootPuct(
           probability, game, &node_table, root, BLACK, visit_budget,
-          PuctParams{PuctRootSelectionPolicy::kLcb});
+          PuctParams::Builder()
+              .set_kind(PuctRootSelectionPolicy::kLcb)
+              .build());
     });
     last_move = result.mcts_move;
   }

@@ -468,8 +468,13 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
               : gumbel_evaluator.SearchRootPuct(
                     probability, game, node_table.get(), root_node,
                     color_to_move, gumbel_n,
-                    PuctParams{PuctRootSelectionPolicy::kVisitCountSample,
-                               1.05f, 0.28f, 0, false, false, tau});
+                    PuctParams::Builder()
+                        .set_kind(PuctRootSelectionPolicy::kVisitCountSample)
+                        .set_c_puct(1.05f)
+                        .set_c_puct_visit_scaling(0.28f)
+                        .set_c_puct_v_2(0.0f)
+                        .set_tau(tau)
+                        .build());
       auto end = std::chrono::high_resolution_clock::now();
 
       // Post Search Statstics.

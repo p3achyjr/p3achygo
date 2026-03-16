@@ -79,6 +79,10 @@ ABSL_FLAG(bool, cur_use_bias_cache, false,
           "Whether to use bias cache for cur.");
 ABSL_FLAG(float, cur_bias_cache_alpha, 0.8f, "Bias cache alpha for cur.");
 ABSL_FLAG(float, cur_bias_cache_lambda, 0.4f, "Bias cache lambda for cur.");
+ABSL_FLAG(bool, cur_enable_m3_bonus, false, "Whether to use m3 bonus in PUCT for cur.");
+ABSL_FLAG(int, cur_var_scale_prior_visits, 0,
+          "Prior visits for variance-based child scale factor for cur.");
+ABSL_FLAG(int, cur_m3_prior_visits, 20, "Prior visits for m3 bonus dampening for cur.");
 ABSL_FLAG(int, cand_n, kDefaultGumbelN, "N for candidate player");
 ABSL_FLAG(int, cand_k, kDefaultGumbelK, "K for candidate player");
 ABSL_FLAG(float, cand_noise_scaling, 1.0f, "Cand gumbel noise scaling");
@@ -100,6 +104,10 @@ ABSL_FLAG(bool, cand_use_bias_cache, false,
           "Whether to use bias cache for cand.");
 ABSL_FLAG(float, cand_bias_cache_alpha, 0.8f, "Bias cache alpha for cand.");
 ABSL_FLAG(float, cand_bias_cache_lambda, 0.4f, "Bias cache lambda for cand.");
+ABSL_FLAG(bool, cand_enable_m3_bonus, false, "Whether to use m3 bonus in PUCT for cand.");
+ABSL_FLAG(int, cand_var_scale_prior_visits, 0,
+          "Prior visits for variance-based child scale factor for cand.");
+ABSL_FLAG(int, cand_m3_prior_visits, 20, "Prior visits for m3 bonus dampening for cand.");
 
 float ConfidenceDelta(float z_score, float num_sims, float wr) {
   return z_score * std::sqrt(wr * (1 - wr) / num_sims);
@@ -143,6 +151,12 @@ void ApplyCurCommandLineFlags(eval::PlayerSearchConfig& cfg) {
     cfg.bias_cache_alpha = absl::GetFlag(FLAGS_cur_bias_cache_alpha);
   if (IsOnCommandLine("cur_bias_cache_lambda"))
     cfg.bias_cache_lambda = absl::GetFlag(FLAGS_cur_bias_cache_lambda);
+  if (IsOnCommandLine("cur_enable_m3_bonus"))
+    cfg.enable_m3_bonus = absl::GetFlag(FLAGS_cur_enable_m3_bonus);
+  if (IsOnCommandLine("cur_var_scale_prior_visits"))
+    cfg.var_scale_prior_visits = absl::GetFlag(FLAGS_cur_var_scale_prior_visits);
+  if (IsOnCommandLine("cur_m3_prior_visits"))
+    cfg.m3_prior_visits = absl::GetFlag(FLAGS_cur_m3_prior_visits);
 }
 
 // Same for cand_* flags.
@@ -175,6 +189,12 @@ void ApplyCandCommandLineFlags(eval::PlayerSearchConfig& cfg) {
     cfg.bias_cache_alpha = absl::GetFlag(FLAGS_cand_bias_cache_alpha);
   if (IsOnCommandLine("cand_bias_cache_lambda"))
     cfg.bias_cache_lambda = absl::GetFlag(FLAGS_cand_bias_cache_lambda);
+  if (IsOnCommandLine("cand_enable_m3_bonus"))
+    cfg.enable_m3_bonus = absl::GetFlag(FLAGS_cand_enable_m3_bonus);
+  if (IsOnCommandLine("cand_var_scale_prior_visits"))
+    cfg.var_scale_prior_visits = absl::GetFlag(FLAGS_cand_var_scale_prior_visits);
+  if (IsOnCommandLine("cand_m3_prior_visits"))
+    cfg.m3_prior_visits = absl::GetFlag(FLAGS_cand_m3_prior_visits);
 }
 
 // Builds a PlayerSearchConfig from the cur_* flags (all fields, no file).
@@ -195,6 +215,9 @@ eval::PlayerSearchConfig CurConfigFromFlags() {
   cfg.use_bias_cache = absl::GetFlag(FLAGS_cur_use_bias_cache);
   cfg.bias_cache_alpha = absl::GetFlag(FLAGS_cur_bias_cache_alpha);
   cfg.bias_cache_lambda = absl::GetFlag(FLAGS_cur_bias_cache_lambda);
+  cfg.enable_m3_bonus = absl::GetFlag(FLAGS_cur_enable_m3_bonus);
+  cfg.var_scale_prior_visits = absl::GetFlag(FLAGS_cur_var_scale_prior_visits);
+  cfg.m3_prior_visits = absl::GetFlag(FLAGS_cur_m3_prior_visits);
   return cfg;
 }
 
@@ -216,6 +239,9 @@ eval::PlayerSearchConfig CandConfigFromFlags() {
   cfg.use_bias_cache = absl::GetFlag(FLAGS_cand_use_bias_cache);
   cfg.bias_cache_alpha = absl::GetFlag(FLAGS_cand_bias_cache_alpha);
   cfg.bias_cache_lambda = absl::GetFlag(FLAGS_cand_bias_cache_lambda);
+  cfg.enable_m3_bonus = absl::GetFlag(FLAGS_cand_enable_m3_bonus);
+  cfg.var_scale_prior_visits = absl::GetFlag(FLAGS_cand_var_scale_prior_visits);
+  cfg.m3_prior_visits = absl::GetFlag(FLAGS_cand_m3_prior_visits);
   return cfg;
 }
 
