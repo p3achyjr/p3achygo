@@ -32,7 +32,9 @@ void PlayGames(nn::NNInterface* nn_interface, int num_games, int visit_count,
               : gumbel_evaluator.SearchRootPuct(
                     probability, game, node_table.get(), root, color_to_move,
                     visit_count,
-                    PuctParams{PuctRootSelectionPolicy::kLcb, 1.0f, 0.45f});
+                    PuctParams::Builder()
+                        .set_kind(PuctRootSelectionPolicy::kLcb)
+                        .build());
       for (auto& cb : callbacks) {
         cb->OnMove(game, color_to_move, root, search_result);
       }

@@ -87,7 +87,9 @@ Search::Params MakeParams(int num_threads, int visit_budget) {
       .num_threads = num_threads,
       .total_visit_budget = visit_budget,
       .total_visit_time_ms = 0,
-      .puct_params = PuctParams{PuctRootSelectionPolicy::kLcb},
+      .puct_params = PuctParams::Builder()
+                        .set_kind(PuctRootSelectionPolicy::kLcb)
+                        .build(),
       .q_fn_kind = QFnKind::kIdentity,
       .n_fn_kind = NFnKind::kVirtualVisit,
       .descent_policy_kind = DescentPolicyKind::kDeterministic,

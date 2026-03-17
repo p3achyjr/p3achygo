@@ -43,6 +43,7 @@ struct TreeNode final {
   float w = 0;
   float v = 0;
   float v_var = 0;
+  double v_m3 = 0;  // non-standardized skewness (3rd moment)
 
 #ifdef V_CATEGORICAL
   std::array<int16_t, kNumVBuckets> v_categorical{};
@@ -51,6 +52,7 @@ struct TreeNode final {
   float w_outcome = 0;
   float v_outcome = 0;
   float v_outcome_var = 0;
+  double v_outcome_m3 = 0;  // non-standardized skewness (3rd moment)
   float score = 0;
 
   int max_child_n = 0;
@@ -189,22 +191,36 @@ inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f) {
   float v_outcome = w_outcome / node->n;
   float score = total_score / node->n;
 
-  // Variance of a mixture distribution.
+  // Variance of a mixture distribution:
   // Var(Y) = (1/N) * sum(i : 0...k) ni(vi + (mi - m)^2)
-  float m2 = (adj_init_util_est - v) * (adj_init_util_est - v);
-  float m2_outcome = (node->init_outcome_est - v_outcome) *
-                     (node->init_outcome_est - v_outcome);
+  // Third moment of a mixture distribution:
+  // Define d_i = u_i - u
+  // M3(Y) = sum(i : 0...k) ni(m3_i + 3 * var_i * d_i + d_i ^ 3)
+  // Derived by defining X - u = X - u_i + d_i, and solving for E[(X - u)^3]
+  float m = adj_init_util_est - v;
+  float m_outcome = node->init_outcome_est - v_outcome;
+  float m2 = m * m;
+  float m2_outcome = m_outcome * m_outcome;
+  double m3 = m2 * m;
+  double m3_outcome = m2_outcome * m_outcome;
   for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
-    if (node->child_visits[a] == 0) {
+    const int n_a = node->child_visits[a];
+    if (n_a == 0) {
       continue;
     }
 
     const TreeNode* child = node->child(a);
-    float dv = -child->v - v;
-    float dv_outcome = -child->v_outcome - v_outcome;
-    m2 += node->child_visits[a] * (child->v_var + dv * dv);
-    m2_outcome += node->child_visits[a] *
-                  (child->v_outcome_var + dv_outcome * dv_outcome);
+    const float dv = -child->v - v;
+    const float dv_outcome = -child->v_outcome - v_outcome;
+    const float dv2 = dv * dv;
+    const float dv_outcome2 = dv_outcome * dv_outcome;
+    const float dv3 = dv2 * dv;
+    const float dv_outcome3 = dv_outcome2 * dv_outcome;
+    m2 += n_a * (child->v_var + dv2);
+    m2_outcome += n_a * (child->v_outcome_var + dv_outcome2);
+    m3 += n_a * (-child->v_m3 + 3 * child->v_var * dv + dv3);
+    m3_outcome += n_a * (-child->v_outcome_m3 +
+                         3 * child->v_outcome_var * dv_outcome + dv_outcome3);
   }
 
   node->w = w;
@@ -215,6 +231,8 @@ inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f) {
   node->max_child_n = max_child_n;
   node->v_var = m2 / node->n;
   node->v_outcome_var = m2_outcome / node->n;
+  node->v_m3 = m3 / node->n;
+  node->v_outcome_m3 = m3_outcome / node->n;
 }
 
 #ifdef V_CATEGORICAL

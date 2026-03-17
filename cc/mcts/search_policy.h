@@ -1,6 +1,9 @@
 #pragma once
 
 #include <atomic>
+#include <cmath>
+#include <iomanip>
+#include <sstream>
 
 #include "absl/log/log.h"
 #include "cc/constants/constants.h"
@@ -17,13 +20,70 @@ enum class PuctRootSelectionPolicy : uint8_t {
 };
 
 struct PuctParams {
-  PuctRootSelectionPolicy kind;
+  PuctRootSelectionPolicy kind = PuctRootSelectionPolicy::kVisitCount;
   float c_puct = 1.0f;
   float c_puct_visit_scaling = 0.45f;
-  float c_puct_v_2 = 3;
+  float c_puct_v_2 = 3.0f;
   bool use_puct_v = false;
   bool enable_var_scaling = false;
+  // Prior visits for the variance-based child exploration scale factor.
+  int var_scale_prior_visits = 0;
   float tau = 1.0f;
+  bool enable_m3_bonus = false;
+  // Prior visits for m3-bonus dampening (higher = slower ramp-in).
+  int m3_prior_visits = 20;
+
+  // Forward-declared; defined below once PuctParams is complete.
+  class Builder;
+};
+
+class PuctParams::Builder {
+ public:
+  Builder() = default;
+  Builder& set_kind(PuctRootSelectionPolicy v) {
+    p_.kind = v;
+    return *this;
+  }
+  Builder& set_c_puct(float v) {
+    p_.c_puct = v;
+    return *this;
+  }
+  Builder& set_c_puct_visit_scaling(float v) {
+    p_.c_puct_visit_scaling = v;
+    return *this;
+  }
+  Builder& set_c_puct_v_2(float v) {
+    p_.c_puct_v_2 = v;
+    return *this;
+  }
+  Builder& set_use_puct_v(bool v) {
+    p_.use_puct_v = v;
+    return *this;
+  }
+  Builder& set_enable_var_scaling(bool v) {
+    p_.enable_var_scaling = v;
+    return *this;
+  }
+  Builder& set_var_scale_prior_visits(int v) {
+    p_.var_scale_prior_visits = v;
+    return *this;
+  }
+  Builder& set_tau(float v) {
+    p_.tau = v;
+    return *this;
+  }
+  Builder& set_enable_m3_bonus(bool v) {
+    p_.enable_m3_bonus = v;
+    return *this;
+  }
+  Builder& set_m3_prior_visits(int v) {
+    p_.m3_prior_visits = v;
+    return *this;
+  }
+  PuctParams build() const { return p_; }
+
+ private:
+  PuctParams p_;
 };
 
 /*
@@ -62,8 +122,11 @@ class PuctScorer final {
       : c_puct_(params.c_puct),
         c_puct_visit_scaling_(params.c_puct_visit_scaling),
         enable_var_scaling_(params.enable_var_scaling),
+        var_scale_prior_visits_(params.var_scale_prior_visits),
         c_puct_v_2_(params.c_puct_v_2),
         use_puct_v_(params.use_puct_v),
+        enable_m3_bonus_(params.enable_m3_bonus),
+        m3_prior_visits_(params.m3_prior_visits),
         q_fn_(q_fn),
         n_fn_(n_fn){};
 
@@ -90,6 +153,9 @@ class PuctScorer final {
     std::array<float, constants::kMaxMovesPerPosition> qs;
     std::array<int, constants::kMaxMovesPerPosition> child_visits_in_flight;
     std::array<float, constants::kMaxMovesPerPosition> qvars;
+    std::array<double, constants::kMaxMovesPerPosition> q_m3s;
+    float q_std_weighted_sum = 0.0f;
+    double q_m3_std_weighted_sum = 0.0;
     for (int a = 0; a < qs.size(); ++a) {
       TreeNode* child = node->child(a);
       if (child == nullptr) {
@@ -101,9 +167,17 @@ class PuctScorer final {
 
       if (child_visits[a] > 0) {
         qs[a] = -child->v;
+      }
+
+      if (child_visits[a] >= 3) {
         qvars[a] = child->v_var;
+        q_m3s[a] = -child->v_m3;
+        q_std_weighted_sum += std::sqrt(qvars[a]) * child_visits[a];
+        q_m3_std_weighted_sum += std::cbrt(q_m3s[a]) * child_visits[a];
       }
     }
+    const float q_std_mean = q_std_weighted_sum / n;
+    const double q_m3_std_mean = q_m3_std_weighted_sum / n;
     const float p_explored = [&]() {
       float mass = 0.0f;
       for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
@@ -135,32 +209,51 @@ class PuctScorer final {
     for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
       // Katago-style root variance scaling. I have no intuition as to why this
       // works -- it strongly compresses c_puct on most nodes.
-      const float c_puct_var_parent_scale_factor = [&]() {
-        if (n < 3) {
+      const auto c_puct_var_parent_scale_factor = [&]() {
+        if (n < 3 || v_var == 0) {
           return 1.0;
         }
         const float stddev = std::sqrt(v_var);
         const float interpolated_stddev =
             (0.8 + v_var * child_visits[a]) / (child_visits[a] + 2);
         return 1.0 + 0.85 * (interpolated_stddev / 0.4);
-      }();
+      };
       // Gives children with high variance an extra exploration bonus. Less
       // principled version of PUCT-V.
-      const float c_puct_var_child_scale_factor = [&]() {
+      const auto c_puct_var_child_scale_factor = [&]() {
         const int child_n = child_visits[a];
-        if (child_visits[a] < 3 || n < 3) {
+        if (child_n < 3 || q_std_mean == 0) {
           return 1.0f;
         }
-        constexpr int kPriorWeight = 3;
-        return (kPriorWeight + child_n * std::sqrt(qvars[a] / v_var)) /
-               float(kPriorWeight + child_n);
-      }();
-      const float c_puct_var_scale_factor = c_puct_var_child_scale_factor;
+        const float prior_weight = static_cast<float>(var_scale_prior_visits_);
+        // return (prior_weight + child_n * std::sqrt(qvars[a] / v_var)) /
+        //        float(prior_weight + child_n);
+        return (prior_weight + child_n * (std::sqrt(qvars[a]) / q_std_mean)) /
+               float(prior_weight + child_n);
+      };
+      const float c_puct_var_scale_factor =
+          enable_var_scaling_ ? c_puct_var_child_scale_factor() : 1.0f;
       const float canonical_child_n =
           n_fn_(child_visits[a], child_visits_in_flight[a]);
       const float canonical_q =
           q_fn_(child_visits[a] > 0 ? qs[a] : v_fpu, child_visits[a],
                 child_visits_in_flight[a]);
+
+      // Gives children with better skewness than other children a bonus.
+      const auto compute_m3_bonus = [&]() -> double {
+        const float prior_weight = static_cast<float>(m3_prior_visits_);
+        const int child_n = child_visits[a];
+        if (child_n < 3) {
+          return 0.0f;
+        }
+
+        const double m3_child_std = std::cbrt(q_m3s[a]);
+        // How much more of a positive tail does this child have than the
+        // average child?
+        const double abs_bonus = m3_child_std - q_m3_std_mean;
+        return (prior_weight + abs_bonus) / double(prior_weight + child_n);
+      };
+      const double m3_bonus = enable_m3_bonus_ ? compute_m3_bonus() : 0.0;
 
       // PUCT-V formula.
       const auto compute_puct_v_explore_term = [&]() {
@@ -184,61 +277,71 @@ class PuctScorer final {
                            : compute_puct_explore_term();
       };
       const float puct_explore_term = compute_explore_term();
-      pucts[a] = {a, puct_explore_term + canonical_q};
+      pucts[a] = {a, puct_explore_term + canonical_q + m3_bonus};
     }
     return pucts;
   }
+
   std::array<std::pair<int, float>, 4> TopScores(
       const TreeNode* node, const game::Game& game,
-      game::Color color_to_move) const {
+      const game::Color color_to_move) const {
     PuctScores pucts = ComputeScores(node);
-    std::sort(pucts.begin(), pucts.end(), [](const auto& p0, const auto& p1) {
-      return p0.second > p1.second;
-    });
-
-    std::array<std::pair<int, float>, 4> top_scores;
-    int ranking = 0;
-    for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
-      if (ranking >= top_scores.size()) {
-        break;
+    std::array<std::pair<int, float>, 4> top_scores = {
+        {{game::kNoopLoc, kMinPuctScore},
+         {game::kNoopLoc, kMinPuctScore},
+         {game::kNoopLoc, kMinPuctScore},
+         {game::kNoopLoc, kMinPuctScore}}};
+    for (const auto& [a, puct_score] : pucts) {
+      int a_ranking = 0;
+      while (a_ranking < static_cast<int>(top_scores.size())) {
+        if (puct_score > top_scores[a_ranking].second) {
+          break;
+        }
+        ++a_ranking;
       }
-      auto [a, puct] = pucts[i];
-      if (game.IsValidMove(a, color_to_move)) {
-        top_scores[ranking] = {a, puct};
-        ++ranking;
-      }
-    }
 
-    for (int r = ranking; r < top_scores.size(); ++r) {
-      top_scores[r] = {game::kNoopLoc, -1000};
+      if (a_ranking >= top_scores.size() ||
+          !game.IsValidMove(game::AsLoc(a), color_to_move)) {
+        continue;
+      }
+
+      // Sift.
+      for (int r = top_scores.size() - 1; r > a_ranking; --r) {
+        top_scores[r] = top_scores[r - 1];
+      }
+
+      // Emplace
+      top_scores[a_ranking] = {a, puct_score};
     }
     return top_scores;
   }
 
   game::Loc TopMove(const TreeNode* node, const game::Game& game,
-                    game::Color color_to_move) const {
+                    const game::Color color_to_move) const {
     PuctScores pucts = ComputeScores(node);
-    std::sort(pucts.begin(), pucts.end(), [](const auto& p0, const auto& p1) {
-      return p0.second > p1.second;
-    });
-    for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
-      auto [a, _] = pucts[i];
-      if (game.IsValidMove(a, color_to_move)) {
-        return game::AsLoc(a);
+    float max_puct_score = kMinPuctScore;
+    game::Loc max_move = game::kNoopLoc;
+    for (const auto& [a, puct_score] : pucts) {
+      const game::Loc mv = game::AsLoc(a);
+      if (puct_score > max_puct_score && game.IsValidMove(mv, color_to_move)) {
+        max_puct_score = puct_score;
+        max_move = mv;
       }
     }
 
-    // No valid moves. Should never get here.
-    CHECK(false) << "No valid moves in PUCT selection.";
-    return game::kNoopLoc;
+    return max_move;
   }
 
  private:
+  static constexpr float kMinPuctScore = -1e6;
   const float c_puct_;
   const float c_puct_visit_scaling_;
   const bool enable_var_scaling_;
+  const int var_scale_prior_visits_;
   const float c_puct_v_2_;
   const bool use_puct_v_;
+  const bool enable_m3_bonus_;
+  const int m3_prior_visits_;
   QFn q_fn_;
   NFn n_fn_;
 };

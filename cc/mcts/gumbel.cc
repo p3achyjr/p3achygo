@@ -240,54 +240,6 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
     top_k_actions.emplace_back(gmove_info[i].move_encoding);
   }
 
-#if 0
-  std::stringstream ss;
-  ss << "\n";
-
-  const auto dbg = [&](int visits_so_far) {
-    if (n < 200) return;
-    float top_lcb_70 = -2, top_lcb_80 = -2, top_lcb_90 = -2, top_lcb_95 = -2;
-    float bot_ucb_70 = -2, bot_ucb_80 = -2, bot_ucb_90 = -2, bot_ucb_95 = -2;
-    ss << std::fixed << std::setprecision(3);
-    ss << "SEQ_HALVING n: " << n << ", k: " << k
-       << ", visits_this_round: " << visits_so_far << "\n";
-    for (auto i = 0; i < k; ++i) {
-      auto& move_info = gmove_info[i];
-      if (move_info.move_encoding == game::kInvalidMoveEncoding) {
-        continue;
-      }
-      int a = move_info.move_encoding;
-      int kb = k / 2 + k % 2;
-      ss << "  action: " << move_info.move_loc
-         << ", n: " << root->child_visits[a] << ", q: " << Q(root, a)
-         << ", var: " << VVar(root->child(a))
-         << ", LCB(.85): " << Lcb(root, a, .15 / kb)
-         << ", UCB(.85): " << Ucb(root, a, .15 / kb)
-         << ", LCB(.9): " << Lcb(root, a, .1 / kb)
-         << ", UCB(.9): " << Ucb(root, a, .1 / kb)
-         << ", LCB(.95): " << Lcb(root, a, .05 / kb)
-         << ", UCB(.95): " << Ucb(root, a, .05 / kb) << "\n";
-
-      if (i < k / 2) {
-        top_lcb_70 = std::max(top_lcb_70, Lcb(root, a, .3 / kb));
-        top_lcb_80 = std::max(top_lcb_80, Lcb(root, a, .2 / kb));
-        top_lcb_90 = std::max(top_lcb_90, Lcb(root, a, .1 / kb));
-        top_lcb_95 = std::max(top_lcb_95, Lcb(root, a, .05 / kb));
-      } else {
-        bot_ucb_70 = std::max(bot_ucb_70, Ucb(root, a, .3 / kb));
-        bot_ucb_80 = std::max(bot_ucb_80, Ucb(root, a, .2 / kb));
-        bot_ucb_90 = std::max(bot_ucb_90, Ucb(root, a, .1 / kb));
-        bot_ucb_95 = std::max(bot_ucb_95, Ucb(root, a, .05 / kb));
-      }
-
-      if (i == k / 2 - 1) ss << "-----\n";
-    }
-    ss << ".9 confidence LCB: " << top_lcb_90 << ", UCB: " << bot_ucb_90
-       << ", proceed? " << (bot_ucb_90 <= top_lcb_90) << "\n";
-    ss << "==============\n";
-  };
-#endif
-
   // checks whether none of the moves to be eliminated are the best move with
   // 90% confidence.
   constexpr int kMinEarlyStoppingVisits = 6;
@@ -734,6 +686,19 @@ void GumbelEvaluator::SingleBackup(TreeNode* node, game::Loc action,
     node->v_outcome = node->w_outcome / node->n;
     node->score = leaf_score * (1.0f / N(node)) +
                   node->score * ((N(node) - 1.0f) / N(node));
+    // Update 3rd moment.
+    const auto compute_m3 = [](const double m3, const double m2, const double d,
+                               const double n) {
+      const double d3 = d * d * d;
+      return m3 + ((n * n - 1) * d3 / (n * n)) - (3 * d * m2 / n);
+    };
+    const float m3 = compute_m3(node->v_m3 * n_old, node->v_var * n_old,
+                                leaf_q - node->v, n_old);
+    const float m3_outcome =
+        compute_m3(node->v_outcome_m3 * n_old, node->v_outcome_var * n_old,
+                   leaf_q_outcome - node->v_outcome, n_old);
+    node->v_m3 = m3 / node->n;
+    node->v_outcome_m3 = m3_outcome / node->n;
     // Update variance.
     node->v_var = n_old * node->v_var + (leaf_q - v_old) * (leaf_q - node->v);
     node->v_var /= node->n;

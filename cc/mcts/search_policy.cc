@@ -1,5 +1,7 @@
 #include "cc/mcts/search_policy.h"
 
+#include "cc/game/board.h"
+
 namespace mcts {
 namespace {
 using namespace ::game;
