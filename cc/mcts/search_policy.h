@@ -167,6 +167,9 @@ class PuctScorer final {
 
       if (child_visits[a] > 0) {
         qs[a] = -child->v;
+      }
+
+      if (child_visits[a] >= 3) {
         qvars[a] = child->v_var;
         q_m3s[a] = -child->v_m3;
         q_std_weighted_sum += std::sqrt(qvars[a]) * child_visits[a];
@@ -207,7 +210,7 @@ class PuctScorer final {
       // Katago-style root variance scaling. I have no intuition as to why this
       // works -- it strongly compresses c_puct on most nodes.
       const auto c_puct_var_parent_scale_factor = [&]() {
-        if (n < 3) {
+        if (n < 3 || v_var == 0) {
           return 1.0;
         }
         const float stddev = std::sqrt(v_var);
@@ -219,7 +222,7 @@ class PuctScorer final {
       // principled version of PUCT-V.
       const auto c_puct_var_child_scale_factor = [&]() {
         const int child_n = child_visits[a];
-        if (child_visits[a] < 3 || n < 3) {
+        if (child_n < 3 || q_std_mean == 0) {
           return 1.0f;
         }
         const float prior_weight = static_cast<float>(var_scale_prior_visits_);
@@ -240,7 +243,7 @@ class PuctScorer final {
       const auto compute_m3_bonus = [&]() -> double {
         const float prior_weight = static_cast<float>(m3_prior_visits_);
         const int child_n = child_visits[a];
-        if (child_visits[a] < 3 || n < 3) {
+        if (child_n < 3) {
           return 0.0f;
         }
 
@@ -248,8 +251,6 @@ class PuctScorer final {
         // How much more of a positive tail does this child have than the
         // average child?
         const double abs_bonus = m3_child_std - q_m3_std_mean;
-        // Normalize to stddev.
-        const double scaled_bonus = abs_bonus / std::sqrt(v_var);
         return (prior_weight + abs_bonus) / double(prior_weight + child_n);
       };
       const double m3_bonus = enable_m3_bonus_ ? compute_m3_bonus() : 0.0;
@@ -283,50 +284,56 @@ class PuctScorer final {
 
   std::array<std::pair<int, float>, 4> TopScores(
       const TreeNode* node, const game::Game& game,
-      game::Color color_to_move) const {
+      const game::Color color_to_move) const {
     PuctScores pucts = ComputeScores(node);
-    std::sort(pucts.begin(), pucts.end(), [](const auto& p0, const auto& p1) {
-      return p0.second > p1.second;
-    });
-
-    std::array<std::pair<int, float>, 4> top_scores;
-    int ranking = 0;
-    for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
-      if (ranking >= top_scores.size()) {
-        break;
+    std::array<std::pair<int, float>, 4> top_scores = {
+        {{game::kNoopLoc, kMinPuctScore},
+         {game::kNoopLoc, kMinPuctScore},
+         {game::kNoopLoc, kMinPuctScore},
+         {game::kNoopLoc, kMinPuctScore}}};
+    for (const auto& [a, puct_score] : pucts) {
+      int a_ranking = 0;
+      while (a_ranking < static_cast<int>(top_scores.size())) {
+        if (puct_score > top_scores[a_ranking].second) {
+          break;
+        }
+        ++a_ranking;
       }
-      auto [a, puct] = pucts[i];
-      if (game.IsValidMove(a, color_to_move)) {
-        top_scores[ranking] = {a, puct};
-        ++ranking;
-      }
-    }
 
-    for (int r = ranking; r < top_scores.size(); ++r) {
-      top_scores[r] = {game::kNoopLoc, -1000};
+      if (a_ranking >= top_scores.size() ||
+          !game.IsValidMove(game::AsLoc(a), color_to_move)) {
+        continue;
+      }
+
+      // Sift.
+      for (int r = top_scores.size() - 1; r > a_ranking; --r) {
+        top_scores[r] = top_scores[r - 1];
+      }
+
+      // Emplace
+      top_scores[a_ranking] = {a, puct_score};
     }
     return top_scores;
   }
 
   game::Loc TopMove(const TreeNode* node, const game::Game& game,
-                    game::Color color_to_move) const {
+                    const game::Color color_to_move) const {
     PuctScores pucts = ComputeScores(node);
-    std::sort(pucts.begin(), pucts.end(), [](const auto& p0, const auto& p1) {
-      return p0.second > p1.second;
-    });
-    for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
-      auto [a, _] = pucts[i];
-      if (game.IsValidMove(a, color_to_move)) {
-        return game::AsLoc(a);
+    float max_puct_score = kMinPuctScore;
+    game::Loc max_move = game::kNoopLoc;
+    for (const auto& [a, puct_score] : pucts) {
+      const game::Loc mv = game::AsLoc(a);
+      if (puct_score > max_puct_score && game.IsValidMove(mv, color_to_move)) {
+        max_puct_score = puct_score;
+        max_move = mv;
       }
     }
 
-    // No valid moves. Should never get here.
-    CHECK(false) << "No valid moves in PUCT selection.";
-    return game::kNoopLoc;
+    return max_move;
   }
 
  private:
+  static constexpr float kMinPuctScore = -1e6;
   const float c_puct_;
   const float c_puct_visit_scaling_;
   const bool enable_var_scaling_;
