@@ -15,6 +15,7 @@ from onnxconverter_common.float16 import convert_float_to_float16
 from onnx import TensorProto, helper
 
 from model import P3achyGoModel
+from optimizer import ConvMuon
 from constants import *
 from lr_schedule import ConstantLRSchedule
 
