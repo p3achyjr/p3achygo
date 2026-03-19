@@ -3,8 +3,11 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <sstream>
+#include <vector>
 
 #include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "cc/constants/constants.h"
 #include "cc/core/util.h"
 #include "cc/core/vmath.h"
@@ -114,22 +117,24 @@ std::array<float, constants::kMaxMovesPerPosition> ComputeImprovedPolicy(
 
 // Version of the above that only bumps the probabiilities of Gumbel selected
 // actions. This avoids choosing moves with low visit counts and high Q-values.
+// Q values are normalized from [-1.1, 1.1] to [0, 1] before weighting.
+// max_n controls the Q weight: logit[a] += (kVisit + max_n) * q_norm(Q(a)).
 std::array<float, constants::kMaxMovesPerPosition> ComputeRootImprovedPolicy(
     TreeNode* node,
     const std::array<float, constants::kMaxMovesPerPosition> masked_logits,
-    const absl::InlinedVector<int, 16>& visited_actions) {
-  float v_mix = VMixed(node);
-  int max_n = MaxN(node);
+    const absl::InlinedVector<int, 16>& visited_actions, int max_n) {
+  constexpr float kQRange = 2.2f;
+  const auto q_norm = [](float q) { return (q + 1.1f) / kQRange; };
+
+  float v_mix = q_norm(VMixed(node));
   alignas(MM_ALIGN) std::array<float, constants::kMaxMovesPerPosition>
       logits_improved;
   for (int action = 0; action < constants::kMaxMovesPerPosition; ++action) {
-    if (core::InlinedVecContains(visited_actions, action)) {
-      logits_improved[action] =
-          masked_logits[action] + QTransform(Q(node, action), max_n);
-    } else {
-      logits_improved[action] =
-          masked_logits[action] + QTransform(v_mix, max_n);
-    }
+    float q = core::InlinedVecContains(visited_actions, action)
+                  ? q_norm(Q(node, action))
+                  : v_mix;
+    logits_improved[action] =
+        masked_logits[action] + (kVisit + max_n) * kValueScale * q;
   }
 
   return core::SoftmaxV(logits_improved);
@@ -264,12 +269,39 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
         return bot_ucb_90 <= top_lcb_90;
       };
 
+  const auto update_qtransform = [&gmove_info, &root](int k) {
+    for (auto i = 0; i < k; ++i) {
+      auto& move_info = gmove_info[i];
+      if (move_info.move_encoding == game::kInvalidMoveEncoding) {
+        continue;
+      }
+
+      TreeNode* child = root->children[move_info.move_encoding].load(
+          std::memory_order_relaxed);
+      move_info.qtransform = QTransform(-V(child), MaxN(root));
+    }
+  };
+
   // For each round:
   // - Select k top nodes to search.
   // - Reject half for next round.
   // - Divide k by 2
   // - Multiply visits_per_action by 2
   uint32_t visits_spent = 0;
+
+  // Theoretical winner visits: analytically predicted visit count for the
+  // winner under sequential halving with no tree reuse.
+  // = sum_r round(n / (num_rounds * k_r)) for each halving round r.
+  int theoretical_winner_visits = 0;
+  {
+    int k_tmp = k;
+    while (k_tmp > 1) {
+      theoretical_winner_visits +=
+          std::round(float(n) / float(num_rounds * k_tmp));
+      k_tmp /= 2;
+    }
+  }
+
   const int m = k;
   while (k > 1) {
     // We are supporting three search modes:
@@ -293,7 +325,9 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
 
       return {v, v, v};
     }();
+    int visits_in_round = 0;
     for (int visit_num = 0; visit_num < visits_per_action; ++visit_num) {
+      ++visits_in_round;
       for (auto i = 0; i < k; ++i) {
         auto& move_info = gmove_info[i];
         if (move_info.move_encoding == game::kInvalidMoveEncoding) {
@@ -323,6 +357,7 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
             node_table->is_graph() || (bias_cache_ != nullptr);
         Backward(search_path, use_idempotent_updates);
         root->child_visits[move_info.move_encoding] += 1;
+        // TODO: Update root max_child_n?
 #if 0
         if (root->child_visits[move_info.move_encoding] > root->max_child_n) {
           root->max_child_n = root->child_visits[move_info.move_encoding];
@@ -334,6 +369,7 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
       if (visit_num % early_stopping_check_interval ==
               (early_stopping_check_interval - 1) &&
           visit_num >= min_check_interval) {
+        update_qtransform(k);
         std::sort(gmove_info, gmove_info + k, GumbelMoveInfoGreater);
         if (bottom_half_ci_gating_check(visit_num, k)) {
           break;
@@ -341,19 +377,7 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
       }
     }
 
-    for (auto i = 0; i < k; ++i) {
-      auto& move_info = gmove_info[i];
-      if (move_info.move_encoding == game::kInvalidMoveEncoding) {
-        continue;
-      }
-
-      // update qvalue
-      TreeNode* child = root->children[move_info.move_encoding].load(
-          std::memory_order_relaxed);
-      auto child_q = -V(child);
-      move_info.qtransform = QTransform(child_q, MaxN(root));
-    }
-
+    update_qtransform(k);
     std::sort(gmove_info, gmove_info + k, GumbelMoveInfoGreater);
     k /= 2;
   }
@@ -368,8 +392,11 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
 #endif
 
   // Get improved policy from completed-Q values.
-  result.pi_improved =
-      ComputeRootImprovedPolicy(root, masked_logits, top_k_actions);
+  // max_n = sqrt(theoretical winner visits) controls Q weight.
+  const int sqrt_theoretical_winner_visits = static_cast<int>(
+      std::sqrt(static_cast<float>(theoretical_winner_visits)));
+  result.pi_improved = ComputeRootImprovedPolicy(
+      root, masked_logits, top_k_actions, sqrt_theoretical_winner_visits);
 
   // Populate stats for visited children.
   for (int i = 0; i < m; ++i) {
@@ -432,6 +459,7 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
 
   result.kld = kld(result.pi_improved, root->move_probs);
   result.visits = visits_spent;
+
   // result.dbg = ss.str();
   return result;
 }
