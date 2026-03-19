@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
-#include <sstream>
 #include <vector>
 
 #include "absl/log/check.h"
@@ -247,7 +246,7 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
 
   // checks whether none of the moves to be eliminated are the best move with
   // 90% confidence.
-  constexpr int kMinEarlyStoppingVisits = 6;
+  static constexpr int kMinEarlyStoppingVisits = 6;
   const auto bottom_half_ci_gating_check =
       [&gmove_info, &root](const int visits_so_far, const int k) {
         if (visits_so_far < kMinEarlyStoppingVisits) return false;
@@ -261,9 +260,9 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
           const int a = move_info.move_encoding;
           const int kb = k / 2 + k % 2;
           if (i < k / 2) {
-            top_lcb_90 = std::max(top_lcb_90, Lcb(root, a, .1 / kb));
+            top_lcb_90 = std::max(top_lcb_90, Lcb(root, a, .05 / kb));
           } else {
-            bot_ucb_90 = std::max(bot_ucb_90, Ucb(root, a, .1 / kb));
+            bot_ucb_90 = std::max(bot_ucb_90, Ucb(root, a, .05 / kb));
           }
         }
         return bot_ucb_90 <= top_lcb_90;
@@ -318,7 +317,8 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
                                        over_search_enabled,
                                        v]() -> std::tuple<int, int, int> {
       if (early_stopping_enabled) {
-        return {v, ceil_div(v, 4), 0};
+        return {v, ceil_div(v, 4),
+                std::max(v / 4, kMinEarlyStoppingVisits) - 1};
       } else if (over_search_enabled) {
         return {v * 5 / 2, ceil_div(v, 4), v - 1};
       }
