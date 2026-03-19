@@ -46,7 +46,11 @@ flags.DEFINE_string(
     "local_run_dir", "/tmp/p3achygo", "Local path for temporary storage"
 )
 flags.DEFINE_bool("local_only", False, "Whether to run RL loop locally.")
-flags.DEFINE_string("chunk_dir", "", "Local directory to read training chunks from. Defaults to local_run_dir.")
+flags.DEFINE_string(
+    "chunk_dir",
+    "",
+    "Local directory to read training chunks from. Defaults to local_run_dir.",
+)
 flags.DEFINE_string(
     "gpu_ids",
     "",

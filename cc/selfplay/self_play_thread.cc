@@ -471,15 +471,20 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
           for (int i = 0; i < pre_k; ++i) mean += qs[i];
           mean /= pre_k;
           float var = 0;
-          for (int i = 0; i < pre_k; ++i) var += (qs[i] - mean) * (qs[i] - mean);
+          for (int i = 0; i < pre_k; ++i)
+            var += (qs[i] - mean) * (qs[i] - mean);
           pre_q_var = var / pre_k;
 
           // Prior gap: top1 - top2 prior among visited children.
           float p1 = 0.0f, p2 = 0.0f;
           for (int i = 0; i < pre_k; ++i) {
             float p = root_node->move_probs[top_actions[i]];
-            if (p >= p1) { p2 = p1; p1 = p; }
-            else if (p > p2) { p2 = p; }
+            if (p >= p1) {
+              p2 = p1;
+              p1 = p;
+            } else if (p > p2) {
+              p2 = p;
+            }
           }
           pre_prior_gap = p1 - p2;
         }
@@ -501,7 +506,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       //   No bonus above p30; scales linearly to 1.5x at p5.
       const float sel_g2_bonus = [&]() {
         if (pre_k < 2 || pre_prior_gap < 0.2f) return 1.0f;
-        constexpr float kP5  = 0.0013f;
+        constexpr float kP5 = 0.0013f;
         constexpr float kP30 = 0.012f;
         return 1.0f + 0.5f * std::clamp((kP30 - pre_top_gap) / (kP30 - kP5),
                                         0.0f, 1.0f);
@@ -515,9 +520,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         if (pre_k < 2 || pre_prior_gap < 0.2f) return 1.0f;
         constexpr float kP85 = 0.158f;
         constexpr float kP95 = 0.345f;
-        return 1.0f - 0.5f * std::clamp(
-                                 (pre_top_gap - kP85) / (kP95 - kP85),
-                                 0.0f, 1.0f);
+        return 1.0f - 0.5f * std::clamp((pre_top_gap - kP85) / (kP95 - kP85),
+                                        0.0f, 1.0f);
       }();
 
       const bool apply_sel_mult = config.sel_mult_base > 0.0f &&
@@ -538,10 +542,10 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         if (sampling_raw_policy) {
           return 0.0f;
         }
-        const float base = is_either_down_bad
-                               ? down_bad_coeff * down_bad_coeff *
-                                     kMoveSelectedForTrainingProb
-                               : kMoveSelectedForTrainingProb;
+        const float base =
+            is_either_down_bad
+                ? down_bad_coeff * down_bad_coeff * kMoveSelectedForTrainingProb
+                : kMoveSelectedForTrainingProb;
         return base * sel_mult;
       }();
 
@@ -589,7 +593,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       bool const is_move_over_search =
           (probability.Uniform() < over_search_prob &&
            is_move_selected_for_training && false);
-      bool const early_stopping_enabled = !is_move_over_search && false;
+      bool const early_stopping_enabled = !is_move_over_search;
       auto const [gumbel_n, gumbel_k, noise_scaling] = [&]() {
         int gumbel_n, gumbel_k;
         float noise_scaling = 1.0f;
@@ -674,7 +678,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       // Bias cache adjustment for this root (read-only, no update).
       float qadj = bias_cache != nullptr ? bias_cache->Fetch(root_node) : 0.0f;
 
-      // Per-move uncertainty and NN/MCTS divergence (pre-search, via tree reuse).
+      // Per-move uncertainty and NN/MCTS divergence (pre-search, via tree
+      // reuse).
       float node_uncertainty = root_node->v_err;
       float nn_mcts_diff = std::abs(nn_util_est - q_pre);
 
@@ -788,12 +793,10 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       diff_ema = diff_ema == 0 ? nn_mcts_diff
                                : (0.75f * diff_ema + 0.25f * nn_mcts_diff);
 
-      var_avg =
-          (var_avg * (game.num_moves() - 1) + var_pre) / game.num_moves();
+      var_avg = (var_avg * (game.num_moves() - 1) + var_pre) / game.num_moves();
       var_min = std::min(var_min, var_pre);
       var_max = std::max(var_max, var_pre);
-      var_ema = var_ema == 0 ? var_pre
-                             : (0.75f * var_ema + 0.25f * var_pre);
+      var_ema = var_ema == 0 ? var_pre : (0.75f * var_ema + 0.25f * var_pre);
 
       if (pre_k >= 2) {
         const int n = game.num_moves();
@@ -811,12 +814,10 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       }
 
       sel_mult_avg =
-          (sel_mult_avg * (game.num_moves() - 1) + sel_mult) /
-          game.num_moves();
-      sel_mult_ema =
-          sel_mult_ema == 0
-              ? sel_mult
-              : (0.75f * sel_mult_ema + 0.25f * sel_mult);
+          (sel_mult_avg * (game.num_moves() - 1) + sel_mult) / game.num_moves();
+      sel_mult_ema = sel_mult_ema == 0
+                         ? sel_mult
+                         : (0.75f * sel_mult_ema + 0.25f * sel_mult);
 
       auto round_end = std::chrono::steady_clock::now();
       auto round_dur = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -877,8 +878,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
           << "  Min=" << diff_min << "  Max=" << diff_max
           << "  EMA=" << diff_ema << "\n";
         s << "Var(pre)=" << var_pre << "  Avg=" << var_avg
-          << "  Min=" << var_min << "  Max=" << var_max
-          << "  EMA=" << var_ema << "\n";
+          << "  Min=" << var_min << "  Max=" << var_max << "  EMA=" << var_ema
+          << "\n";
         s << "MoveQ(k=" << pre_k << ")"
           << "  Var=" << pre_q_var << "  VarAvg=" << q_var_avg
           << "  VarMin=" << q_var_min << "  VarMax=" << q_var_max
@@ -886,12 +887,9 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         s << "  Top1/2Gap=" << pre_top_gap << "  PriorGap=" << pre_prior_gap
           << "  GapAvg=" << top_gap_avg << "  GapMin=" << top_gap_min
           << "  GapMax=" << top_gap_max << "  GapEMA=" << top_gap_ema << "\n";
-        s << "SelMult=" << sel_mult
-          << "  G1=" << sel_g1_mult
-          << "  G2Bonus=" << sel_g2_bonus
-          << "  G2Penalty=" << sel_g2_penalty
-          << "  Avg=" << sel_mult_avg
-          << "  EMA=" << sel_mult_ema << "\n";
+        s << "SelMult=" << sel_mult << "  G1=" << sel_g1_mult
+          << "  G2Bonus=" << sel_g2_bonus << "  G2Penalty=" << sel_g2_penalty
+          << "  Avg=" << sel_mult_avg << "  EMA=" << sel_mult_ema << "\n";
         s << "Board:\n" << game.board() << "\n";
         s << "Nodes Reaped=" << num_nodes_reaped
           << "  Reap Time=" << reap_time_us
