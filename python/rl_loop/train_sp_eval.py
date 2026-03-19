@@ -154,6 +154,7 @@ def loop(
         chunk_size_path: str,
         batch_num_path: str,
         save_trt=True,
+        train_gpu_id: int | None = None,
     ):
         with open(chunk_size_path, "r") as f:
             logging.info(f"Training model {next_model_gen}...")
@@ -171,7 +172,10 @@ def loop(
                 + f" --save_trt={save_trt}"
                 + f" --trt_convert_path={build_trt_engine_path}"
             )
-            exit_code = proc.run_proc(cmd)
+            train_env = os.environ.copy()
+            if train_gpu_id is not None:
+                train_env["CUDA_VISIBLE_DEVICES"] = str(train_gpu_id)
+            exit_code = proc.run_proc(cmd, env=train_env)
             logging.info(f"Training Exited with Status {exit_code}")
 
     def eval_new_model(run_id: str, next_model_gen: int, eval_res_path: str):
@@ -331,11 +335,18 @@ def loop(
             t.start()
         return queues, threads
 
+    def stop_sp_worker(queues, threads, idx):
+        """Stop a single SP worker by index. Sets threads[idx] = None when done."""
+        if threads[idx] is None:
+            return
+        queues[idx].put(())
+        threads[idx].join()
+        threads[idx] = None
+
     def stop_sp(queues, threads):
-        for q in queues:
-            q.put(())
-        for t in threads:
-            t.join()
+        """Stop all remaining (non-None) SP workers."""
+        for i in range(len(threads)):
+            stop_sp_worker(queues, threads, i)
 
     eval_res_path = str(Path(local_run_dir, "eval_res.txt"))
     while model_gen <= config.num_generations:
@@ -349,12 +360,15 @@ def loop(
             time.sleep(POLL_INTERVAL_S)
             latest_chunk_gen = fs.get_most_recent_chunk(run_id)
 
-        # Found new chunk.
+        # Found new chunk. Free one GPU for training while keeping the rest in self-play.
         logging.info(
             f"Found training chunk {latest_chunk_gen}."
             + f" Current generation is {model_gen}."
         )
-        stop_sp(sp_queues, sp_threads)
+        train_gpu_idx = 0  # index into GPU_IDS; this worker is stopped for training
+        train_gpu_id = GPU_IDS[train_gpu_idx]
+        logging.info(f"Stopping SP worker on GPU {train_gpu_id} for training.")
+        stop_sp_worker(sp_queues, sp_threads, train_gpu_idx)
 
         next_model_gen = model_gen + 1
         chunk_path = fs.download_golden_chunk(
@@ -371,7 +385,12 @@ def loop(
             chunk_path,
             chunk_size_path,
             batch_num_path,
+            train_gpu_id=train_gpu_id,
         )
+
+        # Training done. Stop remaining SP workers before running eval on all GPUs.
+        logging.info("Training complete. Stopping remaining SP workers for eval.")
+        stop_sp(sp_queues, sp_threads)
         eval_new_model(run_id, next_model_gen, eval_res_path)
         fs.remove_local_chunk(local_golden_chunk_dir, next_model_gen)
         model_gen = next_model_gen

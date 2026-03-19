@@ -445,8 +445,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       bool const is_move_selected_for_training =
           force_first_move || probability.Uniform() < select_move_prob;
       bool const is_move_over_search =
-          probability.Uniform() < over_search_prob &&
-          is_move_selected_for_training;
+          (probability.Uniform() < over_search_prob &&
+           is_move_selected_for_training && false);
       bool const early_stopping_enabled = !is_move_over_search;
       auto const [gumbel_n, gumbel_k, noise_scaling] = [&]() {
         int gumbel_n, gumbel_k;
@@ -634,6 +634,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
           << "  Select Move Prob=" << select_move_prob
           << "  Add Init State Prob=" << add_init_state_prob
           << "  Trainable=" << is_move_selected_for_training
+          << "  Early Stopping=" << early_stopping_enabled
           << "  Over Search=" << is_move_over_search
           << "  Visits=" << gumbel_res.visits << "  Tau=" << tau << "\n";
         s << "Last 5 Moves: " << game.move(game.num_moves() - 5) << "  "
