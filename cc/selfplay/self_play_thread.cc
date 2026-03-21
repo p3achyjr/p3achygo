@@ -593,7 +593,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       bool const is_move_over_search =
           (probability.Uniform() < over_search_prob &&
            is_move_selected_for_training && false);
-      bool const early_stopping_enabled = !is_move_over_search;
+      bool const early_stopping_enabled = !is_move_over_search && false;
       auto const [gumbel_n, gumbel_k, noise_scaling] = [&]() {
         int gumbel_n, gumbel_k;
         float noise_scaling = 1.0f;
