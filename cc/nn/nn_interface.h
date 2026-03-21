@@ -182,20 +182,28 @@ class NNInterface final {
     // Unapply symmetry.
     std::array<float, constants::kNumBoardLocs> grid_logits_sym;
     std::array<float, constants::kNumBoardLocs> grid_probs_sym;
+    std::array<float, constants::kNumBoardLocs> grid_probs_opt_sym;
     std::copy(infer_result.move_logits.begin(),
               infer_result.move_logits.begin() + constants::kNumBoardLocs,
               grid_logits_sym.begin());
     std::copy(infer_result.move_probs.begin(),
               infer_result.move_probs.begin() + constants::kNumBoardLocs,
               grid_probs_sym.begin());
+    std::copy(infer_result.opt_move_probs.begin(),
+              infer_result.opt_move_probs.begin() + constants::kNumBoardLocs,
+              grid_probs_opt_sym.begin());
     std::array<float, constants::kNumBoardLocs> grid_logits =
         ApplyInverse(sym, grid_logits_sym, BOARD_LEN);
     std::array<float, constants::kNumBoardLocs> grid_probs =
         ApplyInverse(sym, grid_probs_sym, BOARD_LEN);
+    std::array<float, constants::kNumBoardLocs> grid_probs_opt =
+        ApplyInverse(sym, grid_probs_opt_sym, BOARD_LEN);
     std::copy(grid_logits.begin(), grid_logits.end(),
               infer_result.move_logits.begin());
     std::copy(grid_probs.begin(), grid_probs.end(),
               infer_result.move_probs.begin());
+    std::copy(grid_probs_opt.begin(), grid_probs_opt.end(),
+              infer_result.opt_move_probs.begin());
     return infer_result;
   }
 

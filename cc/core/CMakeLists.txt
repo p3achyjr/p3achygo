@@ -39,6 +39,7 @@ target_link_libraries(core_lru_cache INTERFACE absl::flat_hash_set)
 
 add_library(core_vmath INTERFACE)
 target_sources(core_vmath INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/vmath.h)
+target_compile_options(core_vmath INTERFACE -mavx -fno-math-errno)
 
 add_library(core_doctest INTERFACE)
 target_sources(core_doctest INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/doctest_include.h)

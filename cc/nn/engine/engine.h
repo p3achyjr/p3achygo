@@ -3,6 +3,8 @@
 
 #include <memory>
 
+#include "cc/constants/constants.h"
+#include "cc/core/vmath.h"
 #include "cc/nn/engine/go_features.h"
 
 namespace nn {
@@ -12,6 +14,8 @@ struct NNInferResult {
   std::array<float, constants::kMaxMovesPerPosition> move_probs;
   std::array<float, constants::kNumValueLogits> value_probs;
   std::array<float, constants::kNumScoreLogits> score_probs;
+  alignas(MM_ALIGN)
+      std::array<float, constants::kMaxMovesPerPosition> opt_move_probs;
 };
 
 class Engine {

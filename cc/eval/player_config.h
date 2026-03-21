@@ -1,8 +1,11 @@
 #pragma once
 
 #include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "cc/mcts/constants.h"
 
@@ -52,6 +55,7 @@ struct PlayerSearchConfig {
   bool enable_m3_bonus = false;
   int var_scale_prior_visits = 0;
   int m3_prior_visits = 20;
+  float p_opt_weight = 0.0f;
 
   // --- Config-file-only parallel search knobs (no-op for Gumbel) ---
 
@@ -182,6 +186,8 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.var_scale_prior_visits = std::stoi(val);
     else if (key == "m3_prior_visits")
       cfg.m3_prior_visits = std::stoi(val);
+    else if (key == "p_opt_weight")
+      cfg.p_opt_weight = std::stof(val);
     // Parallel search knobs
     else if (key == "num_threads_per_game")
       cfg.num_threads_per_game = std::stoi(val);
@@ -208,6 +214,93 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
     // Unknown keys are silently ignored.
   }
   return cfg;
+}
+
+/*
+ * Formats two PlayerSearchConfig structs side-by-side and returns the string.
+ *
+ * Example output:
+ *   Cur Config                        Cand Config
+ *     n: 128                            n: 256
+ *     k: 8                              k: 8
+ *     ...
+ */
+inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
+                                       const PlayerSearchConfig& cand) {
+  using Row = std::tuple<std::string, std::string, std::string>;
+  std::vector<Row> rows;
+
+  auto b = [](bool v) -> std::string { return v ? "true" : "false"; };
+  auto f = [](float v) -> std::string {
+    std::ostringstream o;
+    o << v;
+    return o.str();
+  };
+  auto i_ = [](int v) -> std::string { return std::to_string(v); };
+  auto s = [](const std::string& v) -> std::string { return v; };
+
+#define ROW(field, fmt) rows.emplace_back(#field, fmt(cur.field), fmt(cand.field))
+  ROW(name, s);
+  ROW(n, i_);
+  ROW(k, i_);
+  ROW(noise_scaling, f);
+  ROW(use_puct, b);
+  ROW(c_puct, f);
+  ROW(c_puct_visit_scaling, f);
+  ROW(var_scale_cpuct, b);
+  ROW(use_puct_v, b);
+  ROW(c_puct_v_2, f);
+  ROW(tau, f);
+  ROW(puct_root_policy, s);
+  ROW(use_lcb, b);
+  ROW(score_weight, f);
+  ROW(score_utility_mode, s);
+  ROW(use_mcgs, b);
+  ROW(use_bias_cache, b);
+  ROW(bias_cache_alpha, f);
+  ROW(bias_cache_lambda, f);
+  ROW(enable_m3_bonus, b);
+  ROW(var_scale_prior_visits, i_);
+  ROW(m3_prior_visits, i_);
+  ROW(p_opt_weight, f);
+  ROW(num_threads_per_game, i_);
+  ROW(time_ms, i_);
+  ROW(q_fn, s);
+  ROW(n_fn, s);
+  ROW(collision_policy, s);
+  ROW(collision_detector, s);
+  ROW(vl_delta, f);
+  ROW(max_collision_retries, i_);
+  ROW(search_mode, s);
+  ROW(descent_policy, s);
+  ROW(max_o_ratio, f);
+#undef ROW
+
+  // Compute column widths.
+  static constexpr size_t kIndent = 2;
+  static constexpr size_t kColGap = 4;
+
+  size_t key_w = 0, cur_w = 0;
+  for (const auto& [k, c, d] : rows) {
+    key_w = std::max(key_w, k.size());
+    cur_w = std::max(cur_w, c.size());
+  }
+
+  std::ostringstream oss;
+  const std::string indent(kIndent, ' ');
+
+  // Header: "Cur Config" aligned over the left column, "Cand Config" over right.
+  size_t left_total = kIndent + key_w + 2 + cur_w + kColGap;
+  oss << "Cur Config" << std::string(left_total - 10, ' ') << "Cand Config\n";
+
+  for (const auto& [k, c, d] : rows) {
+    std::string left = indent + k + ": " + c;
+    if (left.size() < left_total)
+      left += std::string(left_total - left.size(), ' ');
+    oss << left << indent << k << ": " << d << "\n";
+  }
+
+  return oss.str();
 }
 
 }  // namespace eval

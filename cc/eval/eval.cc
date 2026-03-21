@@ -126,6 +126,7 @@ mcts::Search::Params MakeSearchParams(const eval::PlayerSearchConfig& cfg) {
               .set_tau(cfg.tau)
               .set_enable_m3_bonus(cfg.enable_m3_bonus)
               .set_m3_prior_visits(cfg.m3_prior_visits)
+              .set_p_opt_weight(cfg.p_opt_weight)
               .build(),
       .q_fn_kind = q_fn_kind,
       .n_fn_kind = n_fn_kind,
@@ -303,6 +304,7 @@ void PlayEvalGame(size_t seed, int game_id, int total_num_workers,
                             active_cfg.var_scale_prior_visits)
                         .set_enable_m3_bonus(active_cfg.enable_m3_bonus)
                         .set_m3_prior_visits(active_cfg.m3_prior_visits)
+                        .set_p_opt_weight(active_cfg.p_opt_weight)
                         .build())
               : gumbel.SearchRoot(
                     probability, game, player_table, player_tree, color_to_move,

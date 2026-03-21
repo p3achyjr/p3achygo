@@ -64,6 +64,7 @@ struct TreeNode final {
   // initial evaluation (conceptual write-once)
   std::array<float, constants::kMaxMovesPerPosition> move_logits{};
   std::array<float, constants::kMaxMovesPerPosition> move_probs{};
+  std::array<float, constants::kMaxMovesPerPosition> opt_probs{};
   float init_outcome_est = 0;
   float init_score_est = 0;
   float init_score_var = 0;  // Var[score] under the NN's predicted distribution.

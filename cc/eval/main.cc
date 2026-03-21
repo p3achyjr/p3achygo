@@ -83,6 +83,7 @@ ABSL_FLAG(bool, cur_enable_m3_bonus, false, "Whether to use m3 bonus in PUCT for
 ABSL_FLAG(int, cur_var_scale_prior_visits, 0,
           "Prior visits for variance-based child scale factor for cur.");
 ABSL_FLAG(int, cur_m3_prior_visits, 20, "Prior visits for m3 bonus dampening for cur.");
+ABSL_FLAG(float, cur_p_opt_weight, 0.0f, "Optimistic policy interpolation weight for cur.");
 ABSL_FLAG(int, cand_n, kDefaultGumbelN, "N for candidate player");
 ABSL_FLAG(int, cand_k, kDefaultGumbelK, "K for candidate player");
 ABSL_FLAG(float, cand_noise_scaling, 1.0f, "Cand gumbel noise scaling");
@@ -108,6 +109,7 @@ ABSL_FLAG(bool, cand_enable_m3_bonus, false, "Whether to use m3 bonus in PUCT fo
 ABSL_FLAG(int, cand_var_scale_prior_visits, 0,
           "Prior visits for variance-based child scale factor for cand.");
 ABSL_FLAG(int, cand_m3_prior_visits, 20, "Prior visits for m3 bonus dampening for cand.");
+ABSL_FLAG(float, cand_p_opt_weight, 0.0f, "Optimistic policy interpolation weight for cand.");
 
 float ConfidenceDelta(float z_score, float num_sims, float wr) {
   return z_score * std::sqrt(wr * (1 - wr) / num_sims);
@@ -157,6 +159,8 @@ void ApplyCurCommandLineFlags(eval::PlayerSearchConfig& cfg) {
     cfg.var_scale_prior_visits = absl::GetFlag(FLAGS_cur_var_scale_prior_visits);
   if (IsOnCommandLine("cur_m3_prior_visits"))
     cfg.m3_prior_visits = absl::GetFlag(FLAGS_cur_m3_prior_visits);
+  if (IsOnCommandLine("cur_p_opt_weight"))
+    cfg.p_opt_weight = absl::GetFlag(FLAGS_cur_p_opt_weight);
 }
 
 // Same for cand_* flags.
@@ -195,6 +199,8 @@ void ApplyCandCommandLineFlags(eval::PlayerSearchConfig& cfg) {
     cfg.var_scale_prior_visits = absl::GetFlag(FLAGS_cand_var_scale_prior_visits);
   if (IsOnCommandLine("cand_m3_prior_visits"))
     cfg.m3_prior_visits = absl::GetFlag(FLAGS_cand_m3_prior_visits);
+  if (IsOnCommandLine("cand_p_opt_weight"))
+    cfg.p_opt_weight = absl::GetFlag(FLAGS_cand_p_opt_weight);
 }
 
 // Builds a PlayerSearchConfig from the cur_* flags (all fields, no file).
@@ -218,6 +224,7 @@ eval::PlayerSearchConfig CurConfigFromFlags() {
   cfg.enable_m3_bonus = absl::GetFlag(FLAGS_cur_enable_m3_bonus);
   cfg.var_scale_prior_visits = absl::GetFlag(FLAGS_cur_var_scale_prior_visits);
   cfg.m3_prior_visits = absl::GetFlag(FLAGS_cur_m3_prior_visits);
+  cfg.p_opt_weight = absl::GetFlag(FLAGS_cur_p_opt_weight);
   return cfg;
 }
 
@@ -242,6 +249,7 @@ eval::PlayerSearchConfig CandConfigFromFlags() {
   cfg.enable_m3_bonus = absl::GetFlag(FLAGS_cand_enable_m3_bonus);
   cfg.var_scale_prior_visits = absl::GetFlag(FLAGS_cand_var_scale_prior_visits);
   cfg.m3_prior_visits = absl::GetFlag(FLAGS_cand_m3_prior_visits);
+  cfg.p_opt_weight = absl::GetFlag(FLAGS_cand_p_opt_weight);
   return cfg;
 }
 
@@ -371,6 +379,9 @@ int main(int argc, char** argv) {
       recorder::GameRecorder::Create(
           recorder_path, num_games, 10000, 0,
           absl::StrFormat("EVAL_%s_%s", cur_cfg.name, cand_cfg.name));
+
+  LOG(INFO) << "Player configs:\n"
+            << eval::FormatPlayerConfigs(cur_cfg, cand_cfg);
 
   // Spawn games.
   EvalConfig config = EvalConfig{cur_cfg, cand_cfg};
