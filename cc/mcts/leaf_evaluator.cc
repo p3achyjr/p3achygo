@@ -86,6 +86,8 @@ inline void InitFields(const nn::NNInferResult& infer_result, TreeNode* node,
             node->move_logits.begin());
   std::copy(infer_result.move_probs.begin(), infer_result.move_probs.end(),
             node->move_probs.begin());
+  std::copy(infer_result.opt_move_probs.begin(),
+            infer_result.opt_move_probs.end(), node->opt_probs.begin());
 
   float value_est =
       infer_result.value_probs[0] * -1 + infer_result.value_probs[1] * 1;

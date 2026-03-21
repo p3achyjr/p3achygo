@@ -32,6 +32,8 @@ struct PuctParams {
   bool enable_m3_bonus = false;
   // Prior visits for m3-bonus dampening (higher = slower ramp-in).
   int m3_prior_visits = 20;
+  // How much to use optimistic policy. Formula: (1 - p_opt_weight) +
+  float p_opt_weight = 0.0f;
 
   // Forward-declared; defined below once PuctParams is complete.
   class Builder;
@@ -78,6 +80,10 @@ class PuctParams::Builder {
   }
   Builder& set_m3_prior_visits(int v) {
     p_.m3_prior_visits = v;
+    return *this;
+  }
+  Builder& set_p_opt_weight(float v) {
+    p_.p_opt_weight = v;
     return *this;
   }
   PuctParams build() const { return p_; }
@@ -127,6 +133,7 @@ class PuctScorer final {
         use_puct_v_(params.use_puct_v),
         enable_m3_bonus_(params.enable_m3_bonus),
         m3_prior_visits_(params.m3_prior_visits),
+        p_opt_weight_(params.p_opt_weight),
         q_fn_(q_fn),
         n_fn_(n_fn){};
 
@@ -150,6 +157,21 @@ class PuctScorer final {
     const float v_var = node->v_var;
     const std::array<int, constants::kMaxMovesPerPosition> child_visits =
         node->child_visits;
+    const std::array<float, constants::kMaxMovesPerPosition> move_probs = [&] {
+      if (p_opt_weight_ == 0.0f) {
+        return node->move_probs;
+      } else if (p_opt_weight_ == 1.0f) {
+        return node->opt_probs;
+      }
+
+      std::array<float, constants::kMaxMovesPerPosition> move_probs;
+      for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+        move_probs[a] =
+            node->move_probs[a] +
+            p_opt_weight_ * (node->opt_probs[a] - node->move_probs[a]);
+      }
+      return move_probs;
+    }();
     std::array<float, constants::kMaxMovesPerPosition> qs;
     std::array<int, constants::kMaxMovesPerPosition> child_visits_in_flight;
     std::array<float, constants::kMaxMovesPerPosition> qvars;
@@ -182,7 +204,7 @@ class PuctScorer final {
       float mass = 0.0f;
       for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
         if (child_visits[a] + child_visits_in_flight[a] > 0) {
-          mass += node->move_probs[a];
+          mass += move_probs[a];
         }
       }
       return mass;
@@ -260,16 +282,16 @@ class PuctScorer final {
         float var = child_visits[a] < 3 ? (n < 3 ? 1.0f : v_var) : qvars[a];
         float stddev = std::sqrt(var);
         float var_scale_term =
-            node->move_probs[a] * stddev *
+            move_probs[a] * stddev *
             (std::sqrt(canonical_n) / (1 + canonical_child_n));
-        float n_scale_term = node->move_probs[a] * std::log(canonical_n) /
-                             (1 + canonical_child_n);
+        float n_scale_term =
+            move_probs[a] * std::log(canonical_n) / (1 + canonical_child_n);
         return c_puct * var_scale_term + c_puct_v_2 * n_scale_term;
       };
 
       // PUCT formula.
       const auto compute_puct_explore_term = [&]() {
-        return c_puct * c_puct_var_scale_factor * node->move_probs[a] *
+        return c_puct * c_puct_var_scale_factor * move_probs[a] *
                (std::sqrt(canonical_n) / (1 + canonical_child_n));
       };
       const auto compute_explore_term = [&]() {
@@ -342,6 +364,7 @@ class PuctScorer final {
   const bool use_puct_v_;
   const bool enable_m3_bonus_;
   const int m3_prior_visits_;
+  const float p_opt_weight_;
   QFn q_fn_;
   NFn n_fn_;
 };

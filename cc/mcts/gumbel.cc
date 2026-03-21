@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <sstream>
 #include <vector>
 
 #include "absl/log/check.h"

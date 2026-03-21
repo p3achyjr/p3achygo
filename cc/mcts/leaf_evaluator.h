@@ -52,6 +52,8 @@ class LeafEvaluator final {
   void InitTreeNode(core::Probability& probability, TreeNode* node,
                     const game::Game& game, game::Color color_to_move);
 
+  int thread_id() const { return thread_id_; }
+
   // Queues an example for evaluation.
   inline void QueueEval(core::Probability& probability, const game::Game& game,
                         game::Color color_to_move) {

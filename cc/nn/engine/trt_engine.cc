@@ -5,13 +5,16 @@
 #include <cuda_runtime_api.h>
 #include <driver_types.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <numeric>
+#include <sstream>
 #include <unordered_map>
 
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "cc/constants/constants.h"
+#include "cc/core/vmath.h"
 #include "cc/nn/engine/buf_utils.h"
 #include "cc/nn/engine/trt_logger.h"
 #include "cc/nn/engine/trt_names.h"
@@ -244,6 +247,7 @@ void TrtEngineImpl::RunInference() {
   BufferHandle output_outcome = buf_map_[nn::trt::output::kOutcomeName];
   BufferHandle output_own = buf_map_[nn::trt::output::kOwnershipName];
   BufferHandle output_score = buf_map_[nn::trt::output::kScoreName];
+  BufferHandle output_opt_logits = buf_map_[nn::trt::output::kOptPiLogitsName];
 
   cudaMemcpyAsync(input_planes.device_buf, input_planes.host_buf,
                   input_planes.size, cudaMemcpyHostToDevice, stream_);
@@ -282,6 +286,10 @@ void TrtEngineImpl::RunInference() {
                   cudaMemcpyDeviceToHost, stream_);
   cudaMemcpyAsync(output_score.host_buf, output_score.device_buf,
                   output_score.size, cudaMemcpyDeviceToHost, stream_);
+  if (version_ != 0) {
+    cudaMemcpyAsync(output_opt_logits.host_buf, output_opt_logits.device_buf,
+                    output_opt_logits.size, cudaMemcpyDeviceToHost, stream_);
+  }
   cudaStreamSynchronize(stream_);
 
   if (should_retry_capture_) {
@@ -320,6 +328,17 @@ void TrtEngineImpl::GetBatch(int batch_id, NNInferResult& result) {
   float* score = score_buf + score_slice_size * batch_id;
   for (int i = 0; i < constants::kNumScoreLogits; ++i) {
     result.score_probs[i] = score[i];
+  }
+
+  if (version_ != 0) {
+    float* opt_logits_buf = static_cast<float*>(
+        buf_map_[nn::trt::output::kOptPiLogitsName].host_buf);
+    const int opt_slice_size =
+        static_cast<int>(buf_map_[nn::trt::output::kOptPiLogitsName].size /
+                         sizeof(float) / batch_size_);
+    float* opt_logits = opt_logits_buf + opt_slice_size * batch_id;
+    core::Softmax<constants::kMaxMovesPerPosition>(
+        opt_logits, result.opt_move_probs.data());
   }
 }
 

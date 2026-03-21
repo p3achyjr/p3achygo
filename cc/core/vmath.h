@@ -19,7 +19,7 @@ static constexpr float kMinFloat = -FLT_MAX;
 // reduce at the end.
 // !! Requires arguments as MM_ALIGN-byte aligned.
 template <size_t N>
-float MaxV(const std::array<float, N> floats) {
+float MaxV(const float* floats) {
   if (N < kMmSize) {
     float max = kMinFloat;
     for (int i = 0; i < N; ++i) {
@@ -29,7 +29,7 @@ float MaxV(const std::array<float, N> floats) {
     return max;
   }
 
-  const float* data = floats.data();
+  const float* data = floats;
 
   // Populate initial batch
   __m128 maxes = _mm_load_ps(&data[0]);
@@ -56,10 +56,15 @@ float MaxV(const std::array<float, N> floats) {
   return max;
 }
 
+template <size_t N>
+float MaxV(const std::array<float, N> floats) {
+  return MaxV<N>(floats.data());
+}
+
 // Vectorized Sum.
 // !! Requires arguments as MM_ALIGN-byte aligned.
 template <size_t N>
-float SumV(const std::array<float, N> floats) {
+float SumV(const float* floats) {
   if (N < kMmSize) {
     // normal operation.
     float sum = 0;
@@ -70,7 +75,7 @@ float SumV(const std::array<float, N> floats) {
     return sum;
   }
 
-  const float* data = floats.data();
+  const float* data = floats;
 
   __m128 sums = _mm_load_ps(&data[0]);
   int mm_size = (N / kMmSize) * kMmSize;
@@ -97,16 +102,19 @@ float SumV(const std::array<float, N> floats) {
   return sum;
 }
 
-// Vectorized Softmax.
-// !! Requires arguments as MM_ALIGN-byte aligned.
 template <size_t N>
-std::array<float, N> SoftmaxV(const std::array<float, N>& logits) {
-  float max = MaxV(logits);
+float SumV(const std::array<float, N> floats) {
+  return SumV<N>(floats.data());
+}
+
+template <size_t N>
+void SoftmaxV(const float* logits, float* output) {
+  float max = MaxV<N>(logits);
   int mm_size = (N / kMmSize) * kMmSize;
 
   // Calculate normalized logits.
   alignas(MM_ALIGN) float norm_logits[N];
-  const float* logits_data = logits.data();
+  const float* logits_data = logits;
   __m128 max_vec = _mm_set1_ps(max);
   for (int i = 0; i < mm_size; i += kMmSize) {
     // Subtract `max` from each float in batch.
@@ -128,11 +136,10 @@ std::array<float, N> SoftmaxV(const std::array<float, N>& logits) {
   }
 
   // Calculate total mass.
-  float total = SumV(exps);
+  float total = SumV<N>(exps);
 
   // Calculate exps / total
-  alignas(MM_ALIGN) std::array<float, N> softmax;
-  float* softmax_data = softmax.data();
+  float* softmax_data = output;
   float* exps_data = exps.data();
   __m128 total_vec = _mm_set1_ps(total);
   for (int i = 0; i < mm_size; i += kMmSize) {
@@ -146,8 +153,28 @@ std::array<float, N> SoftmaxV(const std::array<float, N>& logits) {
   for (int i = mm_size; i < N; ++i) {
     softmax_data[i] = exps[i] / total;
   }
+}
 
+// Vectorized Softmax.
+// !! Requires arguments as MM_ALIGN-byte aligned.
+template <size_t N>
+std::array<float, N> SoftmaxV(const std::array<float, N>& logits) {
+  alignas(MM_ALIGN) std::array<float, N> softmax;
+  SoftmaxV<N>(logits.data(), softmax.data());
   return softmax;
+}
+
+// Regular Softmax
+template <size_t N>
+void Softmax(const float* logits, float* output) {
+  float m = logits[0];
+  for (int i = 1; i < N; ++i) m = std::max(m, logits[i]);
+  float s = 0.0f;
+  for (int i = 0; i < N; ++i) {
+    output[i] = expf(logits[i] - m);
+    s += output[i];
+  }
+  for (int i = 0; i < N; ++i) output[i] /= s;
 }
 
 }  // namespace core
