@@ -60,7 +60,7 @@ inline int ceil_div(int x, int y) { return (x + y - 1) / y; }
 
 // `q`: value estimate of action
 // `max_b`: max visit count of all children
-float QTransform(float q, int max_b) {
+float QTransform(float q, float max_b) {
   return (kVisit + max_b) * kValueScale * q;
 }
 
@@ -100,16 +100,20 @@ int Argmax(std::array<float, constants::kMaxMovesPerPosition>& arr) {
 }
 
 // Compute completedQ = {q(a) if N(a) > 0, v_mixed otherwise }.
+// Q values are normalized to [0, 1] before weighting.
 std::array<float, constants::kMaxMovesPerPosition> ComputeImprovedPolicy(
     const TreeNode* node) {
-  float v_mix = VMixed(node);
-  int max_n = MaxN(node);
+  constexpr float kQRange = 3.0f;
+  const auto q_norm = [](float q) { return (q + 1.5f) / kQRange; };
+  float v_mix = q_norm(VMixed(node));
+  const float max_b = 2 * std::log(static_cast<float>(MaxN(node)));
   alignas(MM_ALIGN) std::array<float, constants::kMaxMovesPerPosition>
       logits_improved;
   for (int action = 0; action < constants::kMaxMovesPerPosition; ++action) {
     logits_improved[action] =
         node->move_logits[action] +
-        QTransform(NAction(node, action) > 0 ? Q(node, action) : v_mix, max_n);
+        QTransform(NAction(node, action) > 0 ? q_norm(Q(node, action)) : v_mix,
+                   max_b);
   }
 
   return core::SoftmaxV(logits_improved);
@@ -122,7 +126,7 @@ std::array<float, constants::kMaxMovesPerPosition> ComputeImprovedPolicy(
 std::array<float, constants::kMaxMovesPerPosition> ComputeRootImprovedPolicy(
     TreeNode* node,
     const std::array<float, constants::kMaxMovesPerPosition> masked_logits,
-    const absl::InlinedVector<int, 16>& visited_actions, int max_n) {
+    const absl::InlinedVector<int, 16>& visited_actions, float max_n) {
   constexpr float kQRange = 2.2f;
   const auto q_norm = [](float q) { return (q + 1.1f) / kQRange; };
 
@@ -193,8 +197,8 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
   int k = params.k;
   const float noise_scaling = params.noise_scaling;
   const bool disable_pass = params.disable_pass;
-  const bool early_stopping_enabled = params.early_stopping_enabled;
-  const bool over_search_enabled = params.over_search_enabled;
+  const bool early_stopping_enabled = params.early_stopping_enabled && false;
+  const bool over_search_enabled = params.over_search_enabled && false;
   int num_rounds = std::max(log2(k), 1);
 
   if (root->state == TreeNodeState::kNew) {
@@ -347,11 +351,11 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
               search_game.IsGameOver());
         }
         TreeNode* child = root->children[move_info.move_encoding];
-        GumbelNonRootSearchPolicy search_policy;
+        PuctSearchPolicy nonroot_policy(PuctParams{});
         SearchPath search_path =
             Search(probability, search_game, node_table, child,
                    game::OppositeColor(color_to_move), color_to_move,
-                   root->init_score_est, &search_policy);
+                   root->init_score_est, &nonroot_policy);
 
         // update tree
         const bool use_idempotent_updates =
@@ -393,11 +397,11 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
 #endif
 
   // Get improved policy from completed-Q values.
-  // max_n = sqrt(theoretical winner visits) controls Q weight.
-  const int sqrt_theoretical_winner_visits = static_cast<int>(
-      std::sqrt(static_cast<float>(theoretical_winner_visits)));
+  // max_n = 2 * ln(theoretical winner visits) controls Q weight.
+  const float visit_advantage =
+      2 * std::log(static_cast<float>(theoretical_winner_visits + 1));
   result.pi_improved = ComputeRootImprovedPolicy(
-      root, masked_logits, top_k_actions, sqrt_theoretical_winner_visits);
+      root, masked_logits, top_k_actions, visit_advantage);
 
   // Populate stats for visited children.
   for (int i = 0; i < m; ++i) {
@@ -460,8 +464,6 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
 
   result.kld = kld(result.pi_improved, root->move_probs);
   result.visits = visits_spent;
-
-  // result.dbg = ss.str();
   return result;
 }
 
