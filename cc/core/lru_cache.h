@@ -16,6 +16,7 @@ namespace core {
 template <typename K, typename V>
 class LRUCache final {
  public:
+  LRUCache() : max_size_(0) {}
   LRUCache(int max_size) : max_size_(max_size) {}
   ~LRUCache() = default;
 
@@ -52,7 +53,7 @@ class LRUCache final {
   }
 
  private:
-  const int max_size_;
+  int max_size_;
   std::list<K> lru_list_;
   absl::flat_hash_map<K, std::pair<V, typename std::list<K>::iterator>> cache_;
 };

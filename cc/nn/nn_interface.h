@@ -1,7 +1,7 @@
 #ifndef NN_INTERFACE_H_
 #define NN_INTERFACE_H_
 
-#include <atomic>
+#include <array>
 #include <chrono>
 #include <optional>
 #include <thread>
@@ -12,7 +12,7 @@
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "cc/constants/constants.h"
-#include "cc/core/cache.h"
+#include "cc/core/lru_cache.h"
 #include "cc/core/probability.h"
 #include "cc/game/color.h"
 #include "cc/game/game.h"
@@ -100,6 +100,10 @@ class NNInterface final {
 
   SignalKind signal_kind() const { return signal_kind_; }
 
+  // Controls how many of the most-recent moves are included in the NN cache
+  // key. Range [0, kNumLastMoves]. Default: kNumLastMoves (5).
+  void SetNumCacheLastMoves(int n) { num_cache_last_moves_ = n; }
+
   // Blocks until result is ready.
   NNInferResult LoadAndGetInference(int thread_id, const game::Game& game,
                                     game::Color color_to_move,
@@ -139,15 +143,22 @@ class NNInterface final {
   struct NNKey {
     game::Color color_to_move;
     game::Zobrist::Hash board_hash;
+    // [oldest, ..., most recent]; unused leading slots are kNoopLoc.
+    std::array<game::Loc, constants::kNumLastMoves> last_moves;
 
     friend bool operator==(const NNKey& c0, const NNKey& c1) {
       return c0.color_to_move == c1.color_to_move &&
-             c0.board_hash == c1.board_hash;
+             c0.board_hash == c1.board_hash &&
+             c0.last_moves == c1.last_moves;
     }
 
     template <typename H>
     friend H AbslHashValue(H h, const NNKey& c) {
-      return H::combine(std::move(h), c.color_to_move, c.board_hash);
+      h = H::combine(std::move(h), c.color_to_move, c.board_hash);
+      for (const game::Loc& loc : c.last_moves) {
+        h = H::combine(std::move(h), loc);
+      }
+      return h;
     }
   };
 
@@ -234,6 +245,8 @@ class NNInterface final {
     mu_.Await(absl::Condition(&thread_info.res_ready));
   }
 
+  NNKey MakeKey(const game::Game& game, game::Color color_to_move) const;
+
   // Inference Loop.
   void InferLoop();
   void Infer() ABSL_LOCKS_EXCLUDED(mu_);
@@ -243,6 +256,7 @@ class NNInterface final {
   int num_registered_threads_ ABSL_GUARDED_BY(mu_);
   const int num_threads_;
   const SignalKind signal_kind_;
+  int num_cache_last_moves_ = constants::kNumLastMoves;
 
   // Synchronization
   absl::Mutex mu_;
@@ -252,7 +266,7 @@ class NNInterface final {
   std::thread infer_thread_;
   std::atomic<bool> running_;
 
-  std::array<core::Cache<NNKey, NNInferResult>, constants::kMaxNumThreads>
+  std::array<core::LRUCache<NNKey, NNInferResult>, constants::kMaxNumThreads>
       thread_caches_;  // Per-thread cache.
   const int64_t timeout_;
 
