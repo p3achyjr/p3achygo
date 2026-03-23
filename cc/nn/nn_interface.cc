@@ -6,6 +6,7 @@
 #include "absl/log/log.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
+#include "cc/core/lru_cache.h"
 #include "cc/game/symmetry.h"
 #include "cc/nn/engine/go_features.h"
 
@@ -66,13 +67,25 @@ NNInterface::~NNInterface() {
   }
 }
 
+NNInterface::NNKey NNInterface::MakeKey(const game::Game& game,
+                                        game::Color color_to_move) const {
+  const int num_moves = game.num_moves();
+  std::array<game::Loc, constants::kNumLastMoves> last_moves;
+  last_moves.fill(kNoopLoc);
+  for (int i = 0; i < num_cache_last_moves_; ++i) {
+    const int off = num_moves - num_cache_last_moves_ + i;
+    if (off >= 0) {
+      last_moves[constants::kNumLastMoves - num_cache_last_moves_ + i] =
+          game.move(off).loc;
+    }
+  }
+  return NNKey{color_to_move, game.board().hash(), last_moves};
+}
+
 NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
                                                Color color_to_move,
                                                Probability& probability) {
-  NNKey cache_key = NNKey{
-      color_to_move,
-      game.board().hash(),
-  };
+  NNKey cache_key = MakeKey(game, color_to_move);
 
   if (CacheContains(thread_id, cache_key)) {
     // Cached. Immediately return result.
@@ -137,10 +150,7 @@ void NNInterface::LoadEntry(int thread_id, int offset, const game::Game& game,
                             game::Color color_to_move,
                             core::Probability& probability) {
   const int canonical_tid = thread_id + offset;
-  NNKey cache_key = NNKey{
-      color_to_move,
-      game.board().hash(),
-  };
+  NNKey cache_key = MakeKey(game, color_to_move);
 
   if (CacheContains(canonical_tid, cache_key)) {
     // Cached. Do not need to wait for this thread.
@@ -170,10 +180,7 @@ NNInferResult NNInterface::FetchEntry(int thread_id, int offset,
                                       const game::Game& game,
                                       game::Color color_to_move) {
   const int canonical_tid = thread_id + offset;
-  NNKey cache_key = NNKey{
-      color_to_move,
-      game.board().hash(),
-  };
+  NNKey cache_key = MakeKey(game, color_to_move);
 
   ThreadInfo& thread_info = thread_info_[canonical_tid];
   if (CacheContains(canonical_tid, cache_key)) {
@@ -201,7 +208,7 @@ NNInferResult NNInterface::FetchEntry(int thread_id, int offset,
 void NNInterface::InitializeCache(size_t cache_size) {
   for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
     thread_caches_[thread_id] =
-        Cache<NNKey, NNInferResult>(cache_size / num_threads_);
+        LRUCache<NNKey, NNInferResult>(cache_size / num_threads_);
   }
 }
 

@@ -100,6 +100,7 @@ int main(int argc, char** argv) {
                        num_threads, nn::GetVersionFromModelPath(model_path));
   std::unique_ptr<nn::NNInterface> nn_interface =
       std::make_unique<nn::NNInterface>(num_threads, std::move(engine));
+  nn_interface->SetNumCacheLastMoves(1);
 
   // initialize serialization objects.
   std::unique_ptr<recorder::GameRecorder> game_recorder =
