@@ -44,10 +44,10 @@ Client::~Client() {
   CHECK(response_queue_.empty());
 }
 
-absl::Status Client::Start(std::string model_path, int n, int k,
-                           bool use_puct) {
+absl::Status Client::Start(std::string model_path,
+                           eval::PlayerSearchConfig cfg, bool verbose) {
   absl::StatusOr<std::unique_ptr<Service>> service =
-      Service::CreateService(model_path, n, k, use_puct);
+      Service::CreateService(model_path, cfg, verbose);
   if (!service.ok()) {
     return service.status();
   }
@@ -330,6 +330,9 @@ void Client::HandleCommand(Command cmd) {
       }
     case GTPCode::kUndo:
       AddResponse(service_->GtpUndo(cmd.id));
+      return;
+    case GTPCode::kExplainLastMove:
+      AddResponse(service_->GtpExplainLastMove(cmd.id));
       return;
     case GTPCode::kPlayDbg:
       ARITY_CHECK(cmd, 2);

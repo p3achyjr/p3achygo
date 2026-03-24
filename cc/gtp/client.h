@@ -10,6 +10,7 @@
 #include "absl/status/status.h"
 #include "absl/synchronization/mutex.h"
 #include "cc/analysis/analysis.h"
+#include "cc/eval/player_config.h"
 #include "cc/gtp/command.h"
 #include "cc/gtp/service.h"
 
@@ -25,7 +26,8 @@ class Client final {
   Client();
   ~Client();
 
-  absl::Status Start(std::string model_path, int n, int k, bool use_puct);
+  absl::Status Start(std::string model_path, eval::PlayerSearchConfig cfg,
+                     bool verbose = false);
 
   // Parses and adds `cmd_string` to the list of commands to process.
   // Returns whether to continue running the loop.

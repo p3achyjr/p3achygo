@@ -6,6 +6,7 @@
 
 #include "absl/status/statusor.h"
 #include "cc/analysis/analysis.h"
+#include "cc/eval/player_config.h"
 #include "cc/game/loc.h"
 #include "cc/game/move.h"
 #include "cc/gtp/command.h"
@@ -31,6 +32,7 @@ class Service {
   virtual Response<std::string> GtpPrintBoard(std::optional<int> id) = 0;
   virtual Response<game::Scores> GtpFinalScore(std::optional<int> id) = 0;
   virtual Response<> GtpUndo(std::optional<int> id) = 0;
+  virtual Response<std::string> GtpExplainLastMove(std::optional<int> id) = 0;
 
   // Analysis methods. Call these from separate threads.
   virtual Response<> GtpStartAnalysis(std::optional<int> id,
@@ -52,7 +54,8 @@ class Service {
                                 std::string filename) = 0;
 
   static absl::StatusOr<std::unique_ptr<Service>> CreateService(
-      std::string model_path, int n, int k, bool use_puct);
+      std::string model_path, eval::PlayerSearchConfig cfg,
+      bool verbose = false);
 
  protected:
   Service() = default;
