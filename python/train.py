@@ -752,6 +752,8 @@ def log_board_position(
     # Ownership (own_pred is from current player perspective; convert to absolute black=positive)
     own_pred = predictions.own_pred[0].numpy().squeeze()  # (19, 19)
     own_pred_abs = own_pred if to_play == BLACK else -own_pred
+    own = targets.own[0].numpy().squeeze()
+    own = own if to_play == BLACK else -own
 
     def ownership_char(x):
         bounds = [-1.0, -0.5, 0.0, 0.5, 1.0]
@@ -760,16 +762,22 @@ def log_board_position(
 
     board_lines = GoBoard.to_string(board).split("\n")
     own_lines = []
+    own_target_lines = []
     for i in range(19):
         own_lines.append(
-            f"{19 - i:2d} "
-            + " ".join([ownership_char(own_pred_abs[i, j]) for j in range(19)])
+            " ".join([ownership_char(own_pred_abs[i, j]) for j in range(19)])
         )
-    own_lines.append("   " + " ".join(list("ABCDEFGHJKLMNOPQRST")))
+        own_target_lines.append(
+            " ".join([ownership_char(own[i, j]) for j in range(19)])
+        )
     col_gap = "    "
-    print(f"  {'Board':<42}{col_gap}Ownership (○=black ●=white)")
-    for bl, ol in zip(board_lines, own_lines):
-        print(f"  {bl:<42}{col_gap}{ol}")
+    own_lines.append(" ".join(list("ABCDEFGHJKLMNOPQRST")))
+    own_target_lines.append(" ".join(list("ABCDEFGHJKLMNOPQRST")))
+    print(
+        f"  {'Board':<40}{col_gap}{'Own Target(○=black ●=white)':<40}{col_gap}Own Pred"
+    )
+    for bl, otl, ol in zip(board_lines, own_target_lines, own_lines):
+        print(f"  {bl:<40}{col_gap}{otl:<40}{col_gap}{ol}")
     print()
 
     print(f"{'='*60}")

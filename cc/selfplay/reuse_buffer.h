@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 #include "absl/container/inlined_vector.h"
@@ -31,7 +32,7 @@ struct InitState {
   Kind kind = Kind::kEmpty;
 };
 
-enum class BufferType { kGoExploit, kRegret };
+enum class BufferType { kGoExploit, kRegret, kComposite };
 
 // Abstract interface for state reuse buffers.
 class ReuseBuffer {
@@ -40,6 +41,7 @@ class ReuseBuffer {
   virtual void Add(InitState state, float regret) = 0;
   virtual std::optional<InitState> Get() = 0;
   virtual BufferType GetType() const = 0;
+  virtual std::string_view Name() const = 0;
 };
 
 // Ignores regret, uniform random sampling.
@@ -56,6 +58,7 @@ class GoExploitReuseBuffer final : public ReuseBuffer {
   }
 
   BufferType GetType() const override { return BufferType::kGoExploit; }
+  std::string_view Name() const override { return "GoExploit"; }
 
  private:
   core::RingBuffer<InitState, constants::kGoExploitBufferSize> buffer_
@@ -85,6 +88,7 @@ class RegretGuidedBuffer final : public ReuseBuffer {
   }
 
   BufferType GetType() const override { return BufferType::kRegret; }
+  std::string_view Name() const override { return "RegretGuided"; }
 
  private:
   struct Entry {
@@ -101,6 +105,38 @@ class RegretGuidedBuffer final : public ReuseBuffer {
 
   core::Heap<Entry, MaxCmp> regret_pq_;
   absl::Mutex mu_;
+};
+
+// Composites GoExploit and RegretGuided buffers, sampling each with equal
+// probability. RegretGuided states retain force_full_search=true; GoExploit
+// states have force_full_search=false, and raw-policy sampling is naturally
+// limited by the move-number decay in the game loop.
+class CompositeReuseBuffer final : public ReuseBuffer {
+ public:
+  void Add(InitState state, float regret) override {
+    goexploit_.Add(state, regret);
+    regret_.Add(state, regret);
+  }
+
+  std::optional<InitState> Get() override {
+    bool use_goexploit;
+    {
+      absl::MutexLock l(&mu_);
+      use_goexploit = (turn_++ & 1) == 0;
+    }
+    return use_goexploit ? goexploit_.Get() : regret_.Get();
+  }
+
+  BufferType GetType() const override { return BufferType::kComposite; }
+  std::string_view Name() const override {
+    return "Composite(GoExploit+RegretGuided)";
+  }
+
+ private:
+  GoExploitReuseBuffer goexploit_;
+  RegretGuidedBuffer regret_;
+  absl::Mutex mu_;
+  uint64_t turn_ ABSL_GUARDED_BY(mu_) = 0;
 };
 
 }  // namespace selfplay

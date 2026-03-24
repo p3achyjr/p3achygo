@@ -16,6 +16,7 @@ struct SPConfig {
   const int max_moves;
   const GumbelParams selected_params;
   const GumbelParams default_params;
+  const float use_seen_state_prob;
 };
 
 void Run(size_t seed, int thread_id, nn::NNInterface* nn_interface,

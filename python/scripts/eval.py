@@ -188,11 +188,13 @@ def main():
             if result is not None:
                 with results_lock:
                     results.append(result)
-                    total_so_far = sum(r['played'] for r in results)
+                    running = compute_final_stats(results)
                 log(
                     f"[GPU {gpu_id}] Invocation {inv_id} complete: "
-                    f"{result['won']}/{result['played']} wins  "
-                    f"(running total: {total_so_far} games)"
+                    f"{result['won']}/{result['played']} wins  |  "
+                    f"Running: {running['won']}/{running['played']} wins  "
+                    f"WR={running['winrate']:.3f}+-{running['winrate_ci']:.3f}  "
+                    f"Elo={running['elo']:.1f}+-{running['elo_ci']:.1f}"
                 )
 
     threads = [Thread(target=gpu_worker, args=(gpu_id,), daemon=True) for gpu_id in gpu_ids]

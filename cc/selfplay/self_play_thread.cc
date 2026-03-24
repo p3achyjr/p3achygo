@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <sstream>
 #include <tuple>
 
@@ -35,9 +36,6 @@ static constexpr int kShouldLogShard = 8;
 
 // Probability to add any state to the seen buffer.
 static constexpr float kAddSeenStateProb = 0.04f;
-
-// Probability of drawing a state from the visited buffer.
-static constexpr float kUseSeenStateProb = 0.5f;
 
 // Max Number of beginning moves to sample directly.
 static constexpr int kMaxNumRawPolicyMoves = 30;
@@ -189,7 +187,7 @@ void AddRegretGuidedStates(Probability& probability, ReuseBuffer* reuse_buffer,
 }
 
 InitState GetInitState(Probability& probability, ReuseBuffer* buffer,
-                       int num_games_played) {
+                       float use_seen_state_prob, int num_games_played) {
   const float komi = std::round(7.0f + std::min(probability.Gaussian(), 3.0f)) +
                      (probability.Uniform() < 0.5f ? 0.5f : -0.5f);
   InitState s0 =
@@ -218,7 +216,7 @@ InitState GetInitState(Probability& probability, ReuseBuffer* buffer,
     }
 
     return s0;
-  } else if (p <= kPlayFromBookProb + kUseSeenStateProb) {
+  } else if (p <= kPlayFromBookProb + use_seen_state_prob) {
     if (num_games_played < 3 && buffer->GetType() == BufferType::kRegret) {
       // give the regret buffer some time to fill up.
       return s0;
@@ -232,7 +230,7 @@ InitState GetInitState(Probability& probability, ReuseBuffer* buffer,
                            ? InitState::Kind::kRegret
                            : InitState::Kind::kGoExploit;
     return seen_state.value();
-  } else if (p <= kPlayFromBookProb + kUseSeenStateProb + kHandicapGame) {
+  } else if (p <= kPlayFromBookProb + use_seen_state_prob + kHandicapGame) {
     int handicap = std::floor(probability.Uniform() * 3 + 2);
     float komi = (handicap - 2) * 14 + 20.5;  // katago ;)
     return InitState{Board(handicap, komi),
@@ -289,16 +287,13 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
   while (true) {
     // Populate initial state either from seen states or s_0.
     InitState init_state =
-        GetInitState(probability, reuse_buffer, num_games_played);
+        GetInitState(probability, reuse_buffer, config.use_seen_state_prob,
+                     num_games_played);
     bool const is_regret_game = init_state.force_full_search;
 
     // Game state.
     Game game(init_state.board, init_state.last_moves);
     Color color_to_move = init_state.color_to_move;
-
-    LOG_TO_SINK(INFO, sink) << "\nNEW GAME  Kind=" << ToString(init_state.kind)
-                            << "  StartMove=" << init_state.move_num
-                            << "  Color=" << ToString(color_to_move);
 
     // Node table for MCTS.
     std::unique_ptr<NodeTable> node_table = std::make_unique<MctsNodeTable>();
@@ -339,10 +334,19 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
     // Number of moves for which to sample directly from the policy.
     // Regret games skip raw policy sampling — every move is fully searched.
+    // For mid-game positions, the cap decays with a half-life of 40 moves so
+    // that late-game restarts do less raw-policy sampling.
+    int const max_raw_policy_moves = std::round(
+        kMaxNumRawPolicyMoves * std::pow(0.5f, init_state.move_num / 40.0f));
     int const num_moves_raw_policy =
-        !is_regret_game && probability.Uniform() < kOpeningExploreProb
-            ? RandRange(probability.prng(), 0, kMaxNumRawPolicyMoves + 1)
+        !is_regret_game && max_raw_policy_moves > 0 &&
+                probability.Uniform() < kOpeningExploreProb
+            ? RandRange(probability.prng(), 0, max_raw_policy_moves)
             : 0;
+    LOG_TO_SINK(INFO, sink) << "\nNEW GAME  Kind=" << ToString(init_state.kind)
+                            << "  StartMove=" << init_state.move_num
+                            << "  Color=" << ToString(color_to_move)
+                            << "  Raw Policy Moves=" << num_moves_raw_policy;
 
     // Begin Search.
     int search_dur_avg = 0;
@@ -608,7 +612,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       }(root_q_outcome);
 
       if (probability.Uniform() < add_init_state_prob &&
-          reuse_buffer->GetType() == BufferType::kGoExploit) {
+          (reuse_buffer->GetType() == BufferType::kGoExploit ||
+           reuse_buffer->GetType() == BufferType::kComposite)) {
         AddNewInitState(reuse_buffer, game, game.board(), color_to_move,
                         game.num_moves());
       }
@@ -665,8 +670,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
           }
         }
         s << "(" << ToString(root_node->color_to_move)
-          << ") Next Root  N=" << root_node->n
-          << "  Q=" << root_node->v << "  Qz=" << root_node->v_outcome
+          << ") Next Root  N=" << root_node->n << "  Q=" << root_node->v
+          << "  Qz=" << root_node->v_outcome
           << "  Score=" << root_node->init_score_est << "\n";
         s << "Board:\n" << game.board() << "\n";
         s << "Nodes Reaped=" << num_nodes_reaped
@@ -677,65 +682,6 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         LOG_TO_SINK(INFO, sink) << s.str();
       }
     }
-
-    // Cleanup Phase.
-#if 0
-    int num_cleanup_moves = 0;
-    while (IsRunning() && num_cleanup_moves < 30 && !game.IsAllPassAlive()) {
-      auto begin = std::chrono::high_resolution_clock::now();
-      GumbelResult gumbel_res = gumbel_evaluator.SearchRoot(
-          probability, game, node_table.get(), root_node, color_to_move,
-          GumbelSearchParams{std::min(80, config.default_params.n),
-                             std::min(8, config.default_params.k),
-                             /*noise_scaling=*/0.0f});
-      auto end = std::chrono::high_resolution_clock::now();
-      auto search_dur =
-          std::chrono::duration_cast<std::chrono::microseconds>(end - begin)
-              .count();
-
-      game::Loc move = gumbel_res.mcts_move;
-      game.PlayMove(move, color_to_move, /*record=*/false);
-      color_to_move = game::OppositeColor(color_to_move);
-
-      TreeNode* next_root = root_node->children[move];
-      if (!next_root) {
-        next_root = node_table->GetOrCreate(game.board().hash(), color_to_move,
-                                            game.IsGameOver());
-      }
-      int num_nodes_reaped = 0, reap_time_us = 0;
-      auto reap_begin = std::chrono::steady_clock::now();
-      num_nodes_reaped = node_table->Reap(next_root);
-      auto reap_end = std::chrono::steady_clock::now();
-      reap_time_us = std::chrono::duration_cast<std::chrono::microseconds>(
-                         reap_end - reap_begin)
-                         .count();
-      root_node = next_root;
-      ++num_cleanup_moves;
-
-      auto mv_to_string = [](const game::Loc& move) {
-        return ("ABCDEFGHIJKLMNOPQRS"[move.j]) + std::to_string(move.i);
-      };
-
-      std::stringstream s;
-      s << "\n----- Cleanup -----\n";
-      s << "Move: " << mv_to_string(move) << "\n";
-      if (!gumbel_res.child_stats.empty()) {
-        s << "Considered Moves:\n";
-        for (const ChildStats& mv_stats : gumbel_res.child_stats) {
-          s << "  " << mv_to_string(mv_stats.move)
-            << ", p: " << absl::StrFormat("%.3f", mv_stats.prob)
-            << ", n: " << absl::StrFormat("%d", mv_stats.n)
-            << ", q: " << absl::StrFormat("%.3f", mv_stats.q)
-            << ", qz: " << absl::StrFormat("%.3f", mv_stats.qz)
-            << ", score: " << absl::StrFormat("%.3f", mv_stats.score) << "\n";
-        }
-      }
-      s << "Board:\n" << game.board() << "\n";
-      s << "Cleanup took " << search_dur << "us.";
-
-      LOG_TO_SINK(INFO, sink) << s.str();
-    }
-#endif
 
     nn_interface->UnregisterThread(thread_id);
     if (!IsRunning()) break;
@@ -750,7 +696,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     // buffer. The rough intuition for "regret" is the positions that led to
     // the biggest loss in winrate. It is implemented by taking an EMA of
     // value loss over a 50-move horizon.
-    if (reuse_buffer->GetType() == BufferType::kRegret) {
+    if (reuse_buffer->GetType() == BufferType::kRegret ||
+        reuse_buffer->GetType() == BufferType::kComposite) {
       AddRegretGuidedStates(probability, reuse_buffer, game,
                             positions_for_regret,
                             is_regret_game ? probability.Uniform() < 0.5f : 1);

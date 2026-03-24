@@ -63,6 +63,13 @@ class EvalResult(object):
     rel_elo: float
 
 
+def get_eval_n(config, model_gen: int) -> int:
+    if config.eval_n_growth_window <= 0:
+        return config.eval_n
+    c = min(model_gen / config.eval_n_growth_window, 1.0)
+    return int(round(config.min_eval_n + c * (config.eval_n - config.min_eval_n)))
+
+
 def eval(
     run_id: str,
     eval_bin_path: str,
@@ -201,7 +208,7 @@ def loop(
             cand_model_path,
             local_run_dir,
             config.eval_k,
-            config.eval_n,
+            get_eval_n(config, next_model_gen),
         )
         if eval_result.winner == EvalResult.CAND:
             # The cand model is stronger. Upload it as new golden.

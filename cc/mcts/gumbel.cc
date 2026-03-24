@@ -375,7 +375,10 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
               search_game.IsGameOver());
         }
         TreeNode* child = root->children[move_info.move_encoding];
-        PuctSearchPolicy nonroot_policy(PuctParams{});
+        PuctSearchPolicy nonroot_policy(PuctParams::Builder()
+                                            .set_enable_var_scaling(true)
+                                            .set_var_scale_prior_visits(10)
+                                            .build());
         SearchPath search_path =
             Search(probability, search_game, node_table, child,
                    game::OppositeColor(color_to_move), color_to_move,

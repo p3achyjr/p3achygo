@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import tensorflow as tf
 import keras
 import transforms
@@ -31,13 +32,19 @@ def get_ss_timestamps(num_batches):
 
 def get_lr(config: RunConfig, model_gen: int) -> float:
     lr_scale = 0.1 + 0.9 * min(1.0, model_gen / config.lr_growth_window)
-    lr = config.lr
-    if config.lr_schedule is not None:
-        for gen, gen_lr in config.lr_schedule:
-            if gen > model_gen:
-                break
 
-            lr = gen_lr
+    lr = config.lr
+    next_gen, next_lr = None, None
+    for gen, gen_lr in (config.lr_schedule or []):
+        if gen > model_gen:
+            next_gen, next_lr = gen, gen_lr
+            break
+        lr = gen_lr
+
+    window = config.lr_transition_window
+    if window > 0 and next_gen is not None and (next_gen - model_gen) <= window:
+        t = 0.5 * (1.0 - math.cos(math.pi * (1.0 - (next_gen - model_gen) / window)))
+        lr = lr + t * (next_lr - lr)
 
     return lr_scale * lr
 
