@@ -204,7 +204,9 @@ def loop(
                 break
 
             if selfplay_proc.poll() is not None:
-                logging.warning(f"Selfplay Process Exited Unexpectedly: {selfplay_proc.returncode}")
+                logging.warning(
+                    f"Selfplay Process Exited Unexpectedly: {selfplay_proc.returncode}"
+                )
                 break
 
         selfplay_proc.communicate("\n")
