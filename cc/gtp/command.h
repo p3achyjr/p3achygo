@@ -32,6 +32,7 @@ enum class GTPCode : uint8_t {
   kAnalyze = 14,
   kGenMoveAnalyze = 15,
   kUndo = 16,
+  kExplainLastMove = 17,
 
   // [13 - 100 reserved]
   // Private Commands.
@@ -66,6 +67,7 @@ static constexpr GTPCode kSupportedCommands[] = {
     GTPCode::kAnalyze,
     GTPCode::kGenMoveAnalyze,
     GTPCode::kUndo,
+    GTPCode::kExplainLastMove,
 
     // Private.
     GTPCode::kPlayDbg,

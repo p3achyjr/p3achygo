@@ -4,15 +4,19 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <iomanip>
 #include <sstream>
 
 #include "absl/log/log.h"
 #include "absl/status/statusor.h"
 #include "cc/analysis/analysis.h"
 #include "cc/core/probability.h"
+#include "cc/eval/player_config.h"
 #include "cc/game/game.h"
+#include "cc/mcts/bias_cache.h"
 #include "cc/mcts/gumbel.h"
 #include "cc/mcts/node_table.h"
+#include "cc/mcts/search_policy.h"
 #include "cc/mcts/tree.h"
 #include "cc/nn/engine/engine_factory.h"
 #include "cc/nn/nn_interface.h"
@@ -72,11 +76,46 @@ std::string GtpBoardString(const Board& board) {
   return ss.str();
 }
 
+mcts::ScoreUtilityParams MakeScoreUtilityParams(
+    const eval::PlayerSearchConfig& cfg) {
+  mcts::ScoreUtilityMode mode = cfg.score_utility_mode == "integral"
+                                    ? mcts::ScoreUtilityMode::kIntegral
+                                    : mcts::ScoreUtilityMode::kDirect;
+  return mcts::ScoreUtilityParams{.score_weight = cfg.score_weight,
+                                  .mode = mode};
+}
+
+mcts::PuctParams MakePuctParams(const eval::PlayerSearchConfig& cfg) {
+  mcts::PuctRootSelectionPolicy policy;
+  if (cfg.puct_root_policy == "lcb") {
+    policy = mcts::PuctRootSelectionPolicy::kLcb;
+  } else if (cfg.puct_root_policy == "visit_count_sample") {
+    policy = mcts::PuctRootSelectionPolicy::kVisitCountSample;
+  } else if (cfg.puct_root_policy == "visit_count") {
+    policy = mcts::PuctRootSelectionPolicy::kVisitCount;
+  } else {
+    policy = cfg.use_lcb ? mcts::PuctRootSelectionPolicy::kLcb
+                         : mcts::PuctRootSelectionPolicy::kVisitCount;
+  }
+  return mcts::PuctParams::Builder()
+      .set_kind(policy)
+      .set_c_puct(cfg.c_puct)
+      .set_c_puct_visit_scaling(cfg.c_puct_visit_scaling)
+      .set_c_puct_v_2(cfg.c_puct_v_2)
+      .set_use_puct_v(cfg.use_puct_v)
+      .set_enable_var_scaling(cfg.var_scale_cpuct)
+      .set_var_scale_prior_visits(cfg.var_scale_prior_visits)
+      .set_tau(cfg.tau)
+      .set_enable_m3_bonus(cfg.enable_m3_bonus)
+      .set_m3_prior_visits(cfg.m3_prior_visits)
+      .set_p_opt_weight(cfg.p_opt_weight)
+      .build();
+}
+
 class ServiceImpl final : public Service {
  public:
   ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
-              std::unique_ptr<GumbelEvaluator> gumbel_evaluator, int n, int k,
-              bool use_puct);
+              eval::PlayerSearchConfig cfg, bool verbose);
   ~ServiceImpl() = default;
 
   Response<int> GtpProtocolVersion(std::optional<int> id) override;
@@ -93,6 +132,7 @@ class ServiceImpl final : public Service {
   Response<std::string> GtpPrintBoard(std::optional<int> id) override;
   Response<game::Scores> GtpFinalScore(std::optional<int> id) override;
   Response<> GtpUndo(std::optional<int> id) override;
+  Response<std::string> GtpExplainLastMove(std::optional<int> id) override;
 
   // Analysis methods. Call these from separate threads.
   Response<> GtpStartAnalysis(std::optional<int> id,
@@ -114,41 +154,50 @@ class ServiceImpl final : public Service {
 
  private:
   GumbelResult GenMoveCommon(game::Color color);
+  std::string BuildMoveDbgString(const GumbelResult& result, Color color);
+  std::string BuildExplainComment();
   std::vector<std::pair<game::Loc, float>> GetTopPolicyMoves(
       const std::array<float, constants::kMaxMovesPerPosition>& pi);
   void ClearBoard();
   void MakeMove(Color color, Loc loc);
-  inline TreeNode* current_root() const { return root_history_.back(); }
+  inline TreeNode* current_root() const { return current_root_; }
 
+  eval::PlayerSearchConfig cfg_;
+  bool verbose_;
+  float komi_ = 7.5f;
   Probability probability_;
   std::unique_ptr<NNInterface> nn_interface_;
   std::unique_ptr<GumbelEvaluator> gumbel_evaluator_;
   std::unique_ptr<Game> game_;
   std::unique_ptr<NodeTable> node_table_;
-  std::vector<TreeNode*> root_history_;
+  std::optional<mcts::BiasCache> bias_cache_;
+  TreeNode* current_root_;
   Color current_color_;
-  const int n_;
-  const int k_;
-  const bool use_puct_;
+  std::string last_explain_comment_;
 
   std::atomic<bool> analysis_running_;
   std::thread analysis_thread_;
 };
 
 ServiceImpl::ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
-                         std::unique_ptr<GumbelEvaluator> gumbel_evaluator,
-                         int n, int k, bool use_puct)
-    : nn_interface_(std::move(nn_interface)),
-      gumbel_evaluator_(std::move(gumbel_evaluator)),
-      game_(std::make_unique<Game>(false /* prohibit_pass_alive */)),
-      node_table_(std::make_unique<MctsNodeTable>()),
+                         eval::PlayerSearchConfig cfg, bool verbose)
+    : cfg_(cfg),
+      verbose_(verbose),
+      nn_interface_(std::move(nn_interface)),
+      game_(std::make_unique<Game>(false)),
+      node_table_(
+          cfg.use_mcgs
+              ? std::unique_ptr<NodeTable>(std::make_unique<McgsNodeTable>())
+              : std::unique_ptr<NodeTable>(std::make_unique<MctsNodeTable>())),
       current_color_(BLACK),
-      n_(n),
-      k_(k),
-      use_puct_(use_puct),
       analysis_running_(false) {
-  root_history_.emplace_back(
-      node_table_->GetOrCreate(game_->board().hash(), current_color_, false));
+  if (cfg_.use_bias_cache) {
+    bias_cache_.emplace(cfg_.bias_cache_alpha, cfg_.bias_cache_lambda);
+  }
+  gumbel_evaluator_ = std::make_unique<GumbelEvaluator>(
+      nn_interface_.get(), 0, MakeScoreUtilityParams(cfg_),
+      bias_cache_ ? &*bias_cache_ : nullptr);
+  current_root_ = node_table_->GetOrCreate(game_->board().hash(), BLACK, false);
 }
 
 Response<int> ServiceImpl::GtpProtocolVersion(std::optional<int> id) {
@@ -195,6 +244,8 @@ Response<> ServiceImpl::GtpClearBoard(std::optional<int> id) {
 }
 
 Response<> ServiceImpl::GtpKomi(std::optional<int> id, float komi) {
+  komi_ = komi;
+  game_->SetKomi(komi);
   return MakeResponse(id);
 }
 
@@ -213,7 +264,17 @@ Response<Loc> ServiceImpl::GtpGenMove(std::optional<int> id, Color color) {
     return MakeResponse(id, kNoopLoc);
   }
 
-  MakeMove(color, search_result.mcts_move);
+  last_explain_comment_ = BuildExplainComment();
+
+  if (verbose_) {
+    std::string dbg_str = BuildMoveDbgString(search_result, color);
+    MakeMove(color, search_result.mcts_move);
+    dbg_str += "\n" + GtpBoardString(game_->board());
+    std::cerr << dbg_str << "\n";
+  } else {
+    MakeMove(color, search_result.mcts_move);
+  }
+
   return MakeResponse(id, search_result.mcts_move);
 }
 
@@ -233,16 +294,29 @@ Response<> ServiceImpl::GtpUndo(std::optional<int> id) {
     return MakeErrorResponse(id, "Nothing to undo.");
   }
 
-  root_history_.pop_back();
-
-  // Replay from beginning.
-  std::unique_ptr<Game> new_game = std::make_unique<Game>();
+  // Replay from beginning, excluding last move.
+  std::unique_ptr<Game> new_game = std::make_unique<Game>(false);
+  new_game->SetKomi(komi_);
   for (int move_num = 0; move_num < game_->num_moves() - 1; ++move_num) {
     Move move = game_->move(move_num);
     new_game->PlayMove(move.loc, move.color);
   }
-
   game_ = std::move(new_game);
+
+  if (game_->num_moves() == 0) {
+    current_color_ = BLACK;
+  } else {
+    current_color_ =
+        game::OppositeColor(game_->move(game_->num_moves() - 1).color);
+  }
+
+  // Allocate fresh root in a fresh table.
+  node_table_ =
+      cfg_.use_mcgs
+          ? std::unique_ptr<NodeTable>(std::make_unique<McgsNodeTable>())
+          : std::unique_ptr<NodeTable>(std::make_unique<MctsNodeTable>());
+  current_root_ = node_table_->GetOrCreate(game_->board().hash(),
+                                           current_color_, game_->IsGameOver());
   return MakeResponse(id);
 }
 
@@ -283,6 +357,7 @@ game::Loc ServiceImpl::GtpGenMoveAnalyze(game::Color color) {
   GumbelResult search_result = GenMoveCommon(color);
   analysis_running_.store(false, std::memory_order_release);
 
+  last_explain_comment_ = BuildExplainComment();
   MakeMove(color, search_result.mcts_move);
   return search_result.mcts_move;
 }
@@ -307,52 +382,122 @@ Response<std::string> ServiceImpl::GtpPlayDbg(std::optional<int> id,
   return MakeResponse(id, dbg_str);
 }
 
-Response<std::string> ServiceImpl::GtpGenMoveDbg(std::optional<int> id,
-                                                 game::Color color) {
-  GumbelResult search_result = GenMoveCommon(color);
-  std::vector<std::pair<game::Loc, float>> top_policy_moves =
-      current_root() ? GetTopPolicyMoves(current_root()->move_probs)
-                     : std::vector<std::pair<game::Loc, float>>();
-  std::vector<std::pair<game::Loc, float>> top_policy_moves_improved =
-      GetTopPolicyMoves(search_result.pi_improved);
+std::string ServiceImpl::BuildMoveDbgString(const GumbelResult& result,
+                                            Color color) {
+  TreeNode* root = current_root();
 
-  std::string dbg_str;
-  dbg_str += "---- Move Num " + std::to_string(game_->num_moves()) + " ----\n";
-  dbg_str +=
-      "\nTree Stats:\n  N: " +
-      std::to_string(static_cast<int>(N(current_root()))) +
-      "\n  V: " + std::to_string(V(current_root())) +
-      "\n  V_z: " + std::to_string(VOutcome(current_root())) +
-      "\n  V StdDev: " + std::to_string(std::sqrt(VVar(current_root()))) +
-      "\n  V_z StdDev: " +
-      std::to_string(std::sqrt(VOutcomeVar(current_root()))) + "\n  Score: " +
-      std::to_string(current_root() ? current_root()->init_score_est : 0.0f) +
-      "\n";
+  float v_nn = root->init_util_est;
+  float v_nn_adj =
+      (root->bias_cache_entry && root->last_weight_term != 0.0f)
+          ? v_nn - cfg_.bias_cache_lambda *
+                       (root->last_obs_bias_term / root->last_weight_term)
+          : v_nn;
 
-  dbg_str += "Top Policy Moves:\n";
-  for (const auto& move : top_policy_moves) {
-    dbg_str +=
-        GtpValueString(move.first) + ": " + std::to_string(move.second) + "\n";
+  std::string s;
+  s += "---- Move Num " + std::to_string(game_->num_moves()) + " ----\n";
+  s += "NN"
+       "  V=" +
+       std::to_string(v_nn) + "  Vz=" + std::to_string(root->init_outcome_est) +
+       "  Vadj=" + std::to_string(v_nn_adj) +
+       "  Score=" + std::to_string(root->init_score_est) +
+       "    Tree"
+       "  N=" +
+       std::to_string(static_cast<int>(N(root))) +
+       "  V=" + std::to_string(V(root)) +
+       "  Vz=" + std::to_string(VOutcome(root)) +
+       "  Vstd=" + std::to_string(std::sqrt(VVar(root))) +
+       "  Vzstd=" + std::to_string(std::sqrt(VOutcomeVar(root))) + "\n";
+
+  s += "Top Policy Moves:\n";
+  for (const auto& mv : GetTopPolicyMoves(root->move_probs)) {
+    s += "  " + GtpValueString(mv.first) + " = " + std::to_string(mv.second) +
+         "\n";
   }
 
-  dbg_str += "Completed Q:\n";
-  for (const auto& move : top_policy_moves_improved) {
-    dbg_str +=
-        GtpValueString(move.first) + ": " + std::to_string(move.second) + "\n";
-  }
-
-  dbg_str += "Gumbel Selected Moves:\n";
-  for (const auto& selected_child : search_result.child_stats) {
-    dbg_str += GtpValueString(selected_child.move) +
-               ", n: " + std::to_string(selected_child.n) +
-               ", p: " + std::to_string(selected_child.prob) +
-               ", q: " + std::to_string(selected_child.q) +
-               ", qz: " + std::to_string(selected_child.qz) + "\n";
+  s += "Gumbel Selected Moves:\n";
+  for (const auto& child : result.child_stats) {
+    s += "  " + GtpValueString(child.move) + "  n=" + std::to_string(child.n) +
+         "  p=" + std::to_string(child.prob) +
+         "  q=" + std::to_string(child.q) + "  qz=" + std::to_string(child.qz) +
+         "\n";
   }
 
 #ifdef V_CATEGORICAL
-  dbg_str += VCategoricalHistogram(current_root());
+  s += VCategoricalHistogram(root);
 #endif
+
+  return s;
+}
+
+Response<std::string> ServiceImpl::GtpExplainLastMove(std::optional<int> id) {
+  return MakeResponse(id, last_explain_comment_);
+}
+
+std::string ServiceImpl::BuildExplainComment() {
+  TreeNode* root = current_root();
+
+  float v_tree = V(root);
+  float vz_tree = VOutcome(root);
+  float vstd = std::sqrt(VVar(root));
+  float score = Score(root);
+  float v_nn = root->init_util_est;
+  float v_adj =
+      (root->bias_cache_entry && root->last_weight_term != 0.0f)
+          ? v_nn - cfg_.bias_cache_lambda *
+                       (root->last_obs_bias_term / root->last_weight_term)
+          : v_nn;
+
+  std::stringstream ss;
+  ss << std::fixed << std::setprecision(4);
+  ss << "Vnn=" << v_nn << " Vadj=" << v_adj << " V=" << v_tree
+     << " Score=" << score << " Vz=" << vz_tree << " Vstd=" << vstd << "\n";
+
+  struct ChildInfo {
+    int action;
+    float lcb;
+    int n;
+    float q;
+    float qstd;
+    float prior;
+    float opt_prior;
+  };
+
+  std::vector<ChildInfo> visited_children;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    if (root->child_visits[a] == 0) continue;
+    visited_children.push_back(ChildInfo{
+        a,
+        Lcb(root, a),
+        root->child_visits[a],
+        Q(root, a),
+        std::sqrt(QVar(root, a)),
+        root->move_probs[a],
+        root->opt_probs[a],
+    });
+  }
+
+  std::sort(visited_children.begin(), visited_children.end(),
+            [](const ChildInfo& x, const ChildInfo& y) {
+              return x.lcb > y.lcb;
+            });
+
+  static constexpr int kNumTopMoves = 8;
+  int num_to_show = std::min((int)visited_children.size(), kNumTopMoves);
+  ss << "Top Moves (by LCB):\n";
+  for (int i = 0; i < num_to_show; ++i) {
+    const auto& c = visited_children[i];
+    ss << "  " << GtpValueString(AsLoc(c.action)) << "  n=" << c.n
+       << "  q=" << c.q << "  qstd=" << c.qstd << "  lcb=" << c.lcb
+       << "  prior=" << c.prior << "  opt_prior=" << c.opt_prior << "\n";
+  }
+
+  return ss.str();
+}
+
+Response<std::string> ServiceImpl::GtpGenMoveDbg(std::optional<int> id,
+                                                 game::Color color) {
+  GumbelResult search_result = GenMoveCommon(color);
+  std::string dbg_str = BuildMoveDbgString(search_result, color);
 
   if (V(current_root()) < -0.96f && game_->num_moves() > 50) {
     dbg_str += "p3achygo resigns :(";
@@ -360,24 +505,7 @@ Response<std::string> ServiceImpl::GtpGenMoveDbg(std::optional<int> id,
   }
 
   MakeMove(color, search_result.mcts_move);
-
-  // Run this to populate the policy logits at the new root.
-  gumbel_evaluator_->SearchRoot(probability_, *game_, node_table_.get(),
-                                current_root(), game::OppositeColor(color),
-                                mcts::GumbelSearchParams{1, 1});
-  std::vector<std::pair<game::Loc, float>> top_policy_moves_next =
-      current_root() ? GetTopPolicyMoves(current_root()->move_probs)
-                     : std::vector<std::pair<game::Loc, float>>();
-
-#if 0
-  dbg_str += "Top Policy Moves Next:\n";
-  for (const auto& move : top_policy_moves_next) {
-    dbg_str +=
-        GtpValueString(move.first) + ": " + std::to_string(move.second) + "\n";
-  }
-#endif
-
-  dbg_str += "\n" + GtpBoardString(game_->board());
+  dbg_str += "\n" + GtpBoardString(game_->board()) += "\n";
   return MakeResponse(id, dbg_str);
 }
 
@@ -389,7 +517,8 @@ Response<std::array<float, BOARD_LEN * BOARD_LEN>> ServiceImpl::GtpOwnership(
 
 Response<std::string> ServiceImpl::GtpSerializeSgfWithTrees(
     std::optional<int> id, std::string filename) {
-  bool success = recorder::RecordSingleSgfWithTrees(filename, *game_, root_history_);
+  bool success =
+      recorder::RecordSingleSgfWithTrees(filename, *game_, {current_root_});
   if (!success) {
     return MakeErrorResponse<std::string>(id, "Failed to write SGF file");
   }
@@ -418,27 +547,25 @@ GumbelResult ServiceImpl::GenMoveCommon(Color color) {
   if (!(color == current_color_)) {
     // We are moving twice consecutively. Fake a pass first.
     game_->PlayMove(kPassLoc, current_color_);
-    TreeNode* next_root = root_history_.back()->children[kPassLoc];
+    TreeNode* next_root = current_root_->children[kPassLoc];
     if (!next_root) {
-      // After the pass, it's the opponent's (color's) turn
       next_root = node_table_->GetOrCreate(game_->board().hash(), color,
                                            game_->IsGameOver());
     }
-
-    root_history_.emplace_back(next_root);
+    node_table_->Reap(next_root);
+    if (bias_cache_) bias_cache_->PruneUnused();
+    current_root_ = next_root;
     current_color_ = color;
   }
 
   GumbelResult search_result =
-      use_puct_ ? gumbel_evaluator_->SearchRootPuct(
-                      probability_, *game_, node_table_.get(), current_root(),
-                      color, n_,
-                      PuctParams::Builder()
-                          .set_kind(PuctRootSelectionPolicy::kLcb)
-                          .build())
-                : gumbel_evaluator_->SearchRoot(
-                      probability_, *game_, node_table_.get(), current_root(),
-                      color, mcts::GumbelSearchParams{n_, k_, 0.0f});
+      cfg_.use_puct
+          ? gumbel_evaluator_->SearchRootPuct(
+                probability_, *game_, node_table_.get(), current_root(), color,
+                cfg_.n, MakePuctParams(cfg_))
+          : gumbel_evaluator_->SearchRoot(
+                probability_, *game_, node_table_.get(), current_root(), color,
+                mcts::GumbelSearchParams{cfg_.n, cfg_.k, cfg_.noise_scaling});
   return search_result;
 }
 
@@ -462,37 +589,36 @@ void ServiceImpl::MakeMove(Color color, Loc loc) {
   game_->PlayMove(loc, color);
   current_color_ = game::OppositeColor(color);
 
-  TreeNode* next_root = root_history_.back()->children[loc];
+  TreeNode* next_root = current_root_->children[loc];
   if (!next_root) {
     next_root = node_table_->GetOrCreate(game_->board().hash(), current_color_,
                                          game_->IsGameOver());
   }
-  root_history_.emplace_back(next_root);
+  node_table_->Reap(next_root);
+  if (bias_cache_) bias_cache_->PruneUnused();
+  current_root_ = next_root;
 }
 
 void ServiceImpl::ClearBoard() {
-  game_ = std::make_unique<Game>(false /* prohibit_pass_alive */);
-  node_table_ = std::make_unique<MctsNodeTable>();
+  game_ = std::make_unique<Game>(false);
+  game_->SetKomi(komi_);
+  node_table_ =
+      cfg_.use_mcgs
+          ? std::unique_ptr<NodeTable>(std::make_unique<McgsNodeTable>())
+          : std::unique_ptr<NodeTable>(std::make_unique<MctsNodeTable>());
   current_color_ = BLACK;
-  root_history_.clear();
-  root_history_.emplace_back(node_table_->GetOrCreate(
-      game_->board().hash(), current_color_, /*is_terminal=*/false));
+  current_root_ = node_table_->GetOrCreate(game_->board().hash(), BLACK, false);
 }
 }  // namespace
 
 /* static */ absl::StatusOr<std::unique_ptr<Service>> Service::CreateService(
-    std::string model_path, int n, int k, bool use_puct) {
+    std::string model_path, eval::PlayerSearchConfig cfg, bool verbose) {
   std::unique_ptr<nn::Engine> engine =
       nn::CreateEngine(nn::KindFromEnginePath(model_path), model_path, 1,
                        nn::GetVersionFromModelPath(model_path));
   std::unique_ptr<NNInterface> nn_interface = std::make_unique<NNInterface>(
-      1 /* num_threads */, std::numeric_limits<int64_t>::max(), 16384,
-      std::move(engine));
-  std::unique_ptr<GumbelEvaluator> gumbel_evaluator =
-      std::make_unique<GumbelEvaluator>(nn_interface.get(), 0);
-
-  return std::make_unique<ServiceImpl>(
-      std::move(nn_interface), std::move(gumbel_evaluator), n, k, use_puct);
+      1, std::numeric_limits<int64_t>::max(), 16384, std::move(engine));
+  return std::make_unique<ServiceImpl>(std::move(nn_interface), cfg, verbose);
 }
 
 }  // namespace gtp
