@@ -56,6 +56,18 @@ add_library(nn INTERFACE)
 target_link_libraries(nn INTERFACE nn_interface)
 
 # Tests
+if(BUILD_TESTS)
+    add_executable(nn_interface_sync_test nn_interface_sync_test.cc)
+    target_link_libraries(nn_interface_sync_test PRIVATE
+        nn_interface
+        game
+        core_impl
+        core_doctest
+    )
+    add_test(NAME nn_interface_sync_test COMMAND nn_interface_sync_test)
+    set_tests_properties(nn_interface_sync_test PROPERTIES TIMEOUT 265)
+endif()
+
 if(BUILD_TESTS AND USE_TENSORFLOW)
     add_executable(nn_board_utils_test nn_board_utils_test.cc)
     target_link_libraries(nn_board_utils_test PRIVATE

@@ -34,6 +34,7 @@ namespace fs = ::std::filesystem;
 using namespace ::nn;
 
 constexpr char kTimingCachePath[] = "/tmp/trt_timing_cache.bin";
+constexpr int kMaxBatchSize = 256;
 
 struct BufferHandle {
   size_t size;
@@ -178,13 +179,13 @@ int main(int argc, char** argv) {
     profile->setDimensions("board_state", nv::OptProfileSelector::kOPT,
                            nv::Dims4(batch_size, 19, 19, num_planes));
     profile->setDimensions("board_state", nv::OptProfileSelector::kMAX,
-                           nv::Dims4(batch_size, 19, 19, num_planes));
+                           nv::Dims4(kMaxBatchSize, 19, 19, num_planes));
     profile->setDimensions("game_state", nv::OptProfileSelector::kMIN,
                            nv::Dims2(1, num_features));
     profile->setDimensions("game_state", nv::OptProfileSelector::kOPT,
                            nv::Dims2(batch_size, num_features));
     profile->setDimensions("game_state", nv::OptProfileSelector::kMAX,
-                           nv::Dims2(batch_size, num_features));
+                           nv::Dims2(kMaxBatchSize, num_features));
     config->addOptimizationProfile(profile);
     const std::vector<char> timing_cache_blob = ReadFile(kTimingCachePath);
     std::unique_ptr<nvinfer1::ITimingCache> timingCache(

@@ -33,7 +33,7 @@
 
 namespace {
 namespace fs = std::filesystem;
-static constexpr int64_t kTimeoutUs = 4000;
+static constexpr int64_t kTimeoutUs = 200;
 static constexpr int kDefaultGumbelN = 128;
 static constexpr int kDefaultGumbelK = 8;
 }  // namespace
@@ -45,6 +45,7 @@ ABSL_FLAG(std::string, recorder_path, "", "Path to write SGF files.");
 ABSL_FLAG(int, num_games, 0, "Number of eval games");
 ABSL_FLAG(int, cache_size, constants::kDefaultNNCacheSize / 2,
           "Default size of cache.");
+ABSL_FLAG(int, timeout, kTimeoutUs, "NNInterface timeout in us.");
 
 // Per-player config files. When provided, each file sets the base config for
 // that player. Individual flags below still take priority if explicitly passed
@@ -348,7 +349,8 @@ int main(int argc, char** argv) {
   const int cur_batch_size = num_games * cur_cfg.num_threads_per_game;
   const int cand_batch_size = num_games * cand_cfg.num_threads_per_game;
 
-  int cache_size = absl::GetFlag(FLAGS_cache_size);
+  const int timeout_us = absl::GetFlag(FLAGS_timeout);
+  const int cache_size = absl::GetFlag(FLAGS_cache_size);
   std::unique_ptr<nn::Engine> cur_engine = nn::CreateEngine(
       nn::KindFromEnginePath(cur_model_path), cur_model_path, cur_batch_size,
       nn::GetVersionFromModelPath(cur_model_path));
@@ -358,16 +360,16 @@ int main(int argc, char** argv) {
   std::unique_ptr<nn::NNInterface> cur_nn_interface =
       cur_uses_search
           ? std::make_unique<nn::NNInterface>(
-                cur_batch_size, kTimeoutUs, cache_size, std::move(cur_engine),
+                cur_batch_size, timeout_us, cache_size, std::move(cur_engine),
                 nn::NNInterface::SignalKind::kExplicit, num_games)
-          : std::make_unique<nn::NNInterface>(num_games, kTimeoutUs, cache_size,
+          : std::make_unique<nn::NNInterface>(num_games, timeout_us, cache_size,
                                               std::move(cur_engine));
   std::unique_ptr<nn::NNInterface> cand_nn_interface =
       cand_uses_search
           ? std::make_unique<nn::NNInterface>(
-                cand_batch_size, kTimeoutUs, cache_size, std::move(cand_engine),
+                cand_batch_size, timeout_us, cache_size, std::move(cand_engine),
                 nn::NNInterface::SignalKind::kExplicit, num_games)
-          : std::make_unique<nn::NNInterface>(num_games, kTimeoutUs, cache_size,
+          : std::make_unique<nn::NNInterface>(num_games, timeout_us, cache_size,
                                               std::move(cand_engine));
 
   size_t time = std::chrono::duration_cast<std::chrono::nanoseconds>(

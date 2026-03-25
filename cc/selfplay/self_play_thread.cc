@@ -308,6 +308,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
     // Begin Search.
     int search_dur_avg = 0;
+    int search_dur_ema = 0;
     GumbelEvaluator gumbel_evaluator(nn_interface, thread_id);
     while (IsRunning() && !game.IsGameOver() &&
            game.num_moves() < config.max_moves) {
@@ -577,6 +578,9 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
               .count();
       search_dur_avg = (search_dur_avg * (game.num_moves() - 1) + search_dur) /
                        game.num_moves();
+      search_dur_ema = search_dur_ema == 0
+                           ? search_dur
+                           : (0.75 * search_dur_ema + .25 * search_dur);
 
       auto mv_to_string = [](const game::Loc& move) {
         return ("ABCDEFGHIJKLMNOPQRS"[move.j]) + std::to_string(move.i);
@@ -625,8 +629,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         s << "Board:\n" << game.board() << "\n";
         s << "Nodes Reaped=" << num_nodes_reaped
           << "  Reap Time=" << reap_time_us << "us\n";
-        s << "Search Took " << search_dur
-          << "ms  Average For Game=" << search_dur_avg << "ms\n";
+        s << "Search Took " << search_dur << "ms  Average=" << search_dur_avg
+          << "ms  EMA=" << search_dur_ema << "ms\n";
 
         LOG_TO_SINK(INFO, sink) << s.str();
       }
