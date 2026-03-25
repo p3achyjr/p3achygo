@@ -2,6 +2,9 @@
 
 #include <stdlib.h>
 
+#include <atomic>
+#include <thread>
+
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/synchronization/mutex.h"
@@ -11,9 +14,20 @@
 #include "cc/nn/engine/go_features.h"
 
 namespace nn {
+
 namespace {
 using namespace ::core;
 using namespace ::game;
+
+std::unique_ptr<Waker> MakeWaker(NNInterface::WakeStrategy strategy) {
+  switch (strategy) {
+    case NNInterface::WakeStrategy::kMutex:
+      return std::make_unique<MutexWaker>();
+    case NNInterface::WakeStrategy::kGenCounter:
+    default:
+      return std::make_unique<GenCounterWaker>();
+  }
+}
 
 // 2 ** 20. Inference Result is 6kb, so this will be about ~6GB of RAM.
 static constexpr char kSavedModelTagServe[] = "serve";
@@ -29,6 +43,12 @@ NNInterface::NNInterface(int num_threads, int64_t timeout, size_t cache_size,
     : NNInterface(num_threads, timeout, cache_size, std::move(engine),
                   SignalKind::kAuto, -1) {}
 
+NNInterface::NNInterface(int num_threads, int64_t timeout, size_t cache_size,
+                         std::unique_ptr<Engine> engine,
+                         WakeStrategy wake_strategy)
+    : NNInterface(num_threads, timeout, cache_size, std::move(engine),
+                  SignalKind::kAuto, -1, wake_strategy) {}
+
 NNInterface::NNInterface(int num_threads, std::unique_ptr<Engine> engine,
                          SignalKind signal_kind, int num_shared_search_tasks)
     : NNInterface(num_threads, kTimeoutUs, constants::kDefaultNNCacheSize,
@@ -36,7 +56,8 @@ NNInterface::NNInterface(int num_threads, std::unique_ptr<Engine> engine,
 
 NNInterface::NNInterface(int num_threads, int64_t timeout, size_t cache_size,
                          std::unique_ptr<Engine> engine, SignalKind signal_kind,
-                         int num_shared_search_tasks)
+                         int num_shared_search_tasks,
+                         WakeStrategy wake_strategy)
     : num_registered_threads_(num_threads),
       num_threads_(num_threads),
       thread_info_(num_threads_),
@@ -47,7 +68,8 @@ NNInterface::NNInterface(int num_threads, int64_t timeout, size_t cache_size,
       signal_kind_(signal_kind),
       num_shared_search_tasks_(num_shared_search_tasks),
       num_signaled_search_tasks_(0),
-      num_exited_search_tasks_(0) {
+      num_exited_search_tasks_(0),
+      waker_(MakeWaker(wake_strategy)) {
   InitializeCache(cache_size);
   if (num_threads_ > 1) {
     infer_thread_ = std::thread(&NNInterface::InferLoop, this);
@@ -102,7 +124,6 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
   LoadBatch(thread_id, game, color_to_move, sym);
   SignalLoadedAndBlockUntilReady(thread_id);
 
-  // Inference result is now ready.
   NNInferResult infer_result = GetBatch(thread_id, sym);
 
   // Cache this result.
@@ -171,7 +192,7 @@ void NNInterface::LoadEntry(int thread_id, int offset, const game::Game& game,
     absl::MutexLock l(&mu_);
     ThreadInfo& thread_info = thread_info_[canonical_tid];
     thread_info.loaded_for_inference = true;
-    thread_info.res_ready = false;
+    thread_info.res_ready.store(false, std::memory_order_relaxed);
     thread_info.res_cached = false;
   }
 }
@@ -190,13 +211,8 @@ NNInferResult NNInterface::FetchEntry(int thread_id, int offset,
     return CacheGet(canonical_tid, cache_key).value();
   }
 
-  // block until result ready.
-  {
-    absl::MutexLock l(&mu_);
-    mu_.Await(absl::Condition(&thread_info.res_ready));
-  }
+  waker_->Wait(thread_info.res_ready, mu_);
 
-  // Inference result is now ready.
   NNInferResult infer_result =
       GetBatch(canonical_tid, symmetries_[canonical_tid]);
 
@@ -296,6 +312,7 @@ void NNInterface::Infer() {
   } else {
     mu_.LockWhen(absl::Condition(this, &NNInterface::ShouldInfer));
   }
+
   if (num_registered_threads_ == 0) {
     mu_.Unlock();
     return;
@@ -305,7 +322,7 @@ void NNInterface::Infer() {
   // RunInference() would overwrite the engine output buffer before the worker
   // calls GetBatch(). Apply to both kAuto and kExplicit.
   for (const ThreadInfo& thread : thread_info_) {
-    if (thread.res_ready) {
+    if (thread.res_ready.load(std::memory_order_acquire)) {
       mu_.Unlock();
       return;
     }
@@ -328,8 +345,8 @@ void NNInterface::Infer() {
 
   // Run Inference.
   engine_->RunInference();
-
   num_signaled_search_tasks_ = 0;
+
   for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
     ThreadInfo& thread = thread_info_[thread_id];
     if (thread.registered && thread.loaded_for_inference) {
@@ -342,12 +359,16 @@ void NNInterface::Infer() {
       // - worker_thread marks `thread.loaded_for_inference = true`.
       // - infer_thread acquires lock and runs inference. The input is empty, so
       //   inference gives back bogus data.
-      thread.res_ready = true;
+      thread.res_ready.store(true, std::memory_order_release);
       thread.loaded_for_inference = false;
     }
     thread.res_cached = false;
   }
 
+  // Notify all waiting workers. mu_ is still held here; MutexWaker is a no-op
+  // (unlock below triggers Await re-evaluation); GenCounterWaker bumps the
+  // generation counter and calls notify_all() — one FUTEX_WAKE for all.
+  waker_->NotifyAll();
   mu_.Unlock();
 }
 
