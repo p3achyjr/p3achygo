@@ -14,13 +14,21 @@
 namespace selfplay {
 
 struct InitState {
+  enum class Kind : uint8_t {
+    kEmpty = 0,
+    kBook = 1,
+    kHandicap = 2,
+    kGoExploit = 3,
+    kRegret = 4,
+  };
   game::Board board;
   absl::InlinedVector<game::Move, constants::kMaxGameLen> last_moves;
   game::Color color_to_move;
-  int move_num;
+  int move_num = 0;
   // If true, the game started from this state should use full search params
   // and force all moves to be trainable.
   bool force_full_search = false;
+  Kind kind = Kind::kEmpty;
 };
 
 enum class BufferType { kGoExploit, kRegret };

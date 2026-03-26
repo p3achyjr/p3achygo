@@ -208,11 +208,12 @@ class NNInterface final {
     game::Zobrist::Hash board_hash;
     // [oldest, ..., most recent]; unused leading slots are kNoopLoc.
     std::array<game::Loc, constants::kNumLastMoves> last_moves;
+    float komi;
 
     friend bool operator==(const NNKey& c0, const NNKey& c1) {
       return c0.color_to_move == c1.color_to_move &&
-             c0.board_hash == c1.board_hash &&
-             c0.last_moves == c1.last_moves;
+             c0.board_hash == c1.board_hash && c0.last_moves == c1.last_moves &&
+             c0.komi == c1.komi;
     }
 
     template <typename H>
@@ -221,6 +222,7 @@ class NNInterface final {
       for (const game::Loc& loc : c.last_moves) {
         h = H::combine(std::move(h), loc);
       }
+      h = H::combine(std::move(h), c.komi);
       return h;
     }
   };
