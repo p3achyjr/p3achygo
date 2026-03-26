@@ -23,6 +23,7 @@ struct ChildStats {
   float logit;
   float gumbel_noise;
   float qtransform;
+  float improved_policy;  // improved policy probability for this move
 };
 
 struct GumbelResult {
@@ -36,12 +37,56 @@ struct GumbelResult {
 };
 
 struct GumbelSearchParams {
-  int n;
-  int k;
+  int n = 0;
+  int k = 0;
   float noise_scaling = 1.0f;
   bool disable_pass = false;
   bool early_stopping_enabled = false;
   bool over_search_enabled = false;
+  // If > 0, sample mcts_move from the improved policy with temperature tau
+  // (each probability raised to 1/tau, then renormalized). tau == 0 takes the
+  // sequential-halving winner directly.
+  float tau = 0.0f;
+
+  // Forward-declared; defined below once GumbelSearchParams is complete.
+  class Builder;
+};
+
+class GumbelSearchParams::Builder {
+ public:
+  Builder() = default;
+  Builder& set_n(int v) {
+    p_.n = v;
+    return *this;
+  }
+  Builder& set_k(int v) {
+    p_.k = v;
+    return *this;
+  }
+  Builder& set_noise_scaling(float v) {
+    p_.noise_scaling = v;
+    return *this;
+  }
+  Builder& set_disable_pass(bool v) {
+    p_.disable_pass = v;
+    return *this;
+  }
+  Builder& set_early_stopping_enabled(bool v) {
+    p_.early_stopping_enabled = v;
+    return *this;
+  }
+  Builder& set_over_search_enabled(bool v) {
+    p_.over_search_enabled = v;
+    return *this;
+  }
+  Builder& set_tau(float v) {
+    p_.tau = v;
+    return *this;
+  }
+  GumbelSearchParams build() const { return p_; }
+
+ private:
+  GumbelSearchParams p_;
 };
 
 /*

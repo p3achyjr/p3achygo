@@ -86,7 +86,7 @@ float VMixed(const TreeNode* node) {
   return interpolated_q / (1 + SumChildrenN(node));
 }
 
-int Argmax(std::array<float, constants::kMaxMovesPerPosition>& arr) {
+int Argmax(const std::array<float, constants::kMaxMovesPerPosition>& arr) {
   int arg_max = 0;
   float max_val = -FLT_MAX;
   for (int i = 0; i < arr.size(); ++i) {
@@ -97,6 +97,29 @@ int Argmax(std::array<float, constants::kMaxMovesPerPosition>& arr) {
   }
 
   return arg_max;
+}
+
+// Samples an action from `policy` (already normalized) with temperature tau.
+// Each probability is raised to 1/tau, renormalized, then sampled.
+int SampleFromPolicy(
+    const std::array<float, constants::kMaxMovesPerPosition>& policy, float tau,
+    core::Probability& probability) {
+  std::array<float, constants::kMaxMovesPerPosition> tempered;
+  float total = 0.0f;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    tempered[a] = std::pow(policy[a], 1.0f / tau);
+    total += tempered[a];
+  }
+  float p = probability.Uniform();
+  float mass = 0.0f;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    if (tempered[a] == 0.0f) continue;
+    float prob = tempered[a] / total;
+    if (p >= mass && p < mass + prob) return a;
+    mass += prob;
+  }
+  // Fallback: should not be reached with a valid policy.
+  CHECK(false) << "SampleFromPolicy: failed to sample";
 }
 
 // Compute completedQ = {q(a) if N(a) > 0, v_mixed otherwise }.
@@ -199,6 +222,7 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
   const bool disable_pass = params.disable_pass;
   const bool early_stopping_enabled = params.early_stopping_enabled && false;
   const bool over_search_enabled = params.over_search_enabled && false;
+  const float tau = params.tau;
   int num_rounds = std::max(log2(k), 1);
 
   if (root->state == TreeNodeState::kNew) {
@@ -389,32 +413,36 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
 
   AdvanceState(root);
 
-  Loc raw_nn_move = game::AsLoc(Argmax(root->move_logits));
-  GumbelResult result = {raw_nn_move, gmove_info[0].move_loc, {}};
-
-#if 0
-  result.pi_improved[gmove_info[0].move_encoding] = 1.0f;  // one-hot.
-#endif
-
   // Get improved policy from completed-Q values.
   // max_n = 2 * ln(theoretical winner visits) controls Q weight.
   const float visit_advantage =
       2 * std::log(static_cast<float>(theoretical_winner_visits + 1));
-  result.pi_improved = ComputeRootImprovedPolicy(
-      root, masked_logits, top_k_actions, visit_advantage);
+  std::array<float, constants::kMaxMovesPerPosition> pi_improved =
+      ComputeRootImprovedPolicy(root, masked_logits, top_k_actions,
+                                visit_advantage);
+
+  Loc raw_nn_move = game::AsLoc(Argmax(root->move_logits));
+  Loc mcts_move =
+      tau > 0.0f ? game::AsLoc(SampleFromPolicy(pi_improved, tau, probability))
+                 : gmove_info[0].move_loc;
+
+  GumbelResult result = {raw_nn_move, mcts_move, pi_improved};
 
   // Populate stats for visited children.
   for (int i = 0; i < m; ++i) {
     const GumbelMoveInfo& gmove = gmove_info[i];
-    result.child_stats.emplace_back(
-        ChildStats{gmove.move_loc /* move */,
-                   static_cast<int>(NAction(root, gmove.move_encoding)) /* n */,
-                   Q(root, gmove.move_encoding) /* q */,
-                   QOutcome(root, gmove.move_encoding) /* qz */,
-                   ChildScore(root, gmove.move_encoding) /* score */,
-                   gmove.prob /* prob */, gmove.logit /* logit */,
-                   gmove.gumbel_noise /* gumbel_noise */,
-                   gmove.qtransform /* qtransform */});
+    result.child_stats.emplace_back(ChildStats{
+        gmove.move_loc /* move */,
+        static_cast<int>(NAction(root, gmove.move_encoding)) /* n */,
+        Q(root, gmove.move_encoding) /* q */,
+        QOutcome(root, gmove.move_encoding) /* qz */,
+        ChildScore(root, gmove.move_encoding) /* score */,
+        gmove.prob /* prob */,
+        gmove.logit /* logit */,
+        gmove.gumbel_noise /* gumbel_noise */,
+        gmove.qtransform /* qtransform */,
+        pi_improved[gmove.move_encoding] /* improved_policy */,
+    });
   }
 
   // Update root, adding all visits from children, but only q estimates from
@@ -496,47 +524,6 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
     return game::kPassLoc;
   };
 
-  auto sample_action_from_visits =
-      [&](const std::array<float, constants::kMaxMovesPerPosition>&
-              visit_counts,
-          const float tau) {
-        std::array<float, constants::kMaxMovesPerPosition> policy;
-
-        // Compute empirical policy.
-        float total_visits = core::SumV(visit_counts);
-        for (int a = 0; a < policy.size(); ++a) {
-          policy[a] = visit_counts[a] / total_visits;
-        }
-
-        // Exponentiate policy.
-        float total_mass = 0.0f;
-        for (int a = 0; a < policy.size(); ++a) {
-          policy[a] = std::pow(policy[a], 1 / tau);
-          total_mass += policy[a];
-        }
-
-        // Normalize policy.
-        for (int a = 0; a < policy.size(); ++a) {
-          policy[a] /= total_mass;
-        }
-
-        float p = probability.Uniform();
-        float mass = 0.0f;
-        for (int a = 0; a < visit_counts.size(); ++a) {
-          if (policy[a] == 0) continue;
-
-          // Use half-open interval.
-          if (p >= mass && p < mass + policy[a]) {
-            return a;
-          }
-
-          mass += policy[a];
-        }
-
-        // Should never reach here.
-        CHECK(false) << "Could not find viable candidate to sample.";
-      };
-
   if (root->state == TreeNodeState::kNew) {
     leaf_evaluator_.EvaluateRoot(probability, game, root, color_to_move);
   }
@@ -565,6 +552,15 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
     visit_counts[a] = NAction(root, a) - visit_counts_pre_search[a];
   }
 
+  // Improved policy = visit counts normalized as probabilities.
+  std::array<float, constants::kMaxMovesPerPosition> pi_improved;
+  {
+    float total = core::SumV(visit_counts);
+    for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+      pi_improved[a] = total > 0.0f ? visit_counts[a] / total : 0.0f;
+    }
+  }
+
   Loc raw_nn_move = game::AsLoc(Argmax(root->move_logits));
   Loc mcts_move = [&]() {
     switch (puct_params.kind) {
@@ -574,7 +570,7 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
         return best_lcb_move(root);
       case PuctRootSelectionPolicy::kVisitCountSample:
         return game::AsLoc(
-            sample_action_from_visits(visit_counts, puct_params.tau));
+            SampleFromPolicy(pi_improved, puct_params.tau, probability));
     }
 
     return game::AsLoc(Argmax(visit_counts));
@@ -594,9 +590,10 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
         root->move_logits[mv],
         0.0f,
         0.0f,
+        pi_improved[mv] /* improved_policy */,
     });
   }
-  GumbelResult result = {raw_nn_move, mcts_move, visit_counts,
+  GumbelResult result = {raw_nn_move, mcts_move, pi_improved,
                          std::move(child_stats)};
   return result;
 }

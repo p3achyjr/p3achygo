@@ -418,6 +418,7 @@ std::string ServiceImpl::BuildMoveDbgString(const GumbelResult& result,
   for (const auto& child : result.child_stats) {
     s += "  " + GtpValueString(child.move) + "  n=" + std::to_string(child.n) +
          "  p=" + std::to_string(child.prob) +
+         "  p'=" + std::to_string(child.improved_policy) +
          "  q=" + std::to_string(child.q) + "  qz=" + std::to_string(child.qz) +
          "\n";
   }
@@ -476,10 +477,9 @@ std::string ServiceImpl::BuildExplainComment() {
     });
   }
 
-  std::sort(visited_children.begin(), visited_children.end(),
-            [](const ChildInfo& x, const ChildInfo& y) {
-              return x.lcb > y.lcb;
-            });
+  std::sort(
+      visited_children.begin(), visited_children.end(),
+      [](const ChildInfo& x, const ChildInfo& y) { return x.lcb > y.lcb; });
 
   static constexpr int kNumTopMoves = 8;
   int num_to_show = std::min((int)visited_children.size(), kNumTopMoves);

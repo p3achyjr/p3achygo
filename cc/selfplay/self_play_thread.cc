@@ -34,7 +34,7 @@ using namespace ::recorder;
 static constexpr int kShouldLogShard = 8;
 
 // Probability to add any state to the seen buffer.
-static constexpr float kAddSeenStateProb = .04f;
+static constexpr float kAddSeenStateProb = 0.04f;
 
 // Probability of drawing a state from the visited buffer.
 static constexpr float kUseSeenStateProb = 0.5f;
@@ -46,10 +46,10 @@ static constexpr int kMaxNumRawPolicyMoves = 30;
 static constexpr float kOpeningExploreProb = 1.0f;
 
 // Probability of playing from opening book.
-static constexpr float kPlayFromBookProb = .02f;
+static constexpr float kPlayFromBookProb = 0.0f;
 
 // Probability of handicap game.
-static constexpr float kHandicapGame = .05f;
+static constexpr float kHandicapGame = 0.05f;
 
 // Thresholds at which to compute pass-alive regions.
 static constexpr int kComputePAMoveNums[] = {200, 250, 300, 350, 400};
@@ -58,13 +58,13 @@ static constexpr int kComputePAMoveNums[] = {200, 250, 300, 350, 400};
 static constexpr float kLogFullTreeProb = 0.0f;  // .002;
 
 // Probability that we pick a move for training.
-static constexpr float kMoveSelectedForTrainingProb = .25;
+static constexpr float kMoveSelectedForTrainingProb = 0.25f;
 
 // Base probability that we over-search a node.
-static constexpr float kOverSearchNodeProb = 0.15;
+static constexpr float kOverSearchNodeProb = 0.15f;
 
 // Threshold beneath which we are down bad (should resign).
-static constexpr float kDownBadThreshold = -.90;
+static constexpr float kDownBadThreshold = -0.90f;
 
 // Number of moves at down bad threshold before decreasing visit count.
 static constexpr float kNumDownBadMovesThreshold = 5;
@@ -188,18 +188,23 @@ void AddRegretGuidedStates(Probability& probability, ReuseBuffer* reuse_buffer,
   }
 }
 
-InitState GetInitState(Probability& probability, ReuseBuffer* buffer) {
+InitState GetInitState(Probability& probability, ReuseBuffer* buffer,
+                       int num_games_played) {
   const float komi = std::round(7.0f + std::min(probability.Gaussian(), 3.0f)) +
                      (probability.Uniform() < 0.5f ? 0.5f : -0.5f);
   InitState s0 =
       InitState{Board(komi),
                 {kNoopMove, kNoopMove, kNoopMove, kNoopMove, kNoopMove},
-                BLACK};
+                BLACK,
+                0,
+                /*force_full_search=*/false,
+                InitState::Kind::kEmpty};
   float p = probability.Uniform();
   if (p <= kPlayFromBookProb) {
     const int index = probability.Uniform() * kOpeningBook.size();
     const int num_moves =
         std::round(probability.Uniform() * kOpeningBook[index].size());
+    s0.kind = InitState::Kind::kBook;
     s0.last_moves.clear();
     for (int i = 0; i < constants::kNumLastMoves - num_moves; ++i) {
       s0.last_moves.emplace_back(kNoopMove);
@@ -214,21 +219,48 @@ InitState GetInitState(Probability& probability, ReuseBuffer* buffer) {
 
     return s0;
   } else if (p <= kPlayFromBookProb + kUseSeenStateProb) {
+    if (num_games_played < 3 && buffer->GetType() == BufferType::kRegret) {
+      // give the regret buffer some time to fill up.
+      return s0;
+    }
     std::optional<InitState> seen_state = buffer->Get();
     if (!seen_state) {
       return s0;
     }
 
+    seen_state->kind = seen_state->force_full_search
+                           ? InitState::Kind::kRegret
+                           : InitState::Kind::kGoExploit;
     return seen_state.value();
   } else if (p <= kPlayFromBookProb + kUseSeenStateProb + kHandicapGame) {
     int handicap = std::floor(probability.Uniform() * 3 + 2);
     float komi = (handicap - 2) * 14 + 20.5;  // katago ;)
     return InitState{Board(handicap, komi),
                      {kNoopMove, kNoopMove, kNoopMove, kNoopMove, kNoopMove},
-                     WHITE};
+                     WHITE,
+                     0,
+                     /*force_full_search=*/false,
+                     InitState::Kind::kHandicap};
   }
 
   return s0;
+}
+
+std::string ToString(const InitState::Kind& kind) {
+  switch (kind) {
+    case InitState::Kind::kEmpty:
+      return "Empty";
+    case InitState::Kind::kBook:
+      return "Book";
+    case InitState::Kind::kHandicap:
+      return "Handicap";
+    case InitState::Kind::kGoExploit:
+      return "GoExploit";
+    case InitState::Kind::kRegret:
+      return "Regret";
+    default:
+      return "Unknown";
+  }
 }
 
 std::string ToString(const Color& color) {
@@ -251,16 +283,22 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
          std::string logfile, SPConfig config) {
   FileSink sink(logfile.c_str());
   Probability probability(seed);
+  int num_games_played = 0;
 
   // Main loop.
   while (true) {
     // Populate initial state either from seen states or s_0.
-    InitState init_state = GetInitState(probability, reuse_buffer);
+    InitState init_state =
+        GetInitState(probability, reuse_buffer, num_games_played);
     bool const is_regret_game = init_state.force_full_search;
 
     // Game state.
     Game game(init_state.board, init_state.last_moves);
     Color color_to_move = init_state.color_to_move;
+
+    LOG_TO_SINK(INFO, sink) << "\nNEW GAME  Kind=" << ToString(init_state.kind)
+                            << "  StartMove=" << init_state.move_num
+                            << "  Color=" << ToString(color_to_move);
 
     // Node table for MCTS.
     std::unique_ptr<NodeTable> node_table = std::make_unique<MctsNodeTable>();
@@ -303,7 +341,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     // Regret games skip raw policy sampling — every move is fully searched.
     int const num_moves_raw_policy =
         !is_regret_game && probability.Uniform() < kOpeningExploreProb
-            ? RandRange(probability.prng(), 0, kMaxNumRawPolicyMoves)
+            ? RandRange(probability.prng(), 0, kMaxNumRawPolicyMoves + 1)
             : 0;
 
     // Begin Search.
@@ -460,12 +498,14 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
               ? gumbel_evaluator.SearchRoot(
                     probability, game, node_table.get(), root_node,
                     color_to_move,
-                    GumbelSearchParams{
-                        gumbel_n, gumbel_k, noise_scaling,
-                        /*disable_pass=*/false,
-                        /*early_stopping_enabled=*/early_stopping_enabled,
-                        /*over_search_enabled=*/
-                        is_move_over_search})
+                    GumbelSearchParams::Builder()
+                        .set_n(gumbel_n)
+                        .set_k(gumbel_k)
+                        .set_noise_scaling(noise_scaling)
+                        .set_early_stopping_enabled(early_stopping_enabled)
+                        .set_over_search_enabled(is_move_over_search)
+                        .set_tau(tau)
+                        .build())
               : gumbel_evaluator.SearchRootPuct(
                     probability, game, node_table.get(), root_node,
                     color_to_move, gumbel_n,
@@ -595,7 +635,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
           << "  Add Init State Prob=" << add_init_state_prob
           << "  Trainable=" << is_move_selected_for_training
           << "  Over Search=" << is_move_over_search
-          << "  Visits=" << gumbel_res.visits << "\n";
+          << "  Visits=" << gumbel_res.visits << "  Tau=" << tau << "\n";
         s << "Last 5 Moves: " << game.move(game.num_moves() - 5) << "  "
           << game.move(game.num_moves() - 4) << "  "
           << game.move(game.num_moves() - 3) << "  "
@@ -616,6 +656,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
           for (const ChildStats& mv_stats : gumbel_res.child_stats) {
             s << "  " << mv_to_string(mv_stats.move)
               << "  p=" << absl::StrFormat("%.3f", mv_stats.prob)
+              << "  p'=" << absl::StrFormat("%.3f", mv_stats.improved_policy)
               << "  n=" << absl::StrFormat("%d", mv_stats.n)
               << "  q=" << absl::StrFormat("%.3f", mv_stats.q)
               << "  qz=" << absl::StrFormat("%.3f", mv_stats.qz)
@@ -699,6 +740,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     if (!IsRunning()) break;
 
     game.WriteResult();
+    ++num_games_played;
 
     LOG_TO_SINK(INFO, sink) << "Black Score=" << game.result().bscore
                             << "  White Score=" << game.result().wscore;
