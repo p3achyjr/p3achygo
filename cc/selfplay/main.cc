@@ -44,6 +44,10 @@ ABSL_FLAG(int, gumbel_default_n, 32,
           "Number of Low Playout Cap Randomization visits.");
 ABSL_FLAG(bool, use_regret_buffer, false,
           "Use regret-guided state reuse buffer instead of uniform GoExploit.");
+ABSL_FLAG(float, sel_mult_base, 0.0f,
+          "Base multiplier for training position selection probability. "
+          "Enables signal-based sampling (|NN-MCTS| and top1/2 Q gap). "
+          "0 disables (falls back to flat probability).");
 
 void WaitForSignal() {
   // any line from stdin is a shutdown signal.
@@ -134,7 +138,8 @@ int main(int argc, char** argv) {
             selfplay::GumbelParams{absl::GetFlag(FLAGS_gumbel_selected_n),
                                    absl::GetFlag(FLAGS_gumbel_selected_k)},
             selfplay::GumbelParams{absl::GetFlag(FLAGS_gumbel_default_n),
-                                   absl::GetFlag(FLAGS_gumbel_default_k)}});
+                                   absl::GetFlag(FLAGS_gumbel_default_k)},
+            absl::GetFlag(FLAGS_sel_mult_base)});
     threads.emplace_back(std::move(thread));
   }
 

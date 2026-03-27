@@ -16,6 +16,10 @@ struct SPConfig {
   const int max_moves;
   const GumbelParams selected_params;
   const GumbelParams default_params;
+  // Base multiplier for selection probability. If 0, sel_mult is disabled
+  // (falls back to 1.0). Otherwise, the full signal-based multiplier is
+  // computed and scaled by this value.
+  const float sel_mult_base = 0.0f;
 };
 
 void Run(size_t seed, int thread_id, nn::NNInterface* nn_interface,

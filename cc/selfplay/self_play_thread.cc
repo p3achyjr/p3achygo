@@ -347,6 +347,32 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     // Begin Search.
     int search_dur_avg = 0;
     int search_dur_ema = 0;
+
+    // Uncertainty tracking (v_err = MCTS-aggregated NN uncertainty estimate).
+    float uncertainty_avg = 0, uncertainty_ema = 0;
+    float uncertainty_min = std::numeric_limits<float>::max();
+    float uncertainty_max = std::numeric_limits<float>::lowest();
+
+    // |NN_util - MCTS_util| tracking.
+    float diff_avg = 0, diff_ema = 0;
+    float diff_min = std::numeric_limits<float>::max();
+    float diff_max = std::numeric_limits<float>::lowest();
+
+    // Pre-search variance (v_outcome_var from tree reuse) tracking.
+    float var_avg = 0, var_ema = 0;
+    float var_min = std::numeric_limits<float>::max();
+    float var_max = std::numeric_limits<float>::lowest();
+
+    // Over-search multiplier tracking.
+    float sel_mult_avg = 0, sel_mult_ema = 0;
+
+    // Pre-search move-level Q stats (top-8 children by visit count).
+    float q_var_avg = 0, q_var_ema = 0;
+    float q_var_min = std::numeric_limits<float>::max();
+    float q_var_max = std::numeric_limits<float>::lowest();
+    float top_gap_avg = 0, top_gap_ema = 0;
+    float top_gap_min = std::numeric_limits<float>::max();
+    float top_gap_max = std::numeric_limits<float>::lowest();
     GumbelEvaluator gumbel_evaluator(nn_interface, thread_id);
     while (IsRunning() && !game.IsGameOver() &&
            game.num_moves() < config.max_moves) {
@@ -379,27 +405,121 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         return down_bad_coeff;
       }();
 
-      // Probability of selecting a move for training.
+      // NN Stats.
+      float qz_nn = root_node->init_outcome_est;
+      float score_nn = root_node->init_score_est;
+
+      // Pre-search stats (from tree reuse).
+      int n_pre = N(root_node);
+      float q_pre = V(root_node);
+      float qz_pre = VOutcome(root_node);
+      float var_pre = n_pre < 3 ? 0.0f : root_node->v_outcome_var;
+
+      // Pre-search move-level Q stats: top-8 children by visit count.
+      float pre_q_var = 0.0f, pre_top_gap = 0.0f, pre_prior_gap = 0.0f;
+      int pre_k = 0;
+      {
+        constexpr int kTopK = 8;
+        std::array<int, kTopK> top_actions;
+        top_actions.fill(-1);
+        std::array<int, kTopK> top_visits;
+        top_visits.fill(0);
+        for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+          const int n = root_node->child_visits[a];
+          if (n == 0 || root_node->child(a) == nullptr) continue;
+          for (int i = 0; i < kTopK; ++i) {
+            if (n > top_visits[i]) {
+              for (int j = kTopK - 1; j > i; --j) {
+                top_visits[j] = top_visits[j - 1];
+                top_actions[j] = top_actions[j - 1];
+              }
+              top_visits[i] = n;
+              top_actions[i] = a;
+              break;
+            }
+          }
+        }
+        std::array<float, kTopK> qs;
+        for (int i = 0; i < kTopK && top_actions[i] >= 0; ++i) {
+          qs[pre_k++] = Q(root_node, top_actions[i]);
+        }
+        if (pre_k >= 2) {
+          std::sort(qs.begin(), qs.begin() + pre_k, std::greater<float>());
+          pre_top_gap = qs[0] - qs[1];
+          float mean = 0;
+          for (int i = 0; i < pre_k; ++i) mean += qs[i];
+          mean /= pre_k;
+          float var = 0;
+          for (int i = 0; i < pre_k; ++i) var += (qs[i] - mean) * (qs[i] - mean);
+          pre_q_var = var / pre_k;
+
+          // Prior gap: top1 - top2 prior among visited children.
+          float p1 = 0.0f, p2 = 0.0f;
+          for (int i = 0; i < pre_k; ++i) {
+            float p = root_node->move_probs[top_actions[i]];
+            if (p >= p1) { p2 = p1; p1 = p; }
+            else if (p > p2) { p2 = p; }
+          }
+          pre_prior_gap = p1 - p2;
+        }
+      }
+
+      // Selection probability multiplier.
+      // Group 1: |NN_util - MCTS_util| pre-search.
+      //   No bonus below p50; scales linearly to 2.0x at p95.
+      const float sel_g1_mult = [&]() {
+        constexpr float kP50 = 0.060f;
+        constexpr float kP95 = 0.436f;
+        const float diff = std::abs(root_node->init_util_est - q_pre);
+        return 1.0f + std::clamp((diff - kP50) / (kP95 - kP50), 0.0f, 1.0f);
+      }();
+
+      // Group 2 bonus: top1/2 Q gap is small and NN prior gap >= 0.2.
+      //   The NN is confident in a move that MCTS finds equivalent to
+      //   alternatives — more search likely to change the decision.
+      //   No bonus above p30; scales linearly to 1.5x at p5.
+      const float sel_g2_bonus = [&]() {
+        if (pre_k < 2 || pre_prior_gap < 0.2f) return 1.0f;
+        constexpr float kP5  = 0.0013f;
+        constexpr float kP30 = 0.012f;
+        return 1.0f + 0.5f * std::clamp((kP30 - pre_top_gap) / (kP30 - kP5),
+                                        0.0f, 1.0f);
+      }();
+
+      // Group 2 penalty: top1/2 Q gap is large and NN prior gap >= 0.2 —
+      //   best move dominates and NN agrees, more search won't change the
+      //   decision. Voided when prior gap < 0.2 (NN can't distinguish moves,
+      //   large Q gap may be noise). 1.0x below p85; scales to 0.5x at p95.
+      const float sel_g2_penalty = [&]() {
+        if (pre_k < 2 || pre_prior_gap < 0.2f) return 1.0f;
+        constexpr float kP85 = 0.158f;
+        constexpr float kP95 = 0.345f;
+        return 1.0f - 0.5f * std::clamp(
+                                 (pre_top_gap - kP85) / (kP95 - kP85),
+                                 0.0f, 1.0f);
+      }();
+
+      const float sel_mult =
+          config.sel_mult_base > 0.0f
+              ? config.sel_mult_base *
+                    std::max(sel_g1_mult, sel_g2_bonus) * sel_g2_penalty
+              : 1.0f;
+
+      // Probability of selecting a move for training, scaled by sel_mult.
       // If we are not down bad, this is a base probability of
       // `kMoveSelectedForTrainingProb`. If we are down bad, then we anneal our
       // selection probability by down_bad_coeff^2. So if V(root) = -.95,
       // down_bad_coeff = .5, and our probability is annealed by .5 * .5 = .25.
       float const select_move_prob = [sampling_raw_policy, is_either_down_bad,
-                                      down_bad_coeff]() {
+                                      down_bad_coeff, sel_mult]() {
         if (sampling_raw_policy) {
           return 0.0f;
         }
-
-        if (!is_either_down_bad) {
-          // Do not anneal probability.
-          return kMoveSelectedForTrainingProb;
-        }
-
-        // Anneal probability quadratically.
-        float p =
-            down_bad_coeff * down_bad_coeff * kMoveSelectedForTrainingProb;
-
-        return p;
+        const float base = is_either_down_bad
+                               ? down_bad_coeff * down_bad_coeff *
+                                     kMoveSelectedForTrainingProb
+                               : kMoveSelectedForTrainingProb;
+        return base * sel_mult;
       }();
 
       // Probability of over-searching this move, if selected for training.
@@ -430,7 +550,6 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       GumbelParams const trainable_gumbel_params = [&config, is_either_down_bad,
                                                     down_bad_coeff]() {
         if (!is_either_down_bad) {
-          // return defaults.
           return config.selected_params;
         }
 
@@ -482,15 +601,6 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
             kMaxTau);
       }();
 
-      // NN Stats.
-      float qz_nn = root_node->init_outcome_est;
-      float score_nn = root_node->init_score_est;
-
-      // Pre Search Stats.
-      int n_pre = N(root_node);
-      float q_pre = V(root_node);
-      float qz_pre = VOutcome(root_node);
-
       // Run and Profile Search.
       auto begin = std::chrono::high_resolution_clock::now();
       GumbelResult gumbel_res =
@@ -535,6 +645,10 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       int move_n = NAction(root_node, move);
       float move_q = Q(root_node, move);
       float move_qz = QOutcome(root_node, move);
+
+      // Per-move uncertainty and NN/MCTS divergence (pre-search, via tree reuse).
+      float node_uncertainty = root_node->v_err;
+      float nn_mcts_diff = std::abs(nn_util_est - q_pre);
 
       // Update tracking data structures.
       mcts_pis.push_back(gumbel_res.pi_improved);
@@ -622,6 +736,53 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
                            ? search_dur
                            : (0.75 * search_dur_ema + .25 * search_dur);
 
+      uncertainty_avg =
+          (uncertainty_avg * (game.num_moves() - 1) + node_uncertainty) /
+          game.num_moves();
+      uncertainty_min = std::min(uncertainty_min, node_uncertainty);
+      uncertainty_max = std::max(uncertainty_max, node_uncertainty);
+      uncertainty_ema =
+          uncertainty_ema == 0
+              ? node_uncertainty
+              : (0.75f * uncertainty_ema + 0.25f * node_uncertainty);
+
+      diff_avg =
+          (diff_avg * (game.num_moves() - 1) + nn_mcts_diff) / game.num_moves();
+      diff_min = std::min(diff_min, nn_mcts_diff);
+      diff_max = std::max(diff_max, nn_mcts_diff);
+      diff_ema = diff_ema == 0 ? nn_mcts_diff
+                               : (0.75f * diff_ema + 0.25f * nn_mcts_diff);
+
+      var_avg =
+          (var_avg * (game.num_moves() - 1) + var_pre) / game.num_moves();
+      var_min = std::min(var_min, var_pre);
+      var_max = std::max(var_max, var_pre);
+      var_ema = var_ema == 0 ? var_pre
+                             : (0.75f * var_ema + 0.25f * var_pre);
+
+      if (pre_k >= 2) {
+        const int n = game.num_moves();
+        q_var_avg = (q_var_avg * (n - 1) + pre_q_var) / n;
+        q_var_min = std::min(q_var_min, pre_q_var);
+        q_var_max = std::max(q_var_max, pre_q_var);
+        q_var_ema = q_var_ema == 0 ? pre_q_var
+                                   : (0.75f * q_var_ema + 0.25f * pre_q_var);
+        top_gap_avg = (top_gap_avg * (n - 1) + pre_top_gap) / n;
+        top_gap_min = std::min(top_gap_min, pre_top_gap);
+        top_gap_max = std::max(top_gap_max, pre_top_gap);
+        top_gap_ema = top_gap_ema == 0
+                          ? pre_top_gap
+                          : (0.75f * top_gap_ema + 0.25f * pre_top_gap);
+      }
+
+      sel_mult_avg =
+          (sel_mult_avg * (game.num_moves() - 1) + sel_mult) /
+          game.num_moves();
+      sel_mult_ema =
+          sel_mult_ema == 0
+              ? sel_mult
+              : (0.75f * sel_mult_ema + 0.25f * sel_mult);
+
       auto mv_to_string = [](const game::Loc& move) {
         return ("ABCDEFGHIJKLMNOPQRS"[move.j]) + std::to_string(move.i);
       };
@@ -667,6 +828,28 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
           << ") Next Root  N=" << root_node->n
           << "  Q=" << root_node->v << "  Qz=" << root_node->v_outcome
           << "  Score=" << root_node->init_score_est << "\n";
+        s << "Uncertainty=" << node_uncertainty << "  Avg=" << uncertainty_avg
+          << "  Min=" << uncertainty_min << "  Max=" << uncertainty_max
+          << "  EMA=" << uncertainty_ema << "\n";
+        s << "|NN-MCTS|=" << nn_mcts_diff << "  Avg=" << diff_avg
+          << "  Min=" << diff_min << "  Max=" << diff_max
+          << "  EMA=" << diff_ema << "\n";
+        s << "Var(pre)=" << var_pre << "  Avg=" << var_avg
+          << "  Min=" << var_min << "  Max=" << var_max
+          << "  EMA=" << var_ema << "\n";
+        s << "MoveQ(k=" << pre_k << ")"
+          << "  Var=" << pre_q_var << "  VarAvg=" << q_var_avg
+          << "  VarMin=" << q_var_min << "  VarMax=" << q_var_max
+          << "  VarEMA=" << q_var_ema << "\n";
+        s << "  Top1/2Gap=" << pre_top_gap << "  PriorGap=" << pre_prior_gap
+          << "  GapAvg=" << top_gap_avg << "  GapMin=" << top_gap_min
+          << "  GapMax=" << top_gap_max << "  GapEMA=" << top_gap_ema << "\n";
+        s << "SelMult=" << sel_mult
+          << "  G1=" << sel_g1_mult
+          << "  G2Bonus=" << sel_g2_bonus
+          << "  G2Penalty=" << sel_g2_penalty
+          << "  Avg=" << sel_mult_avg
+          << "  EMA=" << sel_mult_ema << "\n";
         s << "Board:\n" << game.board() << "\n";
         s << "Nodes Reaped=" << num_nodes_reaped
           << "  Reap Time=" << reap_time_us << "us\n";

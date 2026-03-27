@@ -54,6 +54,7 @@ struct TreeNode final {
   float v_outcome_var = 0;
   double v_outcome_m3 = 0;  // non-standardized skewness (3rd moment)
   float score = 0;
+  float v_err = 0;
 
   int max_child_n = 0;
 
@@ -69,6 +70,7 @@ struct TreeNode final {
   float init_score_est = 0;
   float init_score_var = 0;  // Var[score] under the NN's predicted distribution.
   float init_util_est = 0;  // mix value estimate and score estimate.
+  float init_err_est = 0;   // initial NN estimate of err.
 
   inline TreeNode* child(int a) const {
     if (a < 0 || a >= constants::kMaxMovesPerPosition) {
@@ -174,7 +176,7 @@ inline void AdvanceState(TreeNode* node) {
 inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f) {
   const float adj_init_util_est = node->init_util_est - obs_bias;
   float w = adj_init_util_est, w_outcome = node->init_outcome_est,
-        total_score = node->init_score_est;
+        total_score = node->init_score_est, w_err = node->init_err_est;
   int max_child_n = 0;
   for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
     // flip signs.
@@ -187,10 +189,12 @@ inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f) {
     total_score -= (node->child_visits[a] * child->score);
     max_child_n = node->child_visits[a] > max_child_n ? node->child_visits[a]
                                                       : max_child_n;
+    w_err += node->child_visits[a] * child->v_err;
   }
   float v = w / node->n;
   float v_outcome = w_outcome / node->n;
   float score = total_score / node->n;
+  float v_err = w_err / node->n;
 
   // Variance of a mixture distribution:
   // Var(Y) = (1/N) * sum(i : 0...k) ni(vi + (mi - m)^2)
@@ -234,6 +238,7 @@ inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f) {
   node->v_outcome_var = m2_outcome / node->n;
   node->v_m3 = m3 / node->n;
   node->v_outcome_m3 = m3_outcome / node->n;
+  node->v_err = v_err;
 }
 
 #ifdef V_CATEGORICAL
