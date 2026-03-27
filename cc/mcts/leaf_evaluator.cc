@@ -106,6 +106,7 @@ inline void InitFields(const nn::NNInferResult& infer_result, TreeNode* node,
   node->init_outcome_est = value_est;
   node->init_score_est = score_est;
   node->init_score_var = score_sq_est - score_est * score_est;
+  node->init_err_est = std::sqrt(infer_result.err2_outcome);
 
   AdvanceState(node);
 }
@@ -143,6 +144,7 @@ void LeafEvaluator::EvaluateRoot(core::Probability& probability,
   node->w_outcome = node->init_outcome_est;
   node->v = node->init_util_est;
   node->v_outcome = node->init_outcome_est;
+  node->v_err = node->init_err_est;
 }
 
 void LeafEvaluator::EvaluateLeaf(core::Probability& probability,
@@ -155,6 +157,7 @@ void LeafEvaluator::EvaluateLeaf(core::Probability& probability,
   float score_utility = ScoreUtility(
       node->init_score_est, std::sqrt(node->init_score_var), root_score_est);
   node->init_util_est = node->init_outcome_est + score_utility;
+  node->v_err = node->init_err_est;
 }
 
 void LeafEvaluator::EvaluateTerminal(const Scores& scores,

@@ -44,8 +44,13 @@ ABSL_FLAG(int, gumbel_default_n, 32,
           "Number of Low Playout Cap Randomization visits.");
 ABSL_FLAG(std::string, reuse_buffer_type, "goexploit",
           "Reuse buffer type: 'goexploit', 'regret', or 'composite'.");
-ABSL_FLAG(float, use_seen_state_prob, 0.5f,
-          "Probability of drawing the initial game state from the reuse buffer.");
+ABSL_FLAG(
+    float, use_seen_state_prob, 0.5f,
+    "Probability of drawing the initial game state from the reuse buffer.");
+ABSL_FLAG(float, sel_mult_base, 0.0f,
+          "Base multiplier for training position selection probability. "
+          "Enables signal-based sampling (|NN-MCTS| and top1/2 Q gap). "
+          "0 disables (falls back to flat probability).");
 
 void WaitForSignal() {
   // any line from stdin is a shutdown signal.
@@ -114,11 +119,11 @@ int main(int argc, char** argv) {
   std::unique_ptr<selfplay::ReuseBuffer> reuse_buffer;
   std::string buffer_type = absl::GetFlag(FLAGS_reuse_buffer_type);
   if (buffer_type == "regret") {
-    reuse_buffer.reset(
-        static_cast<selfplay::ReuseBuffer*>(new selfplay::RegretGuidedBuffer()));
+    reuse_buffer.reset(static_cast<selfplay::ReuseBuffer*>(
+        new selfplay::RegretGuidedBuffer()));
   } else if (buffer_type == "composite") {
-    reuse_buffer.reset(
-        static_cast<selfplay::ReuseBuffer*>(new selfplay::CompositeReuseBuffer()));
+    reuse_buffer.reset(static_cast<selfplay::ReuseBuffer*>(
+        new selfplay::CompositeReuseBuffer()));
   } else if (buffer_type == "goexploit") {
     reuse_buffer.reset(static_cast<selfplay::ReuseBuffer*>(
         new selfplay::GoExploitReuseBuffer()));
@@ -148,7 +153,11 @@ int main(int argc, char** argv) {
                                    absl::GetFlag(FLAGS_gumbel_selected_k)},
             selfplay::GumbelParams{absl::GetFlag(FLAGS_gumbel_default_n),
                                    absl::GetFlag(FLAGS_gumbel_default_k)},
+<<<<<<< HEAD
             absl::GetFlag(FLAGS_use_seen_state_prob)});
+=======
+            absl::GetFlag(FLAGS_sel_mult_base)});
+>>>>>>> c282b2c (weighted move selection)
     threads.emplace_back(std::move(thread));
   }
 

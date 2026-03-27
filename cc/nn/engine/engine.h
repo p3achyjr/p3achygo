@@ -16,6 +16,7 @@ struct NNInferResult {
   std::array<float, constants::kNumScoreLogits> score_probs;
   alignas(MM_ALIGN)
       std::array<float, constants::kMaxMovesPerPosition> opt_move_probs;
+  float err2_outcome;
 };
 
 class Engine {
