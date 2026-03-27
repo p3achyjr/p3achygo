@@ -44,6 +44,7 @@ class RunConfig(object):
   eval_n_growth_window: int
   lr_transition_window: int
   use_seen_state_prob: float
+  reuse_buffer_type: str  # 'goexploit', 'regret', or 'composite'
 
 
 def parse(run_id: str) -> RunConfig:
@@ -86,6 +87,7 @@ def parse(run_id: str) -> RunConfig:
     eval_n_growth_window = obj.get('eval_n_growth_window', 0)
     lr_transition_window = obj.get('lr_transition_window', 0)
     use_seen_state_prob = obj.get('use_seen_state_prob', 0.5)
+    reuse_buffer_type = obj.get('reuse_buffer_type', 'goexploit')
 
     return RunConfig(
         from_existing_run, model_config, num_generations, games_first_gen,
@@ -95,4 +97,4 @@ def parse(run_id: str) -> RunConfig:
         min_train_default_k, min_train_default_n, max_train_default_k,
         max_train_default_n, n_growth_window, k_growth_window, eval_k, eval_n,
         min_eval_n, eval_n_growth_window, lr_transition_window,
-        use_seen_state_prob)
+        use_seen_state_prob, reuse_buffer_type)

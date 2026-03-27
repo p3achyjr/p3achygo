@@ -42,7 +42,7 @@ ABSL_FLAG(int, gumbel_default_k, 5,
           "Number of Low Playout Cap Randomization moves to sample.");
 ABSL_FLAG(int, gumbel_default_n, 32,
           "Number of Low Playout Cap Randomization visits.");
-ABSL_FLAG(std::string, reuse_buffer_type, "composite",
+ABSL_FLAG(std::string, reuse_buffer_type, "goexploit",
           "Reuse buffer type: 'goexploit', 'regret', or 'composite'.");
 ABSL_FLAG(float, use_seen_state_prob, 0.5f,
           "Probability of drawing the initial game state from the reuse buffer.");
@@ -127,10 +127,9 @@ int main(int argc, char** argv) {
                << "'. Must be one of: goexploit, regret, composite.";
     return 1;
   }
-  LOG(INFO) << "==== Reuse Buffer: " << reuse_buffer->Name()
-            << "  use_seen_state_prob: "
-            << absl::GetFlag(FLAGS_use_seen_state_prob) << " ====";
-
+  LOG(INFO) << "Reuse Buffer=" << reuse_buffer->Name()
+            << "  use_seen_state_prob="
+            << absl::GetFlag(FLAGS_use_seen_state_prob);
 
   std::vector<std::string> sink_names;
   for (int thread_id = 0; thread_id < num_threads; ++thread_id) {

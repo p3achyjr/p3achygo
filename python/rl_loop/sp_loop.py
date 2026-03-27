@@ -145,7 +145,7 @@ def loop(
             + f" --gumbel_selected_n={selected_n}"
             + f" --gumbel_default_k={default_k}"
             + f" --gumbel_default_n={default_n}"
-            + f" --reuse_buffer_type=composite"
+            + f" --reuse_buffer_type={config.reuse_buffer_type}"
             + f" --use_seen_state_prob={config.use_seen_state_prob}"
         )
 

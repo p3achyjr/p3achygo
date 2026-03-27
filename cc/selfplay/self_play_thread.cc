@@ -164,13 +164,21 @@ void AddRegretGuidedStates(Probability& probability, ReuseBuffer* reuse_buffer,
 
     // Skip positions that are too won/lost: same attenuation as GoExploit.
     // Linearly attenuate from |v|=0.5 to 0 at |v|=0.9.
-    const float regret_add_prob = [](float v) {
+    const float winrate_correction = [](const float v) {
       static constexpr float kMaxV = 0.9f;
       static constexpr float kAnnealStart = 0.5f;
       if (std::abs(v) > kMaxV) return 0.0f;
       if (std::abs(v) <= kAnnealStart) return 1.0f;
       return (kMaxV - std::abs(v)) / (kMaxV - kAnnealStart);
     }(v);
+    const float mv_num_correction = [](const int mv_num) {
+      static constexpr int kMinAnnealMove = 100;
+      static constexpr int kInterval = 100;
+      const float offset = std::clamp(mv_num - kMinAnnealMove, 0, kInterval);
+      const float p = 1.0 - (offset / kInterval);
+      return std::clamp(std::pow(p, 1.2), 0.0, 1.0);
+    }(game.init_mv_num() + mv_num);
+    const float regret_add_prob = mv_num_correction * winrate_correction;
     if (probability.Uniform() >= regret_add_prob) continue;
 
     regret_buffer.PushHeap({regret, mv_num, color, board, move, v, z});
@@ -179,7 +187,7 @@ void AddRegretGuidedStates(Probability& probability, ReuseBuffer* reuse_buffer,
   // Add the top highest-regret positions to the reuse buffer.
   // mv_num is 0-indexed from game start (same scale as game.num_moves()),
   // so it can be passed directly to AddNewInitState as abs_move_num.
-  for (int i = 0; i < max_states && regret_buffer.Size() > 0; ++i) {
+  for (int i = 0; i < (max_states + 4) && regret_buffer.Size() > 0; ++i) {
     const auto [regret, mv_num, color, board, move, v, z] =
         regret_buffer.PopHeap();
     AddNewInitState(reuse_buffer, game, board, color, mv_num, regret);
@@ -289,10 +297,11 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     InitState init_state =
         GetInitState(probability, reuse_buffer, config.use_seen_state_prob,
                      num_games_played);
-    bool const is_regret_game = init_state.force_full_search;
+    const bool is_regret_game = init_state.force_full_search;
+    const int init_mv_num = init_state.move_num;
 
     // Game state.
-    Game game(init_state.board, init_state.last_moves);
+    Game game(init_state.board, init_state.last_moves, init_mv_num);
     Color color_to_move = init_state.color_to_move;
 
     // Node table for MCTS.
@@ -634,7 +643,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       if (thread_id % kShouldLogShard == 0) {
         std::string root_color = ToString(OppositeColor(color_to_move));
         std::stringstream s;
-        s << "\n----- Move Num: " << game.num_moves() << " -----\n";
+        s << "\n----- Move " << game.num_moves() << " | Abs Move "
+          << (game.num_moves() + game.init_mv_num()) << " -----\n";
         s << "N=" << gumbel_n << "  K=" << gumbel_k
           << "  Select Move Prob=" << select_move_prob
           << "  Add Init State Prob=" << add_init_state_prob
