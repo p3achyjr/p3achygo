@@ -147,6 +147,7 @@ def loop(
             + f" --gumbel_default_n={default_n}"
             + f" --reuse_buffer_type={config.reuse_buffer_type}"
             + f" --use_seen_state_prob={config.use_seen_state_prob}"
+            + f" --sel_mult_base=0.9"
         )
 
         logging.info(f"Running Self-Play Command:\n'{cmd_str}'")

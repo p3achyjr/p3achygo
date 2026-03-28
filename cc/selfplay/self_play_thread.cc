@@ -389,6 +389,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     GumbelEvaluator gumbel_evaluator(nn_interface, thread_id);
     while (IsRunning() && !game.IsGameOver() &&
            game.num_moves() < config.max_moves) {
+      auto round_start = std::chrono::steady_clock::now();
       // Choose n, k = 1 if we have not reached `num_moves_raw_policy` number of
       // moves.
       // Choose n, k = kDownBadParams if we are down bad.
@@ -615,7 +616,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       }();
 
       // Run and Profile Search.
-      auto begin = std::chrono::high_resolution_clock::now();
+      auto begin = std::chrono::steady_clock::now();
       GumbelResult gumbel_res =
           is_move_selected_for_training || sampling_raw_policy || gumbel_n < 100
               ? gumbel_evaluator.SearchRoot(
@@ -639,7 +640,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
                         .set_c_puct_v_2(0.0f)
                         .set_tau(tau)
                         .build());
-      auto end = std::chrono::high_resolution_clock::now();
+      auto end = std::chrono::steady_clock::now();
 
       // Post Search Statstics.
       int n_post = N(root_node);
@@ -797,6 +798,10 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
               ? sel_mult
               : (0.75f * sel_mult_ema + 0.25f * sel_mult);
 
+      auto round_end = std::chrono::steady_clock::now();
+      auto round_dur = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           round_end - round_start)
+                           .count();
       auto mv_to_string = [](const game::Loc& move) {
         return ("ABCDEFGHIJKLMNOPQRS"[move.j]) + std::to_string(move.i);
       };
@@ -870,7 +875,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         s << "Nodes Reaped=" << num_nodes_reaped
           << "  Reap Time=" << reap_time_us << "us\n";
         s << "Search Took " << search_dur << "ms  Average=" << search_dur_avg
-          << "ms  EMA=" << search_dur_ema << "ms\n";
+          << "ms  EMA=" << search_dur_ema << "ms  Search (incl. overhead) Took "
+          << round_dur << "ms\n";
 
         LOG_TO_SINK(INFO, sink) << s.str();
       }
