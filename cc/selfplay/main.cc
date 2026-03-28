@@ -153,11 +153,8 @@ int main(int argc, char** argv) {
                                    absl::GetFlag(FLAGS_gumbel_selected_k)},
             selfplay::GumbelParams{absl::GetFlag(FLAGS_gumbel_default_n),
                                    absl::GetFlag(FLAGS_gumbel_default_k)},
-<<<<<<< HEAD
-            absl::GetFlag(FLAGS_use_seen_state_prob)});
-=======
+            absl::GetFlag(FLAGS_use_seen_state_prob),
             absl::GetFlag(FLAGS_sel_mult_base)});
->>>>>>> c282b2c (weighted move selection)
     threads.emplace_back(std::move(thread));
   }
 

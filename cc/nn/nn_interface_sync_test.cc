@@ -1,13 +1,17 @@
-// Stress-tests two synchronization invariants in NNInterface:
+// Stress-tests three synchronization invariants in NNInterface:
 //
 //  1. RunInference() must never overlap with GetBatch() for any thread slot.
-//     CountingEngine writes a generation counter to per-slot buffers in
+//     CountingEngine writes a per-slot function value to kSlotElems elements in
 //     RunInference(), yielding between writes to maximize the race window.
 //     GetBatch() reads all elements and asserts they are identical.
 //
 //  2. Each thread must receive a result from an inference cycle that ran
 //     AFTER its LoadBatch() call (no stale results). LoadBatch() records the
 //     engine generation at load time; GetBatch() asserts result_gen > load_gen.
+//
+//  3. Each thread must receive its OWN slot's result (no slot mixup).
+//     RunInference() computes f(tid) = (tid + tid) % kPrime for each slot.
+//     The worker thread verifies the result matches f(tid).
 //
 // Adversarial conditions:
 //   - 128 threads on a 32-core machine (4:1 ratio, 4 OS scheduling rounds).
@@ -18,11 +22,13 @@
 //     must wait for the next cycle that includes them and must not receive a
 //     stale result from the partial batch they missed.
 //
-// Runs for kTestSeconds (default 120). Passes iff no race or stale result
-// is detected and no generation goes backwards.
+// Environment variables:
+//   TEST_SECONDS=N   — test duration (default 120)
+//   TEST_CACHE_SIZE=N — per-interface cache size (default 0)
 
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <random>
 #include <thread>
 #include <vector>
@@ -37,16 +43,37 @@ namespace nn {
 namespace {
 
 // Each thread slot holds kSlotElems elements. A race is detectable when
-// RunInference() writes some elements in generation G+1 while GetBatch()
-// is still reading elements written in generation G.
+// RunInference() writes some elements while GetBatch() is still reading.
 static constexpr int kSlotElems = 32;
 
-// Test duration. Long enough to exercise thousands of inference cycles.
-static constexpr int kTestSeconds = 120;
+// Mersenne prime used for the per-slot function: f(tid) = (2 * tid) % kPrime.
+// Each slot gets a unique value, so slot mixup is detectable.
+static constexpr int kPrime = (1 << 19) - 1;  // 524287
 
 // Every kSlowStride-th thread sleeps much longer than the inference timeout
 // to force partial batch scenarios.
 static constexpr int kSlowStride = 8;
+
+int TestSeconds() {
+  const char* env = std::getenv("TEST_SECONDS");
+  if (env) {
+    int val = std::atoi(env);
+    if (val > 0) return val;
+  }
+  return 120;
+}
+
+size_t TestCacheSize() {
+  const char* env = std::getenv("TEST_CACHE_SIZE");
+  if (env) {
+    int val = std::atoi(env);
+    if (val >= 0) return static_cast<size_t>(val);
+  }
+  return 0;
+}
+
+// Per-slot function: deterministic, unique per tid.
+inline int SlotFn(int tid) { return (tid + tid) % kPrime; }
 
 class CountingEngine : public Engine {
  public:
@@ -54,9 +81,11 @@ class CountingEngine : public Engine {
       : num_threads_(num_threads),
         generation_(0),
         buffer_(num_threads * kSlotElems),
+        result_gen_(num_threads),
         load_gen_(num_threads),
         race_detected_(false),
-        stale_detected_(false) {}
+        stale_detected_(false),
+        wrong_slot_detected_(false) {}
 
   Kind kind() override { return Kind::kUnknown; }
   std::string path() override { return ""; }
@@ -64,30 +93,29 @@ class CountingEngine : public Engine {
                     std::array<float, constants::kNumBoardLocs>&) override {}
 
   // Record the engine generation at the moment this thread's data is loaded.
-  // RunInference() will strictly advance generation_, so GetBatch() can verify
-  // the result is newer than what was seen here.
   void LoadBatch(int t, const GoFeatures&) override {
     load_gen_[t].store(generation_.load(std::memory_order_acquire),
                        std::memory_order_release);
   }
 
-  // Write generation counter to every element of every thread slot.
+  // Compute f(tid) for each slot and write to all kSlotElems elements.
   // yield() between slots widens the window for races.
   void RunInference() override {
     int gen = generation_.fetch_add(1, std::memory_order_relaxed) + 1;
     for (int t = 0; t < num_threads_; ++t) {
+      int fval = SlotFn(t);
       for (int i = 0; i < kSlotElems; ++i) {
-        buffer_[t * kSlotElems + i].store(gen, std::memory_order_relaxed);
+        buffer_[t * kSlotElems + i].store(fval, std::memory_order_relaxed);
       }
+      result_gen_[t].store(gen, std::memory_order_relaxed);
       std::this_thread::yield();
     }
   }
 
-  // Read all elements of this slot. Two checks:
+  // Read all elements of this slot. Three checks:
   //   Race:      all elements must be equal (no concurrent RunInference write).
-  //   Freshness: result gen must be strictly greater than the gen captured at
-  //              LoadBatch() time, i.e. the result is from an inference that
-  //              ran after this thread's data was loaded.
+  //   Freshness: result gen must be strictly greater than load gen.
+  //   Slot:      value must equal f(batch_id) (no slot mixup).
   void GetBatch(int batch_id, NNInferResult& result) override {
     int vals[kSlotElems];
     for (int i = 0; i < kSlotElems; ++i) {
@@ -103,11 +131,16 @@ class CountingEngine : public Engine {
       }
     }
 
-    // Check 2: freshness. load_gen_ was stored with release in LoadBatch();
-    // we pair with acquire here to establish the happens-before.
+    // Check 2: freshness.
     int load_gen = load_gen_[batch_id].load(std::memory_order_acquire);
-    if (vals[0] <= load_gen) {
+    int res_gen = result_gen_[batch_id].load(std::memory_order_relaxed);
+    if (res_gen <= load_gen) {
       stale_detected_.store(true, std::memory_order_relaxed);
+    }
+
+    // Check 3: slot correctness.
+    if (vals[0] != SlotFn(batch_id)) {
+      wrong_slot_detected_.store(true, std::memory_order_relaxed);
     }
 
     result.move_logits.fill(static_cast<float>(vals[0]));
@@ -123,25 +156,30 @@ class CountingEngine : public Engine {
   bool stale_detected() const {
     return stale_detected_.load(std::memory_order_relaxed);
   }
+  bool wrong_slot_detected() const {
+    return wrong_slot_detected_.load(std::memory_order_relaxed);
+  }
 
  private:
   const int num_threads_;
   std::atomic<int> generation_;
-  std::vector<std::atomic<int>> buffer_;    // [thread * kSlotElems + i]
-  std::vector<std::atomic<int>> load_gen_;  // generation captured at LoadBatch
+  std::vector<std::atomic<int>> buffer_;       // [thread * kSlotElems + i]
+  std::vector<std::atomic<int>> result_gen_;   // gen written by RunInference
+  std::vector<std::atomic<int>> load_gen_;     // gen captured at LoadBatch
   std::atomic<bool> race_detected_;
   std::atomic<bool> stale_detected_;
+  std::atomic<bool> wrong_slot_detected_;
 };
 
 // Run the full sync stress-test with a given WakeStrategy.
 void RunSyncTest(NNInterface::WakeStrategy strategy) {
   static constexpr int kNumThreads = 128;
+  const size_t cache_size = TestCacheSize();
 
-  // cache_size=0: every call goes through the full inference pipeline.
   auto* engine = new CountingEngine(kNumThreads);
   NNInterface nn_interface(kNumThreads,
                            /*timeout_us=*/200,
-                           /*cache_size=*/0,
+                           /*cache_size=*/cache_size,
                            std::unique_ptr<Engine>(engine), strategy);
   std::atomic<bool> stop{false};
   std::atomic<bool> error{false};
@@ -149,7 +187,7 @@ void RunSyncTest(NNInterface::WakeStrategy strategy) {
   auto worker = [&](int tid) {
     game::Game game;
     core::Probability prob(static_cast<uint64_t>(tid));
-    int last_gen = 0;
+    const int expected = SlotFn(tid);
 
     // Per-thread RNG for jitter. Seed uniquely per thread.
     std::mt19937 rng(static_cast<uint32_t>(tid) * 2654435761u);
@@ -175,14 +213,11 @@ void RunSyncTest(NNInterface::WakeStrategy strategy) {
       NNInferResult result =
           nn_interface.LoadAndGetInference(tid, game, BLACK, prob);
 
-      int gen = static_cast<int>(result.move_logits[0]);
-
-      // Generation must be non-decreasing.
-      if (gen < last_gen) {
+      int got = static_cast<int>(result.move_logits[0]);
+      if (got != expected) {
         error.store(true, std::memory_order_relaxed);
         return;
       }
-      last_gen = gen;
     }
   };
 
@@ -192,7 +227,7 @@ void RunSyncTest(NNInterface::WakeStrategy strategy) {
     workers.emplace_back(worker, tid);
   }
 
-  std::this_thread::sleep_for(std::chrono::seconds(kTestSeconds));
+  std::this_thread::sleep_for(std::chrono::seconds(TestSeconds()));
   stop.store(true, std::memory_order_relaxed);
 
   for (auto& t : workers) {
@@ -205,7 +240,117 @@ void RunSyncTest(NNInterface::WakeStrategy strategy) {
   CHECK_MESSAGE(!engine->stale_detected(),
                 "GetBatch() returned a result from before LoadBatch() — "
                 "result freshness violated");
-  CHECK_MESSAGE(!error.load(), "generation went backwards — ordering violated");
+  CHECK_MESSAGE(!engine->wrong_slot_detected(),
+                "GetBatch() returned wrong slot's result — "
+                "slot identity violated");
+  CHECK_MESSAGE(!error.load(),
+                "worker got wrong result — slot mixup or cache corruption");
+}
+
+// ---------------------------------------------------------------------------
+// Eval-like test: two NNInterfaces, each game thread alternates between them.
+//
+// In eval, there are two NNInterfaces (cur_nn and cand_nn). Each game thread
+// uses one for black and the other for white, alternating each ply. The
+// assignment flips based on game_id % 2 (cur plays black in even games, white
+// in odd games). All game threads share both NNInterfaces concurrently.
+//
+// This exercises:
+//   - Two inference threads running simultaneously with interleaved load
+//     patterns (some threads loading on nn_a while others load on nn_b).
+//   - Partial batches on both interfaces: because threads alternate, at any
+//     given moment only ~half the threads are loading on a given interface,
+//     so the timeout fires frequently with partial batches.
+//   - Cross-interface ordering: a thread must never receive a stale result
+//     from interface A just because interface B ran inference in between.
+//   - Thread slot reuse across interfaces: thread_id i maps to the same
+//     slot on whichever interface it is currently querying.
+// ---------------------------------------------------------------------------
+void RunDualInterfaceTest(NNInterface::WakeStrategy strategy) {
+  // 64 games, each using 1 thread → 64 threads per NNInterface.
+  static constexpr int kNumGames = 64;
+  const size_t cache_size = TestCacheSize();
+
+  auto* engine_a = new CountingEngine(kNumGames);
+  auto* engine_b = new CountingEngine(kNumGames);
+  NNInterface nn_a(kNumGames, /*timeout_us=*/200, /*cache_size=*/cache_size,
+                   std::unique_ptr<Engine>(engine_a), strategy);
+  NNInterface nn_b(kNumGames, /*timeout_us=*/200, /*cache_size=*/cache_size,
+                   std::unique_ptr<Engine>(engine_b), strategy);
+
+  std::atomic<bool> stop{false};
+  std::atomic<bool> error{false};
+
+  // Each "game" thread alternates between nn_a and nn_b each ply, just as
+  // eval alternates between black_nn and white_nn.
+  auto game_worker = [&](int game_id) {
+    game::Game game;
+    core::Probability prob(static_cast<uint64_t>(game_id));
+    const int expected = SlotFn(game_id);
+
+    std::mt19937 rng(static_cast<uint32_t>(game_id) * 2654435761u);
+    std::uniform_int_distribution<int> jitter_us(100, 1000);
+    std::uniform_int_distribution<int> slow_ms(5, 50);
+
+    const bool is_slow = (game_id % kSlowStride == 0);
+
+    // In eval, cur_is_black = (game_id % 2 == 0), so black_nn/white_nn flip.
+    NNInterface* black_nn = (game_id % 2 == 0) ? &nn_a : &nn_b;
+    NNInterface* white_nn = (game_id % 2 == 0) ? &nn_b : &nn_a;
+
+    int ply = 0;
+
+    while (!stop.load(std::memory_order_relaxed) &&
+           !error.load(std::memory_order_relaxed)) {
+      // Jitter to desync threads.
+      std::this_thread::sleep_for(std::chrono::microseconds(jitter_us(rng)));
+      if (is_slow) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(slow_ms(rng)));
+      }
+
+      // Alternate which interface we query, just like eval alternates
+      // between black_nn and white_nn each ply.
+      NNInterface* active_nn = (ply % 2 == 0) ? black_nn : white_nn;
+
+      NNInferResult result =
+          active_nn->LoadAndGetInference(game_id, game, BLACK, prob);
+
+      int got = static_cast<int>(result.move_logits[0]);
+      if (got != expected) {
+        error.store(true, std::memory_order_relaxed);
+        return;
+      }
+      ++ply;
+    }
+  };
+
+  std::vector<std::thread> workers;
+  workers.reserve(kNumGames);
+  for (int game_id = 0; game_id < kNumGames; ++game_id) {
+    workers.emplace_back(game_worker, game_id);
+  }
+
+  std::this_thread::sleep_for(std::chrono::seconds(TestSeconds()));
+  stop.store(true, std::memory_order_relaxed);
+
+  for (auto& t : workers) {
+    t.join();
+  }
+
+  CHECK_MESSAGE(!engine_a->race_detected(),
+                "nn_a: RunInference() overlapped with GetBatch()");
+  CHECK_MESSAGE(!engine_a->stale_detected(),
+                "nn_a: GetBatch() returned stale result");
+  CHECK_MESSAGE(!engine_a->wrong_slot_detected(),
+                "nn_a: GetBatch() returned wrong slot's result");
+  CHECK_MESSAGE(!engine_b->race_detected(),
+                "nn_b: RunInference() overlapped with GetBatch()");
+  CHECK_MESSAGE(!engine_b->stale_detected(),
+                "nn_b: GetBatch() returned stale result");
+  CHECK_MESSAGE(!engine_b->wrong_slot_detected(),
+                "nn_b: GetBatch() returned wrong slot's result");
+  CHECK_MESSAGE(!error.load(),
+                "worker got wrong result — slot mixup or cache corruption");
 }
 
 }  // namespace
@@ -216,6 +361,14 @@ TEST_CASE("NNInterface sync: kGenCounter — no race or stale result") {
 
 TEST_CASE("NNInterface sync: kMutex — no race or stale result") {
   RunSyncTest(NNInterface::WakeStrategy::kMutex);
+}
+
+TEST_CASE("NNInterface sync: dual-interface eval — kGenCounter") {
+  RunDualInterfaceTest(NNInterface::WakeStrategy::kGenCounter);
+}
+
+TEST_CASE("NNInterface sync: dual-interface eval — kMutex") {
+  RunDualInterfaceTest(NNInterface::WakeStrategy::kMutex);
 }
 
 }  // namespace nn
