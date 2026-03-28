@@ -47,6 +47,8 @@ struct GumbelSearchParams {
   // (each probability raised to 1/tau, then renormalized). tau == 0 takes the
   // sequential-halving winner directly.
   float tau = 0.0f;
+  // Prior visits for nonroot var-scaling PUCT. -1 disables var scaling.
+  int nonroot_var_scale_prior_visits = 10;
 
   // Forward-declared; defined below once GumbelSearchParams is complete.
   class Builder;
@@ -83,6 +85,10 @@ class GumbelSearchParams::Builder {
     p_.tau = v;
     return *this;
   }
+  Builder& set_nonroot_var_scale_prior_visits(int v) {
+    p_.nonroot_var_scale_prior_visits = v;
+    return *this;
+  }
   GumbelSearchParams build() const { return p_; }
 
  private:
@@ -99,6 +105,9 @@ class GumbelEvaluator final {
                   ScoreUtilityParams score_params);
   GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id,
                   ScoreUtilityParams score_params, BiasCache* bias_cache);
+  // Convenience ctor for self-play: no custom ScoreUtilityParams needed.
+  GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id,
+                  BiasCache* bias_cache);
   ~GumbelEvaluator() = default;
 
   // Disable Copy and Move.

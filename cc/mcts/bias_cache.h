@@ -125,6 +125,9 @@ class BiasCache final {
                          uint64_t>;
   // (weighted L1 error, weighted visits)
   using Entry = std::pair<float, float>;
+
+  // alpha = how much to attenuate visit counts.
+  // lambda = how much of the bias to adjust root value estimate by.
   BiasCache(float alpha = 0.8f, float lambda = 0.4f)
       : alpha_(alpha), lambda_(lambda){};
   ~BiasCache() = default;
@@ -181,6 +184,14 @@ class BiasCache final {
     return lambda_ * (entry->first / entry->second);
   }
 
+  // Reads the current weighted bias for the node without updating anything.
+  inline float Fetch(const TreeNode* node) const {
+    absl::MutexLock l(&mu_);
+    const std::shared_ptr<Entry>& entry = node->bias_cache_entry;
+    if (!entry || entry->second == 0.0f) return 0.0f;
+    return lambda_ * (entry->first / entry->second);
+  }
+
   inline uint32_t PruneUnused() {
     return absl::erase_if(cache_, [&](const auto& entry) {
       return entry.second.use_count() <= 1;
@@ -191,7 +202,7 @@ class BiasCache final {
   absl::flat_hash_map<Key, std::shared_ptr<Entry>> cache_;
   const float alpha_;
   const float lambda_;
-  absl::Mutex mu_;
+  mutable absl::Mutex mu_;
 };
 
 inline std::string ToString(const LocalPattern& pattern) {

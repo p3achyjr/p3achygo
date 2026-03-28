@@ -19,6 +19,8 @@ from constants import *
 from pathlib import Path
 from rl_loop.constants import SELFPLAY_BATCH_SIZE
 from model import P3achyGoModel
+from optimizer import ConvMuon  # noqa: F401 — registers p3achygo>ConvMuon
+from lr_schedule import ConstantLRSchedule  # noqa: F401 — registers p3achygo>ConstantLRSchedule
 
 sys.stdout.reconfigure(line_buffering=True)  # pytype: disable=attribute-error
 sys.stderr.reconfigure(line_buffering=True)  # pytype: disable=attribute-error
@@ -93,9 +95,7 @@ def main(_):
         )
     else:
         model_path = gcs.download_model(FLAGS.run_id, str(model_dir), model_gen)
-        model = tf.keras.models.load_model(
-            model_path, custom_objects=P3achyGoModel.custom_objects()
-        )
+        model = tf.keras.models.load_model(model_path)
 
     model.summary(batch_size=BATCH_SIZE)
     val_ds = tf.data.TFRecordDataset(FLAGS.val_ds_path, compression_type="ZLIB")

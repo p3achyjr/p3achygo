@@ -54,9 +54,7 @@ def main(_):
 
         # Sanity check: Load the model back
         logging.info("Loading model back as sanity check...")
-        loaded_model = tf.keras.models.load_model(
-            model_path, custom_objects=P3achyGoModel.custom_objects()
-        )
+        loaded_model = tf.keras.models.load_model(model_path)
         logging.info("Model loaded successfully!")
 
         # Run a forward pass with the loaded model

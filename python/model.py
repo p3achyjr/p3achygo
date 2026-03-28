@@ -126,7 +126,7 @@ def gamma(act):
     return 2.0**0.5
 
 
-@keras.saving.register_keras_serializable(package="custom")
+@keras.saving.register_keras_serializable(package="p3achygo")
 class ConvSWS(keras.layers.Layer):
     """
     Implements scaled weight standardization
@@ -191,6 +191,7 @@ class ConvSWS(keras.layers.Layer):
         return cls(**config)
 
 
+@keras.saving.register_keras_serializable(package="p3achygo")
 class ConvBlock(keras.layers.Layer):
     """
     Basic convolutional block.
@@ -254,6 +255,7 @@ class ConvBlock(keras.layers.Layer):
         )
 
 
+@keras.saving.register_keras_serializable(package="p3achygo")
 class ConvPostActivation(ConvBlock):
     def call(self, x, training=False):
         x = self.conv(x)
@@ -262,6 +264,7 @@ class ConvPostActivation(ConvBlock):
         return x
 
 
+@keras.saving.register_keras_serializable(package="p3achygo")
 class ConvPreActivation(ConvBlock):
     def call(self, x, training=False):
         x = self.norm_layer(x, training=training)
@@ -281,6 +284,7 @@ def make_conv_block(output_channels: int, conv_size: int, variance=1.0, name=Non
     )
 
 
+@keras.saving.register_keras_serializable(package="p3achygo")
 class ResidualBlock(keras.layers.Layer):
     """
     Generalized residual block.
@@ -314,6 +318,7 @@ class ResidualBlock(keras.layers.Layer):
         return self.activation(res + x)
 
 
+@keras.saving.register_keras_serializable(package="p3achygo")
 class ClassicResidualBlock(ResidualBlock):
     """
     Residual block found in AlphaGo, KataGo, and Leela.
@@ -355,6 +360,7 @@ class ClassicResidualBlock(ResidualBlock):
         }
 
 
+@keras.saving.register_keras_serializable(package="p3achygo")
 class BottleneckResidualConvBlock(ResidualBlock):
     """
     Bottleneck block that reduces dimension, performs inner convolutions, and
@@ -413,6 +419,7 @@ class BottleneckResidualConvBlock(ResidualBlock):
         }
 
 
+@keras.saving.register_keras_serializable(package="p3achygo")
 class NbtResidualBlock(ResidualBlock):
     """
     Nested Bottleneck Residual Block, a. la. KataGo.
@@ -471,6 +478,7 @@ class NbtResidualBlock(ResidualBlock):
         }
 
 
+@keras.saving.register_keras_serializable(package="p3achygo")
 class BroadcastResidualBlock(ResidualBlock):
     """
     Block that mixes data across channels, and globally, within each channel.
@@ -484,6 +492,7 @@ class BroadcastResidualBlock(ResidualBlock):
     The input tensor is added to the result of the series of layers.
     """
 
+    @keras.saving.register_keras_serializable(package="p3achygo")
     class Broadcast(keras.layers.Layer):
         """
         Block that, per channel, mixes global state.
@@ -535,6 +544,7 @@ class BroadcastResidualBlock(ResidualBlock):
                 name=config.get("name"),
             )
 
+    @keras.saving.register_keras_serializable(package="p3achygo")
     class BroadcastPostAct(Broadcast):
         def call(self, x, training=False):
             assert len(x.shape) == 4
@@ -548,6 +558,7 @@ class BroadcastResidualBlock(ResidualBlock):
 
             return x
 
+    @keras.saving.register_keras_serializable(package="p3achygo")
     class BroadcastPreAct(Broadcast):
         def call(self, x, training=False):
             assert len(x.shape) == 4
@@ -611,6 +622,7 @@ class BroadcastResidualBlock(ResidualBlock):
         )
 
 
+@keras.saving.register_keras_serializable(package="p3achygo")
 class GlobalPool(keras.layers.Layer):
     """
     Computes mean and max of each channel. Given a tensor with shape (n, h, w, c),
@@ -632,6 +644,7 @@ class GlobalPool(keras.layers.Layer):
         }
 
 
+@keras.saving.register_keras_serializable(package="p3achygo")
 class GlobalPoolBias(keras.layers.Layer):
     """
     Takes in two vectors (x, y), and returns x + dense(gpool(y)), where gpool(y) is
@@ -700,6 +713,7 @@ class GlobalPoolBias(keras.layers.Layer):
         )
 
 
+@keras.saving.register_keras_serializable(package="p3achygo")
 class PolicyHead(keras.layers.Layer):
     """
     Implementation of policy head from KataGo.
@@ -798,6 +812,7 @@ class PolicyHead(keras.layers.Layer):
         }
 
 
+@keras.saving.register_keras_serializable(package="p3achygo")
 class ValueHead(keras.layers.Layer):
     """
     Implementation of KataGo value head.
@@ -1030,6 +1045,7 @@ def construct_trunk_from_generic_arch(generic_arch: dict, board_len: int = BOARD
     return blocks
 
 
+@keras.saving.register_keras_serializable(package="p3achygo")
 class P3achyGoModel(keras.Model):
     """
     Input:

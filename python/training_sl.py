@@ -22,6 +22,7 @@ import keras
 from absl import app, flags, logging
 from constants import *
 from lr_schedule import CyclicLRDecaySchedule, ConstantLRSchedule
+from optimizer import ConvMuon  # noqa: F401 — registers p3achygo>ConvMuon
 from model import P3achyGoModel
 from model_config import ModelConfig, CONFIG_OPTIONS
 from pathlib import Path
@@ -92,9 +93,7 @@ def main(_):
     )
     optimizer = None
     if FLAGS.from_checkpoint:
-        model = keras.models.load_model(
-            FLAGS.from_checkpoint, custom_objects=P3achyGoModel.custom_objects()
-        )
+        model = keras.models.load_model(FLAGS.from_checkpoint)
         optimizer = model.optimizer
     if optimizer is None and model.is_transformer:
         optimizer = ConvMuon(learning_rate=lr)

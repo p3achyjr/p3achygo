@@ -18,8 +18,7 @@ def main(_):
     return
 
   logging.info(f'Model Path: {FLAGS.model_path}')
-  model = tf.keras.models.load_model(
-      FLAGS.model_path, custom_objects=P3achyGoModel.custom_objects())
+  model = tf.keras.models.load_model(FLAGS.model_path)
 
   model.save(FLAGS.model_save_path,
              signatures={

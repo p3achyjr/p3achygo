@@ -19,6 +19,7 @@ from pathlib import Path
 from rl_loop.constants import SELFPLAY_BATCH_SIZE
 from typing import Tuple
 from lr_schedule import ConstantLRSchedule
+from optimizer import ConvMuon  # noqa: F401 — registers p3achygo>ConvMuon
 
 BATCH_SIZE = 256
 LIVE_MODEL_NAME = "live_model.keras"
@@ -93,27 +94,13 @@ def main(_):
 
     swa_model_path, _ = get_model_path(FLAGS.models_dir, FLAGS.gen)
     live_model_path = str(Path(FLAGS.models_dir, LIVE_MODEL_NAME))
-    live_model = keras.models.load_model(
-        live_model_path,
-        custom_objects=P3achyGoModel.custom_objects()
-        | {
-            "custom>ConstantLRSchedule": ConstantLRSchedule,
-            "ConstantLRSchedule": ConstantLRSchedule,
-        },
-    )
+    live_model = keras.models.load_model(live_model_path)
     optimizer = getattr(live_model, "optimizer", None)
     if not optimizer:
         logging.info(
             "No optimizer found in model. This should only happen for model_0000."
         )
-    swa_model = keras.models.load_model(
-        swa_model_path,
-        custom_objects=P3achyGoModel.custom_objects()
-        | {
-            "custom>ConstantLRSchedule": ConstantLRSchedule,
-            "ConstantLRSchedule": ConstantLRSchedule,
-        },
-    )
+    swa_model = keras.models.load_model(swa_model_path)
     logging.info(f"Using Train Dataset: {FLAGS.chunk_path}")
     logging.info(f"Using Val Dataset: {FLAGS.val_ds_path}")
     logging.info(f"Using Model Checkpoint: {live_model_path}")

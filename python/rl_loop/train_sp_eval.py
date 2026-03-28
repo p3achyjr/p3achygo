@@ -374,8 +374,15 @@ def loop(
         )
         train_gpu_idx = 0  # index into GPU_IDS; this worker is stopped for training
         train_gpu_id = GPU_IDS[train_gpu_idx]
-        logging.info(f"Stopping SP worker on GPU {train_gpu_id} for training.")
-        stop_sp_worker(sp_queues, sp_threads, train_gpu_idx)
+        if latest_chunk_gen > model_gen + 1:
+            logging.info(
+                f"Training is {latest_chunk_gen - model_gen} gens behind self-play. "
+                f"Stopping all SP workers."
+            )
+            stop_sp(sp_queues, sp_threads)
+        else:
+            logging.info(f"Stopping SP worker on GPU {train_gpu_id} for training.")
+            stop_sp_worker(sp_queues, sp_threads, train_gpu_idx)
 
         next_model_gen = model_gen + 1
         chunk_path = fs.download_golden_chunk(

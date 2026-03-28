@@ -34,8 +34,7 @@ def main(_):
   logging.info(f'Model Path: {model_path}')
   logging.info(f'Model XLA Path: {model_xla_dir + "/" + FLAGS.xla_name}')
 
-  model = tf.keras.models.load_model(
-      model_path, custom_objects=P3achyGoModel.custom_objects())
+  model = tf.keras.models.load_model(model_path)
   planes_shape = model.input_planes_shape()
   features_shape = model.input_features_shape()
   model(*[

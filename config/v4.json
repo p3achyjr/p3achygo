@@ -35,5 +35,16 @@
   "n_growth_window": 250,
   "k_growth_window": 250,
   "eval_k": 8,
-  "eval_n": 100
+  "eval_n": 300,
+  "min_eval_n": 50,
+  "eval_n_growth_window": 250,
+  "optimizer": "muon",
+  "lr_transition_window": 20,
+  "use_seen_state_prob": 0.5,
+  "reuse_buffer_type": "composite",
+  "sel_mult_base": 0.9,
+  "sel_mult_prob": 1.0,
+  "bias_cache_lambda": 0.4,
+  "bias_cache_alpha": 0.8,
+  "nonroot_var_scale_prior_visits": 10
 }

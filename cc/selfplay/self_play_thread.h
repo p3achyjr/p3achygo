@@ -21,6 +21,14 @@ struct SPConfig {
   // (falls back to 1.0). Otherwise, the full signal-based multiplier is
   // computed and scaled by this value.
   const float sel_mult_base = 0.0f;
+  // Fraction of moves [0, 1] where the signal-based sel_mult is applied.
+  // The remaining fraction falls back to sel_mult = 1.0.
+  const float sel_mult_prob = 1.0f;
+  // Bias cache parameters. lambda=0 disables the bias cache entirely.
+  const float bias_cache_lambda = 0.0f;
+  const float bias_cache_alpha = 0.8f;
+  // Prior visits for nonroot var-scaling PUCT. -1 disables var scaling.
+  const int nonroot_var_scale_prior_visits = 10;
 };
 
 void Run(size_t seed, int thread_id, nn::NNInterface* nn_interface,

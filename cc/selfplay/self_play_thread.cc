@@ -386,7 +386,14 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     float top_gap_avg = 0, top_gap_ema = 0;
     float top_gap_min = std::numeric_limits<float>::max();
     float top_gap_max = std::numeric_limits<float>::lowest();
-    GumbelEvaluator gumbel_evaluator(nn_interface, thread_id);
+    std::optional<mcts::BiasCache> bias_cache_storage;
+    mcts::BiasCache* bias_cache = nullptr;
+    if (config.bias_cache_lambda > 0.0f) {
+      bias_cache_storage.emplace(config.bias_cache_alpha,
+                                 config.bias_cache_lambda);
+      bias_cache = &bias_cache_storage.value();
+    }
+    GumbelEvaluator gumbel_evaluator(nn_interface, thread_id, bias_cache);
     while (IsRunning() && !game.IsGameOver() &&
            game.num_moves() < config.max_moves) {
       auto round_start = std::chrono::steady_clock::now();
@@ -513,11 +520,13 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
                                  0.0f, 1.0f);
       }();
 
-      const float sel_mult =
-          config.sel_mult_base > 0.0f
-              ? config.sel_mult_base *
-                    std::max(sel_g1_mult, sel_g2_bonus) * sel_g2_penalty
-              : 1.0f;
+      const bool apply_sel_mult = config.sel_mult_base > 0.0f &&
+                                  probability.Uniform() < config.sel_mult_prob;
+      const float sel_mult = apply_sel_mult
+                                 ? config.sel_mult_base *
+                                       std::max(sel_g1_mult, sel_g2_bonus) *
+                                       sel_g2_penalty
+                                 : 1.0f;
 
       // Probability of selecting a move for training, scaled by sel_mult.
       // If we are not down bad, this is a base probability of
@@ -629,6 +638,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
                         .set_early_stopping_enabled(early_stopping_enabled)
                         .set_over_search_enabled(is_move_over_search)
                         .set_tau(tau)
+                        .set_nonroot_var_scale_prior_visits(
+                            config.nonroot_var_scale_prior_visits)
                         .build())
               : gumbel_evaluator.SearchRootPuct(
                     probability, game, node_table.get(), root_node,
@@ -659,6 +670,9 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       int move_n = NAction(root_node, move);
       float move_q = Q(root_node, move);
       float move_qz = QOutcome(root_node, move);
+
+      // Bias cache adjustment for this root (read-only, no update).
+      float qadj = bias_cache != nullptr ? bias_cache->Fetch(root_node) : 0.0f;
 
       // Per-move uncertainty and NN/MCTS divergence (pre-search, via tree reuse).
       float node_uncertainty = root_node->v_err;
@@ -711,6 +725,12 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
                            .count();
       }
       root_node = next_root;
+
+      // Reap Bias Cache.
+      int num_bias_cache_entries_pruned = 0;
+      if (bias_cache != nullptr) {
+        num_bias_cache_entries_pruned = bias_cache->PruneUnused();
+      }
 
       // Add to seen state buffer.
       float add_init_state_prob = [](float root_q) {
@@ -828,7 +848,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         s << "(" << root_color << ") Pre-Search Stats\n  N = " << n_pre
           << "\n  Q = " << q_pre << "\n  Qz = " << qz_pre << "\n";
         s << "(" << root_color << ") Post-Search Stats\n  N = " << n_post
-          << "\n  Q = " << q_post << "\n  Qz = " << root_q_outcome << "\n";
+          << "\n  Q = " << q_post << "\n  Qz = " << root_q_outcome
+          << "\n  Qadj = " << qadj << "\n";
         s << "Raw NN Move=" << mv_to_string(nn_move) << "\n  n = " << nn_move_n
           << "\n  q = " << nn_move_q << "\n  qz = " << nn_move_qz << "\n";
         s << "Gumbel Move=" << mv_to_string(move) << "\n  n = " << move_n
@@ -873,7 +894,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
           << "  EMA=" << sel_mult_ema << "\n";
         s << "Board:\n" << game.board() << "\n";
         s << "Nodes Reaped=" << num_nodes_reaped
-          << "  Reap Time=" << reap_time_us << "us\n";
+          << "  Reap Time=" << reap_time_us
+          << "us  Bias Cache Reaped=" << num_bias_cache_entries_pruned << "\n";
         s << "Search Took " << search_dur << "ms  Average=" << search_dur_avg
           << "ms  EMA=" << search_dur_ema << "ms  Search (incl. overhead) Took "
           << round_dur << "ms\n";

@@ -4,8 +4,8 @@ import tensorflow as tf
 import keras
 
 
-@keras.saving.register_keras_serializable(package="custom", name="ConstantLRSchedule")
-class ConstantLRSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
+@keras.saving.register_keras_serializable(package="p3achygo")
+class ConstantLRSchedule(keras.optimizers.schedules.LearningRateSchedule):
     """
     Constant LR Schedule.
     """
@@ -27,7 +27,7 @@ class ConstantLRSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
         return cls(**config)
 
 
-class CyclicLRSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
+class CyclicLRSchedule(keras.optimizers.schedules.LearningRateSchedule):
     """
     Implements cyclic learning rate.
 
@@ -62,7 +62,7 @@ class CyclicLRSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
         )
 
 
-class CyclicLRDecaySchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
+class CyclicLRDecaySchedule(keras.optimizers.schedules.LearningRateSchedule):
     """
     One-cycle LR schedule with final decay.
 

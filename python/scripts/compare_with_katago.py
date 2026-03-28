@@ -87,9 +87,7 @@ def js_divergence(p: np.ndarray, q: np.ndarray) -> float:
 def load_p3achy_model(model_path: str) -> tf.keras.Model:
     """Load p3achygo model from checkpoint."""
     print(f"Loading p3achygo model from {model_path}")
-    model = tf.keras.models.load_model(
-        model_path, custom_objects=P3achyGoModel.custom_objects()
-    )
+    model = tf.keras.models.load_model(model_path)
     return model
 
 

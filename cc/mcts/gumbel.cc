@@ -206,6 +206,10 @@ GumbelEvaluator::GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id,
     : leaf_evaluator_(nn_interface->MakeSlot(0), thread_id, score_params),
       bias_cache_(bias_cache) {}
 
+GumbelEvaluator::GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id,
+                                 BiasCache* bias_cache)
+    : leaf_evaluator_(nn_interface, thread_id), bias_cache_(bias_cache) {}
+
 // `n`: total number of simulations.
 // `k`: initial number of actions selected.
 // `n` must be >= `klogk`.
@@ -375,10 +379,15 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
               search_game.IsGameOver());
         }
         TreeNode* child = root->children[move_info.move_encoding];
-        PuctSearchPolicy nonroot_policy(PuctParams::Builder()
-                                            .set_enable_var_scaling(true)
-                                            .set_var_scale_prior_visits(10)
-                                            .build());
+        const bool enable_var_scaling =
+            params.nonroot_var_scale_prior_visits >= 0;
+        PuctSearchPolicy nonroot_policy(
+            PuctParams::Builder()
+                .set_enable_var_scaling(enable_var_scaling)
+                .set_var_scale_prior_visits(
+                    enable_var_scaling ? params.nonroot_var_scale_prior_visits
+                                       : 0)
+                .build());
         SearchPath search_path =
             Search(probability, search_game, node_table, child,
                    game::OppositeColor(color_to_move), color_to_move,

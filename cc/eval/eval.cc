@@ -379,20 +379,16 @@ void PlayEvalGame(size_t seed, int game_id, int total_num_workers,
     // Post-search statistics.
     float cur_n_post = N(cur_tree);
     float cur_q_post = V(cur_tree);
-    float cur_q_nn_adj = cur_tree->bias_cache_entry
-                             ? cur_q_nn - active_cfg.bias_cache_lambda *
-                                              (cur_tree->last_obs_bias_term /
-                                               cur_tree->last_weight_term)
-                             : cur_q_nn;
+    float cur_q_nn_adj =
+        cur_q_nn -
+        (active_bias_cache ? active_bias_cache->Fetch(cur_tree) : 0.0f);
     float cur_q_outcome_post = VOutcome(cur_tree);
     float cur_score_post = Score(cur_tree);
     float cand_n_post = N(cand_tree);
     float cand_q_post = V(cand_tree);
-    float cand_q_nn_adj = cand_tree->bias_cache_entry
-                              ? cand_q_nn - active_cfg.bias_cache_lambda *
-                                                (cand_tree->last_obs_bias_term /
-                                                 cand_tree->last_weight_term)
-                              : cand_q_nn;
+    float cand_q_nn_adj =
+        cand_q_nn -
+        (active_bias_cache ? active_bias_cache->Fetch(cand_tree) : 0.0f);
     float cand_q_outcome_post = VOutcome(cand_tree);
     float cand_score_post = Score(cand_tree);
     float cur_var_post = VVar(cur_tree);

@@ -1,0 +1,28 @@
+{
+  "from_existing_run": "v4",
+  "num_generations": 244,
+  "model_config": "b8c128nbt",
+  "games_first_gen": 5000,
+  "games_per_gen": 5000,
+  "batch_size": 256,
+  "lr_schedule": [
+    [
+      0,
+      5e-3
+    ],
+    [
+      150,
+      2.5e-3
+    ],
+    [
+      173,
+      1e-3
+    ],
+    [
+      221,
+      5e-4
+    ]
+  ],
+  "lr_growth_window": 10,
+  "optimizer": "muon"
+}

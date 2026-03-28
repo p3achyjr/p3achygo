@@ -43,9 +43,7 @@ def convert_onnx(model_path: str) -> str:
     with tf.device("/cpu:0"):
         # Load model and resave without mixed precision.
         tf.keras.mixed_precision.set_global_policy("float32")
-        model = tf.keras.models.load_model(
-            model_path, custom_objects=P3achyGoModel.custom_objects()
-        )
+        model = tf.keras.models.load_model(model_path)
         model_p = Path(model_path)
         onnx_dir = model_p.parent / "_onnx"
         onnx_path = str(onnx_dir / (model_p.stem + ".onnx"))

@@ -402,9 +402,7 @@ def main(_):
 
     with tf.device("/cpu:0"):
         tf.keras.mixed_precision.set_global_policy("float32")
-        model = keras.models.load_model(
-            model_path, custom_objects=P3achyGoModel.custom_objects()
-        )
+        model = keras.models.load_model(model_path)
         planes_shape = model.input_planes_shape()
         features_shape = model.input_features_shape()
         model(
