@@ -534,8 +534,8 @@ def train(
                     mode,
                 )
 
-                # Log board position with predictions every 10th log interval
-                if local_batch_num % (log_interval * 10) == 0:
+                # Log board position with predictions every 5th log interval
+                if local_batch_num % (log_interval * 5) == 0:
                     log_board_position(
                         batch_num,
                         input,
@@ -710,27 +710,27 @@ def log_board_position(
 
     # short-term score
     q6_score_pred, q6_score = (
-        predictions.q6_score_pred[0].numpy() * 10,
+        predictions.q6_score_pred[0].numpy(),
         targets.q6_score[0].numpy(),
     )
     q16_score_pred, q16_score = (
-        predictions.q16_score_pred[0].numpy() * 10,
+        predictions.q16_score_pred[0].numpy(),
         targets.q16_score[0].numpy(),
     )
     q50_score_pred, q50_score = (
-        predictions.q50_score_pred[0].numpy() * 10,
+        predictions.q50_score_pred[0].numpy(),
         targets.q50_score[0].numpy(),
     )
     q6_score_err_pred, q6_score_err = (
-        predictions.q6_score_err_pred[0].numpy() * 100,
+        predictions.q6_score_err_pred[0].numpy(),
         np.square(q6_score - q6_score_pred),
     )
     q16_score_err_pred, q16_score_err = (
-        predictions.q16_score_err_pred[0].numpy() * 100,
+        predictions.q16_score_err_pred[0].numpy(),
         np.square(q16_score - q16_score_pred),
     )
     q50_score_err_pred, q50_score_err = (
-        predictions.q50_score_err_pred[0].numpy() * 100,
+        predictions.q50_score_err_pred[0].numpy(),
         np.square(q50_score - q50_score_pred),
     )
 
@@ -749,7 +749,35 @@ def log_board_position(
     print(f"To play: {'BLACK (○)' if to_play == BLACK else 'WHITE (●)'}")
     print(f"Komi: {komi_actual:.1f} (normalized: {komi:+.3f})")
     print()
-    print(GoBoard.to_string(board))
+    # Ownership (own_pred is from current player perspective; convert to absolute black=positive)
+    own_pred = predictions.own_pred[0].numpy().squeeze()  # (19, 19)
+    own_pred_abs = own_pred if to_play == BLACK else -own_pred
+    own = targets.own[0].numpy().squeeze()
+    own = own if to_play == BLACK else -own
+
+    def ownership_char(x):
+        bounds = [-1.0, -0.5, 0.0, 0.5, 1.0]
+        chars = ["●", "◆", "⋅", "◇", "○"]  # positive=black=○, negative=white=●
+        return chars[int(np.argmin([abs(x - b) for b in bounds]))]
+
+    board_lines = GoBoard.to_string(board).split("\n")
+    own_lines = []
+    own_target_lines = []
+    for i in range(19):
+        own_lines.append(
+            " ".join([ownership_char(own_pred_abs[i, j]) for j in range(19)])
+        )
+        own_target_lines.append(
+            " ".join([ownership_char(own[i, j]) for j in range(19)])
+        )
+    col_gap = "    "
+    own_lines.append(" ".join(list("ABCDEFGHJKLMNOPQRST")))
+    own_target_lines.append(" ".join(list("ABCDEFGHJKLMNOPQRST")))
+    print(
+        f"  {'Board':<40}{col_gap}{'Own Target(○=black ●=white)':<40}{col_gap}Own Pred"
+    )
+    for bl, otl, ol in zip(board_lines, own_target_lines, own_lines):
+        print(f"  {bl:<40}{col_gap}{otl:<40}{col_gap}{ol}")
     print()
 
     print(f"{'='*60}")
@@ -797,16 +825,55 @@ def log_board_position(
         f", Err Predicted: {q50_score_err_pred:.4f}, Actual: {q50_score_err:.4f}"
     )
 
-    # Top policy moves
+    # Soft policy target (policy^0.25 normalized, mirrors v1_loss_terms)
+    policy_soft_target = np.power(np.maximum(policy_target, 0.0), 0.25)
+    _soft_sum = policy_soft_target.sum()
+    if _soft_sum > 0:
+        policy_soft_target /= _soft_sum
+    top_indices_soft_target = np.argsort(policy_soft_target)[-5:][::-1]
+
+    # Soft and optimistic predicted policies
+    pi_soft_probs = keras.activations.softmax(predictions.pi_logits_soft[0]).numpy()
+    pi_optimistic_probs = keras.activations.softmax(
+        predictions.pi_logits_optimistic[0]
+    ).numpy()
+    top_soft = np.argsort(pi_soft_probs)[-5:][::-1]
+    top_optimistic = np.argsort(pi_optimistic_probs)[-5:][::-1]
+
+    # Optimistic weight (mirrors v1_loss_terms computation)
+    epsilon = 1e-6
+    q6_p = predictions.q6_pred[0].numpy()
+    q16_p = predictions.q16_pred[0].numpy()
+    q50_p = predictions.q50_pred[0].numpy()
+    q6_err_p = predictions.q6_err_pred[0].numpy()
+    q16_err_p = predictions.q16_err_pred[0].numpy()
+    q50_err_p = predictions.q50_err_pred[0].numpy()
+    z6 = (targets.q6[0].numpy() - q6_p) / np.sqrt(q6_err_p + epsilon)
+    z16 = (targets.q16[0].numpy() - q16_p) / np.sqrt(q16_err_p + epsilon)
+    z50 = (targets.q50[0].numpy() - q50_p) / np.sqrt(q50_err_p + epsilon)
+    z_wd = 4.0 / 7.0
+    z_val = (z_wd * 3 * z6 + z_wd * 1.5 * z16 + z_wd * 0.75 * z50) / 3.0
+    opt_weight = float(np.clip(1 / (1 + np.exp(-(z_val - 1.0) * 3)), 0.0, 1.0))
+
+    # Top 5 moves table
+    col_w = 20
     print(f"\nTop 5 Policy Moves:")
-    print(f"  {'Predicted':<20} {'Target':<20}")
+    print(
+        f"  {'Predicted':<{col_w}}{'Target':<{col_w}}{'Soft Predicted':<{col_w}}{'Soft Target':<{col_w}}"
+        f"Optimistic (w={opt_weight:.2f}, z={z_val:.2f})"
+    )
     for i in range(5):
-        pred_move = move_to_coords(top_indices[i])
-        pred_prob = policy_pred[top_indices[i]]
-        target_move = move_to_coords(top_indices_target[i])
-        target_prob = policy_target[top_indices_target[i]]
+        pred_str = (
+            f"{move_to_coords(top_indices[i]):>6} {policy_pred[top_indices[i]]:>6.1%}"
+        )
+        tgt_str = f"{move_to_coords(top_indices_target[i]):>6} {policy_target[top_indices_target[i]]:>6.1%}"
+        soft_str = (
+            f"{move_to_coords(top_soft[i]):>6} {pi_soft_probs[top_soft[i]]:>6.1%}"
+        )
+        soft_tgt_str = f"{move_to_coords(top_indices_soft_target[i]):>6} {policy_soft_target[top_indices_soft_target[i]]:>6.1%}"
+        opt_str = f"{move_to_coords(top_optimistic[i]):>6} {pi_optimistic_probs[top_optimistic[i]]:>6.1%}"
         print(
-            f"  {pred_move:>6} {pred_prob:>6.1%}          {target_move:>6} {target_prob:>6.1%}"
+            f"  {pred_str:<{col_w}}{tgt_str:<{col_w}}{soft_str:<{col_w}}{soft_tgt_str:<{col_w}}{opt_str}"
         )
 
     print(f"{'='*60}\n")

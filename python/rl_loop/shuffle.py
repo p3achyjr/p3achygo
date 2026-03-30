@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os, shlex, signal, sys, time
 import gcs_utils as gcs
-import rl_loop.config as config
+import rl_loop.config as config_module
 import rl_loop.fs_utils as fs
 import rl_loop.shuffle_metadata as shuffle_metadata
 
@@ -18,7 +18,7 @@ from subprocess import Popen, PIPE, STDOUT
 from threading import Thread
 
 FLAGS = flags.FLAGS
-POLL_INTERVAL_S = 10
+POLL_INTERVAL_S = 5
 
 # How many times to use each sample, on average.
 AVG_NUM_SYMMETRIES = 3
@@ -84,8 +84,7 @@ def num_samples_in_chunks(gcs_sp_chunks: set[str]) -> int:
   return num_samples
 
 
-def loop(bin_path: str, run_id: str, local_run_dir: str,
-         config: config.RunConfig):
+def loop(bin_path: str, run_id: str, local_run_dir: str):
     """
     Continually produces new training chunks until reaching a specified number of
     generations.
@@ -97,6 +96,7 @@ def loop(bin_path: str, run_id: str, local_run_dir: str,
         select_sample_prob: float,
         local_sp_chunk_dir: str,
         gcs_sp_chunks: set[str],
+        config: config_module.RunConfig,
         in_continuous_mode=True,
     ):
         num_new_samples = 0
@@ -167,8 +167,10 @@ def loop(bin_path: str, run_id: str, local_run_dir: str,
 
     num_samples_generated = num_samples_in_chunks(gcs_sp_chunks)
 
+    config = config_module.parse(run_id)
     chunk_gen = fs.get_most_recent_chunk(run_id) + 1
     while running and chunk_gen <= config.num_generations:
+        config = config_module.parse(run_id)
         # calculate metadata.
         train_window_size = shuffle_metadata.training_window_size(num_samples_generated)
         select_sample_prob = shuffle_metadata.select_sample_probability(
@@ -185,6 +187,7 @@ def loop(bin_path: str, run_id: str, local_run_dir: str,
             select_sample_prob,
             local_sp_chunk_dir,
             gcs_sp_chunks,
+            config,
             in_continuous_mode=True,
         )
         chunk_gen += 1
@@ -205,6 +208,7 @@ def loop(bin_path: str, run_id: str, local_run_dir: str,
     total_gens = config.num_generations + config.extra_train_gens
     extra_gen = 0
     while running and chunk_gen <= total_gens:
+        config = config_module.parse(run_id)
         # pretend as if we have actually played `extra_gen` number of generations, to
         # calculate sample window. Then subtract `extra_gen * num_samples_per_gen_est` to
         # get the actual sample window from our training data.
@@ -229,6 +233,7 @@ def loop(bin_path: str, run_id: str, local_run_dir: str,
             select_sample_prob,
             local_sp_chunk_dir,
             gcs_sp_chunks,
+            config,
             in_continuous_mode=False,
         )
         chunk_gen += 1
@@ -249,8 +254,7 @@ def main(_):
   fs_mode = 'local' if FLAGS.local_only else 'gcs'
   fs.configure_fs(mode=fs_mode, local_path=FLAGS.local_run_dir)
 
-  run_config = config.parse(FLAGS.run_id)
-  loop(FLAGS.bin_path, FLAGS.run_id, FLAGS.local_run_dir, run_config)
+  loop(FLAGS.bin_path, FLAGS.run_id, FLAGS.local_run_dir)
 
 
 if __name__ == '__main__':

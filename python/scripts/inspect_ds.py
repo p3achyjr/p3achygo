@@ -81,9 +81,7 @@ def main(_):
     ds = ds.shuffle(1000)
     ds = ds.prefetch(tf.data.AUTOTUNE)
 
-    model = tf.keras.models.load_model(
-        model_path, custom_objects=P3achyGoModel.custom_objects()
-    )
+    model = tf.keras.models.load_model(model_path)
 
     for (
         input_planes,

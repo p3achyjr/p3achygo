@@ -78,8 +78,8 @@ ABSL_FLAG(std::string, cur_score_utility_mode, "direct",
           "Score utility mode for cur: 'direct' or 'integral'.");
 ABSL_FLAG(bool, cur_use_bias_cache, false,
           "Whether to use bias cache for cur.");
-ABSL_FLAG(float, cur_bias_cache_alpha, 0.8f, "Bias cache alpha for cur.");
-ABSL_FLAG(float, cur_bias_cache_lambda, 0.4f, "Bias cache lambda for cur.");
+ABSL_FLAG(float, cur_bias_cache_alpha, 0.85f, "Bias cache alpha for cur.");
+ABSL_FLAG(float, cur_bias_cache_lambda, 0.45f, "Bias cache lambda for cur.");
 ABSL_FLAG(bool, cur_enable_m3_bonus, false, "Whether to use m3 bonus in PUCT for cur.");
 ABSL_FLAG(int, cur_var_scale_prior_visits, 0,
           "Prior visits for variance-based child scale factor for cur.");

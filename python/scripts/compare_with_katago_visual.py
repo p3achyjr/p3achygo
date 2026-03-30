@@ -76,9 +76,7 @@ def js_divergence(p: np.ndarray, q: np.ndarray) -> float:
 def load_p3achy_model(model_path: str) -> tf.keras.Model:
     """Load p3achygo model from checkpoint."""
     print(f"Loading p3achygo model from {model_path}")
-    model = tf.keras.models.load_model(
-        model_path, custom_objects=P3achyGoModel.custom_objects()
-    )
+    model = tf.keras.models.load_model(model_path)
     return model
 
 
@@ -156,15 +154,15 @@ def ownership_to_string(ownership: np.ndarray) -> str:
     """Convert ownership grid to visual string representation.
 
     Ownership convention: positive = black territory, negative = white territory
-    ○ = Strong white (<-0.7), ◯ = Weak white (-0.7 to -0.3), ⋅ = Neutral (-0.3 to 0.3)
-    ◆ = Weak black (0.3 to 0.7), ● = Strong black (>0.7)
+    ● = Strong white (<-0.7), ◯ = Weak white (-0.7 to -0.3), ⋅ = Neutral (-0.3 to 0.3)
+    ◆ = Weak black (0.3 to 0.7), ○ = Strong black (>0.7)
     """
 
     def char_at(own_pred, i, j):
         x = own_pred[i, j]
         # Positive values = black territory, negative = white territory
         bounds = [-1.0, -0.5, 0, 0.5, 1.0]
-        chars = ["○", "◯", "⋅", "◆", "●"]  # Flipped: positive=black, negative=white
+        chars = ["●", "◯", "⋅", "◆", "○"]  # positive=black=○, negative=white=●
         deltas = [abs(x - b) for b in bounds]
         return chars[np.argmin(deltas)]
 
@@ -257,7 +255,7 @@ def print_comparison(
     white_territory_gt = np.sum(np.abs(np.minimum(own_gt, 0)))
     print(f"  Ownership: B={black_territory_gt:.1f} W={white_territory_gt:.1f}")
     print(
-        f"  Ownership grid (● = black, ◆ = weak black, ⋅ = neutral, ◯ = weak white, ○ = white):"
+        f"  Ownership grid (○ = black, ◆ = weak black, ⋅ = neutral, ◯ = weak white, ● = white):"
     )
     print(textwrap.indent(ownership_to_string(own_gt), "    "))
     print()
@@ -280,7 +278,7 @@ def print_comparison(
     white_territory_p3 = np.sum(np.abs(np.minimum(own_p3, 0)))
     print(f"  Ownership: B={black_territory_p3:.1f} W={white_territory_p3:.1f}")
     print(
-        f"  Ownership grid (● = black, ◆ = weak black, ⋅ = neutral, ◯ = weak white, ○ = white):"
+        f"  Ownership grid (○ = black, ◆ = weak black, ⋅ = neutral, ◯ = weak white, ● = white):"
     )
     print(textwrap.indent(ownership_to_string(own_p3), "    "))
     print()
@@ -305,7 +303,7 @@ def print_comparison(
     white_territory_kg = np.sum(np.abs(np.minimum(own_kg, 0)))
     print(f"  Ownership: B={black_territory_kg:.1f} W={white_territory_kg:.1f}")
     print(
-        f"  Ownership grid (● = black, ◆ = weak black, ⋅ = neutral, ◯ = weak white, ○ = white):"
+        f"  Ownership grid (○ = black, ◆ = weak black, ⋅ = neutral, ◯ = weak white, ● = white):"
     )
     print(textwrap.indent(ownership_to_string(own_kg), "    "))
     print()

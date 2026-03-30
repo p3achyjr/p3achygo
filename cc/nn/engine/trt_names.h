@@ -18,6 +18,7 @@ static constexpr char kOutcomeName[] = "03:outcome";
 static constexpr char kOwnershipName[] = "04:own";
 static constexpr char kScoreName[] = "06:score_probs";
 static constexpr char kOptPiLogitsName[] = "22:pi_logits_optimistic";
+static constexpr char kErrSquaredOutcome[] = "12:q6_err";
 }  // namespace output
 }  // namespace trt
 }  // namespace nn

@@ -14,8 +14,7 @@ test_output = model(test_input)
 
 model.save('/tmp/test')
 
-loaded_1 = tf.keras.models.load_model(
-    '/tmp/test', custom_objects=P3achyGoModel.custom_objects())
+loaded_1 = tf.keras.models.load_model('/tmp/test')
 
 print(model)
 print(loaded_1)

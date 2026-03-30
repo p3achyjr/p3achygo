@@ -42,8 +42,24 @@ ABSL_FLAG(int, gumbel_default_k, 5,
           "Number of Low Playout Cap Randomization moves to sample.");
 ABSL_FLAG(int, gumbel_default_n, 32,
           "Number of Low Playout Cap Randomization visits.");
-ABSL_FLAG(bool, use_regret_buffer, false,
-          "Use regret-guided state reuse buffer instead of uniform GoExploit.");
+ABSL_FLAG(std::string, reuse_buffer_type, "goexploit",
+          "Reuse buffer type: 'goexploit', 'regret', or 'composite'.");
+ABSL_FLAG(
+    float, use_seen_state_prob, 0.5f,
+    "Probability of drawing the initial game state from the reuse buffer.");
+ABSL_FLAG(float, sel_mult_base, 0.0f,
+          "Base multiplier for training position selection probability. "
+          "Enables signal-based sampling (|NN-MCTS| and top1/2 Q gap). "
+          "0 disables (falls back to flat probability).");
+ABSL_FLAG(float, sel_mult_prob, 1.0f,
+          "Fraction of moves [0,1] where signal-based sel_mult is applied. "
+          "Remaining fraction falls back to sel_mult=1.0.");
+ABSL_FLAG(float, bias_cache_lambda, 0.0f,
+          "Bias cache lambda (adjustment scale). 0 disables bias cache.");
+ABSL_FLAG(float, bias_cache_alpha, 0.8f,
+          "Bias cache alpha (visit count attenuation exponent).");
+ABSL_FLAG(int, nonroot_var_scale_prior_visits, 10,
+          "Prior visits for nonroot PUCT var-scaling. -1 disables.");
 
 void WaitForSignal() {
   // any line from stdin is a shutdown signal.
@@ -110,13 +126,37 @@ int main(int argc, char** argv) {
 
   // initialize reuse buffer (uniform GoExploit or regret-guided).
   std::unique_ptr<selfplay::ReuseBuffer> reuse_buffer;
-  if (absl::GetFlag(FLAGS_use_regret_buffer)) {
-    reuse_buffer.reset(
-        static_cast<selfplay::ReuseBuffer*>(new selfplay::RegretGuidedBuffer()));
-  } else {
+  std::string buffer_type = absl::GetFlag(FLAGS_reuse_buffer_type);
+  if (buffer_type == "regret") {
+    reuse_buffer.reset(static_cast<selfplay::ReuseBuffer*>(
+        new selfplay::RegretGuidedBuffer()));
+  } else if (buffer_type == "composite") {
+    reuse_buffer.reset(static_cast<selfplay::ReuseBuffer*>(
+        new selfplay::CompositeReuseBuffer()));
+  } else if (buffer_type == "goexploit") {
     reuse_buffer.reset(static_cast<selfplay::ReuseBuffer*>(
         new selfplay::GoExploitReuseBuffer()));
+  } else {
+    LOG(ERROR) << "Unknown --reuse_buffer_type '" << buffer_type
+               << "'. Must be one of: goexploit, regret, composite.";
+    return 1;
   }
+  LOG(INFO) << "Reuse Buffer=" << reuse_buffer->Name()
+            << "  use_seen_state_prob="
+            << absl::GetFlag(FLAGS_use_seen_state_prob);
+
+  LOG(INFO) << "========== Self-Play Config ==========";
+  LOG(INFO) << "  gumbel_selected: n=" << absl::GetFlag(FLAGS_gumbel_selected_n)
+            << "  k=" << absl::GetFlag(FLAGS_gumbel_selected_k);
+  LOG(INFO) << "  gumbel_default:  n=" << absl::GetFlag(FLAGS_gumbel_default_n)
+            << "  k=" << absl::GetFlag(FLAGS_gumbel_default_k);
+  LOG(INFO) << "  sel_mult_base=" << absl::GetFlag(FLAGS_sel_mult_base)
+            << "  sel_mult_prob=" << absl::GetFlag(FLAGS_sel_mult_prob);
+  LOG(INFO) << "  bias_cache_lambda=" << absl::GetFlag(FLAGS_bias_cache_lambda)
+            << "  bias_cache_alpha=" << absl::GetFlag(FLAGS_bias_cache_alpha);
+  LOG(INFO) << "  nonroot_var_scale_prior_visits="
+            << absl::GetFlag(FLAGS_nonroot_var_scale_prior_visits);
+  LOG(INFO) << "=======================================";
 
   std::vector<std::string> sink_names;
   for (int thread_id = 0; thread_id < num_threads; ++thread_id) {
@@ -134,7 +174,13 @@ int main(int argc, char** argv) {
             selfplay::GumbelParams{absl::GetFlag(FLAGS_gumbel_selected_n),
                                    absl::GetFlag(FLAGS_gumbel_selected_k)},
             selfplay::GumbelParams{absl::GetFlag(FLAGS_gumbel_default_n),
-                                   absl::GetFlag(FLAGS_gumbel_default_k)}});
+                                   absl::GetFlag(FLAGS_gumbel_default_k)},
+            absl::GetFlag(FLAGS_use_seen_state_prob),
+            absl::GetFlag(FLAGS_sel_mult_base),
+            absl::GetFlag(FLAGS_sel_mult_prob),
+            absl::GetFlag(FLAGS_bias_cache_lambda),
+            absl::GetFlag(FLAGS_bias_cache_alpha),
+            absl::GetFlag(FLAGS_nonroot_var_scale_prior_visits)});
     threads.emplace_back(std::move(thread));
   }
 

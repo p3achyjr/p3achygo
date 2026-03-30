@@ -101,9 +101,10 @@ int Argmax(const std::array<float, constants::kMaxMovesPerPosition>& arr) {
 
 // Samples an action from `policy` (already normalized) with temperature tau.
 // Each probability is raised to 1/tau, renormalized, then sampled.
+// TODO: remove board param after debugging.
 int SampleFromPolicy(
     const std::array<float, constants::kMaxMovesPerPosition>& policy, float tau,
-    core::Probability& probability) {
+    core::Probability& probability, const game::Board& board) {
   std::array<float, constants::kMaxMovesPerPosition> tempered;
   float total = 0.0f;
   for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
@@ -112,14 +113,35 @@ int SampleFromPolicy(
   }
   float p = probability.Uniform();
   float mass = 0.0f;
-  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
-    if (tempered[a] == 0.0f) continue;
-    float prob = tempered[a] / total;
-    if (p >= mass && p < mass + prob) return a;
-    mass += prob;
+  int last_nonzero = -1;
+  if (std::isfinite(total) && total > 0.0f) {
+    for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+      if (tempered[a] == 0.0f || !std::isfinite(tempered[a])) continue;
+      last_nonzero = a;
+      float prob = tempered[a] / total;
+      if (p >= mass && p < mass + prob) return a;
+      mass += prob;
+    }
   }
-  // Fallback: should not be reached with a valid policy.
-  CHECK(false) << "SampleFromPolicy: failed to sample";
+  // Build log message for all failure modes.
+  std::ostringstream dbg;
+  dbg << "SampleFromPolicy: failed to sample"
+      << " (p=" << p << " mass=" << mass << " total=" << total << " tau=" << tau
+      << ")\n"
+      << game::ToString(board.position()) << "\n";
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    if (policy[a] == 0.0f) continue;
+    dbg << "  " << game::AsLoc(a) << "  policy=" << policy[a]
+        << "  tempered=" << tempered[a]
+        << "  prob=" << (total > 0.0f ? tempered[a] / total : 0.0f) << "\n";
+  }
+  // Rounding or nan/inf: last_nonzero is valid, recover and warn.
+  if (last_nonzero >= 0) {
+    LOG(WARNING) << dbg.str();
+    return last_nonzero;
+  }
+  // Truly degenerate policy (all zeros): crash.
+  CHECK(false) << dbg.str();
 }
 
 // Compute completedQ = {q(a) if N(a) > 0, v_mixed otherwise }.
@@ -205,6 +227,10 @@ GumbelEvaluator::GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id,
                                  BiasCache* bias_cache)
     : leaf_evaluator_(nn_interface->MakeSlot(0), thread_id, score_params),
       bias_cache_(bias_cache) {}
+
+GumbelEvaluator::GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id,
+                                 BiasCache* bias_cache)
+    : leaf_evaluator_(nn_interface, thread_id), bias_cache_(bias_cache) {}
 
 // `n`: total number of simulations.
 // `k`: initial number of actions selected.
@@ -375,7 +401,15 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
               search_game.IsGameOver());
         }
         TreeNode* child = root->children[move_info.move_encoding];
-        PuctSearchPolicy nonroot_policy(PuctParams{});
+        const bool enable_var_scaling =
+            params.nonroot_var_scale_prior_visits >= 0;
+        PuctSearchPolicy nonroot_policy(
+            PuctParams::Builder()
+                .set_enable_var_scaling(enable_var_scaling)
+                .set_var_scale_prior_visits(
+                    enable_var_scaling ? params.nonroot_var_scale_prior_visits
+                                       : 0)
+                .build());
         SearchPath search_path =
             Search(probability, search_game, node_table, child,
                    game::OppositeColor(color_to_move), color_to_move,
@@ -422,9 +456,9 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
                                 visit_advantage);
 
   Loc raw_nn_move = game::AsLoc(Argmax(root->move_logits));
-  Loc mcts_move =
-      tau > 0.0f ? game::AsLoc(SampleFromPolicy(pi_improved, tau, probability))
-                 : gmove_info[0].move_loc;
+  Loc mcts_move = tau > 0.0f ? game::AsLoc(SampleFromPolicy(
+                                   pi_improved, tau, probability, game.board()))
+                             : gmove_info[0].move_loc;
 
   GumbelResult result = {raw_nn_move, mcts_move, pi_improved};
 
@@ -569,8 +603,8 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
       case PuctRootSelectionPolicy::kLcb:
         return best_lcb_move(root);
       case PuctRootSelectionPolicy::kVisitCountSample:
-        return game::AsLoc(
-            SampleFromPolicy(pi_improved, puct_params.tau, probability));
+        return game::AsLoc(SampleFromPolicy(pi_improved, puct_params.tau,
+                                            probability, game.board()));
     }
 
     return game::AsLoc(Argmax(visit_counts));

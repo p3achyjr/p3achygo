@@ -158,8 +158,7 @@ def main(_):
   logging.info(f'Model Path: {FLAGS.model_path}')
   dummy_board = np.random.random((1, 19, 19, 7))
   dummy_game = np.random.random((1, 1))
-  model = tf.keras.models.load_model(
-      FLAGS.model_path, custom_objects=P3achyGoModel.custom_objects())
+  model = tf.keras.models.load_model(FLAGS.model_path)
   model(dummy_board, dummy_game)
 
   if FLAGS.color.lower() == 'black':

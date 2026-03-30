@@ -248,6 +248,8 @@ void TrtEngineImpl::RunInference() {
   BufferHandle output_own = buf_map_[nn::trt::output::kOwnershipName];
   BufferHandle output_score = buf_map_[nn::trt::output::kScoreName];
   BufferHandle output_opt_logits = buf_map_[nn::trt::output::kOptPiLogitsName];
+  BufferHandle output_err2_outcome =
+      buf_map_[nn::trt::output::kErrSquaredOutcome];
 
   cudaMemcpyAsync(input_planes.device_buf, input_planes.host_buf,
                   input_planes.size, cudaMemcpyHostToDevice, stream_);
@@ -289,6 +291,9 @@ void TrtEngineImpl::RunInference() {
   if (version_ != 0) {
     cudaMemcpyAsync(output_opt_logits.host_buf, output_opt_logits.device_buf,
                     output_opt_logits.size, cudaMemcpyDeviceToHost, stream_);
+    cudaMemcpyAsync(output_err2_outcome.host_buf,
+                    output_err2_outcome.device_buf, output_err2_outcome.size,
+                    cudaMemcpyDeviceToHost, stream_);
   }
   cudaStreamSynchronize(stream_);
 
@@ -307,6 +312,8 @@ void TrtEngineImpl::GetBatch(int batch_id, NNInferResult& result) {
       static_cast<float*>(buf_map_[nn::trt::output::kOutcomeName].host_buf);
   float* score_buf =
       static_cast<float*>(buf_map_[nn::trt::output::kScoreName].host_buf);
+  float* err2_buf = static_cast<float*>(
+      buf_map_[nn::trt::output::kErrSquaredOutcome].host_buf);
 
   int pi_slice_size = SliceSize(pi_shape_, 1);
   int outcome_slice_size = SliceSize(outcome_shape_, 1);
@@ -339,6 +346,7 @@ void TrtEngineImpl::GetBatch(int batch_id, NNInferResult& result) {
     float* opt_logits = opt_logits_buf + opt_slice_size * batch_id;
     core::Softmax<constants::kMaxMovesPerPosition>(
         opt_logits, result.opt_move_probs.data());
+    result.err2_outcome = err2_buf[batch_id];
   }
 }
 

@@ -311,6 +311,7 @@ void BackupStep(int worker_id, TreeNode* node, game::Loc action, bool is_leaf,
       node->w_outcome = node->init_outcome_est;
       node->v = node->init_util_est;
       node->v_outcome = node->init_outcome_est;
+      node->v_err = node->init_err_est;
     } else {
       const float obs_bias = FetchObsBias(bias_cache, node);
       RecomputeNodeStats(node, obs_bias);

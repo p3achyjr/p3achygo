@@ -26,12 +26,14 @@ class Game final {
 
   explicit Game(
       const Board& board,
-      const absl::InlinedVector<Move, constants::kMaxGameLen> last_moves);
+      const absl::InlinedVector<Move, constants::kMaxGameLen> last_moves,
+      const int init_mv_num);
   Game();
   Game(bool prohibit_pass_alive);
   ~Game() = default;
 
   const Board& board() const;
+  const int init_mv_num() const { return init_mv_num_; }
 
   // returns moves _with_ noop padding at the beginning.
   const absl::InlinedVector<Move, constants::kMaxGameLen>& moves() const;
@@ -66,6 +68,8 @@ class Game final {
   Board board_;
   absl::InlinedVector<struct Move, constants::kMaxGameLen> moves_;
   std::optional<Result> result_;
+  // move number of the game this game branched from.
+  int init_mv_num_;
 };
 }  // namespace game
 

@@ -6,13 +6,18 @@
 namespace game {
 
 Game::Game(const Board& board,
-           const absl::InlinedVector<Move, constants::kMaxGameLen> last_moves)
-    : board_(board), moves_(last_moves), result_(Result{EMPTY, 0, 0, {}}) {}
+           const absl::InlinedVector<Move, constants::kMaxGameLen> last_moves,
+           const int init_mv_num)
+    : board_(board),
+      moves_(last_moves),
+      result_(Result{EMPTY, 0, 0, {}}),
+      init_mv_num_(init_mv_num) {}
 Game::Game() : Game(true /* prohibit_pass_alive */) {}
 Game::Game(bool prohibit_pass_alive)
     : board_(prohibit_pass_alive),
       moves_({kNoopMove, kNoopMove, kNoopMove, kNoopMove, kNoopMove}),
-      result_(Result{EMPTY, 0, 0, {}}) {}
+      result_(Result{EMPTY, 0, 0, {}}),
+      init_mv_num_(0) {}
 
 const Board& Game::board() const { return board_; }
 
