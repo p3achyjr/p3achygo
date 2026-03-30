@@ -39,7 +39,7 @@ def swa_avg_weights(weights: list, swa_momentum: float = 0.75) -> list:
     return swa_weights
 
 
-def recompute_bn_statistics(model, ds, num_batches=200):
+def recompute_bn_statistics(model, ds, num_batches=150):
     """
     Recompute BatchNorm running_mean and running_variance by doing
     forward passes through the ds.

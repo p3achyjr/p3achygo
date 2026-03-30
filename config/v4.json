@@ -1,5 +1,5 @@
 {
-  "num_generations": 1000,
+  "num_generations": 200,
   "model_config": "b8c128nbt",
   "games_first_gen": 5000,
   "games_per_gen": 5000,
@@ -7,19 +7,27 @@
   "lr_schedule": [
     [
       0,
-      5e-3
+      2e-3
     ],
     [
-      200,
-      2.5e-3
-    ],
-    [
-      400,
+      40,
       1e-3
     ],
     [
-      600,
-      5e-4
+      75,
+      7e-4
+    ],
+    [
+      100,
+      4e-4
+    ],
+    [
+      150,
+      2e-4
+    ],
+    [
+      210,
+      4e-4
     ]
   ],
   "lr_growth_window": 10,
@@ -32,19 +40,19 @@
   "min_train_default_n": 16,
   "max_train_default_k": 8,
   "max_train_default_n": 80,
-  "n_growth_window": 250,
-  "k_growth_window": 250,
+  "n_growth_window": 200,
+  "k_growth_window": 200,
   "eval_k": 8,
   "eval_n": 300,
   "min_eval_n": 50,
-  "eval_n_growth_window": 250,
+  "eval_n_growth_window": 200,
   "optimizer": "muon",
-  "lr_transition_window": 20,
-  "use_seen_state_prob": 0.5,
-  "reuse_buffer_type": "composite",
+  "lr_transition_window": 10,
+  "use_seen_state_prob": 0.2,
+  "reuse_buffer_type": "goexploit",
   "sel_mult_base": 0.9,
-  "sel_mult_prob": 1.0,
-  "bias_cache_lambda": 0.4,
+  "sel_mult_prob": 0.0,
+  "bias_cache_lambda": 0.0,
   "bias_cache_alpha": 0.8,
-  "nonroot_var_scale_prior_visits": 10
+  "nonroot_var_scale_prior_visits": -1
 }

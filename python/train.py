@@ -710,27 +710,27 @@ def log_board_position(
 
     # short-term score
     q6_score_pred, q6_score = (
-        predictions.q6_score_pred[0].numpy() * 10,
+        predictions.q6_score_pred[0].numpy(),
         targets.q6_score[0].numpy(),
     )
     q16_score_pred, q16_score = (
-        predictions.q16_score_pred[0].numpy() * 10,
+        predictions.q16_score_pred[0].numpy(),
         targets.q16_score[0].numpy(),
     )
     q50_score_pred, q50_score = (
-        predictions.q50_score_pred[0].numpy() * 10,
+        predictions.q50_score_pred[0].numpy(),
         targets.q50_score[0].numpy(),
     )
     q6_score_err_pred, q6_score_err = (
-        predictions.q6_score_err_pred[0].numpy() * 100,
+        predictions.q6_score_err_pred[0].numpy(),
         np.square(q6_score - q6_score_pred),
     )
     q16_score_err_pred, q16_score_err = (
-        predictions.q16_score_err_pred[0].numpy() * 100,
+        predictions.q16_score_err_pred[0].numpy(),
         np.square(q16_score - q16_score_pred),
     )
     q50_score_err_pred, q50_score_err = (
-        predictions.q50_score_err_pred[0].numpy() * 100,
+        predictions.q50_score_err_pred[0].numpy(),
         np.square(q50_score - q50_score_pred),
     )
 
@@ -757,7 +757,7 @@ def log_board_position(
 
     def ownership_char(x):
         bounds = [-1.0, -0.5, 0.0, 0.5, 1.0]
-        chars = ["●", "◯", "⋅", "◆", "○"]  # positive=black=○, negative=white=●
+        chars = ["●", "◆", "⋅", "◇", "○"]  # positive=black=○, negative=white=●
         return chars[int(np.argmin([abs(x - b) for b in bounds]))]
 
     board_lines = GoBoard.to_string(board).split("\n")

@@ -7,7 +7,7 @@ from __future__ import annotations
 import gcs_utils as gcs
 import math
 import os, sys, time
-import rl_loop.config as config
+import rl_loop.config as config_module
 import rl_loop.sp_loop as sp
 import rl_loop.fs_utils as fs
 import rl_loop.model_utils as model_utils
@@ -134,7 +134,6 @@ def eval(
 
 def loop(
     run_id: str,
-    config: config.RunConfig,
     sp_bin_path: str,
     eval_bin_path: str,
     val_ds_path: str,
@@ -185,7 +184,12 @@ def loop(
             exit_code = proc.run_proc(cmd, env=train_env)
             logging.info(f"Training Exited with Status {exit_code}")
 
-    def eval_new_model(run_id: str, next_model_gen: int, eval_res_path: str):
+    def eval_new_model(
+        run_id: str,
+        next_model_gen: int,
+        eval_res_path: str,
+        config: config_module.RunConfig,
+    ):
         # Play against current _best_ model.
         current_golden_gen = fs.get_most_recent_model(run_id)
         cur_model_path = str(
@@ -260,6 +264,7 @@ def loop(
         fs.ensure_local_dirs(local_run_dir)
     )
 
+    config = config_module.parse(run_id)
     eval_history_path = Path(local_run_dir, "elo_history.txt")
     batch_num_path = str(Path(local_run_dir, "batch_num.txt"))
     if not os.path.exists(batch_num_path):
@@ -357,6 +362,7 @@ def loop(
 
     eval_res_path = str(Path(local_run_dir, "eval_res.txt"))
     while model_gen <= config.num_generations:
+        config = config_module.parse(run_id)
         # Start self-play.
         logging.info(f"Model Generation: {model_gen}")
         sp_queues, sp_threads = start_sp()
@@ -405,7 +411,7 @@ def loop(
         # Training done. Stop remaining SP workers before running eval on all GPUs.
         logging.info("Training complete. Stopping remaining SP workers for eval.")
         stop_sp(sp_queues, sp_threads)
-        eval_new_model(run_id, next_model_gen, eval_res_path)
+        eval_new_model(run_id, next_model_gen, eval_res_path, config)
         fs.remove_local_chunk(local_golden_chunk_dir, next_model_gen)
         model_gen = next_model_gen
         logging.info("Eval finished. Restarting self-play -> train -> eval loop.")
@@ -417,6 +423,7 @@ def loop(
     # We have completed all self-play. Continue to train on the tail of self-play
     # data. Shuffler is responsible for notifying when there are no more chunks.
     while model_gen <= config.num_generations + config.extra_train_gens:
+        config = config_module.parse(run_id)
         # Wait for chunk.
         latest_chunk_gen = fs.get_most_recent_chunk(run_id)
         while latest_chunk_gen <= model_gen:
@@ -444,7 +451,7 @@ def loop(
             chunk_size_path,
             batch_num_path,
         )
-        eval_new_model(run_id, next_model_gen, eval_res_path)
+        eval_new_model(run_id, next_model_gen, eval_res_path, config)
 
         fs.remove_local_chunk(local_golden_chunk_dir, next_model_gen)
 
@@ -483,12 +490,10 @@ def main(_):
     build_trt_engine_path = Path(FLAGS.bin_dir, "build_and_run_trt_engine")
 
     val_ds_path = fs.download_val_ds(FLAGS.local_run_dir)
-    run_config = config.parse(FLAGS.run_id)
     run_id = FLAGS.run_id
 
     loop(
         run_id,
-        run_config,
         sp_bin_path,
         eval_bin_path,
         val_ds_path,

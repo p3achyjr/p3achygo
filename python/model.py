@@ -1425,13 +1425,12 @@ class P3achyGoModel(keras.Model):
             q6_score_normalized = targets.q6_score / 10.0
             q16_score_normalized = targets.q16_score / 10.0
             q50_score_normalized = targets.q50_score / 10.0
-            q6_score_loss = self.huber(q6_score_normalized, predictions.q6_score_pred)
-            q16_score_loss = self.huber(
-                q16_score_normalized, predictions.q16_score_pred
-            )
-            q50_score_loss = self.huber(
-                q50_score_normalized, predictions.q50_score_pred
-            )
+            q6_score_pred_normalized = predictions.q6_score_pred / 10.0
+            q16_score_pred_normalized = predictions.q16_score_pred / 10.0
+            q50_score_pred_normalized = predictions.q50_score_pred / 10.0
+            q6_score_loss = self.huber(q6_score_normalized, q6_score_pred_normalized)
+            q16_score_loss = self.huber(q16_score_normalized, q16_score_pred_normalized)
+            q50_score_loss = self.huber(q50_score_normalized, q50_score_pred_normalized)
             q_score_loss = tf.clip_by_value(
                 (q6_score_loss + q16_score_loss + q50_score_loss) / 3.0, 0.0, 200.0
             )
@@ -1439,23 +1438,23 @@ class P3achyGoModel(keras.Model):
             # Q score error losses (outputs 18-20): Huber loss
             # Use stop_gradient on predictions used as targets
             q6_score_err_target = tf.square(
-                tf.stop_gradient(predictions.q6_score_pred) - q6_score_normalized
+                tf.stop_gradient(predictions.q6_score_pred) - targets.q6_score
             )
             q16_score_err_target = tf.square(
-                tf.stop_gradient(predictions.q16_score_pred) - q16_score_normalized
+                tf.stop_gradient(predictions.q16_score_pred) - targets.q16_score
             )
             q50_score_err_target = tf.square(
-                tf.stop_gradient(predictions.q50_score_pred) - q50_score_normalized
+                tf.stop_gradient(predictions.q50_score_pred) - targets.q50_score
             )
 
             q6_score_err_loss = self.huber(
-                q6_score_err_target, predictions.q6_score_err_pred
+                q6_score_err_target / 100.0, predictions.q6_score_err_pred / 100.0
             )
             q16_score_err_loss = self.huber(
-                q16_score_err_target, predictions.q16_score_err_pred
+                q16_score_err_target / 100.0, predictions.q16_score_err_pred / 100.0
             )
             q50_score_err_loss = self.huber(
-                q50_score_err_target, predictions.q50_score_err_pred
+                q50_score_err_target / 100.0, predictions.q50_score_err_pred / 100.0
             )
             q_score_err_loss = tf.clip_by_value(
                 (q6_score_err_loss + q16_score_err_loss + q50_score_err_loss) / 3.0,
