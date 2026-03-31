@@ -98,6 +98,8 @@ ABSL_FLAG(std::string, engine_name, "",
           "Name of engine. Defaults to <onnx_stem>.trt.");
 ABSL_FLAG(bool, use_int8, false, "Whether to enable INT8.");
 ABSL_FLAG(int, batch_size, 0, "Batch Size. ");
+ABSL_FLAG(bool, use_static_shapes, false,
+          "Build with static shapes (MIN=OPT=MAX=batch_size).");
 
 int main(int argc, char** argv) {
   absl::ParseCommandLine(argc, argv);
@@ -172,21 +174,35 @@ int main(int argc, char** argv) {
 
     nvinfer1::IBuilderConfig* config = builder->createBuilderConfig();
 
-    // Optimization profile: dynamic batch in [1, batch_size].
-    nv::IOptimizationProfile* profile = builder->createOptimizationProfile();
-    profile->setDimensions("board_state", nv::OptProfileSelector::kMIN,
-                           nv::Dims4(1, 19, 19, num_planes));
-    profile->setDimensions("board_state", nv::OptProfileSelector::kOPT,
-                           nv::Dims4(batch_size, 19, 19, num_planes));
-    profile->setDimensions("board_state", nv::OptProfileSelector::kMAX,
-                           nv::Dims4(kMaxBatchSize, 19, 19, num_planes));
-    profile->setDimensions("game_state", nv::OptProfileSelector::kMIN,
-                           nv::Dims2(1, num_features));
-    profile->setDimensions("game_state", nv::OptProfileSelector::kOPT,
-                           nv::Dims2(batch_size, num_features));
-    profile->setDimensions("game_state", nv::OptProfileSelector::kMAX,
-                           nv::Dims2(kMaxBatchSize, num_features));
-    config->addOptimizationProfile(profile);
+    const bool use_static = absl::GetFlag(FLAGS_use_static_shapes);
+    if (use_static) {
+      // Static shapes: fix each input to exactly batch_size, no profile needed.
+      for (int i = 0; i < network->getNbInputs(); ++i) {
+        nv::ITensor* input = network->getInput(i);
+        std::string name = input->getName();
+        if (name == "board_state") {
+          input->setDimensions(nv::Dims4(batch_size, 19, 19, num_planes));
+        } else if (name == "game_state") {
+          input->setDimensions(nv::Dims2(batch_size, num_features));
+        }
+      }
+    } else {
+      // Dynamic profile: batch in [1, batch_size, kMaxBatchSize].
+      nv::IOptimizationProfile* profile = builder->createOptimizationProfile();
+      profile->setDimensions("board_state", nv::OptProfileSelector::kMIN,
+                             nv::Dims4(1, 19, 19, num_planes));
+      profile->setDimensions("board_state", nv::OptProfileSelector::kOPT,
+                             nv::Dims4(batch_size, 19, 19, num_planes));
+      profile->setDimensions("board_state", nv::OptProfileSelector::kMAX,
+                             nv::Dims4(kMaxBatchSize, 19, 19, num_planes));
+      profile->setDimensions("game_state", nv::OptProfileSelector::kMIN,
+                             nv::Dims2(1, num_features));
+      profile->setDimensions("game_state", nv::OptProfileSelector::kOPT,
+                             nv::Dims2(batch_size, num_features));
+      profile->setDimensions("game_state", nv::OptProfileSelector::kMAX,
+                             nv::Dims2(kMaxBatchSize, num_features));
+      config->addOptimizationProfile(profile);
+    }
     const std::vector<char> timing_cache_blob = ReadFile(kTimingCachePath);
     std::unique_ptr<nvinfer1::ITimingCache> timingCache(
         config->createTimingCache(
