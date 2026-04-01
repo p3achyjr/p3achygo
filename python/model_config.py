@@ -8,6 +8,7 @@ CONFIG_OPTIONS = [
     "b14c384btl3",
     "b15c192_classic",
     "b8c128nbt",
+    "b12c256nbt",
     "b10c384nbt",
     "b14d96h3_transformer",
 ]
@@ -138,6 +139,18 @@ class ModelConfig:
         )
 
     @staticmethod
+    def b12c256nbt():
+        return ModelConfig(
+            blocks=12,
+            broadcast_interval=3,
+            channels=256,
+            bottleneck_channels=128,
+            head_channels=32,
+            c_val=80,
+            trunk_block_type="nbt",
+        )
+
+    @staticmethod
     def b10c384nbt():
         return ModelConfig(
             blocks=10,
@@ -174,6 +187,8 @@ class ModelConfig:
             return ModelConfig.b15c192_classic()
         elif s == "b8c128nbt":
             return ModelConfig.b8c128nbt()
+        elif s == "b12c256nbt":
+            return ModelConfig.b12c256nbt()
         elif s == "b10c384nbt":
             return ModelConfig.b10c384nbt()
         elif s == "b14d96h3_transformer":
