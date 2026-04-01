@@ -13,6 +13,7 @@
 #include "cc/mcts/tree.h"
 
 namespace mcts {
+static constexpr float kDefaultFPU = 0.2f;
 enum class PuctRootSelectionPolicy : uint8_t {
   kVisitCount = 0,
   kLcb = 1,
@@ -34,6 +35,8 @@ struct PuctParams {
   int m3_prior_visits = 20;
   // How much to use optimistic policy. Formula: (1 - p_opt_weight) +
   float p_opt_weight = 0.0f;
+  // FPU reduction at the root. Set to 0 to disable root FPU (KataGo style).
+  float root_fpu = kDefaultFPU;
 
   // Forward-declared; defined below once PuctParams is complete.
   class Builder;
@@ -86,6 +89,10 @@ class PuctParams::Builder {
     p_.p_opt_weight = v;
     return *this;
   }
+  Builder& set_root_fpu(float v) {
+    p_.root_fpu = v;
+    return *this;
+  }
   PuctParams build() const { return p_; }
 
  private:
@@ -99,7 +106,8 @@ class SearchPolicy {
  public:
   virtual game::Loc SelectNextAction(const TreeNode* node,
                                      const game::Game& game,
-                                     game::Color color_to_move) const = 0;
+                                     game::Color color_to_move,
+                                     bool is_root = false) const = 0;
   virtual ~SearchPolicy() = default;
 
  protected:
@@ -112,7 +120,8 @@ class SearchPolicy {
 class GumbelNonRootSearchPolicy : public SearchPolicy {
  public:
   game::Loc SelectNextAction(const TreeNode* node, const game::Game& game,
-                             game::Color color_to_move) const override;
+                             game::Color color_to_move,
+                             bool is_root = false) const override;
 };
 
 /*
@@ -134,8 +143,9 @@ class PuctScorer final {
         enable_m3_bonus_(params.enable_m3_bonus),
         m3_prior_visits_(params.m3_prior_visits),
         p_opt_weight_(params.p_opt_weight),
+        root_fpu_(params.root_fpu),
         q_fn_(q_fn),
-        n_fn_(n_fn){};
+        n_fn_(n_fn) {};
 
   static inline float ScaleCPuct(float c_puct, const float c_puct_visit_scaling,
                                  const int n) {
@@ -145,8 +155,8 @@ class PuctScorer final {
     return c_puct;
   }
 
-  inline PuctScores ComputeScores(const TreeNode* node) const {
-    constexpr float kFPU = 0.2f;
+  inline PuctScores ComputeScores(const TreeNode* node,
+                                  bool is_root = false) const {
     DCHECK(node->state != TreeNodeState::kNew);
 
     // fetch everything once. this does not prevent concurrent accesses but
@@ -209,7 +219,8 @@ class PuctScorer final {
       }
       return mass;
     }();
-    const float v_fpu = v - kFPU * std::sqrt(p_explored);
+    const float fpu = is_root ? root_fpu_ : kDefaultFPU;
+    const float v_fpu = v - fpu * std::sqrt(p_explored);
 
     // Scale c_puct.
     const float c_puct = ScaleCPuct(c_puct_, c_puct_visit_scaling_, n);
@@ -306,8 +317,8 @@ class PuctScorer final {
 
   std::array<std::pair<int, float>, 4> TopScores(
       const TreeNode* node, const game::Game& game,
-      const game::Color color_to_move) const {
-    PuctScores pucts = ComputeScores(node);
+      const game::Color color_to_move, bool is_root = false) const {
+    PuctScores pucts = ComputeScores(node, is_root);
     std::array<std::pair<int, float>, 4> top_scores = {
         {{game::kNoopLoc, kMinPuctScore},
          {game::kNoopLoc, kMinPuctScore},
@@ -339,8 +350,9 @@ class PuctScorer final {
   }
 
   game::Loc TopMove(const TreeNode* node, const game::Game& game,
-                    const game::Color color_to_move) const {
-    PuctScores pucts = ComputeScores(node);
+                    const game::Color color_to_move,
+                    bool is_root = false) const {
+    PuctScores pucts = ComputeScores(node, is_root);
     float max_puct_score = kMinPuctScore;
     game::Loc max_move = game::kNoopLoc;
     for (const auto& [a, puct_score] : pucts) {
@@ -365,6 +377,7 @@ class PuctScorer final {
   const bool enable_m3_bonus_;
   const int m3_prior_visits_;
   const float p_opt_weight_;
+  const float root_fpu_;
   QFn q_fn_;
   NFn n_fn_;
 };
@@ -373,7 +386,8 @@ class PuctSearchPolicy : public SearchPolicy {
  public:
   PuctSearchPolicy(PuctParams params);
   game::Loc SelectNextAction(const TreeNode* node, const game::Game& game,
-                             game::Color color_to_move) const override;
+                             game::Color color_to_move,
+                             bool is_root = false) const override;
 
  private:
   const PuctParams params_;

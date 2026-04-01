@@ -164,20 +164,20 @@ mcts::Search::Params MakeSearchParams(const eval::PlayerSearchConfig& cfg) {
       .num_threads = cfg.num_threads_per_game,
       .total_visit_budget = cfg.time_ms > 0 ? 1 << 20 : cfg.n,
       .total_visit_time_ms = cfg.time_ms,
-      .puct_params =
-          mcts::PuctParams::Builder()
-              .set_kind(root_policy)
-              .set_c_puct(cfg.c_puct)
-              .set_c_puct_visit_scaling(cfg.c_puct_visit_scaling)
-              .set_c_puct_v_2(cfg.c_puct_v_2)
-              .set_use_puct_v(cfg.use_puct_v)
-              .set_enable_var_scaling(cfg.var_scale_cpuct)
-              .set_var_scale_prior_visits(cfg.var_scale_prior_visits)
-              .set_tau(cfg.tau)
-              .set_enable_m3_bonus(cfg.enable_m3_bonus)
-              .set_m3_prior_visits(cfg.m3_prior_visits)
-              .set_p_opt_weight(cfg.p_opt_weight)
-              .build(),
+      .puct_params = mcts::PuctParams::Builder()
+                         .set_kind(root_policy)
+                         .set_c_puct(cfg.c_puct)
+                         .set_c_puct_visit_scaling(cfg.c_puct_visit_scaling)
+                         .set_c_puct_v_2(cfg.c_puct_v_2)
+                         .set_use_puct_v(cfg.use_puct_v)
+                         .set_enable_var_scaling(cfg.var_scale_cpuct)
+                         .set_var_scale_prior_visits(cfg.var_scale_prior_visits)
+                         .set_tau(cfg.tau)
+                         .set_enable_m3_bonus(cfg.enable_m3_bonus)
+                         .set_m3_prior_visits(cfg.m3_prior_visits)
+                         .set_p_opt_weight(cfg.p_opt_weight)
+                         .set_root_fpu(cfg.root_fpu)
+                         .build(),
       .q_fn_kind = q_fn_kind,
       .n_fn_kind = n_fn_kind,
       .descent_policy_kind = (cfg.descent_policy == "bu_uct")
@@ -355,6 +355,7 @@ void PlayEvalGame(size_t seed, int game_id, int total_num_workers,
                         .set_enable_m3_bonus(active_cfg.enable_m3_bonus)
                         .set_m3_prior_visits(active_cfg.m3_prior_visits)
                         .set_p_opt_weight(active_cfg.p_opt_weight)
+                        .set_root_fpu(active_cfg.root_fpu)
                         .build())
               : gumbel.SearchRoot(
                     probability, game, player_table, player_tree, color_to_move,
