@@ -1,0 +1,37 @@
+#!/bin/bash
+# Pre-commit hook: runs clang-format on C++ files and black on Python files.
+# Formatted files are automatically re-staged.
+
+set -e
+
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM)
+
+# --- clang-format ---
+CPP_FILES=$(echo "$STAGED_FILES" | grep -E '\.(cc|cpp|h)$' || true)
+
+if [ -n "$CPP_FILES" ]; then
+  if ! command -v clang-format &>/dev/null; then
+    echo "pre-commit: clang-format not found, skipping C++ formatting"
+  else
+    echo "pre-commit: running clang-format on:"
+    echo "$CPP_FILES" | sed 's/^/  /'
+    echo "$CPP_FILES" | xargs clang-format -i
+    echo "$CPP_FILES" | xargs git add
+    echo "pre-commit: clang-format done"
+  fi
+fi
+
+# --- black ---
+PY_FILES=$(echo "$STAGED_FILES" | grep -E '\.py$' || true)
+
+if [ -n "$PY_FILES" ]; then
+  if ! command -v black &>/dev/null; then
+    echo "pre-commit: black not found, skipping Python formatting"
+  else
+    echo "pre-commit: running black on:"
+    echo "$PY_FILES" | sed 's/^/  /'
+    echo "$PY_FILES" | xargs black --quiet
+    echo "$PY_FILES" | xargs git add
+    echo "pre-commit: black done"
+  fi
+fi

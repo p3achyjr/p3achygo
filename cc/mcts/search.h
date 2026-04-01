@@ -158,8 +158,9 @@ class DeterministicDescentPolicy final {
 
   inline DescentStep Run(const GlobalSearchState& global_search_state,
                          const TreeNode* node, const game::Game& game,
-                         game::Color color) {
-    const TopActions top_actions = puct_scorer_.TopScores(node, game, color);
+                         game::Color color, bool is_root = false) {
+    const TopActions top_actions =
+        puct_scorer_.TopScores(node, game, color, is_root);
     return {game::AsLoc(top_actions[0].first), top_actions};
   }
 
@@ -182,8 +183,8 @@ class BuUctDescentPolicy final {
 
   inline DescentStep Run(const GlobalSearchState& global_search_state,
                          const TreeNode* node, const game::Game& game,
-                         game::Color color) {
-    PuctScores pucts = puct_scorer_.ComputeScores(node);
+                         game::Color color, bool is_root = false) {
+    PuctScores pucts = puct_scorer_.ComputeScores(node, is_root);
     std::sort(pucts.begin(), pucts.end(), [](const auto& p0, const auto& p1) {
       return p0.second > p1.second;
     });
@@ -247,7 +248,7 @@ class AbortCollisionPolicy final {
 class RetryCollisionPolicy final {
  public:
   RetryCollisionPolicy(const int max_num_retries)
-      : max_num_retries_(max_num_retries){};
+      : max_num_retries_(max_num_retries) {};
   ~RetryCollisionPolicy() = default;
   inline CollisionResult Handle(const GlobalSearchState& global_search_state,
                                 const SearchPath& search_path) {
@@ -272,7 +273,7 @@ class RetryCollisionPolicy final {
 class SmartRetryCollisionPolicy final {
  public:
   SmartRetryCollisionPolicy(const int max_num_retries)
-      : max_num_retries_(max_num_retries){};
+      : max_num_retries_(max_num_retries) {};
   ~SmartRetryCollisionPolicy() = default;
   inline CollisionResult Handle(const GlobalSearchState& global_search_state,
                                 const SearchPath& search_path) {
@@ -334,7 +335,7 @@ class SmartRetryCollisionPolicy final {
 class GlobalSmartRetryCollisionPolicy final {
  public:
   GlobalSmartRetryCollisionPolicy(const int max_num_retries)
-      : max_num_retries_(max_num_retries), fork_points_(ForkCmp{}){};
+      : max_num_retries_(max_num_retries), fork_points_(ForkCmp{}) {};
   ~GlobalSmartRetryCollisionPolicy() = default;
   inline CollisionResult Handle(const GlobalSearchState& global_search_state,
                                 const SearchPath& search_path) {

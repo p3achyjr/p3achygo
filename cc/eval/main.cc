@@ -21,11 +21,11 @@
 #include "absl/log/log.h"
 #include "absl/strings/str_format.h"
 #include "cc/constants/constants.h"
-#include "cc/mcts/constants.h"
 #include "cc/core/elo.h"
 #include "cc/core/filepath.h"
 #include "cc/eval/eval.h"
 #include "cc/eval/player_config.h"
+#include "cc/mcts/constants.h"
 #include "cc/nn/engine/engine_factory.h"
 #include "cc/nn/nn_interface.h"
 #include "cc/recorder/dir.h"
@@ -65,6 +65,8 @@ ABSL_FLAG(float, cur_noise_scaling, 1.0f, "Cur gumbel noise scaling");
 ABSL_FLAG(bool, cur_use_puct, true, "Whether to use PUCT for cur.");
 ABSL_FLAG(bool, cur_use_lcb, true, "Whether to use LCB in PUCT for cur.");
 ABSL_FLAG(float, cur_c_puct, 1.0f, "c_puct for cur.");
+ABSL_FLAG(float, cur_c_puct_visit_scaling, 0.45f,
+          "c_puct_visit_scaling for cur.");
 ABSL_FLAG(bool, cur_var_scale_cpuct, false,
           "Whether to scale c_puct based on variance for cur.");
 ABSL_FLAG(
@@ -80,17 +82,24 @@ ABSL_FLAG(bool, cur_use_bias_cache, false,
           "Whether to use bias cache for cur.");
 ABSL_FLAG(float, cur_bias_cache_alpha, 0.85f, "Bias cache alpha for cur.");
 ABSL_FLAG(float, cur_bias_cache_lambda, 0.45f, "Bias cache lambda for cur.");
-ABSL_FLAG(bool, cur_enable_m3_bonus, false, "Whether to use m3 bonus in PUCT for cur.");
+ABSL_FLAG(bool, cur_enable_m3_bonus, false,
+          "Whether to use m3 bonus in PUCT for cur.");
 ABSL_FLAG(int, cur_var_scale_prior_visits, 0,
           "Prior visits for variance-based child scale factor for cur.");
-ABSL_FLAG(int, cur_m3_prior_visits, 20, "Prior visits for m3 bonus dampening for cur.");
-ABSL_FLAG(float, cur_p_opt_weight, 0.0f, "Optimistic policy interpolation weight for cur.");
+ABSL_FLAG(int, cur_m3_prior_visits, 20,
+          "Prior visits for m3 bonus dampening for cur.");
+ABSL_FLAG(float, cur_p_opt_weight, 0.0f,
+          "Optimistic policy interpolation weight for cur.");
+ABSL_FLAG(float, cur_root_fpu, 0.2f,
+          "Root FPU reduction for cur (0 = no FPU at root).");
 ABSL_FLAG(int, cand_n, kDefaultGumbelN, "N for candidate player");
 ABSL_FLAG(int, cand_k, kDefaultGumbelK, "K for candidate player");
 ABSL_FLAG(float, cand_noise_scaling, 1.0f, "Cand gumbel noise scaling");
 ABSL_FLAG(bool, cand_use_puct, true, "Whether to use PUCT for cand.");
 ABSL_FLAG(bool, cand_use_lcb, true, "Whether to use LCB in PUCT for cand.");
 ABSL_FLAG(float, cand_c_puct, 1.0f, "c_puct for cand.");
+ABSL_FLAG(float, cand_c_puct_visit_scaling, 0.45f,
+          "c_puct_visit_scaling for cand.");
 ABSL_FLAG(bool, cand_var_scale_cpuct, false,
           "Whether to scale c_puct based on variance for cand.");
 ABSL_FLAG(
@@ -106,11 +115,16 @@ ABSL_FLAG(bool, cand_use_bias_cache, false,
           "Whether to use bias cache for cand.");
 ABSL_FLAG(float, cand_bias_cache_alpha, 0.8f, "Bias cache alpha for cand.");
 ABSL_FLAG(float, cand_bias_cache_lambda, 0.4f, "Bias cache lambda for cand.");
-ABSL_FLAG(bool, cand_enable_m3_bonus, false, "Whether to use m3 bonus in PUCT for cand.");
+ABSL_FLAG(bool, cand_enable_m3_bonus, false,
+          "Whether to use m3 bonus in PUCT for cand.");
 ABSL_FLAG(int, cand_var_scale_prior_visits, 0,
           "Prior visits for variance-based child scale factor for cand.");
-ABSL_FLAG(int, cand_m3_prior_visits, 20, "Prior visits for m3 bonus dampening for cand.");
-ABSL_FLAG(float, cand_p_opt_weight, 0.0f, "Optimistic policy interpolation weight for cand.");
+ABSL_FLAG(int, cand_m3_prior_visits, 20,
+          "Prior visits for m3 bonus dampening for cand.");
+ABSL_FLAG(float, cand_p_opt_weight, 0.0f,
+          "Optimistic policy interpolation weight for cand.");
+ABSL_FLAG(float, cand_root_fpu, 0.2f,
+          "Root FPU reduction for cand (0 = no FPU at root).");
 
 float ConfidenceDelta(float z_score, float num_sims, float wr) {
   return z_score * std::sqrt(wr * (1 - wr) / num_sims);
@@ -136,6 +150,8 @@ void ApplyCurCommandLineFlags(eval::PlayerSearchConfig& cfg) {
     cfg.use_lcb = absl::GetFlag(FLAGS_cur_use_lcb);
   if (IsOnCommandLine("cur_c_puct"))
     cfg.c_puct = absl::GetFlag(FLAGS_cur_c_puct);
+  if (IsOnCommandLine("cur_c_puct_visit_scaling"))
+    cfg.c_puct_visit_scaling = absl::GetFlag(FLAGS_cur_c_puct_visit_scaling);
   if (IsOnCommandLine("cur_var_scale_cpuct"))
     cfg.var_scale_cpuct = absl::GetFlag(FLAGS_cur_var_scale_cpuct);
   if (IsOnCommandLine("cur_use_mcgs"))
@@ -157,11 +173,14 @@ void ApplyCurCommandLineFlags(eval::PlayerSearchConfig& cfg) {
   if (IsOnCommandLine("cur_enable_m3_bonus"))
     cfg.enable_m3_bonus = absl::GetFlag(FLAGS_cur_enable_m3_bonus);
   if (IsOnCommandLine("cur_var_scale_prior_visits"))
-    cfg.var_scale_prior_visits = absl::GetFlag(FLAGS_cur_var_scale_prior_visits);
+    cfg.var_scale_prior_visits =
+        absl::GetFlag(FLAGS_cur_var_scale_prior_visits);
   if (IsOnCommandLine("cur_m3_prior_visits"))
     cfg.m3_prior_visits = absl::GetFlag(FLAGS_cur_m3_prior_visits);
   if (IsOnCommandLine("cur_p_opt_weight"))
     cfg.p_opt_weight = absl::GetFlag(FLAGS_cur_p_opt_weight);
+  if (IsOnCommandLine("cur_root_fpu"))
+    cfg.root_fpu = absl::GetFlag(FLAGS_cur_root_fpu);
 }
 
 // Same for cand_* flags.
@@ -176,6 +195,8 @@ void ApplyCandCommandLineFlags(eval::PlayerSearchConfig& cfg) {
     cfg.use_lcb = absl::GetFlag(FLAGS_cand_use_lcb);
   if (IsOnCommandLine("cand_c_puct"))
     cfg.c_puct = absl::GetFlag(FLAGS_cand_c_puct);
+  if (IsOnCommandLine("cand_c_puct_visit_scaling"))
+    cfg.c_puct_visit_scaling = absl::GetFlag(FLAGS_cand_c_puct_visit_scaling);
   if (IsOnCommandLine("cand_var_scale_cpuct"))
     cfg.var_scale_cpuct = absl::GetFlag(FLAGS_cand_var_scale_cpuct);
   if (IsOnCommandLine("cand_use_mcgs"))
@@ -197,11 +218,14 @@ void ApplyCandCommandLineFlags(eval::PlayerSearchConfig& cfg) {
   if (IsOnCommandLine("cand_enable_m3_bonus"))
     cfg.enable_m3_bonus = absl::GetFlag(FLAGS_cand_enable_m3_bonus);
   if (IsOnCommandLine("cand_var_scale_prior_visits"))
-    cfg.var_scale_prior_visits = absl::GetFlag(FLAGS_cand_var_scale_prior_visits);
+    cfg.var_scale_prior_visits =
+        absl::GetFlag(FLAGS_cand_var_scale_prior_visits);
   if (IsOnCommandLine("cand_m3_prior_visits"))
     cfg.m3_prior_visits = absl::GetFlag(FLAGS_cand_m3_prior_visits);
   if (IsOnCommandLine("cand_p_opt_weight"))
     cfg.p_opt_weight = absl::GetFlag(FLAGS_cand_p_opt_weight);
+  if (IsOnCommandLine("cand_root_fpu"))
+    cfg.root_fpu = absl::GetFlag(FLAGS_cand_root_fpu);
 }
 
 // Builds a PlayerSearchConfig from the cur_* flags (all fields, no file).
@@ -213,6 +237,7 @@ eval::PlayerSearchConfig CurConfigFromFlags() {
   cfg.use_puct = absl::GetFlag(FLAGS_cur_use_puct);
   cfg.use_lcb = absl::GetFlag(FLAGS_cur_use_lcb);
   cfg.c_puct = absl::GetFlag(FLAGS_cur_c_puct);
+  cfg.c_puct_visit_scaling = absl::GetFlag(FLAGS_cur_c_puct_visit_scaling);
   cfg.var_scale_cpuct = absl::GetFlag(FLAGS_cur_var_scale_cpuct);
   cfg.use_mcgs = absl::GetFlag(FLAGS_cur_use_mcgs);
   cfg.use_puct_v = absl::GetFlag(FLAGS_cur_use_puct_v);
@@ -226,6 +251,7 @@ eval::PlayerSearchConfig CurConfigFromFlags() {
   cfg.var_scale_prior_visits = absl::GetFlag(FLAGS_cur_var_scale_prior_visits);
   cfg.m3_prior_visits = absl::GetFlag(FLAGS_cur_m3_prior_visits);
   cfg.p_opt_weight = absl::GetFlag(FLAGS_cur_p_opt_weight);
+  cfg.root_fpu = absl::GetFlag(FLAGS_cur_root_fpu);
   return cfg;
 }
 
@@ -238,6 +264,7 @@ eval::PlayerSearchConfig CandConfigFromFlags() {
   cfg.use_puct = absl::GetFlag(FLAGS_cand_use_puct);
   cfg.use_lcb = absl::GetFlag(FLAGS_cand_use_lcb);
   cfg.c_puct = absl::GetFlag(FLAGS_cand_c_puct);
+  cfg.c_puct_visit_scaling = absl::GetFlag(FLAGS_cand_c_puct_visit_scaling);
   cfg.var_scale_cpuct = absl::GetFlag(FLAGS_cand_var_scale_cpuct);
   cfg.use_mcgs = absl::GetFlag(FLAGS_cand_use_mcgs);
   cfg.use_puct_v = absl::GetFlag(FLAGS_cand_use_puct_v);
@@ -251,6 +278,7 @@ eval::PlayerSearchConfig CandConfigFromFlags() {
   cfg.var_scale_prior_visits = absl::GetFlag(FLAGS_cand_var_scale_prior_visits);
   cfg.m3_prior_visits = absl::GetFlag(FLAGS_cand_m3_prior_visits);
   cfg.p_opt_weight = absl::GetFlag(FLAGS_cand_p_opt_weight);
+  cfg.root_fpu = absl::GetFlag(FLAGS_cand_root_fpu);
   return cfg;
 }
 

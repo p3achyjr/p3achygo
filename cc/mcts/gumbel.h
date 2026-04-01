@@ -139,7 +139,8 @@ class GumbelEvaluator final {
   SearchPath Search(core::Probability& probability, game::Game& game,
                     NodeTable* node_table, TreeNode* node,
                     game::Color color_to_move, game::Color root_color,
-                    float root_score_est, SearchPolicy* search_policy);
+                    float root_score_est, SearchPolicy* search_policy,
+                    bool first_is_root);
 
   // Updates all nodes in tree, based on leaf evaluation.
   void Backward(SearchPath& path, bool use_idempotent_updates);

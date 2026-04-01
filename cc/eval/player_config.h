@@ -56,6 +56,7 @@ struct PlayerSearchConfig {
   int var_scale_prior_visits = 0;
   int m3_prior_visits = 20;
   float p_opt_weight = 0.0f;
+  float root_fpu = 0.2f;
 
   // --- Config-file-only parallel search knobs (no-op for Gumbel) ---
 
@@ -188,6 +189,8 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.m3_prior_visits = std::stoi(val);
     else if (key == "p_opt_weight")
       cfg.p_opt_weight = std::stof(val);
+    else if (key == "root_fpu")
+      cfg.root_fpu = std::stof(val);
     // Parallel search knobs
     else if (key == "num_threads_per_game")
       cfg.num_threads_per_game = std::stoi(val);
@@ -239,7 +242,8 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
   auto i_ = [](int v) -> std::string { return std::to_string(v); };
   auto s = [](const std::string& v) -> std::string { return v; };
 
-#define ROW(field, fmt) rows.emplace_back(#field, fmt(cur.field), fmt(cand.field))
+#define ROW(field, fmt) \
+  rows.emplace_back(#field, fmt(cur.field), fmt(cand.field))
   ROW(name, s);
   ROW(n, i_);
   ROW(k, i_);
@@ -263,6 +267,7 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
   ROW(var_scale_prior_visits, i_);
   ROW(m3_prior_visits, i_);
   ROW(p_opt_weight, f);
+  ROW(root_fpu, f);
   ROW(num_threads_per_game, i_);
   ROW(time_ms, i_);
   ROW(q_fn, s);
@@ -289,7 +294,8 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
   std::ostringstream oss;
   const std::string indent(kIndent, ' ');
 
-  // Header: "Cur Config" aligned over the left column, "Cand Config" over right.
+  // Header: "Cur Config" aligned over the left column, "Cand Config" over
+  // right.
   size_t left_total = kIndent + key_w + 2 + cur_w + kColGap;
   oss << "Cur Config" << std::string(left_total - 10, ' ') << "Cand Config\n";
 

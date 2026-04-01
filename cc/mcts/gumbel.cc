@@ -193,7 +193,8 @@ std::array<float, constants::kMaxMovesPerPosition> ComputeRootImprovedPolicy(
 
 Loc GumbelNonRootSearchPolicy::SelectNextAction(const TreeNode* node,
                                                 const Game& game,
-                                                Color color_to_move) const {
+                                                Color color_to_move,
+                                                bool is_root) const {
   DCHECK(node->state != TreeNodeState::kNew);
   std::array<float, constants::kMaxMovesPerPosition> policy_improved =
       ComputeImprovedPolicy(node);
@@ -219,7 +220,7 @@ GumbelEvaluator::GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id)
     : leaf_evaluator_(nn_interface, thread_id) {}
 
 GumbelEvaluator::GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id,
-                                  ScoreUtilityParams score_params)
+                                 ScoreUtilityParams score_params)
     : leaf_evaluator_(nn_interface->MakeSlot(0), thread_id, score_params) {}
 
 GumbelEvaluator::GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id,
@@ -410,10 +411,10 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
                     enable_var_scaling ? params.nonroot_var_scale_prior_visits
                                        : 0)
                 .build());
-        SearchPath search_path =
-            Search(probability, search_game, node_table, child,
-                   game::OppositeColor(color_to_move), color_to_move,
-                   root->init_score_est, &nonroot_policy);
+        SearchPath search_path = Search(
+            probability, search_game, node_table, child,
+            game::OppositeColor(color_to_move), color_to_move,
+            root->init_score_est, &nonroot_policy, /*first_is_root=*/false);
 
         // update tree
         const bool use_idempotent_updates =
@@ -574,7 +575,8 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
     Game search_game = game;
     SearchPath search_path =
         Search(probability, search_game, node_table, root, color_to_move,
-               color_to_move, root->init_score_est, &search_policy);
+               color_to_move, root->init_score_est, &search_policy,
+               /*first_is_root=*/true);
     const bool use_idempotent_updates =
         node_table->is_graph() || (bias_cache_ != nullptr);
     Backward(search_path, use_idempotent_updates);
@@ -641,7 +643,7 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
 GumbelEvaluator::SearchPath GumbelEvaluator::Search(
     core::Probability& probability, Game& game, NodeTable* node_table,
     TreeNode* node, Color color_to_move, Color root_color, float root_score_est,
-    SearchPolicy* search_policy) {
+    SearchPolicy* search_policy, bool first_is_root) {
   SearchPath path = {{game::kNoopLoc, node}};
   if (node->state == TreeNodeState::kNew) {
     // leaf node. evaluate and return.
@@ -652,11 +654,13 @@ GumbelEvaluator::SearchPath GumbelEvaluator::Search(
   }
 
   // internal node. Trace a single path until we hit a leaf.
+  bool is_first_node = first_is_root;
   while (path.back().second->state != TreeNodeState::kNew &&
          !(path.back().second->is_terminal) && !game.IsGameOver()) {
     auto& [action, node] = path.back();
-    Loc selected_action =
-        search_policy->SelectNextAction(node, game, color_to_move);
+    Loc selected_action = search_policy->SelectNextAction(
+        node, game, color_to_move, is_first_node);
+    is_first_node = false;
     CHECK(game.PlayMove(selected_action, color_to_move));
     if (!node->children[selected_action]) {
       // After the move, it's the opponent's turn

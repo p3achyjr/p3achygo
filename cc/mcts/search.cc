@@ -133,7 +133,8 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
           path_index < path_prefix.size()
               ? std::make_pair(std::get<1>(path_prefix[path_index]),
                                std::get<2>(path_prefix[path_index]))
-              : descent_policy.Run(global_state, cur_node, game, color_to_move);
+              : descent_policy.Run(global_state, cur_node, game, color_to_move,
+                                   /*is_root=*/cur_node == root);
       next_move = descent_result.first;
       next_top_actions = descent_result.second;
       CHECK(game.PlayMove(next_move, color_to_move));
