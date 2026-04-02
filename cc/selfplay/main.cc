@@ -20,6 +20,7 @@
 #include "cc/nn/nn_interface.h"
 #include "cc/recorder/dir.h"
 #include "cc/recorder/game_recorder.h"
+#include "cc/selfplay/fork_manager.h"
 #include "cc/selfplay/reuse_buffer.h"
 #include "cc/selfplay/self_play_thread.h"
 
@@ -42,8 +43,6 @@ ABSL_FLAG(int, gumbel_default_k, 5,
           "Number of Low Playout Cap Randomization moves to sample.");
 ABSL_FLAG(int, gumbel_default_n, 32,
           "Number of Low Playout Cap Randomization visits.");
-ABSL_FLAG(std::string, reuse_buffer_type, "goexploit",
-          "Reuse buffer type: 'goexploit', 'regret', or 'composite'.");
 ABSL_FLAG(
     float, use_seen_state_prob, 0.5f,
     "Probability of drawing the initial game state from the reuse buffer.");
@@ -124,23 +123,8 @@ int main(int argc, char** argv) {
                                      absl::GetFlag(FLAGS_flush_interval),
                                      absl::GetFlag(FLAGS_gen), worker_id);
 
-  // initialize reuse buffer (uniform GoExploit or regret-guided).
-  std::unique_ptr<selfplay::ReuseBuffer> reuse_buffer;
-  std::string buffer_type = absl::GetFlag(FLAGS_reuse_buffer_type);
-  if (buffer_type == "regret") {
-    reuse_buffer.reset(static_cast<selfplay::ReuseBuffer*>(
-        new selfplay::RegretGuidedBuffer()));
-  } else if (buffer_type == "composite") {
-    reuse_buffer.reset(static_cast<selfplay::ReuseBuffer*>(
-        new selfplay::CompositeReuseBuffer()));
-  } else if (buffer_type == "goexploit") {
-    reuse_buffer.reset(static_cast<selfplay::ReuseBuffer*>(
-        new selfplay::GoExploitReuseBuffer()));
-  } else {
-    LOG(ERROR) << "Unknown --reuse_buffer_type '" << buffer_type
-               << "'. Must be one of: goexploit, regret, composite.";
-    return 1;
-  }
+  // initialize reuse buffer.
+  auto reuse_buffer = std::make_unique<selfplay::GoExploitReuseBuffer>();
   LOG(INFO) << "Reuse Buffer=" << reuse_buffer->Name()
             << "  use_seen_state_prob="
             << absl::GetFlag(FLAGS_use_seen_state_prob);
@@ -180,7 +164,9 @@ int main(int argc, char** argv) {
             absl::GetFlag(FLAGS_sel_mult_prob),
             absl::GetFlag(FLAGS_bias_cache_lambda),
             absl::GetFlag(FLAGS_bias_cache_alpha),
-            absl::GetFlag(FLAGS_nonroot_var_scale_prior_visits)});
+            absl::GetFlag(FLAGS_nonroot_var_scale_prior_visits),
+            selfplay::ForkManager::Params::ForReuse(
+                absl::GetFlag(FLAGS_use_seen_state_prob))});
     threads.emplace_back(std::move(thread));
   }
 

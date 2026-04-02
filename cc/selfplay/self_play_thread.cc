@@ -19,6 +19,7 @@
 #include "cc/mcts/tree.h"
 #include "cc/recorder/game_recorder.h"
 #include "cc/selfplay/book.h"
+#include "cc/selfplay/fork_manager.h"
 #include "cc/selfplay/reuse_buffer.h"
 
 #define LOG_TO_SINK(severity, sink) LOG(severity).ToSinkOnly(&sink)
@@ -76,7 +77,7 @@ static std::atomic<bool> running = true;
 void AddNewInitState(ReuseBuffer* buffer, const Game& game, const Board& board,
                      Color color_to_move, int abs_move_num,
                      float regret = 0.0f) {
-  absl::InlinedVector<Move, constants::kMaxGameLen> last_moves;
+  absl::InlinedVector<Move, constants::kNumLastMoves> last_moves;
   for (int off = constants::kNumLastMoves; off > 0; --off) {
     // game.move() handles the kMoveOffset, so abs_move_num - off can be as
     // low as -kMoveOffset (accessing the initial last_moves noops).
@@ -197,7 +198,7 @@ void AddRegretGuidedStates(Probability& probability, ReuseBuffer* reuse_buffer,
   }
 }
 
-InitState GetInitState(Probability& probability, ReuseBuffer* buffer,
+InitState GetInitState(Probability& probability, GoExploitReuseBuffer* buffer,
                        float use_seen_state_prob, int num_games_played) {
   const float komi =
       std::round(7.0f + std::clamp(probability.Gaussian(), -3.0f, 3.0f)) +
@@ -207,7 +208,7 @@ InitState GetInitState(Probability& probability, ReuseBuffer* buffer,
                 {kNoopMove, kNoopMove, kNoopMove, kNoopMove, kNoopMove},
                 BLACK,
                 0,
-                /*force_full_search=*/false,
+                FirstMoveBehavior::kSample,
                 InitState::Kind::kEmpty};
   float p = probability.Uniform();
   if (p <= kPlayFromBookProb) {
@@ -229,18 +230,11 @@ InitState GetInitState(Probability& probability, ReuseBuffer* buffer,
 
     return s0;
   } else if (p <= kPlayFromBookProb + use_seen_state_prob) {
-    if (num_games_played < 3 && buffer->GetType() == BufferType::kRegret) {
-      // give the regret buffer some time to fill up.
-      return s0;
-    }
     std::optional<InitState> seen_state = buffer->Get();
     if (!seen_state) {
       return s0;
     }
-
-    seen_state->kind = seen_state->force_full_search
-                           ? InitState::Kind::kRegret
-                           : InitState::Kind::kGoExploit;
+    seen_state->kind = InitState::Kind::kGoExploit;
     return seen_state.value();
   } else if (p <= kPlayFromBookProb + use_seen_state_prob + kHandicapGame) {
     int handicap = std::floor(probability.Uniform() * 3 + 2);
@@ -249,7 +243,7 @@ InitState GetInitState(Probability& probability, ReuseBuffer* buffer,
                      {kNoopMove, kNoopMove, kNoopMove, kNoopMove, kNoopMove},
                      WHITE,
                      0,
-                     /*force_full_search=*/false,
+                     FirstMoveBehavior::kSample,
                      InitState::Kind::kHandicap};
   }
 
@@ -289,7 +283,7 @@ std::string ToString(const Color& color) {
 }  // namespace
 
 void Run(size_t seed, int thread_id, NNInterface* nn_interface,
-         GameRecorder* game_recorder, ReuseBuffer* reuse_buffer,
+         GameRecorder* game_recorder, GoExploitReuseBuffer* reuse_buffer,
          std::string logfile, SPConfig config) {
   FileSink sink(logfile.c_str());
   Probability probability(seed);
@@ -301,8 +295,16 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     InitState init_state =
         GetInitState(probability, reuse_buffer, config.use_seen_state_prob,
                      num_games_played);
-    const bool is_regret_game = init_state.force_full_search;
+    const bool force_full_search_first_move =
+        init_state.first_move_behavior == FirstMoveBehavior::kForceFullSearch;
+    const bool disable_sampling =
+        init_state.first_move_behavior != FirstMoveBehavior::kSample;
     const int init_mv_num = init_state.move_num;
+
+    // ForkManager for fresh games only (kEmpty, kBook, kHandicap).
+    const bool is_fresh_game = init_state.kind == InitState::Kind::kEmpty ||
+                               init_state.kind == InitState::Kind::kBook ||
+                               init_state.kind == InitState::Kind::kHandicap;
 
     // Game state.
     Game game(init_state.board, init_state.last_moves, init_mv_num);
@@ -346,13 +348,13 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     PositionsForRegret positions_for_regret;
 
     // Number of moves for which to sample directly from the policy.
-    // Regret games skip raw policy sampling — every move is fully searched.
+    // kPlay/kForceFullSearch disable raw policy sampling.
     // For mid-game positions, the cap decays with a half-life of 40 moves so
     // that late-game restarts do less raw-policy sampling.
     int const max_raw_policy_moves = std::round(
         kMaxNumRawPolicyMoves * std::pow(0.5f, init_state.move_num / 40.0f));
     int const num_moves_raw_policy =
-        !is_regret_game && max_raw_policy_moves > 0 &&
+        !disable_sampling && max_raw_policy_moves > 0 &&
                 probability.Uniform() < kOpeningExploreProb
             ? RandRange(probability.prng(), 0, max_raw_policy_moves)
             : 0;
@@ -407,6 +409,9 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       return RandRange(probability.prng(), min_k, config.default_params.k + 1);
     }();
     GumbelEvaluator gumbel_evaluator(nn_interface, thread_id, bias_cache);
+    ForkManager fork_manager(config.fork_params, reuse_buffer,
+                             &gumbel_evaluator, probability,
+                             /*started_from_forced_search=*/!is_fresh_game);
     while (IsRunning() && !game.IsGameOver() &&
            game.num_moves() < config.max_moves) {
       auto round_start = std::chrono::steady_clock::now();
@@ -608,7 +613,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       }();
 
       // Force full search on the first move of a regret-game restart.
-      bool const force_first_move = is_regret_game && game.num_moves() == 0;
+      bool const force_first_move =
+          force_full_search_first_move && game.num_moves() == 0;
       bool const is_move_selected_for_training =
           force_first_move || probability.Uniform() < select_move_prob;
       bool const is_move_over_search =
@@ -724,6 +730,13 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         num_consecutive_down_bad_moves = 0;
       }
 
+      // Fork before playing the move (ForkManager sees the pre-move board).
+      fork_manager.MaybeFork(game,
+                             ForkManager::MoveData{game.board(), color_to_move,
+                                                   move, nn_util_est, q_post,
+                                                   /*is_eligible=*/move_n != 0},
+                             probability);
+
       // Play move, and calculate PA regions if we hit a checkpoint.
       game.PlayMove(move, color_to_move);
       if (std::find(std::begin(kComputePAMoveNums),
@@ -784,13 +797,6 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         float p = penalty * kAddSeenStateProb;
         return p;
       }(root_q_outcome);
-
-      if (probability.Uniform() < add_init_state_prob &&
-          (reuse_buffer->GetType() == BufferType::kGoExploit ||
-           reuse_buffer->GetType() == BufferType::kComposite)) {
-        AddNewInitState(reuse_buffer, game, game.board(), color_to_move,
-                        game.num_moves());
-      }
 
       auto search_dur =
           std::chrono::duration_cast<std::chrono::milliseconds>(end - begin)
@@ -942,16 +948,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     LOG_TO_SINK(INFO, sink) << "Black Score=" << game.result().bscore
                             << "  White Score=" << game.result().wscore;
 
-    // Find the positions with the most "regret" and add them to the reuse
-    // buffer. The rough intuition for "regret" is the positions that led to
-    // the biggest loss in winrate. It is implemented by taking an EMA of
-    // value loss over a 50-move horizon.
-    if (reuse_buffer->GetType() == BufferType::kRegret ||
-        reuse_buffer->GetType() == BufferType::kComposite) {
-      AddRegretGuidedStates(probability, reuse_buffer, game,
-                            positions_for_regret,
-                            is_regret_game ? probability.Uniform() < 0.5f : 1);
-    }
+    fork_manager.FinalizeGame(game, probability);
 
     auto begin = std::chrono::high_resolution_clock::now();
     game_recorder->RecordGame(thread_id, init_state.board, game, mcts_pis,

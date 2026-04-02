@@ -26,7 +26,7 @@ class Game final {
 
   explicit Game(
       const Board& board,
-      const absl::InlinedVector<Move, constants::kMaxGameLen> last_moves,
+      const absl::InlinedVector<Move, constants::kNumLastMoves>& last_moves,
       const int init_mv_num);
   Game();
   Game(bool prohibit_pass_alive);
