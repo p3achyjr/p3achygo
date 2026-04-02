@@ -43,4 +43,12 @@ float Probability::Gaussian() {
   return z;
 }
 
+float Probability::Exponential() {
+  float u = 0;
+  while (u == 0) {
+    u = Uniform();
+  }
+  return -std::log(u);
+}
+
 }  // namespace core

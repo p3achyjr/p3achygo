@@ -14,6 +14,15 @@
 
 namespace selfplay {
 
+// Controls sampling and search params for the first move of a restarted game.
+enum class FirstMoveBehavior : uint8_t {
+  kSample = 0,  // game proceeds as normal
+  kPlay =
+      1,  // no opening raw-policy sampling; game proceeds as normal otherwise
+  kForceFullSearch =
+      2,  // no opening raw-policy sampling; first move gets a full search
+};
+
 struct InitState {
   enum class Kind : uint8_t {
     kEmpty = 0,
@@ -23,12 +32,10 @@ struct InitState {
     kRegret = 4,
   };
   game::Board board;
-  absl::InlinedVector<game::Move, constants::kMaxGameLen> last_moves;
+  absl::InlinedVector<game::Move, constants::kNumLastMoves> last_moves;
   game::Color color_to_move;
   int move_num = 0;
-  // If true, the game started from this state should use full search params
-  // and force all moves to be trainable.
-  bool force_full_search = false;
+  FirstMoveBehavior first_move_behavior = FirstMoveBehavior::kSample;
   Kind kind = Kind::kEmpty;
 };
 
@@ -47,7 +54,7 @@ class ReuseBuffer {
 // Ignores regret, uniform random sampling.
 class GoExploitReuseBuffer final : public ReuseBuffer {
  public:
-  void Add(InitState state, float /*regret*/) override {
+  void Add(InitState state, float regret = 0) override {
     absl::MutexLock l(&mu_);
     buffer_.Append(state);
   }
@@ -78,12 +85,13 @@ class RegretGuidedBuffer final : public ReuseBuffer {
     regret_pq_.PushHeap(Entry{state, regret});
   }
 
-  // Returns and removes the highest-regret state, with force_full_search set.
+  // Returns and removes the highest-regret state, with first move forced full
+  // search.
   std::optional<InitState> Get() override {
     absl::MutexLock l(&mu_);
     if (regret_pq_.Size() <= 0) return std::nullopt;
     InitState state = regret_pq_.PopHeap().state;
-    state.force_full_search = true;
+    state.first_move_behavior = FirstMoveBehavior::kForceFullSearch;
     return state;
   }
 

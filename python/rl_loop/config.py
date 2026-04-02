@@ -45,7 +45,6 @@ class RunConfig(object):
     eval_n_growth_window: int
     lr_transition_window: int
     use_seen_state_prob: float
-    reuse_buffer_type: str  # 'goexploit', 'regret', or 'composite'
     sel_mult_base: float
     sel_mult_scale_factor: float
     bias_cache_lambda: float
@@ -93,7 +92,6 @@ def parse(run_id: str) -> RunConfig:
         eval_n_growth_window = obj.get("eval_n_growth_window", 0)
         lr_transition_window = obj.get("lr_transition_window", 0)
         use_seen_state_prob = obj.get("use_seen_state_prob", 0.5)
-        reuse_buffer_type = obj.get("reuse_buffer_type", "goexploit")
         sel_mult_base = obj.get("sel_mult_base", 0.0)
         sel_mult_scale_factor = obj.get("sel_mult_scale_factor", 1.0)
         bias_cache_lambda = obj.get("bias_cache_lambda", 0.0)
@@ -131,7 +129,6 @@ def parse(run_id: str) -> RunConfig:
             eval_n_growth_window,
             lr_transition_window,
             use_seen_state_prob,
-            reuse_buffer_type,
             sel_mult_base,
             sel_mult_scale_factor,
             bias_cache_lambda,

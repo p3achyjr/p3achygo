@@ -4,6 +4,7 @@
 #include "absl/container/flat_hash_map.h"
 #include "cc/nn/nn_interface.h"
 #include "cc/recorder/game_recorder.h"
+#include "cc/selfplay/fork_manager.h"
 #include "cc/selfplay/reuse_buffer.h"
 
 namespace selfplay {
@@ -47,13 +48,16 @@ struct SPConfig {
   const float bias_cache_alpha = 0.8f;
   // Prior visits for nonroot var-scaling PUCT. -1 disables var scaling.
   const int nonroot_var_scale_prior_visits = 10;
+  // Fork manager parameters.
+  const ForkManager::Params fork_params = ForkManager::Params{};
   // Per-generation sel_mult threshold calibration.
   const SelMultCalibration calibration = {};
 };
 
 void Run(size_t seed, int thread_id, nn::NNInterface* nn_interface,
-         recorder::GameRecorder* game_recorder, ReuseBuffer* reuse_buffer,
-         std::string logfile, SPConfig config);
+         recorder::GameRecorder* game_recorder,
+         GoExploitReuseBuffer* reuse_buffer, std::string logfile,
+         SPConfig config);
 
 void SignalStop();
 bool IsRunning();

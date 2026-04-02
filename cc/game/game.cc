@@ -1,15 +1,17 @@
 #include "cc/game/game.h"
 
+#include "cc/constants/constants.h"
 #include "cc/game/board.h"
 #include "cc/game/loc.h"
 
 namespace game {
 
-Game::Game(const Board& board,
-           const absl::InlinedVector<Move, constants::kMaxGameLen> last_moves,
-           const int init_mv_num)
+Game::Game(
+    const Board& board,
+    const absl::InlinedVector<Move, constants::kNumLastMoves>& last_moves,
+    const int init_mv_num)
     : board_(board),
-      moves_(last_moves),
+      moves_(last_moves.begin(), last_moves.end()),
       result_(Result{EMPTY, 0, 0, {}}),
       init_mv_num_(init_mv_num) {}
 Game::Game() : Game(true /* prohibit_pass_alive */) {}
