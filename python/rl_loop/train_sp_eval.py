@@ -46,7 +46,11 @@ flags.DEFINE_string(
     "local_run_dir", "/tmp/p3achygo", "Local path for temporary storage"
 )
 flags.DEFINE_bool("local_only", False, "Whether to run RL loop locally.")
-flags.DEFINE_string("chunk_dir", "", "Local directory to read training chunks from. Defaults to local_run_dir.")
+flags.DEFINE_string(
+    "chunk_dir",
+    "",
+    "Local directory to read training chunks from. Defaults to local_run_dir.",
+)
 flags.DEFINE_string(
     "gpu_ids",
     "",
@@ -103,8 +107,10 @@ def eval(
             + f" --recorder_path={local_run_dir}"
             + f" --cache_size={EVAL_CACHE_SIZE}"
             + f" --num_games={games_per_worker}"
-            + f" --cur_n={n} --cur_use_puct=1 --cur_use_lcb=1"
-            + f" --cand_n={n} --cand_use_puct=1 --cand_use_lcb=1"
+            + f" --cur_n={n} --cur_use_puct=1 --cur_use_lcb=1 --cur_use_bias_cache=true"
+            + f" --cur_var_scale_cpuct=true --cur_var_scale_prior_visits=10 --cur_p_opt_weight=0.5"
+            + f" --cand_n={n} --cand_use_puct=1 --cand_use_lcb=1 --cand_use_bias_cache=true"
+            + f" --cand_var_scale_cpuct=true --cand_var_scale_prior_visits=10 --cand_p_opt_weight=0.5"
         )
         logging.info(f"Running Eval Worker {i} (GPU {GPU_IDS[i]}):\n'{cmd}'")
         exit_code = proc.run_proc(cmd, env=worker_env)
@@ -127,7 +133,7 @@ def eval(
         with open(res_path) as f:
             elos.append(float(f.read()))
     cand_rel_elo = sum(elos) / len(elos)
-    winner = EvalResult.CUR if cand_rel_elo < 30 else EvalResult.CAND
+    winner = EvalResult.CUR if cand_rel_elo < 0.0 else EvalResult.CAND
     logging.info(f"Winner: {winner}, Cand Elo: {cand_rel_elo} (per-worker: {elos})")
     return EvalResult(winner, cand_rel_elo)
 
@@ -230,6 +236,7 @@ def loop(
         existing_run_id: str,
         local_model_cands_dir: str,
         local_golden_chunk_dir: str,
+        train_gpu_id: int | None = None,
     ):
         logging.info(f"Training from existing run {existing_run_id} for run {run_id}")
         model_gen = fs.get_most_recent_model_cand(run_id)
@@ -254,6 +261,7 @@ def loop(
                 chunk_size_path,
                 batch_num_path,
                 save_trt=False,
+                train_gpu_id=train_gpu_id,
             )
             fs.upload_model_cand(run_id, local_model_cands_dir, next_model_gen)
             fs.remove_local_chunk(local_golden_chunk_dir, next_model_gen)
@@ -317,11 +325,14 @@ def loop(
         fs.download_model_cand(run_id, local_model_cands_dir, model_gen)
 
     if config.from_existing_run:
+        train_gpu_idx = 0  # index into GPU_IDS; this worker is stopped for training
+        train_gpu_id = GPU_IDS[train_gpu_idx]
         train_from_existing_run(
             run_id,
             config.from_existing_run,
             local_model_cands_dir,
             local_golden_chunk_dir,
+            train_gpu_id=train_gpu_id,
         )
         return
 

@@ -34,8 +34,8 @@ using namespace ::recorder;
 // Whether the current thread should log.
 static constexpr int kShouldLogShard = 8;
 
-// Probability to add any state to the seen buffer.
-static constexpr float kAddSeenStateProb = 0.04f;
+// Probability to add any state to the seen buffer. Default = ~1 per game.
+static constexpr float kAddSeenStateProb = 0.003f;
 
 // Max Number of beginning moves to sample directly.
 static constexpr int kMaxNumRawPolicyMoves = 30;
@@ -66,6 +66,9 @@ static constexpr float kDownBadThreshold = -0.90f;
 
 // Number of moves at down bad threshold before decreasing visit count.
 static constexpr float kNumDownBadMovesThreshold = 5;
+
+// PUCT used for fast search.
+static constexpr float kPuctFastSearchProb = 0.25;
 
 // Whether the thread should continue running.
 static std::atomic<bool> running = true;
@@ -196,8 +199,9 @@ void AddRegretGuidedStates(Probability& probability, ReuseBuffer* reuse_buffer,
 
 InitState GetInitState(Probability& probability, ReuseBuffer* buffer,
                        float use_seen_state_prob, int num_games_played) {
-  const float komi = std::round(7.0f + std::min(probability.Gaussian(), 3.0f)) +
-                     (probability.Uniform() < 0.5f ? 0.5f : -0.5f);
+  const float komi =
+      std::round(7.0f + std::clamp(probability.Gaussian(), -3.0f, 3.0f)) +
+      (probability.Uniform() < 0.5f ? -0.5f : 0.5f);
   InitState s0 =
       InitState{Board(komi),
                 {kNoopMove, kNoopMove, kNoopMove, kNoopMove, kNoopMove},
@@ -393,6 +397,15 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
                                  config.bias_cache_lambda);
       bias_cache = &bias_cache_storage.value();
     }
+    const bool use_puct_fast_search =
+        probability.Uniform() < kPuctFastSearchProb;
+    const float fast_move_noise_scaling = probability.Uniform() / 1.4f;
+    const float fast_move_gumbel_k = [&]() {
+      // as k increases, search gets weaker.
+      int num_rounds = std::log2(config.default_params.k);
+      int min_k = 1ull << num_rounds;
+      return RandRange(probability.prng(), min_k, config.default_params.k + 1);
+    }();
     GumbelEvaluator gumbel_evaluator(nn_interface, thread_id, bias_cache);
     while (IsRunning() && !game.IsGameOver() &&
            game.num_moves() < config.max_moves) {
@@ -471,15 +484,20 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
           for (int i = 0; i < pre_k; ++i) mean += qs[i];
           mean /= pre_k;
           float var = 0;
-          for (int i = 0; i < pre_k; ++i) var += (qs[i] - mean) * (qs[i] - mean);
+          for (int i = 0; i < pre_k; ++i)
+            var += (qs[i] - mean) * (qs[i] - mean);
           pre_q_var = var / pre_k;
 
           // Prior gap: top1 - top2 prior among visited children.
           float p1 = 0.0f, p2 = 0.0f;
           for (int i = 0; i < pre_k; ++i) {
             float p = root_node->move_probs[top_actions[i]];
-            if (p >= p1) { p2 = p1; p1 = p; }
-            else if (p > p2) { p2 = p; }
+            if (p >= p1) {
+              p2 = p1;
+              p1 = p;
+            } else if (p > p2) {
+              p2 = p;
+            }
           }
           pre_prior_gap = p1 - p2;
         }
@@ -489,7 +507,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       // Group 1: |NN_util - MCTS_util| pre-search.
       //   No bonus below p50; scales linearly to 2.0x at p95.
       const float sel_g1_mult = [&]() {
-        constexpr float kP50 = 0.060f;
+        constexpr float kP50 = 0.125f;
         constexpr float kP95 = 0.436f;
         const float diff = std::abs(root_node->init_util_est - q_pre);
         return 1.0f + std::clamp((diff - kP50) / (kP95 - kP50), 0.0f, 1.0f);
@@ -501,7 +519,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       //   No bonus above p30; scales linearly to 1.5x at p5.
       const float sel_g2_bonus = [&]() {
         if (pre_k < 2 || pre_prior_gap < 0.2f) return 1.0f;
-        constexpr float kP5  = 0.0013f;
+        constexpr float kP5 = 0.0013f;
         constexpr float kP30 = 0.012f;
         return 1.0f + 0.5f * std::clamp((kP30 - pre_top_gap) / (kP30 - kP5),
                                         0.0f, 1.0f);
@@ -515,18 +533,25 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         if (pre_k < 2 || pre_prior_gap < 0.2f) return 1.0f;
         constexpr float kP85 = 0.158f;
         constexpr float kP95 = 0.345f;
-        return 1.0f - 0.5f * std::clamp(
-                                 (pre_top_gap - kP85) / (kP95 - kP85),
-                                 0.0f, 1.0f);
+        return 1.0f - 0.5f * std::clamp((pre_top_gap - kP85) / (kP95 - kP85),
+                                        0.0f, 1.0f);
       }();
 
-      const bool apply_sel_mult = config.sel_mult_base > 0.0f &&
-                                  probability.Uniform() < config.sel_mult_prob;
-      const float sel_mult = apply_sel_mult
-                                 ? config.sel_mult_base *
-                                       std::max(sel_g1_mult, sel_g2_bonus) *
-                                       sel_g2_penalty
-                                 : 1.0f;
+      const bool apply_sel_mult = config.sel_mult_base > 0.0f;
+      const float sel_g1_mult_adj =
+          (sel_g1_mult - 1.0f) * config.sel_mult_prob + 1.0f;
+      const float sel_g2_bonus_adj =
+          (sel_g2_bonus - 1.0f) * config.sel_mult_prob + 1.0f;
+      const float sel_g2_penalty_adj =
+          1.0f - (1.0f - sel_g2_penalty) * config.sel_mult_prob;
+      const float sel_mult_base_adj =
+          config.sel_mult_base +
+          (1.0f - config.sel_mult_base) * (1.0f - config.sel_mult_prob);
+      const float sel_mult =
+          apply_sel_mult ? sel_mult_base_adj *
+                               std::max(sel_g1_mult_adj, sel_g2_bonus_adj) *
+                               sel_g2_penalty_adj
+                         : 1.0f;
 
       // Probability of selecting a move for training, scaled by sel_mult.
       // If we are not down bad, this is a base probability of
@@ -538,10 +563,10 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         if (sampling_raw_policy) {
           return 0.0f;
         }
-        const float base = is_either_down_bad
-                               ? down_bad_coeff * down_bad_coeff *
-                                     kMoveSelectedForTrainingProb
-                               : kMoveSelectedForTrainingProb;
+        const float base =
+            is_either_down_bad
+                ? down_bad_coeff * down_bad_coeff * kMoveSelectedForTrainingProb
+                : kMoveSelectedForTrainingProb;
         return base * sel_mult;
       }();
 
@@ -604,8 +629,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
           gumbel_k = trainable_gumbel_params.k;
         } else {
           gumbel_n = config.default_params.n;
-          gumbel_k = config.default_params.k;
-          noise_scaling = 0.0f;
+          gumbel_k = fast_move_gumbel_k;
+          noise_scaling = fast_move_noise_scaling;
         }
 
         return std::make_tuple(gumbel_n, gumbel_k, noise_scaling);
@@ -627,7 +652,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       // Run and Profile Search.
       auto begin = std::chrono::steady_clock::now();
       GumbelResult gumbel_res =
-          is_move_selected_for_training || sampling_raw_policy || gumbel_n < 100
+          is_move_selected_for_training || sampling_raw_policy ||
+                  !use_puct_fast_search
               ? gumbel_evaluator.SearchRoot(
                     probability, game, node_table.get(), root_node,
                     color_to_move,
@@ -650,6 +676,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
                         .set_c_puct_visit_scaling(0.28f)
                         .set_c_puct_v_2(0.0f)
                         .set_tau(tau)
+                        .set_root_fpu(0.0f)
                         .build());
       auto end = std::chrono::steady_clock::now();
 
@@ -672,9 +699,12 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       float move_qz = QOutcome(root_node, move);
 
       // Bias cache adjustment for this root (read-only, no update).
-      float qadj = bias_cache != nullptr ? bias_cache->Fetch(root_node) : 0.0f;
+      float obs_bias =
+          bias_cache != nullptr ? bias_cache->Fetch(root_node) : 0.0f;
+      float nn_util_adj = nn_util_est - obs_bias;
 
-      // Per-move uncertainty and NN/MCTS divergence (pre-search, via tree reuse).
+      // Per-move uncertainty and NN/MCTS divergence (pre-search, via tree
+      // reuse).
       float node_uncertainty = root_node->v_err;
       float nn_mcts_diff = std::abs(nn_util_est - q_pre);
 
@@ -788,12 +818,10 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       diff_ema = diff_ema == 0 ? nn_mcts_diff
                                : (0.75f * diff_ema + 0.25f * nn_mcts_diff);
 
-      var_avg =
-          (var_avg * (game.num_moves() - 1) + var_pre) / game.num_moves();
+      var_avg = (var_avg * (game.num_moves() - 1) + var_pre) / game.num_moves();
       var_min = std::min(var_min, var_pre);
       var_max = std::max(var_max, var_pre);
-      var_ema = var_ema == 0 ? var_pre
-                             : (0.75f * var_ema + 0.25f * var_pre);
+      var_ema = var_ema == 0 ? var_pre : (0.75f * var_ema + 0.25f * var_pre);
 
       if (pre_k >= 2) {
         const int n = game.num_moves();
@@ -811,12 +839,10 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       }
 
       sel_mult_avg =
-          (sel_mult_avg * (game.num_moves() - 1) + sel_mult) /
-          game.num_moves();
-      sel_mult_ema =
-          sel_mult_ema == 0
-              ? sel_mult
-              : (0.75f * sel_mult_ema + 0.25f * sel_mult);
+          (sel_mult_avg * (game.num_moves() - 1) + sel_mult) / game.num_moves();
+      sel_mult_ema = sel_mult_ema == 0
+                         ? sel_mult
+                         : (0.75f * sel_mult_ema + 0.25f * sel_mult);
 
       auto round_end = std::chrono::steady_clock::now();
       auto round_dur = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -837,19 +863,48 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
           << "  Trainable=" << is_move_selected_for_training
           << "  Early Stopping=" << early_stopping_enabled
           << "  Over Search=" << is_move_over_search
-          << "  Visits=" << gumbel_res.visits << "  Tau=" << tau << "\n";
+          << "  Visits=" << gumbel_res.visits << "  Tau=" << tau
+          << "  NoiseScaling=" << noise_scaling
+          << "  PUCT Fast Search=" << use_puct_fast_search << "\n";
         s << "Last 5 Moves: " << game.move(game.num_moves() - 5) << "  "
           << game.move(game.num_moves() - 4) << "  "
           << game.move(game.num_moves() - 3) << "  "
           << game.move(game.num_moves() - 2) << "  "
           << game.move(game.num_moves() - 1) << "\n";
-        s << "(" << root_color << ") NN Stats\n  Qz = " << qz_nn
+        s << "(" << root_color << ") NN Stats\n  Q = " << nn_util_est
+          << "  Qadj = " << nn_util_adj << "  Qz = " << qz_nn
           << "\n  Score = " << score_nn << "\n";
         s << "(" << root_color << ") Pre-Search Stats\n  N = " << n_pre
           << "\n  Q = " << q_pre << "\n  Qz = " << qz_pre << "\n";
         s << "(" << root_color << ") Post-Search Stats\n  N = " << n_post
           << "\n  Q = " << q_post << "\n  Qz = " << root_q_outcome
-          << "\n  Qadj = " << qadj << "\n";
+          << "\n  adj = " << obs_bias << "\n";
+        s << "(" << ToString(root_node->color_to_move)
+          << ") Next Root  N=" << root_node->n << "  Q=" << root_node->v
+          << "  Qz=" << root_node->v_outcome
+          << "  Score=" << root_node->init_score_est << "\n";
+        s << "Uncertainty=" << node_uncertainty << "  Avg=" << uncertainty_avg
+          << "  Min=" << uncertainty_min << "  Max=" << uncertainty_max
+          << "  EMA=" << uncertainty_ema << "\n";
+        s << "|NN-MCTS|=" << nn_mcts_diff << "  Avg=" << diff_avg
+          << "  Min=" << diff_min << "  Max=" << diff_max
+          << "  EMA=" << diff_ema << "\n";
+        s << "Var(pre)=" << var_pre << "  Avg=" << var_avg
+          << "  Min=" << var_min << "  Max=" << var_max << "  EMA=" << var_ema
+          << "\n";
+        s << "MoveQ(k=" << pre_k << ")" << "  Var=" << pre_q_var
+          << "  VarAvg=" << q_var_avg << "  VarMin=" << q_var_min
+          << "  VarMax=" << q_var_max << "  VarEMA=" << q_var_ema << "\n";
+        s << "  Top1/2Gap=" << pre_top_gap << "  PriorGap=" << pre_prior_gap
+          << "  GapAvg=" << top_gap_avg << "  GapMin=" << top_gap_min
+          << "  GapMax=" << top_gap_max << "  GapEMA=" << top_gap_ema << "\n";
+        s << "SelMult=" << sel_mult << "  Base=" << config.sel_mult_base
+          << "  BaseAdj=" << sel_mult_base_adj << "  G1=" << sel_g1_mult
+          << "  G1Adj=" << sel_g1_mult_adj << "  G2Bonus=" << sel_g2_bonus
+          << "  G2BonusAdj=" << sel_g2_bonus_adj
+          << "  G2Penalty=" << sel_g2_penalty
+          << "  G2PenaltyAdj=" << sel_g2_penalty_adj << "  Avg=" << sel_mult_avg
+          << "  EMA=" << sel_mult_ema << "\n";
         s << "Raw NN Move=" << mv_to_string(nn_move) << "\n  n = " << nn_move_n
           << "\n  q = " << nn_move_q << "\n  qz = " << nn_move_qz << "\n";
         s << "Gumbel Move=" << mv_to_string(move) << "\n  n = " << move_n
@@ -866,32 +921,6 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
               << "  score=" << absl::StrFormat("%.3f", mv_stats.score) << "\n";
           }
         }
-        s << "(" << ToString(root_node->color_to_move)
-          << ") Next Root  N=" << root_node->n << "  Q=" << root_node->v
-          << "  Qz=" << root_node->v_outcome
-          << "  Score=" << root_node->init_score_est << "\n";
-        s << "Uncertainty=" << node_uncertainty << "  Avg=" << uncertainty_avg
-          << "  Min=" << uncertainty_min << "  Max=" << uncertainty_max
-          << "  EMA=" << uncertainty_ema << "\n";
-        s << "|NN-MCTS|=" << nn_mcts_diff << "  Avg=" << diff_avg
-          << "  Min=" << diff_min << "  Max=" << diff_max
-          << "  EMA=" << diff_ema << "\n";
-        s << "Var(pre)=" << var_pre << "  Avg=" << var_avg
-          << "  Min=" << var_min << "  Max=" << var_max
-          << "  EMA=" << var_ema << "\n";
-        s << "MoveQ(k=" << pre_k << ")"
-          << "  Var=" << pre_q_var << "  VarAvg=" << q_var_avg
-          << "  VarMin=" << q_var_min << "  VarMax=" << q_var_max
-          << "  VarEMA=" << q_var_ema << "\n";
-        s << "  Top1/2Gap=" << pre_top_gap << "  PriorGap=" << pre_prior_gap
-          << "  GapAvg=" << top_gap_avg << "  GapMin=" << top_gap_min
-          << "  GapMax=" << top_gap_max << "  GapEMA=" << top_gap_ema << "\n";
-        s << "SelMult=" << sel_mult
-          << "  G1=" << sel_g1_mult
-          << "  G2Bonus=" << sel_g2_bonus
-          << "  G2Penalty=" << sel_g2_penalty
-          << "  Avg=" << sel_mult_avg
-          << "  EMA=" << sel_mult_ema << "\n";
         s << "Board:\n" << game.board() << "\n";
         s << "Nodes Reaped=" << num_nodes_reaped
           << "  Reap Time=" << reap_time_us

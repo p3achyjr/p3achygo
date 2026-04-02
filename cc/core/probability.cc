@@ -10,7 +10,7 @@ Probability::Probability(uint64_t seed) : prng_(seed) {}
 PRng& Probability::prng() { return prng_; }
 
 float Probability::GumbelSample() {
-  float cdf = prng_.next() / static_cast<float>(0xffffffff);
+  float cdf = Uniform();
   return -logf(-logf(cdf));
 }
 

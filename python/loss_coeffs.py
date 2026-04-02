@@ -30,7 +30,7 @@ class LossCoeffs:
     def RLCoeffs():
         return LossCoeffs(
             1.0,
-            0.15,
+            0.06,  # policy aux
             1.0,
             1.5,
             0.02,  # score

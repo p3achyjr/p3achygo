@@ -96,4 +96,11 @@ if(BUILD_TESTS)
         core_doctest
     )
     add_test(NAME core_vmath_test COMMAND core_vmath_test)
+
+    add_executable(core_probability_test probability_test.cc)
+    target_link_libraries(core_probability_test PRIVATE
+        core_probability
+        core_doctest
+    )
+    add_test(NAME core_probability_test COMMAND core_probability_test)
 endif()

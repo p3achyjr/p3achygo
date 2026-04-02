@@ -116,14 +116,14 @@ def loop(
             selected_k = int(
                 round(
                     config.min_train_selected_k
-                    + c_n * (config.max_train_selected_k - config.min_train_selected_k)
+                    + c_k * (config.max_train_selected_k - config.min_train_selected_k)
                 )
             )
             selected_k = clamp_k(selected_k)
             default_n = int(
                 round(
                     config.min_train_default_n
-                    + c_k * (config.max_train_default_n - config.min_train_default_n)
+                    + c_n * (config.max_train_default_n - config.min_train_default_n)
                 )
             )
             default_k = int(
@@ -204,7 +204,9 @@ def loop(
                 break
 
             if selfplay_proc.poll() is not None:
-                logging.warning(f"Selfplay Process Exited Unexpectedly: {selfplay_proc.returncode}")
+                logging.warning(
+                    f"Selfplay Process Exited Unexpectedly: {selfplay_proc.returncode}"
+                )
                 break
 
         selfplay_proc.communicate("\n")

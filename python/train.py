@@ -294,12 +294,14 @@ class LossTracker:
     def __init__(self):
         self.n = 0
         self.min_losses = defaultdict(lambda: self.MAX_LOSS)
+        self.ema_losses = defaultdict(lambda: 0)
         self.avg_losses = defaultdict(lambda: 0)
 
     def update_losses(
         self,
         result: TrainStepResult,
     ):
+
         loss = result.total_loss.numpy()
         policy_loss = result.policy_loss.numpy()
         policy_aux_loss = result.policy_aux_loss.numpy()
@@ -328,6 +330,25 @@ class LossTracker:
             else 0.0
         )
 
+        def update_mean_losses(r_m: float, r_c: float, losses: dict):
+            losses["loss"] = losses["loss"] * r_m + loss * r_c
+            losses["policy"] = losses["policy"] * r_m + policy_loss * r_c
+            losses["policy_aux"] = losses["policy_aux"] * r_m + policy_aux_loss * r_c
+            losses["outcome"] = losses["outcome"] * r_m + outcome_loss * r_c
+            losses["score_pdf"] = losses["score_pdf"] * r_m + score_pdf_loss * r_c
+            losses["score_cdf"] = losses["score_cdf"] * r_m + score_cdf_loss * r_c
+            losses["own"] = losses["own"] * r_m + own_loss * r_c
+            losses["q6"] = losses["q6"] * r_m + q6_loss * r_c
+            losses["q16"] = losses["q16"] * r_m + q16_loss * r_c
+            losses["q50"] = losses["q50"] * r_m + q50_loss * r_c
+            losses["q_err"] = losses["q_err"] * r_m + q_err_loss * r_c
+            losses["q_score"] = losses["q_score"] * r_m + q_score_loss * r_c
+            losses["q_score_err"] = losses["q_score_err"] * r_m + q_score_err_loss * r_c
+            losses["pi_soft"] = losses["pi_soft"] * r_m + pi_soft_loss * r_c
+            losses["pi_optimistic"] = (
+                losses["pi_optimistic"] * r_m + pi_optimistic_loss * r_c
+            )
+
         self.min_losses["loss"] = min(self.min_losses["loss"], loss)
         self.min_losses["policy"] = min(self.min_losses["policy"], policy_loss)
         self.min_losses["policy_aux"] = min(
@@ -352,38 +373,12 @@ class LossTracker:
 
         r_m = 0.99 if self.n > 0 else 0.0
         r_c = 0.01 if self.n > 0 else 1.0
+        update_mean_losses(r_m, r_c, self.ema_losses)
+
+        r_m = self.n / (self.n + 1)
+        r_c = 1 / (self.n + 1)
+        update_mean_losses(r_m, r_c, self.avg_losses)
         self.n += 1
-        self.avg_losses["loss"] = self.avg_losses["loss"] * r_m + loss * r_c
-        self.avg_losses["policy"] = self.avg_losses["policy"] * r_m + policy_loss * r_c
-        self.avg_losses["policy_aux"] = (
-            self.avg_losses["policy_aux"] * r_m + policy_aux_loss * r_c
-        )
-        self.avg_losses["outcome"] = (
-            self.avg_losses["outcome"] * r_m + outcome_loss * r_c
-        )
-        self.avg_losses["score_pdf"] = (
-            self.avg_losses["score_pdf"] * r_m + score_pdf_loss * r_c
-        )
-        self.avg_losses["score_cdf"] = (
-            self.avg_losses["score_cdf"] * r_m + score_cdf_loss * r_c
-        )
-        self.avg_losses["own"] = self.avg_losses["own"] * r_m + own_loss * r_c
-        self.avg_losses["q6"] = self.avg_losses["q6"] * r_m + q6_loss * r_c
-        self.avg_losses["q16"] = self.avg_losses["q16"] * r_m + q16_loss * r_c
-        self.avg_losses["q50"] = self.avg_losses["q50"] * r_m + q50_loss * r_c
-        self.avg_losses["q_err"] = self.avg_losses["q_err"] * r_m + q_err_loss * r_c
-        self.avg_losses["q_score"] = (
-            self.avg_losses["q_score"] * r_m + q_score_loss * r_c
-        )
-        self.avg_losses["q_score_err"] = (
-            self.avg_losses["q_score_err"] * r_m + q_score_err_loss * r_c
-        )
-        self.avg_losses["pi_soft"] = (
-            self.avg_losses["pi_soft"] * r_m + pi_soft_loss * r_c
-        )
-        self.avg_losses["pi_optimistic"] = (
-            self.avg_losses["pi_optimistic"] * r_m + pi_optimistic_loss * r_c
-        )
 
 
 class ValMetrics:
@@ -585,21 +580,21 @@ def log_train(
 ):
     mode_str = "sl" if mode == Mode.SL else "rl"
 
-    loss_avg = losses.avg_losses["loss"]
-    policy_avg = losses.avg_losses["policy"]
-    policy_aux_avg = losses.avg_losses["policy_aux"]
-    outcome_avg = losses.avg_losses["outcome"]
-    score_pdf_avg = losses.avg_losses["score_pdf"]
-    score_cdf_avg = losses.avg_losses["score_cdf"]
-    own_avg = losses.avg_losses["own"]
-    q6_avg = losses.avg_losses["q6"]
-    q16_avg = losses.avg_losses["q16"]
-    q50_avg = losses.avg_losses["q50"]
-    q_err_avg = losses.avg_losses["q_err"]
-    q_score_avg = losses.avg_losses["q_score"]
-    q_score_err_avg = losses.avg_losses["q_score_err"]
-    pi_soft_avg = losses.avg_losses["pi_soft"]
-    pi_optimistic_avg = losses.avg_losses["pi_optimistic"]
+    loss_avg = losses.ema_losses["loss"]
+    policy_avg = losses.ema_losses["policy"]
+    policy_aux_avg = losses.ema_losses["policy_aux"]
+    outcome_avg = losses.ema_losses["outcome"]
+    score_pdf_avg = losses.ema_losses["score_pdf"]
+    score_cdf_avg = losses.ema_losses["score_cdf"]
+    own_avg = losses.ema_losses["own"]
+    q6_avg = losses.ema_losses["q6"]
+    q16_avg = losses.ema_losses["q16"]
+    q50_avg = losses.ema_losses["q50"]
+    q_err_avg = losses.ema_losses["q_err"]
+    q_score_avg = losses.ema_losses["q_score"]
+    q_score_err_avg = losses.ema_losses["q_score_err"]
+    pi_soft_avg = losses.ema_losses["pi_soft"]
+    pi_optimistic_avg = losses.ema_losses["pi_optimistic"]
 
     loss_min = losses.min_losses["loss"]
     policy_min = losses.min_losses["policy"]
