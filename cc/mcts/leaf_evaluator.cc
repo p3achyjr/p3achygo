@@ -172,6 +172,7 @@ void LeafEvaluator::EvaluateTerminal(const Scores& scores,
 
   // Using the actual score, instead of {-1.5, 1.5}, incentivizes search to
   // pass if all other moves just lead to worse outcomes.
+  root_score_est *= color_to_move == root_color ? 1.0f : -1.0f;
   float score_utility = ScoreUtility(final_score, 0.0f, root_score_est);
   float empirical_q = (player_score > opp_score ? 1.0 : -1.0) + score_utility;
   float empirical_outcome = player_score > opp_score ? 1.0 : -1.0;

@@ -130,6 +130,12 @@ def main(_):
     )
     live_model.compile(optimizer=optimizer)
     live_model.save(live_model_path)
+    if FLAGS.next_gen % 10 == 0:
+        live_model_ckpt_path = str(
+            Path(FLAGS.models_dir, "_live", f"live_{FLAGS.next_gen:04d}.keras")
+        )
+        Path(FLAGS.models_dir, "_live").mkdir(exist_ok=True)
+        live_model.save(live_model_ckpt_path)
     if FLAGS.save_trt:
         model_utils.save_onnx_trt(
             swa_model,

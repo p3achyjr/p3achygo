@@ -146,7 +146,6 @@ class ModelConfig:
             channels=256,
             bottleneck_channels=128,
             head_channels=32,
-            c_val=80,
             trunk_block_type="nbt",
         )
 
