@@ -11,6 +11,7 @@
 #include "cc/core/heap.h"
 #include "cc/core/ring_buffer.h"
 #include "cc/game/game.h"
+#include "cc/selfplay/fork_kind.h"
 
 namespace selfplay {
 
@@ -37,6 +38,7 @@ struct InitState {
   int move_num = 0;
   FirstMoveBehavior first_move_behavior = FirstMoveBehavior::kSample;
   Kind kind = Kind::kEmpty;
+  std::optional<ForkKind> fork_kind = std::nullopt;
 };
 
 enum class BufferType { kGoExploit, kRegret, kComposite };

@@ -230,14 +230,7 @@ InitState GetInitState(Probability& probability, GoExploitReuseBuffer* buffer,
     }
 
     return s0;
-  } else if (p <= kPlayFromBookProb + use_seen_state_prob) {
-    std::optional<InitState> seen_state = buffer->Get();
-    if (!seen_state) {
-      return s0;
-    }
-    seen_state->kind = InitState::Kind::kGoExploit;
-    return seen_state.value();
-  } else if (p <= kPlayFromBookProb + use_seen_state_prob + kHandicapGame) {
+  } else if (p <= kPlayFromBookProb + kHandicapGame) {
     int handicap = std::floor(probability.Uniform() * 3 + 2);
     float komi = (handicap - 2) * 14 + 20.5;  // katago ;)
     return InitState{Board(handicap, komi),
@@ -246,9 +239,38 @@ InitState GetInitState(Probability& probability, GoExploitReuseBuffer* buffer,
                      0,
                      FirstMoveBehavior::kSample,
                      InitState::Kind::kHandicap};
+  } else if (p <= kPlayFromBookProb + kHandicapGame + use_seen_state_prob) {
+    std::optional<InitState> seen_state = buffer->Get();
+    if (!seen_state) {
+      return s0;
+    }
+    seen_state->kind = InitState::Kind::kGoExploit;
+    return seen_state.value();
   }
 
+  // fall back to empty game.
   return s0;
+}
+
+std::string ToString(const ForkKind& kind) {
+  switch (kind) {
+    case ForkKind::kEarly:
+      return "kEarly";
+    case ForkKind::kLate:
+      return "kLate";
+    case ForkKind::kSampleT1:
+      return "kSampleT1";
+    case ForkKind::kSampleT2:
+      return "kSampleT2";
+    case ForkKind::kSampleUniform:
+      return "kSampleUniform";
+    case ForkKind::kRegret:
+      return "kRegret";
+    case ForkKind::kUniform:
+      return "kUniform";
+    default:
+      return "Unknown";
+  }
 }
 
 std::string ToString(const InitState::Kind& kind) {
@@ -361,10 +383,17 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
                 probability.Uniform() < kOpeningExploreProb
             ? RandRange(probability.prng(), 0, max_raw_policy_moves)
             : 0;
-    LOG_TO_SINK(INFO, sink) << "\nNEW GAME  Kind=" << ToString(init_state.kind)
-                            << "  StartMove=" << init_state.move_num
-                            << "  Color=" << ToString(color_to_move)
-                            << "  Raw Policy Moves=" << num_moves_raw_policy;
+    LOG_TO_SINK(INFO, sink)
+        << "\nNEW GAME  Kind=" << ToString(init_state.kind)
+        << "  StartMove=" << init_state.move_num
+        << "  Color=" << ToString(color_to_move)
+        << "  Komi=" << init_state.board.komi()
+        << "  Raw Policy Moves=" << num_moves_raw_policy
+        << (init_state.fork_kind.has_value()
+                ? "  ForkKind=" + ToString(*init_state.fork_kind) +
+                      "  Starting Position\n" +
+                      game::ToString(init_state.board.position())
+                : "");
 
     // Begin Search.
     int search_dur_avg = 0;

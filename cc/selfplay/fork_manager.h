@@ -21,19 +21,10 @@
 #include "cc/mcts/gumbel.h"
 #include "cc/mcts/node_table.h"
 #include "cc/mcts/tree.h"
+#include "cc/selfplay/fork_kind.h"
 #include "cc/selfplay/reuse_buffer.h"
 
 namespace selfplay {
-
-enum class ForkKind : uint8_t {
-  kEarly = 0,
-  kLate = 1,
-  kSampleT1 = 2,
-  kSampleT2 = 3,
-  kSampleUniform = 4,
-  kRegret = 5,
-  kUniform = 6,
-};
 
 // Manages position diversity for a single self-play game by sampling
 // alternative continuations and adding them to the reuse buffer.
@@ -47,16 +38,19 @@ enum class ForkKind : uint8_t {
 //   3. Call FinalizeGame() after the game loop (kRegret only).
 class ForkManager final {
  public:
+  // Conditional probabilities at baseline reuse_prob=0.2.
+  static constexpr float kBaseProbs[5] = {0.0f, 0.08f, 0.0f, 0.0f, 0.02f};
   struct Params {
     // Probability of each fork kind. Must sum to 1.
     // Tuned for reuse_chance=0.2 (conditional on being a fresh game).
-    float early_fork_prob = 0.20f;
-    float late_fork_prob = 0.05f;
-    float sample_policy_t1_prob = 0.21f;
-    float sample_policy_t2_prob = 0.075f;
-    float sample_random_prob = 0.015f;
+    float early_fork_prob = kBaseProbs[0];
+    float late_fork_prob = kBaseProbs[1];
+    float sample_policy_t1_prob = kBaseProbs[2];  // absorbed into uniform.
+    float sample_policy_t2_prob = kBaseProbs[3];
+    float sample_random_prob = kBaseProbs[4];
     float regret_prob = 0.0f;
-    float uniform_prob = 0.45f;
+    float uniform_prob = 1.0f - (kBaseProbs[0] + kBaseProbs[1] + kBaseProbs[2] +
+                                 kBaseProbs[3] + kBaseProbs[4]);
     // Post-fork probabilities (independent; need not sum to 1).
     float force_full_search_prob = 0.25f;
     float double_sample_prob = 0.5f;
@@ -67,18 +61,15 @@ class ForkManager final {
     // their effective per-game rates across different reuse fractions.
     // Baseline: reuse_prob=0.2. Scales up/down from there.
     static Params ForReuse(float reuse_prob) {
-      static constexpr float kBaseFresh = 0.8f;  // 1 - baseline reuse 0.2
-      // Conditional probabilities at baseline reuse_prob=0.2.
-      static constexpr float kBase[5] = {0.20f, 0.05f, 0.21f, 0.075f, 0.015f};
-      const float fresh = std::max(1.0f - reuse_prob, 1e-6f);
-      const float scale = kBaseFresh / fresh;
+      static constexpr float kBaseReuse = 0.2f;  // 1 - baseline reuse 0.2
+      const float scale = reuse_prob == 0 ? 0 : (kBaseReuse / reuse_prob);
 
       Params p;
-      p.early_fork_prob = kBase[0] * scale;
-      p.late_fork_prob = kBase[1] * scale;
-      p.sample_policy_t1_prob = kBase[2] * scale;
-      p.sample_policy_t2_prob = kBase[3] * scale;
-      p.sample_random_prob = kBase[4] * scale;
+      p.early_fork_prob = kBaseProbs[0] * scale;
+      p.late_fork_prob = kBaseProbs[1] * scale;
+      p.sample_policy_t1_prob = kBaseProbs[2] * scale;
+      p.sample_policy_t2_prob = kBaseProbs[3] * scale;
+      p.sample_random_prob = kBaseProbs[4] * scale;
       float fork_sum = p.early_fork_prob + p.late_fork_prob +
                        p.sample_policy_t1_prob + p.sample_policy_t2_prob +
                        p.sample_random_prob;
@@ -201,18 +192,19 @@ class ForkManager final {
     const game::Board& board = data.board;
 
     // kUniform: restart from the current position, optionally adjusting komi
-    // to make the game score-neutral (50% probability of adjustment).
+    // to make the game score-neutral (70% probability of adjustment).
     if (kind_ == ForkKind::kUniform) {
       game::Board restart_board = board;
-      if (prob.Uniform() < 0.5f) {
-        const LastMoves last_moves = BuildLastMoves(game, move_num, {});
-        const EvalResult eval = EvalBoard(board, color, last_moves, prob);
-        restart_board.SetKomi(board.komi() +
-                              ComputeKomiDelta(eval.init_score_est, color));
+      const LastMoves last_moves = BuildLastMoves(game, move_num, {});
+      const EvalResult eval = EvalBoard(board, color, last_moves, prob);
+      const float komi_delta = ComputeKomiDelta(eval.init_score_est, color);
+      const float p_adjust_komi = std::atan(eval.init_score_est / 3.0) * M_2_PI;
+      if (prob.Uniform() < p_adjust_komi) {
+        restart_board.SetKomi(board.komi() + komi_delta);
       }
       reuse_buffer_->Add(InitState{
           restart_board, BuildLastMoves(game, move_num, {}), color, move_num,
-          FirstMoveBehavior::kSample, InitState::Kind::kGoExploit});
+          FirstMoveBehavior::kSample, InitState::Kind::kGoExploit, kind_});
       return;
     }
 
@@ -365,7 +357,7 @@ class ForkManager final {
             BuildLastMoves(game, move_num,
                            {{color, alt_move}, {opponent_color, alt_move2}}),
             color, move_num + 2, first_move_behavior,
-            InitState::Kind::kGoExploit});
+            InitState::Kind::kGoExploit, kind_});
         return;
       }
     }
@@ -377,7 +369,7 @@ class ForkManager final {
     reuse_buffer_->Add(InitState{
         fork_board, BuildLastMoves(game, move_num, {{color, alt_move}}),
         opponent_color, move_num + 1, first_move_behavior,
-        InitState::Kind::kGoExploit});
+        InitState::Kind::kGoExploit, kind_});
   }
 
   void FinalizeGame(const game::Game& game, core::Probability& prob) {
@@ -483,7 +475,7 @@ class ForkManager final {
     }
     reuse_buffer_->Add(InitState{top.board, last_moves, top.color, top.move_num,
                                  first_move_behavior,
-                                 InitState::Kind::kGoExploit});
+                                 InitState::Kind::kGoExploit, kind_});
   }
 
  private:

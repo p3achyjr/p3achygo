@@ -176,6 +176,10 @@ int main(int argc, char** argv) {
             << "  use_seen_state_prob="
             << absl::GetFlag(FLAGS_use_seen_state_prob);
 
+  const selfplay::ForkManager::Params fork_params =
+      selfplay::ForkManager::Params::ForReuse(
+          absl::GetFlag(FLAGS_use_seen_state_prob));
+
   LOG(INFO) << "========== Self-Play Config ==========";
   LOG(INFO) << "  gumbel_selected: n=" << absl::GetFlag(FLAGS_gumbel_selected_n)
             << "  k=" << absl::GetFlag(FLAGS_gumbel_selected_k);
@@ -188,6 +192,15 @@ int main(int argc, char** argv) {
             << "  bias_cache_alpha=" << absl::GetFlag(FLAGS_bias_cache_alpha);
   LOG(INFO) << "  nonroot_var_scale_prior_visits="
             << absl::GetFlag(FLAGS_nonroot_var_scale_prior_visits);
+  LOG(INFO) << "  fork_probs (reuse="
+            << absl::GetFlag(FLAGS_use_seen_state_prob)
+            << "):  early=" << fork_params.early_fork_prob
+            << "  late=" << fork_params.late_fork_prob
+            << "  sampleT1=" << fork_params.sample_policy_t1_prob
+            << "  sampleT2=" << fork_params.sample_policy_t2_prob
+            << "  sampleRandom=" << fork_params.sample_random_prob
+            << "  regret=" << fork_params.regret_prob
+            << "  uniform=" << fork_params.uniform_prob;
   LOG(INFO) << "=======================================";
 
   std::vector<std::string> sink_names;
@@ -226,9 +239,7 @@ int main(int argc, char** argv) {
             absl::GetFlag(FLAGS_sel_mult_scale_factor),
             absl::GetFlag(FLAGS_bias_cache_lambda),
             absl::GetFlag(FLAGS_bias_cache_alpha),
-            absl::GetFlag(FLAGS_nonroot_var_scale_prior_visits),
-            selfplay::ForkManager::Params::ForReuse(
-                absl::GetFlag(FLAGS_use_seen_state_prob)),
+            absl::GetFlag(FLAGS_nonroot_var_scale_prior_visits), fork_params,
             calibration});
     threads.emplace_back(std::move(thread));
   }
