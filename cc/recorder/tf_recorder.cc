@@ -1,6 +1,9 @@
 #include "cc/recorder/tf_recorder.h"
 
+#include <algorithm>
+#include <functional>
 #include <memory>
+#include <numeric>
 
 #include "absl/log/check.h"
 #include "absl/strings/str_format.h"
@@ -12,6 +15,7 @@
 #include "cc/game/board.h"
 #include "cc/game/color.h"
 #include "cc/recorder/make_tf_example.h"
+#include "cc/recorder/move_search_stats.h"
 #include "example.pb.h"
 
 namespace recorder {
@@ -50,7 +54,7 @@ class TfRecorderImpl final : public TfRecorder {
                   const std::vector<float>& root_qs,
                   const std::vector<float>& root_scores,
                   const std::vector<float>& klds,
-                  const std::vector<uint32_t>& visit_counts) override;
+                  const std::vector<MoveSearchStats>& move_stats) override;
   void Flush() override;
 
  private:
@@ -62,7 +66,7 @@ class TfRecorderImpl final : public TfRecorder {
     std::vector<float> root_qs;
     std::vector<float> root_scores;
     std::vector<float> klds;
-    std::vector<uint32_t> visit_counts;
+    std::vector<MoveSearchStats> move_stats;
   };
 
   const std::string path_;
@@ -85,24 +89,23 @@ TfRecorderImpl::TfRecorderImpl(std::string path, int num_threads, int gen,
       thread_game_counts_{},
       batch_num_(0) {}
 
-void TfRecorderImpl::RecordGame(int thread_id, const Board& init_board,
-                                const Game& game,
-                                const ImprovedPolicies& mcts_pis,
-                                const std::vector<uint8_t>& move_trainables,
-                                const std::vector<float>& root_qs,
-                                const std::vector<float>& root_scores,
-                                const std::vector<float>& klds,
-                                const std::vector<uint32_t>& visit_counts) {
+void TfRecorderImpl::RecordGame(
+    int thread_id, const Board& init_board, const Game& game,
+    const ImprovedPolicies& mcts_pis,
+    const std::vector<uint8_t>& move_trainables,
+    const std::vector<float>& root_qs, const std::vector<float>& root_scores,
+    const std::vector<float>& klds,
+    const std::vector<MoveSearchStats>& move_stats) {
   CHECK(game.has_result());
   CHECK(game.num_moves() == mcts_pis.size() &&
         game.num_moves() == move_trainables.size() &&
         game.num_moves() == root_qs.size() &&
         game.num_moves() == root_scores.size() &&
         game.num_moves() == klds.size() &&
-        game.num_moves() == visit_counts.size());
+        game.num_moves() == move_stats.size());
   thread_records_[thread_id].emplace_back(
       Record{init_board, game, mcts_pis, move_trainables, root_qs, root_scores,
-             klds, visit_counts});
+             klds, move_stats});
   ++thread_game_counts_[thread_id];
 }
 
@@ -113,6 +116,7 @@ void TfRecorderImpl::Flush() {
          total_num_trainable_moves = 0, total_num_fast_moves = 0;
   // Buffer examples first. We need to account for policy surprise weighting.
   std::vector<std::string> tf_examples;
+  std::vector<MoveSearchStats> all_move_stats;
   for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
     std::vector<Record>& records = thread_records_[thread_id];
     if (records.empty()) {
@@ -127,7 +131,6 @@ void TfRecorderImpl::Flush() {
       const std::vector<uint8_t>& move_trainables = record.move_trainables;
       const std::vector<float>& root_qs = record.root_qs;
       const std::vector<float>& root_scores = record.root_scores;
-      const std::vector<uint32_t>& visit_counts = record.visit_counts;
       const size_t num_trainable_moves =
           std::accumulate(move_trainables.begin(), move_trainables.end(), 0,
                           [](size_t x, size_t y) { return x + y; });
@@ -140,11 +143,13 @@ void TfRecorderImpl::Flush() {
         }
         return sum;
       }();
-      for (size_t i = 0; i < visit_counts.size(); ++i) {
-        trainable_visit_count += visit_counts[i] * (move_trainables[i] ? 1 : 0);
-        fast_visit_count += visit_counts[i] * (move_trainables[i] ? 0 : 1);
-        total_num_trainable_moves += (move_trainables[i] ? 1 : 0);
-        total_num_fast_moves += (move_trainables[i] ? 0 : 1);
+      for (size_t i = 0; i < record.move_stats.size(); ++i) {
+        const bool trainable = move_trainables[i];
+        const size_t vc = static_cast<size_t>(record.move_stats[i].visit_count);
+        trainable_visit_count += vc * (trainable ? 1 : 0);
+        fast_visit_count += vc * (trainable ? 0 : 1);
+        total_num_trainable_moves += (trainable ? 1 : 0);
+        total_num_fast_moves += (trainable ? 0 : 1);
       }
       const float avg_kld =
           num_trainable_moves > 0 ? kld_sum / num_trainable_moves : 0.0f;
@@ -226,6 +231,9 @@ void TfRecorderImpl::Flush() {
         // Play next move.
         board.PlayMove(move.loc, move.color);
       }
+
+      all_move_stats.insert(all_move_stats.end(), record.move_stats.begin(),
+                            record.move_stats.end());
     }
 
     records.clear();
@@ -287,6 +295,86 @@ void TfRecorderImpl::Flush() {
           : 0,
       total_num_fast_moves > 0 ? fast_visit_count / total_num_fast_moves : 0);
   fclose(visit_count_file);
+
+  // Write .stats text file: percentile table for each field (p0..p100 at 5%
+  // increments), one row per field.
+  std::string stats_filename =
+      FilePath(path_) / absl::StrFormat(data::kStatsFormat, gen_, batch_num_,
+                                        num_games, num_records, timestamp,
+                                        worker_id_);
+  FILE* const stats_file = fopen(stats_filename.c_str(), "w");
+
+  // Helper: extract a field from all_move_stats (with optional filter),
+  // sort, and return percentiles at 2.5% increments (p0, p2.5, ..., p100 =
+  // 41 values).
+  const int n_stats = static_cast<int>(all_move_stats.size());
+  auto compute_percentiles =
+      [&](std::function<float(const MoveSearchStats&)> get,
+          std::function<bool(const MoveSearchStats&)> filter = {}) {
+        std::vector<float> vals;
+        vals.reserve(n_stats);
+        for (const auto& s : all_move_stats) {
+          if (!filter || filter(s)) vals.push_back(get(s));
+        }
+        std::sort(vals.begin(), vals.end());
+        std::vector<float> percentiles;
+        const int n = static_cast<int>(vals.size());
+        for (int i = 0; i <= 40; ++i) {
+          int idx = n > 0 ? std::clamp(static_cast<int>(std::round(
+                                           i * 2.5f / 100.0f * (n - 1))),
+                                       0, n - 1)
+                          : 0;
+          percentiles.push_back(n > 0 ? vals[idx] : 0.0f);
+        }
+        return percentiles;
+      };
+
+  auto write_percentiles =
+      [&](const char* name, std::function<float(const MoveSearchStats&)> get,
+          std::function<bool(const MoveSearchStats&)> filter = {}) {
+        auto percentiles = compute_percentiles(get, filter);
+        absl::FPrintF(stats_file, "%-24s", name);
+        for (float v : percentiles) absl::FPrintF(stats_file, " %7.4f", v);
+        absl::FPrintF(stats_file, "\n");
+      };
+
+  // Percentile header (p0, p2.5, p5, ..., p100).
+  absl::FPrintF(stats_file, "# percentiles: p0 p2.5 p5 ... p100 (%d moves)\n",
+                n_stats);
+  absl::FPrintF(stats_file, "%-24s", "field");
+  for (int i = 0; i <= 40; ++i)
+    absl::FPrintF(stats_file, " %7s",
+                  absl::StrFormat("p%.4g", i * 2.5f).c_str());
+  absl::FPrintF(stats_file, "\n");
+
+  write_percentiles("nn_q", [](const MoveSearchStats& s) { return s.nn_q; });
+  write_percentiles("mcts_q",
+                    [](const MoveSearchStats& s) { return s.mcts_q; });
+  write_percentiles("nn_mcts_diff",
+                    [](const MoveSearchStats& s) { return s.nn_mcts_diff; });
+  write_percentiles("v_outcome_stddev", [](const MoveSearchStats& s) {
+    return s.v_outcome_stddev;
+  });
+  write_percentiles("top12_q_gap",
+                    [](const MoveSearchStats& s) { return s.top12_q_gap; });
+  write_percentiles(
+      "top12_q_gap_nz", [](const MoveSearchStats& s) { return s.top12_q_gap; },
+      [](const MoveSearchStats& s) { return s.top12_q_gap > 0.0f; });
+  write_percentiles("prior_gap",
+                    [](const MoveSearchStats& s) { return s.prior_gap; });
+  write_percentiles("prior_entropy",
+                    [](const MoveSearchStats& s) { return s.prior_entropy; });
+  write_percentiles("nn_uncertainty",
+                    [](const MoveSearchStats& s) { return s.nn_uncertainty; });
+  write_percentiles("q_variance",
+                    [](const MoveSearchStats& s) { return s.q_variance; });
+  write_percentiles("kld", [](const MoveSearchStats& s) { return s.kld; });
+  write_percentiles("sel_mult",
+                    [](const MoveSearchStats& s) { return s.sel_mult; });
+  write_percentiles("visit_count",
+                    [](const MoveSearchStats& s) { return s.visit_count; });
+
+  fclose(stats_file);
 
   // Update metadata fields.
   ++batch_num_;

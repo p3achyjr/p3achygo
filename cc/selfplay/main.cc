@@ -4,6 +4,8 @@
 
 #include <sys/stat.h>
 
+#include <fstream>
+#include <sstream>
 #include <thread>
 
 #include "absl/flags/flag.h"
@@ -51,15 +53,56 @@ ABSL_FLAG(float, sel_mult_base, 0.0f,
           "Base multiplier for training position selection probability. "
           "Enables signal-based sampling (|NN-MCTS| and top1/2 Q gap). "
           "0 disables (falls back to flat probability).");
-ABSL_FLAG(float, sel_mult_prob, 1.0f,
-          "Fraction of moves [0,1] where signal-based sel_mult is applied. "
-          "Remaining fraction falls back to sel_mult=1.0.");
+ABSL_FLAG(float, sel_mult_scale_factor, 1.0f,
+          "Scale factor [0,1] applied to all sel_mult signal components. "
+          "0 = signals have no effect; 1 = full effect.");
 ABSL_FLAG(float, bias_cache_lambda, 0.0f,
           "Bias cache lambda (adjustment scale). 0 disables bias cache.");
 ABSL_FLAG(float, bias_cache_alpha, 0.8f,
           "Bias cache alpha (visit count attenuation exponent).");
 ABSL_FLAG(int, nonroot_var_scale_prior_visits, 10,
           "Prior visits for nonroot PUCT var-scaling. -1 disables.");
+ABSL_FLAG(std::string, sel_mult_calibration_file, "",
+          "Path to key=value file with per-generation sel_mult thresholds. "
+          "Written by the Python RL loop from .stats files. If empty, "
+          "hardcoded defaults in SelMultCalibration are used.");
+
+selfplay::SelMultCalibration ParseCalibrationFile(const std::string& path) {
+  selfplay::SelMultCalibration calib;
+  if (path.empty()) return calib;
+
+  std::ifstream f(path);
+  if (!f.is_open()) {
+    LOG(WARNING) << "Could not open --sel_mult_calibration_file: " << path
+                 << ". Using defaults.";
+    return calib;
+  }
+
+  std::string line;
+  while (std::getline(f, line)) {
+    if (line.empty() || line[0] == '#') continue;
+    auto eq = line.find('=');
+    if (eq == std::string::npos) continue;
+    const std::string key = line.substr(0, eq);
+    const float val = std::stof(line.substr(eq + 1));
+    // clang-format off
+    if      (key == "g1_p50")    calib.g1_p50    = val;
+    else if (key == "g1_p72_5")  calib.g1_p72_5  = val;
+    else if (key == "g1_p95")    calib.g1_p95    = val;
+    else if (key == "g2b_p2_5")  calib.g2b_p2_5  = val;
+    else if (key == "g2b_p25")   calib.g2b_p25   = val;
+    else if (key == "g2p_p80")   calib.g2p_p80   = val;
+    else if (key == "g2p_p92_5") calib.g2p_p92_5 = val;
+    else if (key == "g2p_p97_5") calib.g2p_p97_5 = val;
+    else if (key == "std_p70")   calib.std_p70   = val;
+    else if (key == "std_p95")   calib.std_p95   = val;
+    else LOG(WARNING) << "Unknown calibration key: " << key;
+    // clang-format on
+  }
+
+  LOG(INFO) << "Loaded sel_mult calibration from " << path;
+  return calib;
+}
 
 void WaitForSignal() {
   // any line from stdin is a shutdown signal.
@@ -151,7 +194,8 @@ int main(int argc, char** argv) {
   LOG(INFO) << "  gumbel_default:  n=" << absl::GetFlag(FLAGS_gumbel_default_n)
             << "  k=" << absl::GetFlag(FLAGS_gumbel_default_k);
   LOG(INFO) << "  sel_mult_base=" << absl::GetFlag(FLAGS_sel_mult_base)
-            << "  sel_mult_prob=" << absl::GetFlag(FLAGS_sel_mult_prob);
+            << "  sel_mult_scale_factor="
+            << absl::GetFlag(FLAGS_sel_mult_scale_factor);
   LOG(INFO) << "  bias_cache_lambda=" << absl::GetFlag(FLAGS_bias_cache_lambda)
             << "  bias_cache_alpha=" << absl::GetFlag(FLAGS_bias_cache_alpha);
   LOG(INFO) << "  nonroot_var_scale_prior_visits="
@@ -163,6 +207,21 @@ int main(int argc, char** argv) {
     sink_names.push_back(
         absl::StrFormat("/tmp/thread%d_%s_log.txt", thread_id, worker_id));
   }
+  selfplay::SelMultCalibration calibration =
+      ParseCalibrationFile(absl::GetFlag(FLAGS_sel_mult_calibration_file));
+  LOG(INFO) << "======= SelMult Calibration =======";
+  LOG(INFO) << "  G1:  p50=" << calibration.g1_p50
+            << "  p72.5=" << calibration.g1_p72_5
+            << "  p95=" << calibration.g1_p95;
+  LOG(INFO) << "  G2 Bonus: p2.5=" << calibration.g2b_p2_5
+            << "  p25=" << calibration.g2b_p25;
+  LOG(INFO) << "  G2 Penalty: p80=" << calibration.g2p_p80
+            << "  p92.5=" << calibration.g2p_p92_5
+            << "  p97.5=" << calibration.g2p_p97_5;
+  LOG(INFO) << "  Std: p70=" << calibration.std_p70
+            << "  p95=" << calibration.std_p95;
+  LOG(INFO) << "=====================================";
+
   std::vector<std::thread> threads;
   for (int thread_id = 0; thread_id < num_threads; ++thread_id) {
     size_t seed = absl::HashOf(worker_id, thread_id);
@@ -177,10 +236,10 @@ int main(int argc, char** argv) {
                                    absl::GetFlag(FLAGS_gumbel_default_k)},
             absl::GetFlag(FLAGS_use_seen_state_prob),
             absl::GetFlag(FLAGS_sel_mult_base),
-            absl::GetFlag(FLAGS_sel_mult_prob),
+            absl::GetFlag(FLAGS_sel_mult_scale_factor),
             absl::GetFlag(FLAGS_bias_cache_lambda),
             absl::GetFlag(FLAGS_bias_cache_alpha),
-            absl::GetFlag(FLAGS_nonroot_var_scale_prior_visits)});
+            absl::GetFlag(FLAGS_nonroot_var_scale_prior_visits), calibration});
     threads.emplace_back(std::move(thread));
   }
 

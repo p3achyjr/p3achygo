@@ -5,6 +5,7 @@
 
 #include "cc/game/game.h"
 #include "cc/mcts/tree.h"
+#include "cc/recorder/move_search_stats.h"
 #include "cc/recorder/sgf_recorder.h"
 #include "cc/recorder/tf_recorder.h"
 
@@ -35,7 +36,7 @@ class GameRecorder {
                           const std::vector<float>& root_scores,
                           const std::vector<float>& klds,
                           const std::vector<mcts::TreeNode*>& roots,
-                          const std::vector<uint32_t>& visit_counts) = 0;
+                          const std::vector<MoveSearchStats>& move_stats) = 0;
 
   virtual void RecordEvalGame(int thread_id, const game::Game& game,
                               const std::string& b_name,
