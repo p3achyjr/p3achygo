@@ -5,6 +5,7 @@
 #include <string>
 
 #include "cc/game/game.h"
+#include "cc/recorder/move_search_stats.h"
 
 namespace recorder {
 
@@ -33,7 +34,7 @@ class TfRecorder {
                           const std::vector<float>& root_qs,
                           const std::vector<float>& root_scores,
                           const std::vector<float>& klds,
-                          const std::vector<uint32_t>& visit_counts) = 0;
+                          const std::vector<MoveSearchStats>& move_stats) = 0;
 
   // Flushes all pending writes. Not thread safe.
   virtual void Flush() = 0;

@@ -47,7 +47,7 @@ class RunConfig(object):
     use_seen_state_prob: float
     reuse_buffer_type: str  # 'goexploit', 'regret', or 'composite'
     sel_mult_base: float
-    sel_mult_prob: float
+    sel_mult_scale_factor: float
     bias_cache_lambda: float
     bias_cache_alpha: float
     nonroot_var_scale_prior_visits: int
@@ -95,7 +95,7 @@ def parse(run_id: str) -> RunConfig:
         use_seen_state_prob = obj.get("use_seen_state_prob", 0.5)
         reuse_buffer_type = obj.get("reuse_buffer_type", "goexploit")
         sel_mult_base = obj.get("sel_mult_base", 0.0)
-        sel_mult_prob = obj.get("sel_mult_prob", 1.0)
+        sel_mult_scale_factor = obj.get("sel_mult_scale_factor", 1.0)
         bias_cache_lambda = obj.get("bias_cache_lambda", 0.0)
         bias_cache_alpha = obj.get("bias_cache_alpha", 0.8)
         nonroot_var_scale_prior_visits = obj.get("nonroot_var_scale_prior_visits", 10)
@@ -133,7 +133,7 @@ def parse(run_id: str) -> RunConfig:
             use_seen_state_prob,
             reuse_buffer_type,
             sel_mult_base,
-            sel_mult_prob,
+            sel_mult_scale_factor,
             bias_cache_lambda,
             bias_cache_alpha,
             nonroot_var_scale_prior_visits,

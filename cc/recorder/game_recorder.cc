@@ -38,7 +38,7 @@ class GameRecorderImpl final : public GameRecorder {
                   const std::vector<float>& root_scores,
                   const std::vector<float>& klds,
                   const std::vector<mcts::TreeNode*>& roots,
-                  const std::vector<uint32_t>& visit_counts) override;
+                  const std::vector<MoveSearchStats>& move_stats) override;
 
   void RecordEvalGame(int thread_id, const game::Game& game,
                       const std::string& b_name,
@@ -97,15 +97,13 @@ GameRecorderImpl::~GameRecorderImpl() {
   }
 }
 
-void GameRecorderImpl::RecordGame(int thread_id, const game::Board& init_board,
-                                  const game::Game& game,
-                                  const ImprovedPolicies& mcts_pis,
-                                  const std::vector<uint8_t>& is_move_trainable,
-                                  const std::vector<float>& root_qs,
-                                  const std::vector<float>& root_scores,
-                                  const std::vector<float>& klds,
-                                  const std::vector<mcts::TreeNode*>& roots,
-                                  const std::vector<uint32_t>& visit_counts) {
+void GameRecorderImpl::RecordGame(
+    int thread_id, const game::Board& init_board, const game::Game& game,
+    const ImprovedPolicies& mcts_pis,
+    const std::vector<uint8_t>& is_move_trainable,
+    const std::vector<float>& root_qs, const std::vector<float>& root_scores,
+    const std::vector<float>& klds, const std::vector<mcts::TreeNode*>& roots,
+    const std::vector<MoveSearchStats>& move_stats) {
   if (path_.empty()) {
     return;
   }
@@ -117,7 +115,7 @@ void GameRecorderImpl::RecordGame(int thread_id, const game::Board& init_board,
   }
   tf_recorder_->RecordGame(thread_id, init_board, game, mcts_pis,
                            is_move_trainable, root_qs, root_scores, klds,
-                           visit_counts);
+                           move_stats);
   thread_mus_[thread_id].Unlock();
 
   absl::MutexLock lock(&mu_);

@@ -35,6 +35,9 @@ static constexpr char kSgfFullFormat[] = "FULL_gen%03d_b%03d_g%03d_%s.sgf";
 // Format for game-tree SGF lock-file.
 static constexpr char kSgfFullDoneFormat[] = "FULL_gen%03d_b%03d_g%03d_%s.done";
 
+// Format for per-batch search stats file.
+static constexpr char kStatsFormat[] = "gen%03d_b%03d_g%03d_n%05d_t%d_%s.stats";
+
 // keep in sync with python/gcs_utils.py
 static constexpr char kGoldenChunkFormat[] = "chunk_%04d.tfrecord.zz";
 

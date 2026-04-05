@@ -4,6 +4,7 @@ import gcs_utils as gcs
 import os, secrets, shlex, time
 import rl_loop.fs_utils as fs
 import rl_loop.config
+import rl_loop.sel_mult_calibration as calib_utils
 import math
 
 from absl import logging
@@ -135,6 +136,17 @@ def loop(
             return selected_n, selected_k, default_n, default_k
 
         selected_n, selected_k, default_n, default_k = get_gumbel_params()
+
+        # Compute sel_mult calibration from the previous generation's stats
+        # files. Falls back to C++ defaults when no stats are available (gen 0).
+        calib_file = None
+        if gen > 0:
+            calib = calib_utils.compute_calibration(local_sp_chunk_dir, gen - 1)
+            if calib is not None:
+                calib_path = Path(local_run_dir) / f"sel_mult_calib_gen{gen:03d}.txt"
+                calib_utils.write_calibration_file(calib, calib_path)
+                calib_file = str(calib_path)
+
         cmd_str = (
             f"{bin_path} --num_threads={num_threads}"
             + f" --model_path={str(model_path)}"
@@ -148,10 +160,11 @@ def loop(
             + f" --reuse_buffer_type={config.reuse_buffer_type}"
             + f" --use_seen_state_prob={config.use_seen_state_prob}"
             + f" --sel_mult_base={config.sel_mult_base}"
-            + f" --sel_mult_prob={config.sel_mult_prob}"
+            + f" --sel_mult_scale_factor={config.sel_mult_scale_factor}"
             + f" --bias_cache_lambda={config.bias_cache_lambda}"
             + f" --bias_cache_alpha={config.bias_cache_alpha}"
             + f" --nonroot_var_scale_prior_visits={config.nonroot_var_scale_prior_visits}"
+            + (f" --sel_mult_calibration_file={calib_file}" if calib_file else "")
         )
 
         logging.info(f"Running Self-Play Command:\n'{cmd_str}'")
