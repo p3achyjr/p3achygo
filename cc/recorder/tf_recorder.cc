@@ -232,8 +232,14 @@ void TfRecorderImpl::Flush() {
         board.PlayMove(move.loc, move.color);
       }
 
-      all_move_stats.insert(all_move_stats.end(), record.move_stats.begin(),
-                            record.move_stats.end());
+      for (const auto& s : record.move_stats) {
+        // Skip policy-sampled moves (no real search). visit_count == 1
+        // means the root was evaluated but no Gumbel search was run, so
+        // nn_mcts_diff and top12_q_gap are not meaningful.
+        if (s.visit_count > 1.0f) {
+          all_move_stats.push_back(s);
+        }
+      }
     }
 
     records.clear();
@@ -366,8 +372,6 @@ void TfRecorderImpl::Flush() {
                     [](const MoveSearchStats& s) { return s.prior_entropy; });
   write_percentiles("nn_uncertainty",
                     [](const MoveSearchStats& s) { return s.nn_uncertainty; });
-  write_percentiles("q_variance",
-                    [](const MoveSearchStats& s) { return s.q_variance; });
   write_percentiles("kld", [](const MoveSearchStats& s) { return s.kld; });
   write_percentiles("sel_mult",
                     [](const MoveSearchStats& s) { return s.sel_mult; });

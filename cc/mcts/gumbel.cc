@@ -144,6 +144,18 @@ int SampleFromPolicy(
   CHECK(false) << dbg.str();
 }
 
+float ComputeKLD(
+    const std::array<float, constants::kMaxMovesPerPosition>& target,
+    const std::array<float, constants::kMaxMovesPerPosition>& prior) {
+  constexpr double kEps = 1e-10;
+  double kld = 0.0;
+  for (size_t i = 0; i < constants::kMaxMovesPerPosition; ++i) {
+    if (target[i] == 0.0f) continue;
+    kld += target[i] * std::log(target[i] / (prior[i] + kEps));
+  }
+  return static_cast<float>(kld);
+}
+
 // Compute completedQ = {q(a) if N(a) > 0, v_mixed otherwise }.
 // Q values are normalized to [0, 1] before weighting.
 std::array<float, constants::kMaxMovesPerPosition> ComputeImprovedPolicy(
@@ -512,20 +524,7 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
     root->n += child_stat.n;
   }
 
-  auto const kld =
-      [](const std::array<float, constants::kMaxMovesPerPosition> p,
-         const std::array<float, constants::kMaxMovesPerPosition> q) {
-        double kld = 0.0f;
-        for (size_t i = 0; i < constants::kMaxMovesPerPosition; ++i) {
-          constexpr double kEps = 1e-10;
-          if (p[i] == 0) continue;
-          kld += p[i] * std::log(p[i] / (q[i] + kEps));
-        }
-
-        return kld;
-      };
-
-  result.kld = kld(result.pi_improved, root->move_probs);
+  result.kld = ComputeKLD(result.pi_improved, root->move_probs);
   result.visits = visits_spent;
   return result;
 }
