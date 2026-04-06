@@ -16,7 +16,6 @@ struct MoveSearchStats {
   float prior_gap;         // policy prior gap between top-1 and top-2 visited
   float prior_entropy;     // Shannon entropy of NN policy distribution H(pi)
   float nn_uncertainty;    // NN value uncertainty (v_err)
-  float q_variance;        // Q variance among visited children
   float kld;               // KL divergence: improved policy vs NN prior
   float sel_mult;          // training selection probability multiplier
   float visit_count;       // MCTS visit count for this move
@@ -55,10 +54,6 @@ class MoveSearchStats::Builder {
   }
   Builder& nn_uncertainty(float v) {
     s_.nn_uncertainty = v;
-    return *this;
-  }
-  Builder& q_variance(float v) {
-    s_.q_variance = v;
     return *this;
   }
   Builder& kld(float v) {

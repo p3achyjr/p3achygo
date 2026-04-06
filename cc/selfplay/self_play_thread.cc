@@ -386,10 +386,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     // Over-search multiplier tracking.
     float sel_mult_avg = 0, sel_mult_ema = 0;
 
-    // Pre-search move-level Q stats (top-8 children by visit count).
-    float q_var_avg = 0, q_var_ema = 0;
-    float q_var_min = std::numeric_limits<float>::max();
-    float q_var_max = std::numeric_limits<float>::lowest();
+    // Pre-search move-level Q stats.
     float top_gap_avg = 0, top_gap_ema = 0;
     float top_gap_min = std::numeric_limits<float>::max();
     float top_gap_max = std::numeric_limits<float>::lowest();
@@ -452,113 +449,103 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       float q_pre = V(root_node);
       float qz_pre = VOutcome(root_node);
       float var_pre = n_pre < 3 ? 0.0f : root_node->v_outcome_var;
-
-      // Pre-search move-level Q stats: top-8 children by visit count.
-      float pre_q_var = 0.0f, pre_top_gap = 0.0f, pre_prior_gap = 0.0f;
+      // Pre-search move-level Q stats: all visited children, sorted by Q.
+      float pre_top_gap = 0.0f, pre_prior_gap = 0.0f;
+      bool pre_top_prior_is_top_q = false;
+      bool pre_top2_prior_match_top2_q = false;
       int pre_k = 0;
       {
-        constexpr int kTopK = 8;
-        std::array<int, kTopK> top_actions;
-        top_actions.fill(-1);
-        std::array<int, kTopK> top_visits;
-        top_visits.fill(0);
+        struct MoveEntry {
+          int action;
+          float q;
+          float prior;
+        };
+        absl::InlinedVector<MoveEntry, 32> moves;
         for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
-          const int n = root_node->child_visits[a];
-          if (n == 0 || root_node->child(a) == nullptr) continue;
-          for (int i = 0; i < kTopK; ++i) {
-            if (n > top_visits[i]) {
-              for (int j = kTopK - 1; j > i; --j) {
-                top_visits[j] = top_visits[j - 1];
-                top_actions[j] = top_actions[j - 1];
-              }
-              top_visits[i] = n;
-              top_actions[i] = a;
-              break;
-            }
-          }
+          if (root_node->child_visits[a] == 0 || root_node->child(a) == nullptr)
+            continue;
+          moves.push_back({a, Q(root_node, a), root_node->move_probs[a]});
         }
-        std::array<float, kTopK> qs;
-        for (int i = 0; i < kTopK && top_actions[i] >= 0; ++i) {
-          qs[pre_k++] = Q(root_node, top_actions[i]);
-        }
+        std::sort(
+            moves.begin(), moves.end(),
+            [](const MoveEntry& x, const MoveEntry& y) { return x.q > y.q; });
+        pre_k = static_cast<int>(moves.size());
         if (pre_k >= 2) {
-          std::sort(qs.begin(), qs.begin() + pre_k, std::greater<float>());
-          pre_top_gap = qs[0] - qs[1];
-          float mean = 0;
-          for (int i = 0; i < pre_k; ++i) mean += qs[i];
-          mean /= pre_k;
-          float var = 0;
-          for (int i = 0; i < pre_k; ++i)
-            var += (qs[i] - mean) * (qs[i] - mean);
-          pre_q_var = var / pre_k;
+          pre_top_gap = moves[0].q - moves[1].q;
 
-          // Prior gap: top1 - top2 prior among visited children.
-          float p1 = 0.0f, p2 = 0.0f;
-          for (int i = 0; i < pre_k; ++i) {
-            float p = root_node->move_probs[top_actions[i]];
-            if (p >= p1) {
-              p2 = p1;
-              p1 = p;
-            } else if (p > p2) {
-              p2 = p;
+          // Prior gap: prior(top-Q move) - prior(2nd-top-Q move).
+          pre_prior_gap = moves[0].prior - moves[1].prior;
+
+          // Find the NN's top-2 prior moves globally.
+          int top_prior_1 = 0, top_prior_2 = -1;
+          for (int a = 1; a < constants::kMaxMovesPerPosition; ++a) {
+            if (root_node->move_probs[a] > root_node->move_probs[top_prior_1]) {
+              top_prior_2 = top_prior_1;
+              top_prior_1 = a;
+            } else if (top_prior_2 < 0 ||
+                       root_node->move_probs[a] >
+                           root_node->move_probs[top_prior_2]) {
+              top_prior_2 = a;
             }
           }
-          pre_prior_gap = p1 - p2;
+          pre_top_prior_is_top_q = (top_prior_1 == moves[0].action);
+          // G2 bonus: top-2 prior moves are the same set as top-2 Q moves.
+          pre_top2_prior_match_top2_q =
+              pre_top_prior_is_top_q && (top_prior_2 == moves[1].action);
         }
       }
 
       // Selection probability multiplier.
       //
       // G1: |NN_util - MCTS_util| pre-search — NN disagrees with MCTS.
-      //   Piecewise linear: 1.0 below p50; 1.0→1.5 from p50→p72;
-      //   1.5→3.0 from p72→p95.
+      //   Linear: 1.0 below p50; 1.0→2.0 from p50→p95 (unbounded above).
       const float sel_g1_mult = [&]() {
         const float p50 = config.calibration.g1_p50;
-        const float p72 = config.calibration.g1_p72_5;
         const float p95 = config.calibration.g1_p95;
         const float diff = std::abs(root_node->init_util_est - q_pre);
         if (diff <= p50) return 1.0f;
-        if (diff <= p72) return 1.0f + 0.5f * (diff - p50) / (p72 - p50);
-        return 1.5f + 1.5f * std::clamp((diff - p72) / (p95 - p72), 0.0f, 1.0f);
+        return 1.0f + (diff - p50) / (p95 - p50);
       }();
 
-      // G2 bonus: top1/2 Q gap is small — the NN is confident in a move that
-      //   MCTS finds equivalent to alternatives; more search may change the
-      //   decision. 1.5x at p2.5, decaying linearly to 1.0x at p25.
+      // G2 bonus: top1/2 Q gap is small — NN and search agree on candidates
+      //   but search finds them equivalent; NN may be overconfident.
+      //   1.5x at p2.5, decaying linearly to 1.0x at p25 (unbounded above 1.5).
       const float sel_g2_bonus = [&]() {
-        if (pre_k < 2) return 1.0f;
+        if (pre_k < 2 || !pre_top2_prior_match_top2_q || pre_prior_gap < 0.2f)
+          return 1.0f;
         const float p2_5 = config.calibration.g2b_p2_5;
         const float p25 = config.calibration.g2b_p25;
-        return 1.0f + 0.5f * std::clamp((p25 - pre_top_gap) / (p25 - p2_5),
-                                        0.0f, 1.0f);
+        return 1.0f + 0.5f * std::max((p25 - pre_top_gap) / (p25 - p2_5), 0.0f);
       }();
 
-      // G2 penalty: top1/2 Q gap is large — best move dominates, more search
-      //   won't change the decision. Piecewise: 1.0 below p80; step to 0.8
-      //   at p80; 0.8→0.5 from p80→p92.5; 0.5→0.15 from p92.5→p97.5.
+      // G2 penalty: top1/2 Q gap is large and NN already agrees with top-Q
+      //   move — search won't change the decision. Requires prior_gap to scale
+      //   with Q gap: min_prior_gap ramps from 0.2 at p70 to 0.6 at p95.
+      //   Penalty: 0.8→0.5 linearly from p80→p97.5 (floored at 0).
       const float sel_g2_penalty = [&]() {
-        if (pre_k < 2) return 1.0f;
+        if (pre_k < 2 || !pre_top_prior_is_top_q) return 1.0f;
+        const float p70 = config.calibration.g2p_p70;
         const float p80 = config.calibration.g2p_p80;
-        const float p92_5 = config.calibration.g2p_p92_5;
+        const float p95 = config.calibration.g2p_p95;
         const float p97_5 = config.calibration.g2p_p97_5;
         if (pre_top_gap < p80) return 1.0f;
-        if (pre_top_gap <= p92_5)
-          return 0.8f - 0.3f * (pre_top_gap - p80) / (p92_5 - p80);
-        return 0.5f -
-               0.35f * std::clamp((pre_top_gap - p92_5) / (p97_5 - p92_5), 0.0f,
-                                  1.0f);
+        const float min_prior_gap =
+            0.2f +
+            0.4f * std::clamp((pre_top_gap - p70) / (p95 - p70), 0.0f, 1.0f);
+        if (pre_prior_gap < min_prior_gap) return 1.0f;
+        return std::max(0.0f,
+                        0.8f - 0.3f * (pre_top_gap - p80) / (p97_5 - p80));
       }();
 
       // Stddev bonus: sqrt(v_outcome_var) is high — tree-reuse variance
       //   indicates the position is genuinely uncertain.
-      //   1.0 below p70; step to 1.2 at p70; 1.2→2.0 from p70→p95.
+      //   1.0 below p70; 1.2→2.0 from p70→p95 (unbounded above).
       const float sel_std_bonus = [&]() {
         const float p70 = config.calibration.std_p70;
         const float p95 = config.calibration.std_p95;
         const float std_dev = std::sqrt(var_pre);
         if (std_dev < p70) return 1.0f;
-        return 1.2f +
-               0.8f * std::clamp((std_dev - p70) / (p95 - p70), 0.0f, 1.0f);
+        return 1.2f + 0.8f * std::max((std_dev - p70) / (p95 - p70), 0.0f);
       }();
 
       const bool apply_sel_mult = config.sel_mult_base > 0.0f;
@@ -753,7 +740,6 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
               .prior_gap(pre_prior_gap)
               .prior_entropy(prior_entropy)
               .nn_uncertainty(node_uncertainty)
-              .q_variance(pre_q_var)
               .kld(gumbel_res.kld)
               .sel_mult(sel_mult)
               .visit_count(static_cast<float>(gumbel_res.visits))
@@ -868,11 +854,6 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
       if (pre_k >= 2) {
         const int n = game.num_moves();
-        q_var_avg = (q_var_avg * (n - 1) + pre_q_var) / n;
-        q_var_min = std::min(q_var_min, pre_q_var);
-        q_var_max = std::max(q_var_max, pre_q_var);
-        q_var_ema = q_var_ema == 0 ? pre_q_var
-                                   : (0.75f * q_var_ema + 0.25f * pre_q_var);
         top_gap_avg = (top_gap_avg * (n - 1) + pre_top_gap) / n;
         top_gap_min = std::min(top_gap_min, pre_top_gap);
         top_gap_max = std::max(top_gap_max, pre_top_gap);
@@ -927,6 +908,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
           << ") Next Root  N=" << root_node->n << "  Q=" << root_node->v
           << "  Qz=" << root_node->v_outcome
           << "  Score=" << root_node->init_score_est << "\n";
+        s << "KLD=" << gumbel_res.kld << "\n";
         s << "Uncertainty=" << node_uncertainty << "  Avg=" << uncertainty_avg
           << "  Min=" << uncertainty_min << "  Max=" << uncertainty_max
           << "  EMA=" << uncertainty_ema << "\n";
@@ -936,10 +918,9 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         s << "Var(pre)=" << var_pre << "  Avg=" << var_avg
           << "  Min=" << var_min << "  Max=" << var_max << "  EMA=" << var_ema
           << "\n";
-        s << "MoveQ(k=" << pre_k << ")" << "  Var=" << pre_q_var
-          << "  VarAvg=" << q_var_avg << "  VarMin=" << q_var_min
-          << "  VarMax=" << q_var_max << "  VarEMA=" << q_var_ema << "\n";
+        s << "MoveQ(k=" << pre_k << ")\n";
         s << "  Top1/2Gap=" << pre_top_gap << "  PriorGap=" << pre_prior_gap
+          << "  TopPriorIsTopQ=" << pre_top_prior_is_top_q
           << "  GapAvg=" << top_gap_avg << "  GapMin=" << top_gap_min
           << "  GapMax=" << top_gap_max << "  GapEMA=" << top_gap_ema << "\n";
         s << "SelMult=" << sel_mult << "  Base=" << config.sel_mult_base

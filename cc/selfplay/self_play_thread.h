@@ -17,7 +17,7 @@ struct GumbelParams {
 // a key=value text file passed via --sel_mult_calibration_file. Defaults
 // match the initial hardcoded thresholds.
 struct SelMultCalibration {
-  // G1 bonus breakpoints (nn_mcts_diff).
+  // G1 bonus breakpoints (nn_mcts_diff): linear 1.0→2.0 from p50→p95.
   float g1_p50 = 0.068f;
   float g1_p72_5 = 0.170f;
   float g1_p95 = 0.563f;
@@ -25,8 +25,11 @@ struct SelMultCalibration {
   float g2b_p2_5 = 0.0007f;
   float g2b_p25 = 0.0276f;
   // G2 penalty breakpoints (top12_q_gap_nz, large-gap regime).
+  // p70/p95 used for dynamic min_prior_gap scaling; p80/p97_5 for magnitude.
+  float g2p_p70 = 0.064f;
   float g2p_p80 = 0.1057f;
   float g2p_p92_5 = 0.2445f;
+  float g2p_p95 = 0.316f;
   float g2p_p97_5 = 0.4790f;
   // Stddev bonus breakpoints (v_outcome_stddev).
   float std_p70 = 0.185f;
