@@ -14,6 +14,7 @@ target_link_libraries(self_play PUBLIC
     nn
     engine_factory
     recorder
+    absl::flat_hash_map
     absl::log
     absl::check
     absl::strings

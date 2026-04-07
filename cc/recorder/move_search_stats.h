@@ -8,22 +8,27 @@ namespace recorder {
 // to .stats text files alongside .tfrecord.zz chunks.
 // Use MoveSearchStats::Builder to construct instances.
 struct MoveSearchStats {
+  bool sampled_raw_policy;
   float nn_q;              // NN value estimate before search (init_util_est)
   float mcts_q;            // MCTS Q pre-search (from tree reuse)
   float nn_mcts_diff;      // |nn_q - mcts_q|
   float v_outcome_stddev;  // sqrt(v_outcome_var) from tree reuse
-  float top12_q_gap;       // Q gap between top-1 and top-2 visited children
-  float prior_gap;         // policy prior gap between top-1 and top-2 visited
   float prior_entropy;     // Shannon entropy of NN policy distribution H(pi)
   float nn_uncertainty;    // NN value uncertainty (v_err)
-  float kld;               // KL divergence: improved policy vs NN prior
-  float sel_mult;          // training selection probability multiplier
-  float visit_count;       // MCTS visit count for this move
+  float kld;      // KL divergence: improved policy vs NN prior (post-search)
+  float pre_kld;  // KL divergence: improved policy vs NN prior (pre-search,
+                  // reused tree)
+  float sel_mult_modifier;  // training selection probability multiplier
+  float visit_count;        // MCTS visit count for this move
   class Builder;
 };
 
 class MoveSearchStats::Builder {
  public:
+  Builder& sampled_raw_policy(bool b) {
+    s_.sampled_raw_policy = b;
+    return *this;
+  }
   Builder& nn_q(float v) {
     s_.nn_q = v;
     return *this;
@@ -40,14 +45,6 @@ class MoveSearchStats::Builder {
     s_.v_outcome_stddev = v;
     return *this;
   }
-  Builder& top12_q_gap(float v) {
-    s_.top12_q_gap = v;
-    return *this;
-  }
-  Builder& prior_gap(float v) {
-    s_.prior_gap = v;
-    return *this;
-  }
   Builder& prior_entropy(float v) {
     s_.prior_entropy = v;
     return *this;
@@ -60,8 +57,12 @@ class MoveSearchStats::Builder {
     s_.kld = v;
     return *this;
   }
-  Builder& sel_mult(float v) {
-    s_.sel_mult = v;
+  Builder& pre_kld(float v) {
+    s_.pre_kld = v;
+    return *this;
+  }
+  Builder& sel_mult_modifier(float v) {
+    s_.sel_mult_modifier = v;
     return *this;
   }
   Builder& visit_count(float v) {

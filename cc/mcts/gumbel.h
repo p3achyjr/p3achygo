@@ -159,6 +159,13 @@ class GumbelEvaluator final {
   BiasCache* bias_cache_ = nullptr;
 };
 
+float ComputeKLD(
+    const std::array<float, constants::kMaxMovesPerPosition>& target,
+    const std::array<float, constants::kMaxMovesPerPosition>& prior);
+
+std::array<float, constants::kMaxMovesPerPosition> ComputeImprovedPolicy(
+    const TreeNode* node, const int n);
+
 }  // namespace mcts
 
 #endif

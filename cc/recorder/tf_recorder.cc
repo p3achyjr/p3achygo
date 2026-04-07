@@ -235,8 +235,8 @@ void TfRecorderImpl::Flush() {
       for (const auto& s : record.move_stats) {
         // Skip policy-sampled moves (no real search). visit_count == 1
         // means the root was evaluated but no Gumbel search was run, so
-        // nn_mcts_diff and top12_q_gap are not meaningful.
-        if (s.visit_count > 1.0f) {
+        // stats are not meaningful.
+        if (!s.sampled_raw_policy && s.visit_count > 1.0f) {
           all_move_stats.push_back(s);
         }
       }
@@ -311,8 +311,7 @@ void TfRecorderImpl::Flush() {
   FILE* const stats_file = fopen(stats_filename.c_str(), "w");
 
   // Helper: extract a field from all_move_stats (with optional filter),
-  // sort, and return percentiles at 2.5% increments (p0, p2.5, ..., p100 =
-  // 41 values).
+  // sort, and return percentiles at p01, p05..p95 (5% steps), p99 (21 values).
   const int n_stats = static_cast<int>(all_move_stats.size());
   auto compute_percentiles =
       [&](std::function<float(const MoveSearchStats&)> get,
@@ -320,19 +319,27 @@ void TfRecorderImpl::Flush() {
         std::vector<float> vals;
         vals.reserve(n_stats);
         for (const auto& s : all_move_stats) {
-          if (!filter || filter(s)) vals.push_back(get(s));
+          if (s.sampled_raw_policy) continue;
+          if (!filter || filter(s)) {
+            float v = get(s);
+            if (std::isfinite(v)) vals.push_back(v);
+          }
         }
         std::sort(vals.begin(), vals.end());
-        std::vector<float> percentiles;
         const int n = static_cast<int>(vals.size());
-        for (int i = 0; i <= 40; ++i) {
-          int idx = n > 0 ? std::clamp(static_cast<int>(std::round(
-                                           i * 2.5f / 100.0f * (n - 1))),
-                                       0, n - 1)
-                          : 0;
-          percentiles.push_back(n > 0 ? vals[idx] : 0.0f);
+        auto at_pct = [&](float pct) -> float {
+          if (n == 0) return 0.0f;
+          int idx = std::clamp(
+              static_cast<int>(std::round(pct / 100.0f * (n - 1))), 0, n - 1);
+          return vals[idx];
+        };
+        std::vector<float> percentiles;
+        percentiles.push_back(at_pct(1.0f));  // p01
+        for (int i = 5; i <= 95; i += 5) {
+          percentiles.push_back(at_pct(static_cast<float>(i)));  // p05..p95
         }
-        return percentiles;
+        percentiles.push_back(at_pct(99.0f));  // p99
+        return percentiles;                    // 21 values
       };
 
   auto write_percentiles =
@@ -340,18 +347,19 @@ void TfRecorderImpl::Flush() {
           std::function<bool(const MoveSearchStats&)> filter = {}) {
         auto percentiles = compute_percentiles(get, filter);
         absl::FPrintF(stats_file, "%-24s", name);
-        for (float v : percentiles) absl::FPrintF(stats_file, " %7.4f", v);
+        for (float v : percentiles) absl::FPrintF(stats_file, " %9.6f", v);
         absl::FPrintF(stats_file, "\n");
       };
 
-  // Percentile header (p0, p2.5, p5, ..., p100).
-  absl::FPrintF(stats_file, "# percentiles: p0 p2.5 p5 ... p100 (%d moves)\n",
-                n_stats);
+  // Percentile header: p01, p05, p10, ..., p95, p99 (21 columns).
+  absl::FPrintF(stats_file,
+                "# percentiles: p01 p05 p10 ... p95 p99 (%d moves)\n", n_stats);
   absl::FPrintF(stats_file, "%-24s", "field");
-  for (int i = 0; i <= 40; ++i)
-    absl::FPrintF(stats_file, " %7s",
-                  absl::StrFormat("p%.4g", i * 2.5f).c_str());
-  absl::FPrintF(stats_file, "\n");
+  absl::FPrintF(stats_file, " %9s", "p01");
+  for (int i = 5; i <= 95; i += 5) {
+    absl::FPrintF(stats_file, " %9s", absl::StrFormat("p%02d", i).c_str());
+  }
+  absl::FPrintF(stats_file, " %9s\n", "p99");
 
   write_percentiles("nn_q", [](const MoveSearchStats& s) { return s.nn_q; });
   write_percentiles("mcts_q",
@@ -361,22 +369,33 @@ void TfRecorderImpl::Flush() {
   write_percentiles("v_outcome_stddev", [](const MoveSearchStats& s) {
     return s.v_outcome_stddev;
   });
-  write_percentiles("top12_q_gap",
-                    [](const MoveSearchStats& s) { return s.top12_q_gap; });
-  write_percentiles(
-      "top12_q_gap_nz", [](const MoveSearchStats& s) { return s.top12_q_gap; },
-      [](const MoveSearchStats& s) { return s.top12_q_gap > 0.0f; });
-  write_percentiles("prior_gap",
-                    [](const MoveSearchStats& s) { return s.prior_gap; });
   write_percentiles("prior_entropy",
                     [](const MoveSearchStats& s) { return s.prior_entropy; });
   write_percentiles("nn_uncertainty",
                     [](const MoveSearchStats& s) { return s.nn_uncertainty; });
   write_percentiles("kld", [](const MoveSearchStats& s) { return s.kld; });
-  write_percentiles("sel_mult",
-                    [](const MoveSearchStats& s) { return s.sel_mult; });
+  write_percentiles("pre_kld",
+                    [](const MoveSearchStats& s) { return s.pre_kld; });
+  write_percentiles("sel_mult_modifier", [](const MoveSearchStats& s) {
+    return s.sel_mult_modifier;
+  });
   write_percentiles("visit_count",
                     [](const MoveSearchStats& s) { return s.visit_count; });
+
+  // Write scalar metadata: mean sel_mult (used by Python to compute
+  // sel_mult_base = 1 / mean for the next generation).
+  float sel_mult_sum = 0.0f;
+  int sel_mult_count = 0;
+  for (const auto& s : all_move_stats) {
+    if (s.sampled_raw_policy) continue;
+    if (!std::isfinite(s.sel_mult_modifier)) continue;
+    sel_mult_sum += s.sel_mult_modifier;
+    ++sel_mult_count;
+  }
+  const float sel_mult_mean =
+      sel_mult_count > 0 ? sel_mult_sum / static_cast<float>(sel_mult_count)
+                         : 1.0f;
+  absl::FPrintF(stats_file, "sel_mult_mean=%f\n", sel_mult_mean);
 
   fclose(stats_file);
 
