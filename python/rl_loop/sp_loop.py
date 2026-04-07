@@ -144,7 +144,7 @@ def loop(
         if gen > 0:
             calib = calib_utils.compute_calibration(local_sp_chunk_dir, gen - 1)
             if calib is not None:
-                calib_path = Path(local_run_dir) / f"sel_mult_calib_gen{gen:03d}.txt"
+                calib_path = Path(local_run_dir) / f"sel_mult_calib.txt"
                 calib_utils.write_calibration_file(calib, calib_path)
                 calib_file = str(calib_path)
                 # Use 1/mean_sel_mult from last gen so average sel_mult ≈ 1.0.

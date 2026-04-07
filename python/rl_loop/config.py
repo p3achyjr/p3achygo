@@ -27,6 +27,8 @@ class RunConfig(object):
     extra_train_gens: int
     lr_growth_window: int
     optimizer: str  # 'sgd' or 'muon'
+    adam_wd: float
+    muon_wd: float
 
     # Gumbel Controls
     min_train_selected_k: int
@@ -75,6 +77,8 @@ def parse(run_id: str) -> RunConfig:
         extra_train_gens = obj.get("extra_train_gens", 0)
         lr_growth_window = obj.get("lr_growth_window", 0)
         optimizer = obj.get("optimizer", "sgd")
+        adam_wd = obj.get("adam_wd", 0.01)
+        muon_wd = obj.get("muon_wd", 0.02)
 
         min_train_selected_k = obj.get("min_train_selected_k", 8)
         min_train_selected_n = obj.get("min_train_selected_n", 128)
@@ -113,6 +117,8 @@ def parse(run_id: str) -> RunConfig:
             extra_train_gens,
             lr_growth_window,
             optimizer,
+            adam_wd,
+            muon_wd,
             min_train_selected_k,
             min_train_selected_n,
             max_train_selected_k,
