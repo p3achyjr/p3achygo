@@ -386,10 +386,6 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     // Over-search multiplier tracking.
     float sel_mult_avg = 0, sel_mult_ema = 0;
 
-    // Pre-search move-level Q stats.
-    float top_gap_avg = 0, top_gap_ema = 0;
-    float top_gap_min = std::numeric_limits<float>::max();
-    float top_gap_max = std::numeric_limits<float>::lowest();
     std::optional<mcts::BiasCache> bias_cache_storage;
     mcts::BiasCache* bias_cache = nullptr;
     if (config.bias_cache_lambda > 0.0f) {
@@ -449,119 +445,54 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       float q_pre = V(root_node);
       float qz_pre = VOutcome(root_node);
       float var_pre = n_pre < 3 ? 0.0f : root_node->v_outcome_var;
-      // Pre-search move-level Q stats: all visited children, sorted by Q.
-      float pre_top_gap = 0.0f, pre_prior_gap = 0.0f;
-      bool pre_top_prior_is_top_q = false;
-      bool pre_top2_prior_match_top2_q = false;
-      int pre_k = 0;
-      {
-        struct MoveEntry {
-          int action;
-          float q;
-          float prior;
-        };
-        absl::InlinedVector<MoveEntry, 32> moves;
-        for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
-          if (root_node->child_visits[a] == 0 || root_node->child(a) == nullptr)
-            continue;
-          moves.push_back({a, Q(root_node, a), root_node->move_probs[a]});
-        }
-        std::sort(
-            moves.begin(), moves.end(),
-            [](const MoveEntry& x, const MoveEntry& y) { return x.q > y.q; });
-        pre_k = static_cast<int>(moves.size());
-        if (pre_k >= 2) {
-          pre_top_gap = moves[0].q - moves[1].q;
-
-          // Prior gap: prior(top-Q move) - prior(2nd-top-Q move).
-          pre_prior_gap = moves[0].prior - moves[1].prior;
-
-          // Find the NN's top-2 prior moves globally.
-          int top_prior_1 = 0, top_prior_2 = -1;
-          for (int a = 1; a < constants::kMaxMovesPerPosition; ++a) {
-            if (root_node->move_probs[a] > root_node->move_probs[top_prior_1]) {
-              top_prior_2 = top_prior_1;
-              top_prior_1 = a;
-            } else if (top_prior_2 < 0 ||
-                       root_node->move_probs[a] >
-                           root_node->move_probs[top_prior_2]) {
-              top_prior_2 = a;
-            }
-          }
-          pre_top_prior_is_top_q = (top_prior_1 == moves[0].action);
-          // G2 bonus: top-2 prior moves are the same set as top-2 Q moves.
-          pre_top2_prior_match_top2_q =
-              pre_top_prior_is_top_q && (top_prior_2 == moves[1].action);
-        }
-      }
-
+      float pre_kld = ComputeKLD(ComputeImprovedPolicy(root_node, 0),
+                                 root_node->move_probs);
       // Selection probability multiplier.
       //
-      // G1: |NN_util - MCTS_util| pre-search — NN disagrees with MCTS.
-      //   Linear: 1.0 below p50; 1.0→2.0 from p50→p95 (unbounded above).
-      const float sel_g1_mult = [&]() {
-        const float p50 = config.calibration.g1_p50;
-        const float p95 = config.calibration.g1_p95;
-        const float diff = std::abs(root_node->init_util_est - q_pre);
-        if (diff <= p50) return 1.0f;
-        return 1.0f + (diff - p50) / (p95 - p50);
-      }();
-
-      // G2 bonus: top1/2 Q gap is small — NN and search agree on candidates
-      //   but search finds them equivalent; NN may be overconfident.
-      //   1.5x at p2.5, decaying linearly to 1.0x at p25 (unbounded above 1.5).
-      const float sel_g2_bonus = [&]() {
-        if (pre_k < 2 || !pre_top2_prior_match_top2_q || pre_prior_gap < 0.2f)
-          return 1.0f;
-        const float p2_5 = config.calibration.g2b_p2_5;
-        const float p25 = config.calibration.g2b_p25;
-        return 1.0f + 0.5f * std::max((p25 - pre_top_gap) / (p25 - p2_5), 0.0f);
-      }();
-
-      // G2 penalty: top1/2 Q gap is large and NN already agrees with top-Q
-      //   move — search won't change the decision. Requires prior_gap to scale
-      //   with Q gap: min_prior_gap ramps from 0.2 at p70 to 0.6 at p95.
-      //   Penalty: 0.8→0.5 linearly from p80→p97.5 (floored at 0).
-      const float sel_g2_penalty = [&]() {
-        if (pre_k < 2 || !pre_top_prior_is_top_q) return 1.0f;
-        const float p70 = config.calibration.g2p_p70;
-        const float p80 = config.calibration.g2p_p80;
-        const float p95 = config.calibration.g2p_p95;
-        const float p97_5 = config.calibration.g2p_p97_5;
-        if (pre_top_gap < p80) return 1.0f;
-        const float min_prior_gap =
-            0.2f +
-            0.4f * std::clamp((pre_top_gap - p70) / (p95 - p70), 0.0f, 1.0f);
-        if (pre_prior_gap < min_prior_gap) return 1.0f;
-        return std::max(0.0f,
-                        0.8f - 0.3f * (pre_top_gap - p80) / (p97_5 - p80));
-      }();
-
-      // Stddev bonus: sqrt(v_outcome_var) is high — tree-reuse variance
-      //   indicates the position is genuinely uncertain.
-      //   1.0 below p70; 1.2→2.0 from p70→p95 (unbounded above).
+      // StddevBonus: sqrt(v_outcome_var) is high — tree-reuse variance
+      //   indicates genuine position uncertainty.
+      //   1.0→2.0 linearly from p50→p95 (uncapped; overall bonus capped
+      //   at 2.5).
       const float sel_std_bonus = [&]() {
-        const float p70 = config.calibration.std_p70;
-        const float p95 = config.calibration.std_p95;
+        const float p50 = config.calibration.get(
+            config.calibration.v_outcome_stddev, "p50", 0.090f);
+        const float p95 = config.calibration.get(
+            config.calibration.v_outcome_stddev, "p95", 0.374f);
         const float std_dev = std::sqrt(var_pre);
-        if (std_dev < p70) return 1.0f;
-        return 1.2f + 0.8f * std::max((std_dev - p70) / (p95 - p70), 0.0f);
+        if (std_dev <= p50 || p95 <= p50) return 1.0f;
+        return 1.0f + (std_dev - p50) / (p95 - p50);
+      }();
+
+      // KLD bonus: pre-search KLD is high — reused tree strongly disagrees
+      //   with NN prior. 1.0→1.5 from p70→p95 (hard cap at 1.5).
+      const float sel_kld_bonus = [&]() {
+        const float p70 =
+            config.calibration.get(config.calibration.pre_kld, "p70", 0.310f);
+        const float p95 =
+            config.calibration.get(config.calibration.pre_kld, "p95", 1.166f);
+        if (pre_kld <= p70 || p95 <= p70) return 1.0f;
+        return std::min(1.5f, 1.0f + 0.5f * (pre_kld - p70) / (p95 - p70));
+      }();
+
+      // KLD penalty: pre-search KLD is low — reused tree agrees with NN prior;
+      //   search unlikely to produce a training surprise.
+      //   1.0→0.4 linearly from p35→p05 (floor at 0.4).
+      const float sel_kld_penalty = [&]() {
+        const float p05 =
+            config.calibration.get(config.calibration.pre_kld, "p05", 0.0002f);
+        const float p35 =
+            config.calibration.get(config.calibration.pre_kld, "p35", 0.038f);
+        if (pre_kld >= p35) return 1.0f;
+        if (pre_kld <= p05 || p35 <= p05) return 0.4f;
+        return 1.0f - 0.6f * (p35 - pre_kld) / (p35 - p05);
       }();
 
       const bool apply_sel_mult = config.sel_mult_base > 0.0f;
-      const float scale = config.sel_mult_scale_factor;
-      const float sel_g1_mult_adj = (sel_g1_mult - 1.0f) * scale + 1.0f;
-      const float sel_g2_bonus_adj = (sel_g2_bonus - 1.0f) * scale + 1.0f;
-      const float sel_std_bonus_adj = (sel_std_bonus - 1.0f) * scale + 1.0f;
-      const float sel_g2_penalty_adj = 1.0f - (1.0f - sel_g2_penalty) * scale;
-      const float sel_mult_base_adj =
-          config.sel_mult_base + (1.0f - config.sel_mult_base) * (1.0f - scale);
+      const float sel_bonus =
+          std::min(std::max(sel_std_bonus, sel_kld_bonus), 2.5f);
+      const float sel_mult_modifier = sel_bonus * sel_kld_penalty;
       const float sel_mult =
-          apply_sel_mult ? sel_mult_base_adj *
-                               std::max({sel_g1_mult_adj, sel_g2_bonus_adj,
-                                         sel_std_bonus_adj}) *
-                               sel_g2_penalty_adj
-                         : 1.0f;
+          apply_sel_mult ? (config.sel_mult_base * sel_mult_modifier) : 1.0f;
 
       // Probability of selecting a move for training, scaled by sel_mult.
       // If we are not down bad, this is a base probability of
@@ -695,6 +626,9 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       float q_post = V(root_node);
       float root_q_outcome = VOutcome(root_node);
       float root_score = Score(root_node);
+      float var_post = n_post < 3 ? 0.0f : root_node->v_outcome_var;
+      float post_kld = ComputeKLD(ComputeImprovedPolicy(root_node, 0),
+                                  root_node->move_probs);
 
       Loc nn_move = gumbel_res.nn_move;
       Loc move = gumbel_res.mcts_move;
@@ -732,16 +666,16 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       }
       move_stats.push_back(
           MoveSearchStats::Builder()
+              .sampled_raw_policy(sampling_raw_policy)
               .nn_q(nn_util_est)
               .mcts_q(q_pre)
               .nn_mcts_diff(nn_mcts_diff)
               .v_outcome_stddev(std::sqrt(var_pre))
-              .top12_q_gap(pre_top_gap)
-              .prior_gap(pre_prior_gap)
               .prior_entropy(prior_entropy)
               .nn_uncertainty(node_uncertainty)
-              .kld(gumbel_res.kld)
-              .sel_mult(sel_mult)
+              .kld(post_kld)
+              .pre_kld(pre_kld)
+              .sel_mult_modifier(sel_mult_modifier)
               .visit_count(static_cast<float>(gumbel_res.visits))
               .build());
       positions_for_regret.push_back({color_to_move, game.board(), move,
@@ -852,16 +786,6 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       var_max = std::max(var_max, var_pre);
       var_ema = var_ema == 0 ? var_pre : (0.75f * var_ema + 0.25f * var_pre);
 
-      if (pre_k >= 2) {
-        const int n = game.num_moves();
-        top_gap_avg = (top_gap_avg * (n - 1) + pre_top_gap) / n;
-        top_gap_min = std::min(top_gap_min, pre_top_gap);
-        top_gap_max = std::max(top_gap_max, pre_top_gap);
-        top_gap_ema = top_gap_ema == 0
-                          ? pre_top_gap
-                          : (0.75f * top_gap_ema + 0.25f * pre_top_gap);
-      }
-
       sel_mult_avg =
           (sel_mult_avg * (game.num_moves() - 1) + sel_mult) / game.num_moves();
       sel_mult_ema = sel_mult_ema == 0
@@ -908,29 +832,21 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
           << ") Next Root  N=" << root_node->n << "  Q=" << root_node->v
           << "  Qz=" << root_node->v_outcome
           << "  Score=" << root_node->init_score_est << "\n";
-        s << "KLD=" << gumbel_res.kld << "\n";
+        s << "Pre-KLD=" << pre_kld << "  Post-KLD=" << post_kld
+          << "  Gumbel-KLD=" << gumbel_res.kld << "\n";
         s << "Uncertainty=" << node_uncertainty << "  Avg=" << uncertainty_avg
           << "  Min=" << uncertainty_min << "  Max=" << uncertainty_max
           << "  EMA=" << uncertainty_ema << "\n";
         s << "|NN-MCTS|=" << nn_mcts_diff << "  Avg=" << diff_avg
           << "  Min=" << diff_min << "  Max=" << diff_max
           << "  EMA=" << diff_ema << "\n";
-        s << "Var(pre)=" << var_pre << "  Avg=" << var_avg
-          << "  Min=" << var_min << "  Max=" << var_max << "  EMA=" << var_ema
-          << "\n";
-        s << "MoveQ(k=" << pre_k << ")\n";
-        s << "  Top1/2Gap=" << pre_top_gap << "  PriorGap=" << pre_prior_gap
-          << "  TopPriorIsTopQ=" << pre_top_prior_is_top_q
-          << "  GapAvg=" << top_gap_avg << "  GapMin=" << top_gap_min
-          << "  GapMax=" << top_gap_max << "  GapEMA=" << top_gap_ema << "\n";
+        s << "Var(pre)=" << var_pre << "  Var(post)=" << var_post
+          << "  Avg=" << var_avg << "  Min=" << var_min << "  Max=" << var_max
+          << "  EMA=" << var_ema << "\n";
         s << "SelMult=" << sel_mult << "  Base=" << config.sel_mult_base
-          << "  BaseAdj=" << sel_mult_base_adj << "  G1=" << sel_g1_mult
-          << "  G1Adj=" << sel_g1_mult_adj << "  G2Bonus=" << sel_g2_bonus
-          << "  G2BonusAdj=" << sel_g2_bonus_adj
-          << "  StdBonus=" << sel_std_bonus
-          << "  StdBonusAdj=" << sel_std_bonus_adj
-          << "  G2Penalty=" << sel_g2_penalty
-          << "  G2PenaltyAdj=" << sel_g2_penalty_adj << "  Avg=" << sel_mult_avg
+          << "  Modifier=" << sel_mult_modifier << "  Bonus=" << sel_bonus
+          << "  StdBonus=" << sel_std_bonus << "  KLDBonus=" << sel_kld_bonus
+          << "  KLDPenalty=" << sel_kld_penalty << "  Avg=" << sel_mult_avg
           << "  EMA=" << sel_mult_ema << "\n";
         s << "Raw NN Move=" << mv_to_string(nn_move) << "\n  n = " << nn_move_n
           << "\n  q = " << nn_move_q << "\n  qz = " << nn_move_qz << "\n";

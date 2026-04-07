@@ -140,12 +140,21 @@ def loop(
         # Compute sel_mult calibration from the previous generation's stats
         # files. Falls back to C++ defaults when no stats are available (gen 0).
         calib_file = None
+        sel_mult_base = config.sel_mult_base
         if gen > 0:
             calib = calib_utils.compute_calibration(local_sp_chunk_dir, gen - 1)
             if calib is not None:
                 calib_path = Path(local_run_dir) / f"sel_mult_calib_gen{gen:03d}.txt"
                 calib_utils.write_calibration_file(calib, calib_path)
                 calib_file = str(calib_path)
+                # Use 1/mean_sel_mult from last gen so average sel_mult ≈ 1.0.
+                computed_base = calib_utils.compute_sel_mult_base(calib)
+                if computed_base is not None:
+                    logging.info(
+                        f"sel_mult_base: {sel_mult_base:.4f} → {computed_base:.4f} "
+                        f"(1 / sel_mult_mean={calib['sel_mult_mean']:.4f})"
+                    )
+                    sel_mult_base = computed_base
 
         cmd_str = (
             f"{bin_path} --num_threads={num_threads}"
@@ -159,7 +168,7 @@ def loop(
             + f" --gumbel_default_n={default_n}"
             + f" --reuse_buffer_type={config.reuse_buffer_type}"
             + f" --use_seen_state_prob={config.use_seen_state_prob}"
-            + f" --sel_mult_base={config.sel_mult_base}"
+            + f" --sel_mult_base={sel_mult_base}"
             + f" --sel_mult_scale_factor={config.sel_mult_scale_factor}"
             + f" --bias_cache_lambda={config.bias_cache_lambda}"
             + f" --bias_cache_alpha={config.bias_cache_alpha}"

@@ -1,6 +1,7 @@
 #ifndef SELF_PLAY_THREAD_H_
 #define SELF_PLAY_THREAD_H_
 
+#include "absl/container/flat_hash_map.h"
 #include "cc/nn/nn_interface.h"
 #include "cc/recorder/game_recorder.h"
 #include "cc/selfplay/reuse_buffer.h"
@@ -12,28 +13,21 @@ struct GumbelParams {
   int k;
 };
 
-// Per-generation threshold calibration for the sel_mult signal components.
+// Per-generation threshold calibration for sel_mult signal components.
 // Values are derived from .stats files by the Python RL loop and written to
-// a key=value text file passed via --sel_mult_calibration_file. Defaults
-// match the initial hardcoded thresholds.
+// a key=value text file passed via --sel_mult_calibration_file.
+//
+// Each field holds a percentile table keyed by "p01", "p05", ..., "p95",
+// "p99". Use get() to look up a value with a hardcoded fallback default.
 struct SelMultCalibration {
-  // G1 bonus breakpoints (nn_mcts_diff): linear 1.0→2.0 from p50→p95.
-  float g1_p50 = 0.068f;
-  float g1_p72_5 = 0.170f;
-  float g1_p95 = 0.563f;
-  // G2 bonus breakpoints (top12_q_gap_nz, small-gap regime).
-  float g2b_p2_5 = 0.0007f;
-  float g2b_p25 = 0.0276f;
-  // G2 penalty breakpoints (top12_q_gap_nz, large-gap regime).
-  // p70/p95 used for dynamic min_prior_gap scaling; p80/p97_5 for magnitude.
-  float g2p_p70 = 0.064f;
-  float g2p_p80 = 0.1057f;
-  float g2p_p92_5 = 0.2445f;
-  float g2p_p95 = 0.316f;
-  float g2p_p97_5 = 0.4790f;
-  // Stddev bonus breakpoints (v_outcome_stddev).
-  float std_p70 = 0.185f;
-  float std_p95 = 0.393f;
+  absl::flat_hash_map<std::string, float> v_outcome_stddev;
+  absl::flat_hash_map<std::string, float> pre_kld;
+
+  float get(const absl::flat_hash_map<std::string, float>& m,
+            const std::string& pct, float def) const {
+    auto it = m.find(pct);
+    return it != m.end() ? it->second : def;
+  }
 };
 
 struct SPConfig {

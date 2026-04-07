@@ -78,6 +78,9 @@ selfplay::SelMultCalibration ParseCalibrationFile(const std::string& path) {
     return calib;
   }
 
+  // File format: "field.percentile=value" per line, e.g.
+  //   v_outcome_stddev.p50=0.090000
+  //   pre_kld.p70=0.310000
   std::string line;
   while (std::getline(f, line)) {
     if (line.empty() || line[0] == '#') continue;
@@ -85,19 +88,20 @@ selfplay::SelMultCalibration ParseCalibrationFile(const std::string& path) {
     if (eq == std::string::npos) continue;
     const std::string key = line.substr(0, eq);
     const float val = std::stof(line.substr(eq + 1));
-    // clang-format off
-    if      (key == "g1_p50")    calib.g1_p50    = val;
-    else if (key == "g1_p72_5")  calib.g1_p72_5  = val;
-    else if (key == "g1_p95")    calib.g1_p95    = val;
-    else if (key == "g2b_p2_5")  calib.g2b_p2_5  = val;
-    else if (key == "g2b_p25")   calib.g2b_p25   = val;
-    else if (key == "g2p_p80")   calib.g2p_p80   = val;
-    else if (key == "g2p_p92_5") calib.g2p_p92_5 = val;
-    else if (key == "g2p_p97_5") calib.g2p_p97_5 = val;
-    else if (key == "std_p70")   calib.std_p70   = val;
-    else if (key == "std_p95")   calib.std_p95   = val;
-    else LOG(WARNING) << "Unknown calibration key: " << key;
-    // clang-format on
+    auto dot = key.find('.');
+    if (dot == std::string::npos) {
+      LOG(WARNING) << "Unknown calibration key format (expected field.pct): "
+                   << key;
+      continue;
+    }
+    const std::string field = key.substr(0, dot);
+    const std::string pct = key.substr(dot + 1);
+    if (field == "v_outcome_stddev") {
+      calib.v_outcome_stddev[pct] = val;
+    } else if (field == "pre_kld") {
+      calib.pre_kld[pct] = val;
+    }
+    // Unknown fields are silently ignored (forward-compatibility).
   }
 
   LOG(INFO) << "Loaded sel_mult calibration from " << path;
@@ -210,16 +214,15 @@ int main(int argc, char** argv) {
   selfplay::SelMultCalibration calibration =
       ParseCalibrationFile(absl::GetFlag(FLAGS_sel_mult_calibration_file));
   LOG(INFO) << "======= SelMult Calibration =======";
-  LOG(INFO) << "  G1:  p50=" << calibration.g1_p50
-            << "  p72.5=" << calibration.g1_p72_5
-            << "  p95=" << calibration.g1_p95;
-  LOG(INFO) << "  G2 Bonus: p2.5=" << calibration.g2b_p2_5
-            << "  p25=" << calibration.g2b_p25;
-  LOG(INFO) << "  G2 Penalty: p80=" << calibration.g2p_p80
-            << "  p92.5=" << calibration.g2p_p92_5
-            << "  p97.5=" << calibration.g2p_p97_5;
-  LOG(INFO) << "  Std: p70=" << calibration.std_p70
-            << "  p95=" << calibration.std_p95;
+  LOG(INFO) << "  v_outcome_stddev: p50="
+            << calibration.get(calibration.v_outcome_stddev, "p50", 0.090f)
+            << "  p95="
+            << calibration.get(calibration.v_outcome_stddev, "p95", 0.374f);
+  LOG(INFO) << "  pre_kld: p05="
+            << calibration.get(calibration.pre_kld, "p05", 0.0002f)
+            << "  p35=" << calibration.get(calibration.pre_kld, "p35", 0.038f)
+            << "  p70=" << calibration.get(calibration.pre_kld, "p70", 0.310f)
+            << "  p95=" << calibration.get(calibration.pre_kld, "p95", 1.166f);
   LOG(INFO) << "=====================================";
 
   std::vector<std::thread> threads;

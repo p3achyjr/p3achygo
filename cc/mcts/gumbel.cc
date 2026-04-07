@@ -144,39 +144,7 @@ int SampleFromPolicy(
   CHECK(false) << dbg.str();
 }
 
-float ComputeKLD(
-    const std::array<float, constants::kMaxMovesPerPosition>& target,
-    const std::array<float, constants::kMaxMovesPerPosition>& prior) {
-  constexpr double kEps = 1e-10;
-  double kld = 0.0;
-  for (size_t i = 0; i < constants::kMaxMovesPerPosition; ++i) {
-    if (target[i] == 0.0f) continue;
-    kld += target[i] * std::log(target[i] / (prior[i] + kEps));
-  }
-  return static_cast<float>(kld);
-}
-
-// Compute completedQ = {q(a) if N(a) > 0, v_mixed otherwise }.
-// Q values are normalized to [0, 1] before weighting.
-std::array<float, constants::kMaxMovesPerPosition> ComputeImprovedPolicy(
-    const TreeNode* node) {
-  constexpr float kQRange = 3.0f;
-  const auto q_norm = [](float q) { return (q + 1.5f) / kQRange; };
-  float v_mix = q_norm(VMixed(node));
-  const float max_b = 2 * std::log(static_cast<float>(MaxN(node)));
-  alignas(MM_ALIGN) std::array<float, constants::kMaxMovesPerPosition>
-      logits_improved;
-  for (int action = 0; action < constants::kMaxMovesPerPosition; ++action) {
-    logits_improved[action] =
-        node->move_logits[action] +
-        QTransform(NAction(node, action) > 0 ? q_norm(Q(node, action)) : v_mix,
-                   max_b);
-  }
-
-  return core::SoftmaxV(logits_improved);
-}
-
-// Version of the above that only bumps the probabiilities of Gumbel selected
+// Version of the above that only bumps the probabilities of Gumbel selected
 // actions. This avoids choosing moves with low visit counts and high Q-values.
 // Q values are normalized from [-1.1, 1.1] to [0, 1] before weighting.
 // max_n controls the Q weight: logit[a] += (kVisit + max_n) * q_norm(Q(a)).
@@ -201,7 +169,44 @@ std::array<float, constants::kMaxMovesPerPosition> ComputeRootImprovedPolicy(
   return core::SoftmaxV(logits_improved);
 }
 
+// Compute completedQ = {q(a) if N(a) > 0, v_mixed otherwise }.
+std::array<float, constants::kMaxMovesPerPosition> ComputeImprovedPolicy(
+    const TreeNode* node) {
+  return ComputeImprovedPolicy(node, MaxN(node));
+}
+
 }  // namespace
+
+float ComputeKLD(
+    const std::array<float, constants::kMaxMovesPerPosition>& target,
+    const std::array<float, constants::kMaxMovesPerPosition>& prior) {
+  constexpr double kEps = 1e-10;
+  double kld = 0.0;
+  for (size_t i = 0; i < constants::kMaxMovesPerPosition; ++i) {
+    if (target[i] == 0.0f) continue;
+    kld += target[i] * std::log(target[i] / (prior[i] + kEps));
+  }
+  return static_cast<float>(kld);
+}
+
+// Compute completedQ = {q(a) if N(a) > 0, v_mixed otherwise }.
+std::array<float, constants::kMaxMovesPerPosition> ComputeImprovedPolicy(
+    const TreeNode* node, const int n) {
+  constexpr float kQRange = 3.0f;
+  const auto q_norm = [](float q) { return (q + 1.5f) / kQRange; };
+  float v_mix = q_norm(VMixed(node));
+  const float q_scale_factor = n <= 0 ? 0 : 2 * std::log(static_cast<float>(n));
+  alignas(MM_ALIGN) std::array<float, constants::kMaxMovesPerPosition>
+      logits_improved;
+  for (int action = 0; action < constants::kMaxMovesPerPosition; ++action) {
+    logits_improved[action] =
+        node->move_logits[action] +
+        QTransform(NAction(node, action) > 0 ? q_norm(Q(node, action)) : v_mix,
+                   q_scale_factor);
+  }
+
+  return core::SoftmaxV(logits_improved);
+}
 
 Loc GumbelNonRootSearchPolicy::SelectNextAction(const TreeNode* node,
                                                 const Game& game,
@@ -507,6 +512,19 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
       root->v = root_ratio * root->v + child_ratio * child_stat.q;
       root->v_outcome =
           root_ratio * root->v_outcome + child_ratio * child_stat.qz;
+
+      // This is imprecise but probably good enough.
+      if (root->child(result.mcts_move) != nullptr) {
+        root->v_outcome_var =
+            ((root->n - 1) * root->v_outcome_var +
+             (child_stat.n - 1) *
+                 root->child(result.mcts_move)->v_outcome_var) /
+            (root->n + child_stat.n - 2);
+        root->v_var =
+            ((root->n - 1) * root->v_var +
+             (child_stat.n - 1) * root->child(result.mcts_move)->v_var) /
+            (root->n + child_stat.n - 2);
+      }
 
 #ifdef V_CATEGORICAL
       // Update categorical distribution.
