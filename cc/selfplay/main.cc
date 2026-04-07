@@ -220,6 +220,8 @@ int main(int argc, char** argv) {
             << "  p35=" << calibration.get(calibration.pre_kld, "p35", 0.038f)
             << "  p70=" << calibration.get(calibration.pre_kld, "p70", 0.310f)
             << "  p95=" << calibration.get(calibration.pre_kld, "p95", 1.166f);
+  LOG(INFO) << "  Sel Mult Base=" << absl::GetFlag(FLAGS_sel_mult_base)
+            << "  Scale=" << absl::GetFlag(FLAGS_sel_mult_scale_factor);
   LOG(INFO) << "=====================================";
 
   std::vector<std::thread> threads;

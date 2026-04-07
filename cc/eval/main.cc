@@ -90,7 +90,7 @@ ABSL_FLAG(int, cur_m3_prior_visits, 20,
           "Prior visits for m3 bonus dampening for cur.");
 ABSL_FLAG(float, cur_p_opt_weight, 0.0f,
           "Optimistic policy interpolation weight for cur.");
-ABSL_FLAG(float, cur_root_fpu, 0.2f,
+ABSL_FLAG(float, cur_root_fpu, 0.1f,
           "Root FPU reduction for cur (0 = no FPU at root).");
 ABSL_FLAG(int, cand_n, kDefaultGumbelN, "N for candidate player");
 ABSL_FLAG(int, cand_k, kDefaultGumbelK, "K for candidate player");
@@ -113,8 +113,8 @@ ABSL_FLAG(std::string, cand_score_utility_mode, "direct",
           "Score utility mode for cand: 'direct' or 'integral'.");
 ABSL_FLAG(bool, cand_use_bias_cache, false,
           "Whether to use bias cache for cand.");
-ABSL_FLAG(float, cand_bias_cache_alpha, 0.8f, "Bias cache alpha for cand.");
-ABSL_FLAG(float, cand_bias_cache_lambda, 0.4f, "Bias cache lambda for cand.");
+ABSL_FLAG(float, cand_bias_cache_alpha, 0.85f, "Bias cache alpha for cand.");
+ABSL_FLAG(float, cand_bias_cache_lambda, 0.45f, "Bias cache lambda for cand.");
 ABSL_FLAG(bool, cand_enable_m3_bonus, false,
           "Whether to use m3 bonus in PUCT for cand.");
 ABSL_FLAG(int, cand_var_scale_prior_visits, 0,
@@ -123,7 +123,7 @@ ABSL_FLAG(int, cand_m3_prior_visits, 20,
           "Prior visits for m3 bonus dampening for cand.");
 ABSL_FLAG(float, cand_p_opt_weight, 0.0f,
           "Optimistic policy interpolation weight for cand.");
-ABSL_FLAG(float, cand_root_fpu, 0.2f,
+ABSL_FLAG(float, cand_root_fpu, 0.1f,
           "Root FPU reduction for cand (0 = no FPU at root).");
 
 float ConfidenceDelta(float z_score, float num_sims, float wr) {
