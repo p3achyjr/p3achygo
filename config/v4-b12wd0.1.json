@@ -1,0 +1,38 @@
+{
+  "from_existing_run": "v4",
+  "num_generations": 200,
+  "model_config": "b12c256nbt",
+  "games_first_gen": 5000,
+  "games_per_gen": 5000,
+  "batch_size": 256,
+  "lr_schedule": [
+    [
+      0,
+      1e-3
+    ],
+    [
+      40,
+      7e-3
+    ],
+    [
+      75,
+      4e-4
+    ],
+    [
+      100,
+      2e-4
+    ],
+    [
+      165,
+      1e-4
+    ],
+    [
+      210,
+      2e-4
+    ]
+  ],
+  "lr_growth_window": 10,
+  "lr_transition_window": 10,
+  "optimizer": "muon",
+  "muon_wd": 0.1
+}

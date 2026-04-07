@@ -148,7 +148,6 @@ def train_step(
         total_loss = loss + reg_loss
         scaled_loss = optimizer.scale_loss(total_loss)
 
-    # Compute gradients (LossScaleOptimizer handles scaling automatically in Keras 3.x)
     gradients = g.gradient(scaled_loss, model.trainable_variables)
     optimizer.apply_gradients(zip(gradients, model.trainable_variables))
 
@@ -158,7 +157,6 @@ def train_step(
     )
     unscaled_gradients = [g / scale for g in gradients]
 
-    # Return FVI predictions for logging
     return TrainStepResult(
         predictions=predictions,
         total_loss=total_loss,

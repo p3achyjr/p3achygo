@@ -27,6 +27,8 @@ class RunConfig(object):
     extra_train_gens: int
     lr_growth_window: int
     optimizer: str  # 'sgd' or 'muon'
+    adam_wd: float
+    muon_wd: float
 
     # Gumbel Controls
     min_train_selected_k: int
@@ -45,7 +47,6 @@ class RunConfig(object):
     eval_n_growth_window: int
     lr_transition_window: int
     use_seen_state_prob: float
-    reuse_buffer_type: str  # 'goexploit', 'regret', or 'composite'
     sel_mult_base: float
     sel_mult_scale_factor: float
     bias_cache_lambda: float
@@ -76,6 +77,8 @@ def parse(run_id: str) -> RunConfig:
         extra_train_gens = obj.get("extra_train_gens", 0)
         lr_growth_window = obj.get("lr_growth_window", 0)
         optimizer = obj.get("optimizer", "sgd")
+        adam_wd = obj.get("adam_wd", 0.01)
+        muon_wd = obj.get("muon_wd", 0.02)
 
         min_train_selected_k = obj.get("min_train_selected_k", 8)
         min_train_selected_n = obj.get("min_train_selected_n", 128)
@@ -93,7 +96,6 @@ def parse(run_id: str) -> RunConfig:
         eval_n_growth_window = obj.get("eval_n_growth_window", 0)
         lr_transition_window = obj.get("lr_transition_window", 0)
         use_seen_state_prob = obj.get("use_seen_state_prob", 0.5)
-        reuse_buffer_type = obj.get("reuse_buffer_type", "goexploit")
         sel_mult_base = obj.get("sel_mult_base", 0.0)
         sel_mult_scale_factor = obj.get("sel_mult_scale_factor", 1.0)
         bias_cache_lambda = obj.get("bias_cache_lambda", 0.0)
@@ -115,6 +117,8 @@ def parse(run_id: str) -> RunConfig:
             extra_train_gens,
             lr_growth_window,
             optimizer,
+            adam_wd,
+            muon_wd,
             min_train_selected_k,
             min_train_selected_n,
             max_train_selected_k,
@@ -131,7 +135,6 @@ def parse(run_id: str) -> RunConfig:
             eval_n_growth_window,
             lr_transition_window,
             use_seen_state_prob,
-            reuse_buffer_type,
             sel_mult_base,
             sel_mult_scale_factor,
             bias_cache_lambda,

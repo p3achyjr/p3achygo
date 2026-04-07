@@ -22,6 +22,7 @@
 #include "cc/nn/nn_interface.h"
 #include "cc/recorder/dir.h"
 #include "cc/recorder/game_recorder.h"
+#include "cc/selfplay/fork_manager.h"
 #include "cc/selfplay/reuse_buffer.h"
 #include "cc/selfplay/self_play_thread.h"
 
@@ -44,8 +45,6 @@ ABSL_FLAG(int, gumbel_default_k, 5,
           "Number of Low Playout Cap Randomization moves to sample.");
 ABSL_FLAG(int, gumbel_default_n, 32,
           "Number of Low Playout Cap Randomization visits.");
-ABSL_FLAG(std::string, reuse_buffer_type, "goexploit",
-          "Reuse buffer type: 'goexploit', 'regret', or 'composite'.");
 ABSL_FLAG(
     float, use_seen_state_prob, 0.5f,
     "Probability of drawing the initial game state from the reuse buffer.");
@@ -171,26 +170,15 @@ int main(int argc, char** argv) {
                                      absl::GetFlag(FLAGS_flush_interval),
                                      absl::GetFlag(FLAGS_gen), worker_id);
 
-  // initialize reuse buffer (uniform GoExploit or regret-guided).
-  std::unique_ptr<selfplay::ReuseBuffer> reuse_buffer;
-  std::string buffer_type = absl::GetFlag(FLAGS_reuse_buffer_type);
-  if (buffer_type == "regret") {
-    reuse_buffer.reset(static_cast<selfplay::ReuseBuffer*>(
-        new selfplay::RegretGuidedBuffer()));
-  } else if (buffer_type == "composite") {
-    reuse_buffer.reset(static_cast<selfplay::ReuseBuffer*>(
-        new selfplay::CompositeReuseBuffer()));
-  } else if (buffer_type == "goexploit") {
-    reuse_buffer.reset(static_cast<selfplay::ReuseBuffer*>(
-        new selfplay::GoExploitReuseBuffer()));
-  } else {
-    LOG(ERROR) << "Unknown --reuse_buffer_type '" << buffer_type
-               << "'. Must be one of: goexploit, regret, composite.";
-    return 1;
-  }
+  // initialize reuse buffer.
+  auto reuse_buffer = std::make_unique<selfplay::GoExploitReuseBuffer>();
   LOG(INFO) << "Reuse Buffer=" << reuse_buffer->Name()
             << "  use_seen_state_prob="
             << absl::GetFlag(FLAGS_use_seen_state_prob);
+
+  const selfplay::ForkManager::Params fork_params =
+      selfplay::ForkManager::Params::ForReuse(
+          absl::GetFlag(FLAGS_use_seen_state_prob));
 
   LOG(INFO) << "========== Self-Play Config ==========";
   LOG(INFO) << "  gumbel_selected: n=" << absl::GetFlag(FLAGS_gumbel_selected_n)
@@ -204,6 +192,15 @@ int main(int argc, char** argv) {
             << "  bias_cache_alpha=" << absl::GetFlag(FLAGS_bias_cache_alpha);
   LOG(INFO) << "  nonroot_var_scale_prior_visits="
             << absl::GetFlag(FLAGS_nonroot_var_scale_prior_visits);
+  LOG(INFO) << "  fork_probs (reuse="
+            << absl::GetFlag(FLAGS_use_seen_state_prob)
+            << "):  early=" << fork_params.early_fork_prob
+            << "  late=" << fork_params.late_fork_prob
+            << "  sampleT1=" << fork_params.sample_policy_t1_prob
+            << "  sampleT2=" << fork_params.sample_policy_t2_prob
+            << "  sampleRandom=" << fork_params.sample_random_prob
+            << "  regret=" << fork_params.regret_prob
+            << "  uniform=" << fork_params.uniform_prob;
   LOG(INFO) << "=======================================";
 
   std::vector<std::string> sink_names;
@@ -223,6 +220,8 @@ int main(int argc, char** argv) {
             << "  p35=" << calibration.get(calibration.pre_kld, "p35", 0.038f)
             << "  p70=" << calibration.get(calibration.pre_kld, "p70", 0.310f)
             << "  p95=" << calibration.get(calibration.pre_kld, "p95", 1.166f);
+  LOG(INFO) << "  Sel Mult Base=" << absl::GetFlag(FLAGS_sel_mult_base)
+            << "  Scale=" << absl::GetFlag(FLAGS_sel_mult_scale_factor);
   LOG(INFO) << "=====================================";
 
   std::vector<std::thread> threads;
@@ -242,7 +241,8 @@ int main(int argc, char** argv) {
             absl::GetFlag(FLAGS_sel_mult_scale_factor),
             absl::GetFlag(FLAGS_bias_cache_lambda),
             absl::GetFlag(FLAGS_bias_cache_alpha),
-            absl::GetFlag(FLAGS_nonroot_var_scale_prior_visits), calibration});
+            absl::GetFlag(FLAGS_nonroot_var_scale_prior_visits), fork_params,
+            calibration});
     threads.emplace_back(std::move(thread));
   }
 

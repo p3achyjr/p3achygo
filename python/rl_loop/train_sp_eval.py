@@ -29,7 +29,7 @@ FLAGS = flags.FLAGS
 POLL_INTERVAL_S = 60
 EVAL_CACHE_SIZE = 32768
 MAX_EVAL_GAMES_PER_WORKER = 100
-TARGET_EVAL_GAMES = 200
+TARGET_EVAL_GAMES = 100
 
 # Pool of GPU IDs used for both self-play and eval workers. Set in main().
 # Each worker is assigned one GPU from this pool.
@@ -74,6 +74,7 @@ def get_eval_n(config, model_gen: int) -> int:
     return int(round(config.min_eval_n + c * (config.eval_n - config.min_eval_n)))
 
 
+# katago/lc0 do not use gating. This, then, mainly serves as a sanity check.
 def eval(
     run_id: str,
     eval_bin_path: str,

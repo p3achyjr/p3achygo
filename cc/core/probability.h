@@ -30,6 +30,9 @@ class Probability final {
   // returns a sample x ~ Gaussian(0, 1)
   float Gaussian();
 
+  // returns a sample x ~ Exponential(0, 1)
+  float Exponential();
+
  private:
   PRng prng_;
 };

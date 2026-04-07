@@ -50,8 +50,8 @@
   "lr_transition_window": 10,
   "use_seen_state_prob": 0.2,
   "reuse_buffer_type": "goexploit",
-  "sel_mult_base": 0.75,
-  "sel_mult_scale_factor": 0.0,
+  "sel_mult_base": 0.9,
+  "sel_mult_scale_factor": 1.0,
   "bias_cache_lambda": 0.0,
   "bias_cache_alpha": 0.8,
   "nonroot_var_scale_prior_visits": 10

@@ -35,7 +35,7 @@ def get_lr(config: RunConfig, model_gen: int) -> float:
 
     lr = config.lr
     next_gen, next_lr = None, None
-    for gen, gen_lr in (config.lr_schedule or []):
+    for gen, gen_lr in config.lr_schedule or []:
         if gen > model_gen:
             next_gen, next_lr = gen, gen_lr
             break
@@ -83,17 +83,17 @@ def train_one_gen(
 
     batch_size = config.batch_size
     lr_schedule = ConstantLRSchedule(get_lr(config, model_gen))
-    num_batches = chunk_size // batch_size
     # lr_schedule = CyclicLRSchedule(config.min_lr * lr_scale,
     #                                config.max_lr * lr_scale, num_batches)
 
-    logging.info(f"Batch Size: {batch_size}")
-    logging.info(f"Learning Rate Schedule: {lr_schedule.info()}")
     # logging.info(f'Running initial validation...')
     # train.val(model, mode=train.Mode.RL, val_ds=val_ds, val_batch_num=-1)
 
     ds = tf.data.TFRecordDataset(chunk_path, compression_type="ZLIB")
     num_batches = find_num_batches(ds)
+
+    logging.info(f"Batch Size: {batch_size}")
+    logging.info(f"Learning Rate Schedule: {lr_schedule.info()}")
 
     ds = ds.map(transforms.expand, num_parallel_calls=tf.data.AUTOTUNE)
     ds = ds.batch(batch_size)
@@ -104,7 +104,8 @@ def train_one_gen(
             optimizer = ConvMuon(
                 learning_rate=lr_schedule,
                 exclude_layers=[r".*policy_head\/.*", r".*value_head\/.*"],
-                adam_weight_decay=0.01,
+                adam_weight_decay=config.adam_wd,
+                weight_decay=config.muon_wd,
             )
         else:
             optimizer = keras.optimizers.SGD(
@@ -117,7 +118,19 @@ def train_one_gen(
             optimizer = keras.mixed_precision.LossScaleOptimizer(optimizer)
 
     inner_optimizer = getattr(optimizer, "inner_optimizer", optimizer)
-    logging.info(f"Optimizer: {type(inner_optimizer).__name__}")
+    if isinstance(inner_optimizer, ConvMuon):
+        logging.info(
+            f"Using ConvMuon Optimizer"
+            f"\n  Weight Decay={inner_optimizer.weight_decay}"
+            f"\n  AdamW Weight Decay={inner_optimizer.adam_weight_decay}"
+            f"\n  Momentum={inner_optimizer.momentum}"
+        )
+    else:
+        logging.info(
+            f"Using ConvMuon SGD"
+            f"\n  Momentum={inner_optimizer.momentum}"
+            f"\n  ClipNorm={inner_optimizer.global_clipnorm}"
+        )
 
     ss_manager = WeightSnapshotManager(get_ss_timestamps(num_batches))
     last_swa_weights = last_swa_model.get_weights()

@@ -144,7 +144,7 @@ def loop(
         if gen > 0:
             calib = calib_utils.compute_calibration(local_sp_chunk_dir, gen - 1)
             if calib is not None:
-                calib_path = Path(local_run_dir) / f"sel_mult_calib_gen{gen:03d}.txt"
+                calib_path = Path(local_run_dir) / f"sel_mult_calib.txt"
                 calib_utils.write_calibration_file(calib, calib_path)
                 calib_file = str(calib_path)
                 # Use 1/mean_sel_mult from last gen so average sel_mult ≈ 1.0.
@@ -166,7 +166,6 @@ def loop(
             + f" --gumbel_selected_n={selected_n}"
             + f" --gumbel_default_k={default_k}"
             + f" --gumbel_default_n={default_n}"
-            + f" --reuse_buffer_type={config.reuse_buffer_type}"
             + f" --use_seen_state_prob={config.use_seen_state_prob}"
             + f" --sel_mult_base={sel_mult_base}"
             + f" --sel_mult_scale_factor={config.sel_mult_scale_factor}"
