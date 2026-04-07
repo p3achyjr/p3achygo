@@ -196,12 +196,6 @@ class ForkManager final {
     if (kind_ == ForkKind::kUniform) {
       game::Board restart_board = board;
       const LastMoves last_moves = BuildLastMoves(game, move_num, {});
-      const EvalResult eval = EvalBoard(board, color, last_moves, prob);
-      const float komi_delta = ComputeKomiDelta(eval.init_score_est, color);
-      const float p_adjust_komi = std::atan(eval.init_score_est / 3.0) * M_2_PI;
-      if (prob.Uniform() < p_adjust_komi) {
-        restart_board.SetKomi(board.komi() + komi_delta);
-      }
       reuse_buffer_->Add(InitState{
           restart_board, BuildLastMoves(game, move_num, {}), color, move_num,
           FirstMoveBehavior::kSample, InitState::Kind::kGoExploit, kind_});
