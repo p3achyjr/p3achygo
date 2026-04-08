@@ -18,8 +18,6 @@ namespace recorder {
  */
 class GameRecorder {
  public:
-  using ImprovedPolicies =
-      std::vector<std::array<float, constants::kMaxMovesPerPosition>>;
   virtual ~GameRecorder() = default;
 
   // Disable Copy and Move.
@@ -30,13 +28,7 @@ class GameRecorder {
 
   virtual void RecordGame(int thread_id, const game::Board& init_board,
                           const game::Game& game,
-                          const ImprovedPolicies& mcts_pis,
-                          const std::vector<uint8_t>& move_trainables,
-                          const std::vector<float>& root_qs,
-                          const std::vector<float>& root_scores,
-                          const std::vector<float>& klds,
-                          const std::vector<mcts::TreeNode*>& roots,
-                          const std::vector<MoveSearchStats>& move_stats) = 0;
+                          const std::vector<MoveSearchRecord>& move_infos) = 0;
 
   virtual void RecordEvalGame(int thread_id, const game::Game& game,
                               const std::string& b_name,

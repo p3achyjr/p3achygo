@@ -68,24 +68,15 @@ class TfRecorderImpl final : public TfRecorder {
   TfRecorderImpl& operator=(TfRecorderImpl&&) = delete;
 
   void RecordGame(int thread_id, const game::Board& init_board,
-                  const Game& game, const ImprovedPolicies& mcts_pis,
-                  const std::vector<uint8_t>& move_trainables,
-                  const std::vector<float>& root_qs,
-                  const std::vector<float>& root_scores,
-                  const std::vector<float>& klds,
-                  const std::vector<MoveSearchStats>& move_stats) override;
+                  const Game& game,
+                  const std::vector<MoveSearchRecord>& move_infos) override;
   void Flush() override;
 
  private:
   struct Record {
     Board init_board;
     Game game;
-    ImprovedPolicies mcts_pis;
-    std::vector<uint8_t> move_trainables;
-    std::vector<float> root_qs;
-    std::vector<float> root_scores;
-    std::vector<float> klds;
-    std::vector<MoveSearchStats> move_stats;
+    std::vector<MoveSearchRecord> move_infos;
   };
 
   const std::string path_;
@@ -110,21 +101,10 @@ TfRecorderImpl::TfRecorderImpl(std::string path, int num_threads, int gen,
 
 void TfRecorderImpl::RecordGame(
     int thread_id, const Board& init_board, const Game& game,
-    const ImprovedPolicies& mcts_pis,
-    const std::vector<uint8_t>& move_trainables,
-    const std::vector<float>& root_qs, const std::vector<float>& root_scores,
-    const std::vector<float>& klds,
-    const std::vector<MoveSearchStats>& move_stats) {
+    const std::vector<MoveSearchRecord>& move_infos) {
   CHECK(game.has_result());
-  CHECK(game.num_moves() == mcts_pis.size() &&
-        game.num_moves() == move_trainables.size() &&
-        game.num_moves() == root_qs.size() &&
-        game.num_moves() == root_scores.size() &&
-        game.num_moves() == klds.size() &&
-        game.num_moves() == move_stats.size());
-  thread_records_[thread_id].emplace_back(
-      Record{init_board, game, mcts_pis, move_trainables, root_qs, root_scores,
-             klds, move_stats});
+  CHECK(game.num_moves() == move_infos.size());
+  thread_records_[thread_id].emplace_back(Record{init_board, game, move_infos});
   ++thread_game_counts_[thread_id];
 }
 
@@ -147,25 +127,24 @@ void TfRecorderImpl::Flush() {
       // Replay game from beginning. We do not store full board positions in
       // `Game` because MCTS performs many copies of `Game` objects.
       const Game& game = record.game;
-      const ImprovedPolicies& mcts_pis = record.mcts_pis;
-      const std::vector<uint8_t>& move_trainables = record.move_trainables;
-      const std::vector<float>& root_qs = record.root_qs;
-      const std::vector<float>& root_scores = record.root_scores;
+      const std::vector<MoveSearchRecord>& move_infos = record.move_infos;
       const size_t num_trainable_moves =
-          std::accumulate(move_trainables.begin(), move_trainables.end(), 0,
-                          [](size_t x, size_t y) { return x + y; });
+          std::accumulate(move_infos.begin(), move_infos.end(), 0,
+                          [](size_t x, const MoveSearchRecord& y) {
+                            return x + y.move_trainable;
+                          });
       const float kld_sum = [&]() {
         float sum = 0;
-        for (size_t i = 0; i < move_trainables.size(); ++i) {
-          if (move_trainables[i]) {
-            sum += record.klds[i];
+        for (const MoveSearchRecord& move_info : move_infos) {
+          if (move_info.move_trainable) {
+            sum += move_info.kld;
           }
         }
         return sum;
       }();
-      for (size_t i = 0; i < record.move_stats.size(); ++i) {
-        const bool trainable = move_trainables[i];
-        const size_t vc = static_cast<size_t>(record.move_stats[i].visit_count);
+      for (const MoveSearchRecord& move_info : move_infos) {
+        const bool trainable = move_info.move_trainable;
+        const size_t vc = static_cast<size_t>(move_info.move_stats.visit_count);
         trainable_visit_count += vc * (trainable ? 1 : 0);
         fast_visit_count += vc * (trainable ? 0 : 1);
         total_num_trainable_moves += (trainable ? 1 : 0);
@@ -184,14 +163,15 @@ void TfRecorderImpl::Flush() {
 
         Move move = game.move(move_num);
 
-        bool is_trainable = move_trainables[move_num];
+        const MoveSearchRecord& move_info = move_infos[move_num];
+        const bool is_trainable = move_info.move_trainable;
         if (is_trainable) {
           // Coerce into example and write result.
           Move next_move = move_num < game.num_moves() - 1
                                ? game.move(move_num + 1)
                                : Move{OppositeColor(move.color), kPassLoc};
           const std::array<float, constants::kMaxMovesPerPosition>& pi =
-              mcts_pis[move_num];
+              move_info.mcts_pi;
           Color color = move.color;
           float z = [&]() {
             if (game.result().winner == EMPTY) {
@@ -209,21 +189,23 @@ void TfRecorderImpl::Flush() {
 
             float q_short_term = 0, score_short_term = 0;
             for (int i = 0; i <= horizon; ++i) {
+              const MoveSearchRecord& td_move_info = move_infos[move_num + i];
               float v_mult = (i % 2 == 0) ? 1.0f : -1.0f;  // turn multiplier
               q_short_term +=
-                  v_mult * std::pow(lambda, i) * root_qs[move_num + i];
+                  v_mult * std::pow(lambda, i) * td_move_info.root_q_outcome;
               score_short_term +=
-                  v_mult * std::pow(lambda, i) * root_scores[move_num + i];
+                  v_mult * std::pow(lambda, i) * td_move_info.root_score;
             }
 
             return {q_short_term / N, score_short_term / N};
           };
+          // Go all the way to the end of the game.
           const auto [q6, q6_score] = exp_weighted_short_term_value_score(
-              5.0f / 6.0f, std::min(6, game.num_moves() - move_num - 1));
+              5.0f / 6.0f, game.num_moves() - move_num - 1);
           const auto [q16, q16_score] = exp_weighted_short_term_value_score(
-              15.0f / 16.0f, std::min(16, game.num_moves() - move_num - 1));
+              15.0f / 16.0f, game.num_moves() - move_num - 1);
           const auto [q50, q50_score] = exp_weighted_short_term_value_score(
-              49.0f / 50.0f, std::min(50, game.num_moves() - move_num - 1));
+              49.0f / 50.0f, game.num_moves() - move_num - 1);
           tensorflow::Example example = MakeTfExample(
               board.position(), last_moves, board.GetStonesInAtari(),
               board.GetStonesWithLiberties(2), board.GetStonesWithLiberties(3),
@@ -235,9 +217,7 @@ void TfRecorderImpl::Flush() {
 
           // Policy surprise weighting.
           const float freq_weight =
-              avg_kld == 0.0f
-                  ? 1.0
-                  : (0.5F + 0.5F * (record.klds[move_num] / avg_kld));
+              avg_kld == 0.0f ? 1.0 : (0.5F + 0.5F * (move_info.kld / avg_kld));
           for (int i = 0; i < std::floor(freq_weight); ++i) {
             tf_examples.push_back(data);
           }
@@ -252,16 +232,16 @@ void TfRecorderImpl::Flush() {
         board.PlayMove(move.loc, move.color);
       }
 
-      for (size_t i = 0; i < record.move_stats.size(); ++i) {
-        const auto& s = record.move_stats[i];
+      for (const auto& move_info : move_infos) {
         // Skip policy-sampled moves (no real search). visit_count == 1
         // means the root was evaluated but no Gumbel search was run, so
         // stats are not meaningful.
+        const auto& s = move_info.move_stats;
         if (!s.sampled_raw_policy && s.visit_count > 1.0f) {
           all_move_stats.push_back(s);
           const float freq_weight =
               avg_kld == 0.0f ? 1.0f
-                              : (0.5f + 0.5f * (record.klds[i] / avg_kld));
+                              : (0.5f + 0.5f * (move_info.kld / avg_kld));
           all_freq_weights.push_back(freq_weight);
         }
       }

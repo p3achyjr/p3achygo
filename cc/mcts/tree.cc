@@ -1,7 +1,9 @@
 #include "cc/mcts/tree.h"
 
+#include <algorithm>
 #include <iostream>
 #include <sstream>
+#include <vector>
 
 #include "absl/strings/str_format.h"
 #include "boost/math/distributions/students_t.hpp"
@@ -66,27 +68,53 @@ float Ucb(const TreeNode* node, int action, float alpha) {
   return ConfidenceInterval(node, action, alpha).second;
 }
 
-#ifdef V_CATEGORICAL
-std::string VCategoricalHistogram(TreeNode* node) {
+std::string VCategoricalHistogram(TreeNode* node, int granularity) {
   if (node == nullptr) return "";
 
-  std::stringstream ss;
+  // Aggregate raw buckets into display buckets.
+  std::vector<uint64_t> display(granularity, 0);
   for (int i = 0; i < kNumVBuckets; ++i) {
-    float lb = i * kBucketRange - 1.0f;
-    float ub = (i + 1) * kBucketRange - 1.0f;
-    ss << absl::StrFormat("%.4f", (lb + 1.0f) / 2);
-    ss << " - ";
-    ss << absl::StrFormat("%.4f", (ub + 1.0f) / 2);
-    ss << ": ";
+    float center = (i + 0.5f) * kBucketRange - 1.0f;
+    int j = static_cast<int>((center + 1.0f) / 2.0f * granularity);
+    j = std::clamp(j, 0, granularity - 1);
+    display[j] += node->v_categorical[i];
+  }
 
-    for (int _ = 0; _ < node->v_categorical[i]; ++_) {
-      ss << "#";
+  // Find first/last occupied bucket to bound the display range.
+  int lo = granularity, hi = -1;
+  for (int j = 0; j < granularity; ++j) {
+    if (display[j] > 0) {
+      if (j < lo) lo = j;
+      if (j > hi) hi = j;
     }
-    ss << "\n";
+  }
+  if (hi < 0) return "";
+
+  uint64_t max_count = 0;
+  for (int j = lo; j <= hi; ++j) {
+    max_count = std::max(max_count, display[j]);
+  }
+
+  static constexpr int kMaxBarWidth = 24;
+  float bucket_width = 2.0f / granularity;
+  float v_min = lo * bucket_width - 1.0f;
+  float v_max = (hi + 1) * bucket_width - 1.0f;
+
+  std::stringstream ss;
+  ss << absl::StrFormat("  V [%+.2f .. %+.2f]\n", v_min, v_max);
+  for (int j = lo; j <= hi; ++j) {
+    float center = (j + 0.5f) * bucket_width - 1.0f;
+    int bar_len = max_count > 0
+                      ? static_cast<int>(static_cast<float>(display[j]) /
+                                         max_count * kMaxBarWidth)
+                      : 0;
+    ss << absl::StrFormat("  %+5.2f │", center);
+    for (int k = 0; k < bar_len; ++k) ss << "█";
+    for (int k = bar_len; k < kMaxBarWidth; ++k) ss << " ";
+    ss << absl::StrFormat("│ %lu\n", display[j]);
   }
 
   return ss.str();
 }
-#endif
 
 }  // namespace mcts
