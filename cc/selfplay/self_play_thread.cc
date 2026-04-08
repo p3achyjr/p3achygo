@@ -673,6 +673,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
               .root_score(root_score)
               .kld(gumbel_res.kld)
               .root(log_mcts_trees ? root_node : nullptr)
+              .mcts_value_dist(root_node->v_categorical)
               .move_stats(move_stats)
               .build();
       move_infos.push_back(move_info);
@@ -876,6 +877,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
               << "  score=" << absl::StrFormat("%.3f", mv_stats.score) << "\n";
           }
         }
+        s << "MCTS Value:\n" << VCategoricalHistogram(root_node) << "\n";
         s << "Board:\n" << game.board() << "\n";
         s << "Nodes Reaped=" << num_nodes_reaped
           << "  Reap Time=" << reap_time_us

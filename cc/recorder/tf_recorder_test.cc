@@ -16,6 +16,7 @@
 #include "cc/game/color.h"
 #include "cc/game/game.h"
 #include "cc/game/loc.h"
+#include "cc/mcts/constants.h"
 #include "cc/recorder/move_search_stats.h"
 #include "example.pb.h"
 
@@ -76,7 +77,8 @@ PolicyArray MakePiForMove(int move_num) {
 }
 
 MoveSearchRecord SimpleRecord(PolicyArray pi, bool trainable, float kld = 0.0f,
-                              float root_q = 0.5f, float root_score = 0.0f) {
+                              float root_q = 0.5f, float root_score = 0.0f,
+                              MctsValueDist dist = {}) {
   return MoveSearchRecord::Builder()
       .mcts_pi(pi)
       .move_trainable(trainable)
@@ -84,6 +86,7 @@ MoveSearchRecord SimpleRecord(PolicyArray pi, bool trainable, float kld = 0.0f,
       .root_score(root_score)
       .kld(kld)
       .root(nullptr)
+      .mcts_value_dist(dist)
       .move_stats(MoveSearchStats::Builder().build())
       .build();
 }
@@ -481,6 +484,91 @@ TEST_CASE("TfRecorder: only trainable moves produce examples") {
 
     fs::remove_all(tmpdir);
   }
+}
+
+TEST_CASE("TfRecorder: pi_aux_dist encodes next move's improved policy") {
+  // pi_aux_dist for move N is move_infos[N+1].mcts_pi.
+  // For the last move, pi_aux_dist is all zeros (PolicyArray{}).
+  char tmpdir[] = "/tmp/tf_recorder_test_XXXXXX";
+  REQUIRE(mkdtemp(tmpdir) != nullptr);
+  std::string dir = std::string(tmpdir) + "/";
+
+  // 2-move game: move 0's pi_aux_dist = move 1's mcts_pi.
+  PolicyArray pi0 = MakeUniformPi();
+  PolicyArray pi1 = MakePiForMove(7);  // one-hot at index 7
+
+  std::vector<MoveSearchRecord> move_infos = {
+      SimpleRecord(pi0, /*trainable=*/true),
+      SimpleRecord(pi1, /*trainable=*/true),
+  };
+
+  auto examples = RunAndRead(dir, MakePassGame(2), move_infos);
+  REQUIRE(examples.size() == 2);
+
+  auto decode_pi_aux_dist = [](const tensorflow::Example& ex) {
+    const std::string& bytes =
+        ex.features().feature().at("pi_aux_dist").bytes_list().value(0);
+    PolicyArray dist{};
+    std::memcpy(dist.data(), bytes.data(),
+                sizeof(float) * constants::kMaxMovesPerPosition);
+    return dist;
+  };
+
+  // Move 0: pi_aux_dist = pi1 (one-hot at 7).
+  auto dist0 = decode_pi_aux_dist(examples[0]);
+  CHECK(dist0[7] == doctest::Approx(1.0f));
+  for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
+    if (i != 7) CHECK(dist0[i] == doctest::Approx(0.0f));
+  }
+
+  // Move 1 (last move): pi_aux_dist = all zeros.
+  auto dist1 = decode_pi_aux_dist(examples[1]);
+  for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
+    CHECK(dist1[i] == doctest::Approx(0.0f));
+  }
+
+  fs::remove_all(tmpdir);
+}
+
+TEST_CASE("TfRecorder: v_categorical encodes mcts value distribution") {
+  // mcts_value_dist is written verbatim as uint32[kNumVBuckets].
+  char tmpdir[] = "/tmp/tf_recorder_test_XXXXXX";
+  REQUIRE(mkdtemp(tmpdir) != nullptr);
+  std::string dir = std::string(tmpdir) + "/";
+
+  // Construct a known distribution: put 3 counts in bucket 10, 7 in bucket 40.
+  MctsValueDist dist{};
+  dist[10] = 3;
+  dist[40] = 7;
+
+  std::vector<MoveSearchRecord> move_infos = {
+      SimpleRecord(MakeUniformPi(), /*trainable=*/true, /*kld=*/0.0f,
+                   /*root_q=*/0.5f, /*root_score=*/0.0f, dist),
+  };
+
+  auto examples = RunAndRead(dir, MakePassGame(1), move_infos);
+  REQUIRE(examples.size() == 1);
+
+  const std::string& bytes = examples[0]
+                                 .features()
+                                 .feature()
+                                 .at("v_categorical")
+                                 .bytes_list()
+                                 .value(0);
+  REQUIRE(bytes.size() == sizeof(uint32_t) * mcts::kNumVBuckets);
+
+  MctsValueDist decoded{};
+  std::memcpy(decoded.data(), bytes.data(),
+              sizeof(uint32_t) * mcts::kNumVBuckets);
+
+  CHECK(decoded[10] == 3u);
+  CHECK(decoded[40] == 7u);
+  // All other buckets should be zero.
+  for (int i = 0; i < mcts::kNumVBuckets; ++i) {
+    if (i != 10 && i != 40) CHECK(decoded[i] == 0u);
+  }
+
+  fs::remove_all(tmpdir);
 }
 
 }  // namespace

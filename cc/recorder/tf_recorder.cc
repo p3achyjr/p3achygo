@@ -167,11 +167,14 @@ void TfRecorderImpl::Flush() {
         const bool is_trainable = move_info.move_trainable;
         if (is_trainable) {
           // Coerce into example and write result.
-          Move next_move = move_num < game.num_moves() - 1
-                               ? game.move(move_num + 1)
-                               : Move{OppositeColor(move.color), kPassLoc};
-          const std::array<float, constants::kMaxMovesPerPosition>& pi =
-              move_info.mcts_pi;
+          const Move next_move =
+              move_num < game.num_moves() - 1
+                  ? game.move(move_num + 1)
+                  : Move{OppositeColor(move.color), kPassLoc};
+          const PolicyArray pi_aux_dist = move_num < game.num_moves() - 1
+                                              ? move_infos[move_num + 1].mcts_pi
+                                              : PolicyArray{};
+          const PolicyArray& pi = move_info.mcts_pi;
           Color color = move.color;
           float z = [&]() {
             if (game.result().winner == EMPTY) {
@@ -209,9 +212,9 @@ void TfRecorderImpl::Flush() {
           tensorflow::Example example = MakeTfExample(
               board.position(), last_moves, board.GetStonesInAtari(),
               board.GetStonesWithLiberties(2), board.GetStonesWithLiberties(3),
-              board.GetLadderedStones(), pi, next_move.loc, game.result(), q6,
-              q16, q50, q6_score, q16_score, q50_score, move.color, game.komi(),
-              BOARD_LEN);
+              board.GetLadderedStones(), pi, next_move.loc, pi_aux_dist,
+              game.result(), move_info.mcts_value_dist, q6, q16, q50, q6_score,
+              q16_score, q50_score, move.color, game.komi(), BOARD_LEN);
           std::string data;
           example.SerializeToString(&data);
 

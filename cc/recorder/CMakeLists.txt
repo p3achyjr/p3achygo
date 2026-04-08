@@ -64,6 +64,7 @@ if(BUILD_TESTS)
         tf_recorder
         game
         constants
+        mcts_constants
         core_doctest
     )
     add_test(NAME tf_recorder_test COMMAND tf_recorder_test)

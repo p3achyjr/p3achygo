@@ -123,6 +123,10 @@ int SampleFromPolicy(
       mass += prob;
     }
   }
+
+  if (p == 1.0f) {
+    return last_nonzero;
+  }
   // Build log message for all failure modes.
   std::ostringstream dbg;
   dbg << "SampleFromPolicy: failed to sample" << " (p=" << p << " mass=" << mass
