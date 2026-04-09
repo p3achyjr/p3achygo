@@ -13,7 +13,19 @@ class ConvMuon(keras.optimizers.Muon):
     The stock Muon routes all non-2D variables to AdamW. This subclass instead
     allows any variable whose effective 2D dims (after flattening) are both > 4
     to use the Muon update path, which includes conv weights.
+
+    Args:
+        scale_weight_decay_by_rms: If True, the Muon weight-decay step is
+            multiplied by the same RMS scale factor applied to the gradient
+            step (sqrt(max(flat_dim, out_dim)) * rms_rate). This makes the
+            per-element grad/WD ratio identical across all body layer shapes,
+            matching KataGo upstream's behavior. Defaults to False to preserve
+            backward compatibility with older checkpoints.
     """
+
+    def __init__(self, *args, scale_weight_decay_by_rms=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.scale_weight_decay_by_rms = scale_weight_decay_by_rms
 
     def _should_use_adamw(self, variable):
         shape = variable.shape
@@ -61,3 +73,44 @@ class ConvMuon(keras.optimizers.Muon):
             scaled = scaled_2d
 
         self.assign_sub(variable, scaled)
+
+    def _wd_rms_scale(self, variable):
+        """RMS scale factor used by lr_adjust for a given variable's 2D shape.
+
+        Matches the scaling applied to the gradient step in _muon_update_step,
+        using the same [H*W*in, out] flattening convention. Returns 1.0 if
+        rms_rate is None (Moonlight scaling disabled).
+        """
+        if self.rms_rate is None:
+            return 1.0
+        shape = variable.shape
+        out_dim = shape[-1]
+        flat_dim = 1
+        for d in shape[:-1]:
+            flat_dim *= d
+        return float(max(flat_dim, out_dim)) ** 0.5 * self.rms_rate
+
+    def _apply_weight_decay(self, variables):
+        for variable in variables:
+            if not self._use_weight_decay(variable):
+                continue
+            if self._should_use_adamw(variable):
+                wd_value = self.adam_weight_decay
+                rms_scale = 1.0
+            else:
+                wd_value = self.weight_decay
+                rms_scale = (
+                    self._wd_rms_scale(variable)
+                    if self.scale_weight_decay_by_rms
+                    else 1.0
+                )
+            if wd_value is None:
+                continue
+            wd = ops.cast(wd_value, variable.dtype)
+            lr = ops.cast(self.learning_rate, variable.dtype)
+            variable.assign(variable - variable * wd * lr * rms_scale)
+
+    def get_config(self):
+        config = super().get_config()
+        config["scale_weight_decay_by_rms"] = self.scale_weight_decay_by_rms
+        return config

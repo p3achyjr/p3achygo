@@ -106,6 +106,7 @@ def train_one_gen(
                 exclude_layers=[r".*policy_head\/.*", r".*value_head\/.*"],
                 adam_weight_decay=config.adam_wd,
                 weight_decay=config.muon_wd,
+                scale_weight_decay_by_rms=config.scale_weight_decay_by_rms,
             )
         else:
             optimizer = keras.optimizers.SGD(
@@ -124,6 +125,7 @@ def train_one_gen(
             f"\n  Weight Decay={inner_optimizer.weight_decay}"
             f"\n  AdamW Weight Decay={inner_optimizer.adam_weight_decay}"
             f"\n  Momentum={inner_optimizer.momentum}"
+            f"\n  Scale WD by RMS={inner_optimizer.scale_weight_decay_by_rms}"
         )
     else:
         logging.info(
