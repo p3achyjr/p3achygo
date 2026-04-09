@@ -18,8 +18,10 @@ struct MoveSearchStats {
   float kld;      // KL divergence: improved policy vs NN prior (post-search)
   float pre_kld;  // KL divergence: improved policy vs NN prior (pre-search,
                   // reused tree)
-  float sel_mult_modifier;  // training selection probability multiplier
-  float visit_count;        // MCTS visit count for this move
+  float sel_mult_modifier;         // training selection probability multiplier
+  float sel_mult_modifier_weight;  // how much this sel_mult_modifier affects
+                                   // move selection across the game.
+  float visit_count;               // MCTS visit count for this move
   class Builder;
 };
 
@@ -63,6 +65,10 @@ class MoveSearchStats::Builder {
   }
   Builder& sel_mult_modifier(float v) {
     s_.sel_mult_modifier = v;
+    return *this;
+  }
+  Builder& sel_mult_modifier_weight(float v) {
+    s_.sel_mult_modifier_weight = v;
     return *this;
   }
   Builder& visit_count(float v) {

@@ -385,16 +385,15 @@ void TfRecorderImpl::Flush() {
   // Write scalar metadata: mean sel_mult (used by Python to compute
   // sel_mult_base = 1 / mean for the next generation).
   float sel_mult_sum = 0.0f;
-  int sel_mult_count = 0;
+  float sel_mult_count = 0;
   for (const auto& s : all_move_stats) {
     if (s.sampled_raw_policy) continue;
     if (!std::isfinite(s.sel_mult_modifier)) continue;
-    sel_mult_sum += s.sel_mult_modifier;
-    ++sel_mult_count;
+    sel_mult_sum += s.sel_mult_modifier_weight * s.sel_mult_modifier;
+    sel_mult_count += s.sel_mult_modifier_weight;
   }
   const float sel_mult_mean =
-      sel_mult_count > 0 ? sel_mult_sum / static_cast<float>(sel_mult_count)
-                         : 1.0f;
+      sel_mult_count > 0 ? sel_mult_sum / sel_mult_count : 1.0f;
   absl::FPrintF(stats_file, "sel_mult_mean=%f\n", sel_mult_mean);
 
   fclose(stats_file);

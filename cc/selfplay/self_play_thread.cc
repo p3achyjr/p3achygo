@@ -415,7 +415,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     float var_max = std::numeric_limits<float>::lowest();
 
     // Over-search multiplier tracking.
-    float sel_mult_avg = 0, sel_mult_ema = 0;
+    float sel_mult_avg = 0, sel_mult_ema = 0, select_move_prob_base_avg = 0,
+          select_move_prob_avg = 0;
 
     std::optional<mcts::BiasCache> bias_cache_storage;
     mcts::BiasCache* bias_cache = nullptr;
@@ -479,8 +480,10 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       float q_pre = V(root_node);
       float qz_pre = VOutcome(root_node);
       float var_pre = n_pre < 3 ? 0.0f : root_node->v_outcome_var;
-      float pre_kld = ComputeKLD(ComputeImprovedPolicy(root_node, 0),
-                                 root_node->move_probs);
+      float pre_kld = root_node->n >= 1
+                          ? ComputeKLD(ComputeImprovedPolicy(root_node, 0),
+                                       root_node->move_probs)
+                          : 0.0f;
       // Selection probability multiplier.
       //
       // StddevBonus: sqrt(v_outcome_var) is high — tree-reuse variance
@@ -524,7 +527,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       const bool apply_sel_mult = config.sel_mult_base > 0.0f;
       const float sel_bonus =
           std::min(std::max(sel_std_bonus, sel_kld_bonus), 2.5f);
-      const float sel_mult_modifier = sel_bonus * sel_kld_penalty;
+      const float sel_mult_modifier =
+          sampling_raw_policy ? 1.0f : sel_bonus * sel_kld_penalty;
       const float sel_mult =
           apply_sel_mult ? (config.sel_mult_base * sel_mult_modifier) : 1.0f;
 
@@ -533,16 +537,17 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       // `kMoveSelectedForTrainingProb`. If we are down bad, then we anneal our
       // selection probability by down_bad_coeff^2. So if V(root) = -.95,
       // down_bad_coeff = .5, and our probability is annealed by .5 * .5 = .25.
-      float const select_move_prob = [sampling_raw_policy, is_either_down_bad,
-                                      down_bad_coeff, sel_mult]() {
+      auto const [select_move_prob, select_move_prob_base] =
+          [sampling_raw_policy, is_either_down_bad, down_bad_coeff,
+           sel_mult]() -> std::pair<float, float> {
         if (sampling_raw_policy) {
-          return 0.0f;
+          return {0.0f, 0.0f};
         }
         const float base =
             is_either_down_bad
                 ? down_bad_coeff * down_bad_coeff * kMoveSelectedForTrainingProb
                 : kMoveSelectedForTrainingProb;
-        return base * sel_mult;
+        return {base * sel_mult, base};
       }();
 
       // Probability of over-searching this move, if selected for training.
@@ -662,8 +667,10 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       float root_q_outcome = VOutcome(root_node);
       float root_score = Score(root_node);
       float var_post = n_post < 3 ? 0.0f : root_node->v_outcome_var;
-      float post_kld = ComputeKLD(ComputeImprovedPolicy(root_node, 0),
-                                  root_node->move_probs);
+      float post_kld = root_node->n >= 1
+                           ? ComputeKLD(ComputeImprovedPolicy(root_node, 0),
+                                        root_node->move_probs)
+                           : 0.0f;
 
       Loc nn_move = gumbel_res.nn_move;
       Loc move = gumbel_res.mcts_move;
@@ -711,6 +718,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
               .kld(post_kld)
               .pre_kld(pre_kld)
               .sel_mult_modifier(sel_mult_modifier)
+              .sel_mult_modifier_weight(select_move_prob_base /
+                                        kMoveSelectedForTrainingProb)
               .visit_count(static_cast<float>(gumbel_res.visits))
               .build());
       positions_for_regret.push_back({color_to_move, game.board(), move,
@@ -826,6 +835,13 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       sel_mult_ema = sel_mult_ema == 0
                          ? sel_mult
                          : (0.75f * sel_mult_ema + 0.25f * sel_mult);
+      select_move_prob_base_avg =
+          (select_move_prob_base_avg * (game.num_moves() - 1) +
+           select_move_prob_base) /
+          game.num_moves();
+      select_move_prob_avg =
+          (select_move_prob_avg * (game.num_moves() - 1) + select_move_prob) /
+          game.num_moves();
 
       auto round_end = std::chrono::steady_clock::now();
       auto round_dur = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -842,6 +858,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
           << (game.num_moves() + game.init_mv_num()) << " -----\n";
         s << "N=" << gumbel_n << "  K=" << gumbel_k
           << "  Select Move Prob=" << select_move_prob
+          << "  Avg(Adj)=" << select_move_prob_avg
+          << "  Avg(Base)=" << select_move_prob_base_avg
           << "  Add Init State Prob=" << add_init_state_prob
           << "  Trainable=" << is_move_selected_for_training
           << "  Early Stopping=" << early_stopping_enabled
