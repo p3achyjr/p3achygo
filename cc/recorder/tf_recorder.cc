@@ -202,11 +202,11 @@ void TfRecorderImpl::Flush() {
 
             return {q_short_term / N, score_short_term / N};
           };
-          // Go all the way to the end of the game.
           const auto [q6, q6_score] = exp_weighted_short_term_value_score(
-              5.0f / 6.0f, game.num_moves() - move_num - 1);
+              5.0f / 6.0f, std::min(6, game.num_moves() - move_num - 1));
           const auto [q16, q16_score] = exp_weighted_short_term_value_score(
-              15.0f / 16.0f, game.num_moves() - move_num - 1);
+              15.0f / 16.0f, std::min(16, game.num_moves() - move_num - 1));
+          // Go all the way to the end of the game.
           const auto [q50, q50_score] = exp_weighted_short_term_value_score(
               49.0f / 50.0f, game.num_moves() - move_num - 1);
           tensorflow::Example example = MakeTfExample(

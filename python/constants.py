@@ -1,6 +1,6 @@
-'''
+"""
 Various constants.
-'''
+"""
 
 BOARD_LEN = 19
 
@@ -17,6 +17,8 @@ NON_MOVE = (-1, -1)
 PASS_MOVE = (BOARD_LEN, 0)
 
 PASS_MOVE_ENCODING = 361
+NUM_MOVES = BOARD_LEN * BOARD_LEN + 1  # 362
+NUM_V_BUCKETS = 51  # must match mcts::kNumVBuckets in C++
 
 
 def num_input_planes(version=1) -> int:

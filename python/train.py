@@ -475,6 +475,8 @@ def train(
                 score_one_hot,
                 policy,
                 policy_aux,
+                policy_aux_dist,
+                has_pi_aux_dist,
                 own,
                 q6,
                 q16,
@@ -483,6 +485,8 @@ def train(
                 q16_score,
                 q50_score,
                 game_outcome,
+                mcts_value_dist,
+                has_mcts_value_dist,
             ) = batch_data
 
             targets = GroundTruth(
@@ -498,6 +502,10 @@ def train(
                 q6_score=q6_score,
                 q16_score=q16_score,
                 q50_score=q50_score,
+                policy_aux_dist=policy_aux_dist,
+                has_pi_aux_dist=has_pi_aux_dist,
+                mcts_value_dist=mcts_value_dist,
+                has_mcts_value_dist=has_mcts_value_dist,
             )
 
             result = train_step(
@@ -937,6 +945,8 @@ def val(
             score_one_hot,
             policy,
             policy_aux,
+            policy_aux_dist,
+            has_pi_aux_dist,
             own,
             q6,
             q16,
@@ -945,6 +955,8 @@ def val(
             q16_score,
             q50_score,
             game_outcome,
+            mcts_value_dist,
+            has_mcts_value_dist,
         ) = batch_data
 
         targets = GroundTruth(
@@ -960,6 +972,10 @@ def val(
             q6_score=q6_score,
             q16_score=q16_score,
             q50_score=q50_score,
+            policy_aux_dist=policy_aux_dist,
+            has_pi_aux_dist=has_pi_aux_dist,
+            mcts_value_dist=mcts_value_dist,
+            has_mcts_value_dist=has_mcts_value_dist,
         )
 
         result = val_fn(

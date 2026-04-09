@@ -67,6 +67,11 @@ class GroundTruth(NamedTuple):
     q6_score: Optional[tf.Tensor] = None
     q16_score: Optional[tf.Tensor] = None
     q50_score: Optional[tf.Tensor] = None
+    # new optional labels
+    policy_aux_dist: Optional[tf.Tensor] = None  # float32[NUM_MOVES]
+    has_pi_aux_dist: Optional[tf.Tensor] = None  # bool scalar
+    mcts_value_dist: Optional[tf.Tensor] = None  # int32[NUM_V_BUCKETS]
+    has_mcts_value_dist: Optional[tf.Tensor] = None  # bool scalar
 
 
 class LossWeights(NamedTuple):

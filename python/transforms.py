@@ -18,6 +18,10 @@ EX_DESC = {
     "own": tf.io.FixedLenFeature([], tf.string),
     "pi": tf.io.FixedLenFeature([], tf.string),
     "pi_aux": tf.io.FixedLenFeature([], tf.string),
+    # Optional fields — absent in older data. Use VarLenFeature so parse
+    # succeeds even when the key is missing.
+    "pi_aux_dist": tf.io.VarLenFeature(tf.string),
+    "mcts_value_dist": tf.io.VarLenFeature(tf.string),
     "score_margin": tf.io.FixedLenFeature([], tf.float32),
     "q6": tf.io.FixedLenFeature([], tf.float32),
     "q16": tf.io.FixedLenFeature([], tf.float32),
@@ -123,6 +127,7 @@ def _apply_symmetry_to_grids(
     own,
     policy,
     policy_aux,
+    policy_aux_dist,
     stones_in_ladder,
 ):
     """Apply symmetry transformations to all grid-based tensors."""
@@ -147,6 +152,16 @@ def _apply_symmetry_to_grids(
         policy_aux = sym.apply_loc_symmetry(symmetry, policy_aux, bsize)
         policy_aux = as_index(policy_aux, bsize=bsize)
 
+    # Apply same board-permutation symmetry to the auxiliary policy distribution.
+    # Sentinel (all-zeros) is unchanged under any symmetry.
+    board_policy_aux_dist = policy_aux_dist[0 : bsize * bsize]
+    board_policy_aux_dist = tf.reshape(board_policy_aux_dist, shape=(bsize, bsize))
+    board_policy_aux_dist = sym.apply_grid_symmetry(symmetry, board_policy_aux_dist)
+    board_policy_aux_dist = tf.reshape(board_policy_aux_dist, shape=(bsize * bsize,))
+    policy_aux_dist = tf.concat(
+        [board_policy_aux_dist, [policy_aux_dist[bsize * bsize]]], axis=0
+    )
+
     return (
         board,
         last_moves,
@@ -156,6 +171,7 @@ def _apply_symmetry_to_grids(
         own,
         policy,
         policy_aux,
+        policy_aux_dist,
         stones_in_ladder,
     )
 
@@ -292,6 +308,30 @@ def _parse_example(tf_example):
     )
     policy_aux = tf.reshape(tf.io.decode_raw(ex["pi_aux"], tf.int16), shape=())
 
+    # Optional fields — absent in older data.
+    pi_aux_dist_values = ex["pi_aux_dist"].values  # shape [1] or []
+    has_pi_aux_dist = tf.greater(tf.size(pi_aux_dist_values), 0)
+    policy_aux_dist = tf.cond(
+        has_pi_aux_dist,
+        lambda: tf.reshape(
+            tf.io.decode_raw(pi_aux_dist_values[0], tf.float32), shape=(NUM_MOVES,)
+        ),
+        lambda: tf.zeros(NUM_MOVES, dtype=tf.float32),
+    )
+
+    mcts_value_dist_values = ex["mcts_value_dist"].values  # shape [1] or []
+    has_mcts_value_dist = tf.greater(tf.size(mcts_value_dist_values), 0)
+    # tf.io.decode_raw does not support uint32; decode as int32 (same bit layout,
+    # safe since visit counts never exceed 2^31).
+    mcts_value_dist = tf.cond(
+        has_mcts_value_dist,
+        lambda: tf.reshape(
+            tf.io.decode_raw(mcts_value_dist_values[0], tf.int32),
+            shape=(NUM_V_BUCKETS,),
+        ),
+        lambda: tf.zeros(NUM_V_BUCKETS, dtype=tf.int32),
+    )
+
     # Parse scalar fields
     komi = ex["komi"]
     score = ex["score_margin"]
@@ -334,6 +374,10 @@ def _parse_example(tf_example):
         "own": own,
         "policy": policy,
         "policy_aux": policy_aux,
+        "policy_aux_dist": policy_aux_dist,
+        "has_pi_aux_dist": has_pi_aux_dist,
+        "mcts_value_dist": mcts_value_dist,
+        "has_mcts_value_dist": has_mcts_value_dist,
         "score": score,
         "q6": q6,
         "q16": q16,
@@ -362,6 +406,7 @@ def _expand_common(parsed):
     own = parsed["own"]
     policy = parsed["policy"]
     policy_aux = parsed["policy_aux"]
+    policy_aux_dist = parsed["policy_aux_dist"]
     komi = parsed["komi"]
     score = parsed["score"]
 
@@ -386,6 +431,7 @@ def _expand_common(parsed):
         own,
         policy,
         policy_aux,
+        policy_aux_dist,
         stones_in_ladder,
     ) = _apply_symmetry_to_grids(
         symmetry,
@@ -398,6 +444,7 @@ def _expand_common(parsed):
         own,
         policy,
         policy_aux,
+        policy_aux_dist,
         stones_in_ladder,
     )
 
@@ -429,6 +476,10 @@ def _expand_common(parsed):
         "own": own,
         "policy": policy,
         "policy_aux": policy_aux,
+        "policy_aux_dist": policy_aux_dist,
+        "has_pi_aux_dist": parsed["has_pi_aux_dist"],
+        "mcts_value_dist": parsed["mcts_value_dist"],
+        "has_mcts_value_dist": parsed["has_mcts_value_dist"],
         "score_one_hot": score_one_hot,
         "game_outcome": game_outcome,
     }
@@ -448,6 +499,8 @@ def expand(tf_example):
         expanded["score_one_hot"],
         expanded["policy"],
         expanded["policy_aux"],
+        expanded["policy_aux_dist"],
+        expanded["has_pi_aux_dist"],
         expanded["own"],
         parsed["q6"],
         parsed["q16"],
@@ -456,4 +509,6 @@ def expand(tf_example):
         parsed["q16_score"],
         parsed["q50_score"],
         expanded["game_outcome"],
+        expanded["mcts_value_dist"],
+        expanded["has_mcts_value_dist"],
     )
