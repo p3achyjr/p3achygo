@@ -21,11 +21,27 @@ class ConvMuon(keras.optimizers.Muon):
             per-element grad/WD ratio identical across all body layer shapes,
             matching KataGo upstream's behavior. Defaults to False to preserve
             backward compatibility with older checkpoints.
+        wd_lr_exponent: If set, scales the Muon weight decay as
+            wd × (lr / wd_lr_max)^wd_lr_exponent each step, matching KataGo
+            upstream's sublinear WD decay (exponent=0.70). Defaults to None
+            (constant WD). Has no effect on AdamW variables.
+        wd_lr_max: The reference LR at which `weight_decay` is calibrated
+            (typically the peak/starting LR). Required when wd_lr_exponent
+            is set. Defaults to None.
     """
 
-    def __init__(self, *args, scale_weight_decay_by_rms=False, **kwargs):
+    def __init__(
+        self,
+        *args,
+        scale_weight_decay_by_rms=False,
+        wd_lr_exponent=None,
+        wd_lr_max=None,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self.scale_weight_decay_by_rms = scale_weight_decay_by_rms
+        self.wd_lr_exponent = wd_lr_exponent
+        self.wd_lr_max = wd_lr_max
 
     def _should_use_adamw(self, variable):
         shape = variable.shape
@@ -97,6 +113,7 @@ class ConvMuon(keras.optimizers.Muon):
             if self._should_use_adamw(variable):
                 wd_value = self.adam_weight_decay
                 rms_scale = 1.0
+                lr_scale_factor = 1.0
             else:
                 wd_value = self.weight_decay
                 rms_scale = (
@@ -104,13 +121,24 @@ class ConvMuon(keras.optimizers.Muon):
                     if self.scale_weight_decay_by_rms
                     else 1.0
                 )
+                if self.wd_lr_exponent is not None and self.wd_lr_max is not None:
+                    lr = ops.cast(self.learning_rate, "float32")
+                    lr_ratio = lr / ops.cast(self.wd_lr_max, "float32")
+                    # Clamp to (0, 1] — WD should not exceed the base value.
+                    lr_ratio = ops.minimum(lr_ratio, 1.0)
+                    lr_scale_factor = ops.power(lr_ratio, self.wd_lr_exponent)
+                else:
+                    lr_scale_factor = 1.0
             if wd_value is None:
                 continue
             wd = ops.cast(wd_value, variable.dtype)
             lr = ops.cast(self.learning_rate, variable.dtype)
-            variable.assign(variable - variable * wd * lr * rms_scale)
+            lr_scale_factor = ops.cast(lr_scale_factor, variable.dtype)
+            variable.assign(variable - variable * wd * lr * rms_scale * lr_scale_factor)
 
     def get_config(self):
         config = super().get_config()
         config["scale_weight_decay_by_rms"] = self.scale_weight_decay_by_rms
+        config["wd_lr_exponent"] = self.wd_lr_exponent
+        config["wd_lr_max"] = self.wd_lr_max
         return config
