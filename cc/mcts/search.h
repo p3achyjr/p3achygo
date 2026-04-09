@@ -6,6 +6,7 @@
 #include <optional>
 
 #include "absl/synchronization/mutex.h"
+#include "cc/constants/constants.h"
 #include "cc/core/heap.h"
 #include "cc/game/loc.h"
 #include "cc/mcts/bias_cache.h"
@@ -185,18 +186,40 @@ class BuUctDescentPolicy final {
                          const TreeNode* node, const game::Game& game,
                          game::Color color, bool is_root = false) {
     PuctScores pucts = puct_scorer_.ComputeScores(node, is_root);
-    std::sort(pucts.begin(), pucts.end(), [](const auto& p0, const auto& p1) {
-      return p0.second > p1.second;
-    });
+    std::array<std::pair<int, float>, 4> top_scores = {
+        {{game::kNoopLoc, -1000},
+         {game::kNoopLoc, -1000},
+         {game::kNoopLoc, -1000},
+         {game::kNoopLoc, -1000}}};
+    std::array<std::pair<int, float>, 4> fallback_scores = {
+        {{game::kNoopLoc, -1000},
+         {game::kNoopLoc, -1000},
+         {game::kNoopLoc, -1000},
+         {game::kNoopLoc, -1000}}};
+    const auto find_ranking = [](const auto& scores, const float score) -> int {
+      for (int r = 0; r < static_cast<int>(scores.size()); ++r) {
+        if (score >= scores[r].second) {
+          return r;
+        }
+      }
+      return static_cast<int>(scores.size());
+    };
+    const auto sift = [](auto& scores, const int ranking,
+                         const std::pair<int, float> e) {
+      if (ranking < 0 || ranking >= static_cast<int>(scores.size())) return;
+      for (int i = static_cast<int>(scores.size()) - 1; i > ranking; --i) {
+        scores[i] = scores[i - 1];
+      }
+      scores[ranking] = e;
+    };
 
-    std::array<std::pair<int, float>, 4> top_scores;
-    int ranking = 0;
-    for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
-      if (ranking >= top_scores.size()) {
-        break;
+    for (const auto& [a, puct_score] : pucts) {
+      if (!game.IsValidMove(game::AsLoc(a), color)) {
+        continue;
       }
 
-      auto [a, puct] = pucts[i];
+      int fallback_ranking = find_ranking(fallback_scores, puct_score);
+      int ranking = find_ranking(top_scores, puct_score);
       const TreeNode* child = node->children[a].load(std::memory_order_acquire);
       if (child != nullptr) {
         const float n = child->n;
@@ -206,20 +229,18 @@ class BuUctDescentPolicy final {
             child->sum_n_in_flights.load(std::memory_order_acquire);
         const float o = sum_n_in_flights / (n + n_in_flight);
         if (o > max_o_) {
-          continue;
+          ranking = static_cast<int>(top_scores.size());
         }
       }
 
-      if (game.IsValidMove(a, color)) {
-        top_scores[ranking] = {a, puct};
-        ++ranking;
-      }
+      sift(fallback_scores, fallback_ranking, {a, puct_score});
+      sift(top_scores, ranking, {a, puct_score});
     }
 
-    for (int r = ranking; r < top_scores.size(); ++r) {
-      top_scores[r] = {game::kNoopLoc, -1000};
+    if (game::AsLoc(top_scores[0].first) != game::kNoopLoc) {
+      return {game::AsLoc(top_scores[0].first), top_scores};
     }
-    return {game::AsLoc(top_scores[0].first), top_scores};
+    return {game::AsLoc(fallback_scores[0].first), fallback_scores};
   }
 
  private:

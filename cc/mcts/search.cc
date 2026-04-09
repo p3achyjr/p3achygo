@@ -8,6 +8,7 @@
 
 #include "cc/constants/constants.h"
 #include "cc/core/probability.h"
+#include "cc/game/board.h"
 #include "cc/game/color.h"
 #include "cc/game/loc.h"
 #include "cc/game/move.h"
@@ -137,7 +138,10 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
                                    /*is_root=*/cur_node == root);
       next_move = descent_result.first;
       next_top_actions = descent_result.second;
-      CHECK(game.PlayMove(next_move, color_to_move));
+      CHECK(game.PlayMove(next_move, color_to_move))
+          << "Invalid Move " << game::Move{color_to_move, next_move}
+          << "  Score=" << next_top_actions[0].second << "\n"
+          << game::ToString(game.board().position());
       color_to_move = game::OppositeColor(color_to_move);
       path.push_back({cur_node, next_move, next_top_actions});
       child = cur_node->children[next_move].load(std::memory_order_relaxed);
