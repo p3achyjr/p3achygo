@@ -30,6 +30,9 @@ class RunConfig(object):
     adam_wd: float
     muon_wd: float
     scale_weight_decay_by_rms: bool
+    wd_auto_scale: bool
+    wd_lr_exponent: float
+    wd_lr_max: float
 
     # Gumbel Controls
     min_train_selected_k: int
@@ -81,6 +84,14 @@ def parse(run_id: str) -> RunConfig:
         adam_wd = obj.get("adam_wd", 0.01)
         muon_wd = obj.get("muon_wd", 0.02)
         scale_weight_decay_by_rms = obj.get("scale_weight_decay_by_rms", False)
+        wd_auto_scale = obj.get("wd_auto_scale", False)
+        wd_lr_exponent = obj.get("wd_lr_exponent", None)
+        wd_lr_max = obj.get("wd_lr_max", None)
+        if wd_auto_scale:
+            if wd_lr_exponent is None:
+                wd_lr_exponent = 0.42
+            if wd_lr_max is None:
+                wd_lr_max = max_lr
 
         min_train_selected_k = obj.get("min_train_selected_k", 8)
         min_train_selected_n = obj.get("min_train_selected_n", 128)
@@ -122,6 +133,9 @@ def parse(run_id: str) -> RunConfig:
             adam_wd,
             muon_wd,
             scale_weight_decay_by_rms,
+            wd_auto_scale,
+            wd_lr_exponent,
+            wd_lr_max,
             min_train_selected_k,
             min_train_selected_n,
             max_train_selected_k,

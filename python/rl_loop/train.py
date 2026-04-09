@@ -107,6 +107,8 @@ def train_one_gen(
                 adam_weight_decay=config.adam_wd,
                 weight_decay=config.muon_wd,
                 scale_weight_decay_by_rms=config.scale_weight_decay_by_rms,
+                wd_lr_exponent=config.wd_lr_exponent,
+                wd_lr_max=config.wd_lr_max,
             )
         else:
             optimizer = keras.optimizers.SGD(
@@ -126,6 +128,9 @@ def train_one_gen(
             f"\n  AdamW Weight Decay={inner_optimizer.adam_weight_decay}"
             f"\n  Momentum={inner_optimizer.momentum}"
             f"\n  Scale WD by RMS={inner_optimizer.scale_weight_decay_by_rms}"
+            f"\n  WD Auto Scale={config.wd_auto_scale}"
+            f"\n  WD LR Exponent={inner_optimizer.wd_lr_exponent}"
+            f"\n  WD LR Max={inner_optimizer.wd_lr_max}"
         )
     else:
         logging.info(
