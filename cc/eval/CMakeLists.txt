@@ -1,10 +1,19 @@
-# Eval library - engine evaluation and matches
+# Player config library - search parameter parsing and construction
+add_library(player_config
+    player_config.cc
+    player_config.h
+)
+target_link_libraries(player_config PUBLIC
+    mcts
+)
 
+# Eval library - engine evaluation and matches
 add_library(eval
     eval.cc
     eval.h
 )
 target_link_libraries(eval PUBLIC
+    player_config
     trt_deps
     constants
     core_impl

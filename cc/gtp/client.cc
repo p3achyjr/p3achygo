@@ -44,8 +44,8 @@ Client::~Client() {
   CHECK(response_queue_.empty());
 }
 
-absl::Status Client::Start(std::string model_path,
-                           eval::PlayerSearchConfig cfg, bool verbose) {
+absl::Status Client::Start(std::string model_path, eval::PlayerSearchConfig cfg,
+                           bool verbose) {
   absl::StatusOr<std::unique_ptr<Service>> service =
       Service::CreateService(model_path, cfg, verbose);
   if (!service.ok()) {
@@ -334,6 +334,40 @@ void Client::HandleCommand(Command cmd) {
     case GTPCode::kExplainLastMove:
       AddResponse(service_->GtpExplainLastMove(cmd.id));
       return;
+    case GTPCode::kTimeSettings:
+      ARITY_CHECK(cmd, 3);
+      {
+        int main_time, byoyomi_time, byoyomi_stones;
+        if (!absl::SimpleAtoi(cmd.arg_tokens[0], &main_time) ||
+            !absl::SimpleAtoi(cmd.arg_tokens[1], &byoyomi_time) ||
+            !absl::SimpleAtoi(cmd.arg_tokens[2], &byoyomi_stones)) {
+          AddResponse(MakeErrorResponse(
+              cmd.id, "time_settings: could not parse arguments into ints."));
+          return;
+        }
+        AddResponse(service_->GtpTimeSettings(cmd.id, main_time, byoyomi_time,
+                                              byoyomi_stones));
+        return;
+      }
+    case GTPCode::kTimeLeft:
+      ARITY_CHECK(cmd, 3);
+      {
+        game::Color color;
+        int seconds, stones;
+        if (!ParseColor(cmd.arg_tokens[0], &color)) {
+          AddResponse(MakeErrorResponse(
+              cmd.id, "time_left: could not parse argument into color."));
+          return;
+        }
+        if (!absl::SimpleAtoi(cmd.arg_tokens[1], &seconds) ||
+            !absl::SimpleAtoi(cmd.arg_tokens[2], &stones)) {
+          AddResponse(MakeErrorResponse(
+              cmd.id, "time_left: could not parse arguments into ints."));
+          return;
+        }
+        AddResponse(service_->GtpTimeLeft(cmd.id, color, seconds, stones));
+        return;
+      }
     case GTPCode::kPlayDbg:
       ARITY_CHECK(cmd, 2);
       {

@@ -40,6 +40,10 @@ GTPCode StringToGTPCode(std::string token) {
     return GTPCode::kUndo;
   } else if (token == "gomill-explain_last_move") {
     return GTPCode::kExplainLastMove;
+  } else if (token == "time_settings") {
+    return GTPCode::kTimeSettings;
+  } else if (token == "time_left") {
+    return GTPCode::kTimeLeft;
   } else if (token == "play_dbg") {
     return GTPCode::kPlayDbg;
   } else if (token == "genmove_dbg") {
@@ -91,6 +95,10 @@ std::string GTPCodeToString(GTPCode code) {
       return "undo";
     case GTPCode::kExplainLastMove:
       return "gomill-explain_last_move";
+    case GTPCode::kTimeSettings:
+      return "time_settings";
+    case GTPCode::kTimeLeft:
+      return "time_left";
     case GTPCode::kPlayDbg:
       return "play_dbg";
     case GTPCode::kGenMoveDbg:

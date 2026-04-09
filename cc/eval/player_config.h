@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "cc/mcts/constants.h"
+#include "cc/mcts/search.h"
 
 namespace eval {
 
@@ -195,7 +196,7 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
     else if (key == "num_threads_per_game")
       cfg.num_threads_per_game = std::stoi(val);
     else if (key == "time_ms")
-      cfg.time_ms = std::stoi(val);
+      cfg.time_ms = val == "auto" ? -1 : std::stoi(val);
     else if (key == "q_fn")
       cfg.q_fn = val;
     else if (key == "n_fn")
@@ -308,5 +309,16 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
 
   return oss.str();
 }
+
+// Parsing utils
+mcts::ScoreUtilityParams MakeScoreUtilityParams(
+    const eval::PlayerSearchConfig& cfg);
+
+mcts::PuctParams MakePuctParams(const eval::PlayerSearchConfig& cfg);
+
+// Converts a PlayerSearchConfig into Search::Params for parallel search.
+// The Gumbel path in PlayEvalGame does not use this; it is here so that
+// integrating parallel search is a mechanical substitution.
+mcts::Search::Params MakeSearchParams(const eval::PlayerSearchConfig& cfg);
 
 }  // namespace eval

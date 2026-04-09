@@ -13,9 +13,11 @@
 #include "cc/core/probability.h"
 #include "cc/eval/player_config.h"
 #include "cc/game/game.h"
+#include "cc/gtp/time_control.h"
 #include "cc/mcts/bias_cache.h"
 #include "cc/mcts/gumbel.h"
 #include "cc/mcts/node_table.h"
+#include "cc/mcts/search.h"
 #include "cc/mcts/search_policy.h"
 #include "cc/mcts/tree.h"
 #include "cc/nn/engine/engine_factory.h"
@@ -32,6 +34,7 @@ using namespace ::nn;
 using namespace ::mcts;
 using namespace ::recorder;
 using namespace ::sgf;
+using namespace ::eval;
 
 std::string GtpBoardString(const Board& board) {
   static constexpr char kColIndices[] =
@@ -76,42 +79,6 @@ std::string GtpBoardString(const Board& board) {
   return ss.str();
 }
 
-mcts::ScoreUtilityParams MakeScoreUtilityParams(
-    const eval::PlayerSearchConfig& cfg) {
-  mcts::ScoreUtilityMode mode = cfg.score_utility_mode == "integral"
-                                    ? mcts::ScoreUtilityMode::kIntegral
-                                    : mcts::ScoreUtilityMode::kDirect;
-  return mcts::ScoreUtilityParams{.score_weight = cfg.score_weight,
-                                  .mode = mode};
-}
-
-mcts::PuctParams MakePuctParams(const eval::PlayerSearchConfig& cfg) {
-  mcts::PuctRootSelectionPolicy policy;
-  if (cfg.puct_root_policy == "lcb") {
-    policy = mcts::PuctRootSelectionPolicy::kLcb;
-  } else if (cfg.puct_root_policy == "visit_count_sample") {
-    policy = mcts::PuctRootSelectionPolicy::kVisitCountSample;
-  } else if (cfg.puct_root_policy == "visit_count") {
-    policy = mcts::PuctRootSelectionPolicy::kVisitCount;
-  } else {
-    policy = cfg.use_lcb ? mcts::PuctRootSelectionPolicy::kLcb
-                         : mcts::PuctRootSelectionPolicy::kVisitCount;
-  }
-  return mcts::PuctParams::Builder()
-      .set_kind(policy)
-      .set_c_puct(cfg.c_puct)
-      .set_c_puct_visit_scaling(cfg.c_puct_visit_scaling)
-      .set_c_puct_v_2(cfg.c_puct_v_2)
-      .set_use_puct_v(cfg.use_puct_v)
-      .set_enable_var_scaling(cfg.var_scale_cpuct)
-      .set_var_scale_prior_visits(cfg.var_scale_prior_visits)
-      .set_tau(cfg.tau)
-      .set_enable_m3_bonus(cfg.enable_m3_bonus)
-      .set_m3_prior_visits(cfg.m3_prior_visits)
-      .set_p_opt_weight(cfg.p_opt_weight)
-      .build();
-}
-
 class ServiceImpl final : public Service {
  public:
   ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
@@ -133,6 +100,11 @@ class ServiceImpl final : public Service {
   Response<game::Scores> GtpFinalScore(std::optional<int> id) override;
   Response<> GtpUndo(std::optional<int> id) override;
   Response<std::string> GtpExplainLastMove(std::optional<int> id) override;
+  Response<> GtpTimeSettings(std::optional<int> id, int main_time_secs,
+                             int byoyomi_time_secs,
+                             int byoyomi_periods) override;
+  Response<> GtpTimeLeft(std::optional<int> id, Color color, int seconds,
+                         int stones) override;
 
   // Analysis methods. Call these from separate threads.
   Response<> GtpStartAnalysis(std::optional<int> id,
@@ -153,8 +125,7 @@ class ServiceImpl final : public Service {
   Response<> GtpLoadSgf(std::optional<int> id, std::string filename) override;
 
  private:
-  GumbelResult GenMoveCommon(game::Color color);
-  std::string BuildMoveDbgString(const GumbelResult& result, Color color);
+  game::Loc GenMoveCommon(game::Color color);
   std::string BuildExplainComment();
   std::vector<std::pair<game::Loc, float>> GetTopPolicyMoves(
       const std::array<float, constants::kMaxMovesPerPosition>& pi);
@@ -162,7 +133,8 @@ class ServiceImpl final : public Service {
   void MakeMove(Color color, Loc loc);
   inline TreeNode* current_root() const { return current_root_; }
 
-  eval::PlayerSearchConfig cfg_;
+  const eval::PlayerSearchConfig cfg_;
+  TimeControl time_control_;
   bool verbose_;
   float komi_ = 7.5f;
   Probability probability_;
@@ -259,7 +231,7 @@ Response<> ServiceImpl::GtpPlay(std::optional<int> id, Move move) {
 }
 
 Response<Loc> ServiceImpl::GtpGenMove(std::optional<int> id, Color color) {
-  GumbelResult search_result = GenMoveCommon(color);
+  const auto mcts_move = GenMoveCommon(color);
   if (V(current_root()) < -0.96f && game_->num_moves() > 50) {
     return MakeResponse(id, kNoopLoc);
   }
@@ -267,15 +239,15 @@ Response<Loc> ServiceImpl::GtpGenMove(std::optional<int> id, Color color) {
   last_explain_comment_ = BuildExplainComment();
 
   if (verbose_) {
-    std::string dbg_str = BuildMoveDbgString(search_result, color);
-    MakeMove(color, search_result.mcts_move);
+    std::string dbg_str = last_explain_comment_;
+    MakeMove(color, mcts_move);
     dbg_str += "\n" + GtpBoardString(game_->board());
     std::cerr << dbg_str << "\n";
   } else {
-    MakeMove(color, search_result.mcts_move);
+    MakeMove(color, mcts_move);
   }
 
-  return MakeResponse(id, search_result.mcts_move);
+  return MakeResponse(id, mcts_move);
 }
 
 Response<std::string> ServiceImpl::GtpPrintBoard(std::optional<int> id) {
@@ -354,12 +326,12 @@ void ServiceImpl::GtpStopAnalysis() {
 
 game::Loc ServiceImpl::GtpGenMoveAnalyze(game::Color color) {
   analysis_running_.store(true, std::memory_order_release);
-  GumbelResult search_result = GenMoveCommon(color);
+  const auto mcts_move = GenMoveCommon(color);
   analysis_running_.store(false, std::memory_order_release);
 
   last_explain_comment_ = BuildExplainComment();
-  MakeMove(color, search_result.mcts_move);
-  return search_result.mcts_move;
+  MakeMove(color, mcts_move);
+  return mcts_move;
 }
 
 Response<std::string> ServiceImpl::GtpPlayDbg(std::optional<int> id,
@@ -380,54 +352,6 @@ Response<std::string> ServiceImpl::GtpPlayDbg(std::optional<int> id,
   dbg_str += "\n" + GtpBoardString(game_->board());
 
   return MakeResponse(id, dbg_str);
-}
-
-std::string ServiceImpl::BuildMoveDbgString(const GumbelResult& result,
-                                            Color color) {
-  TreeNode* root = current_root();
-
-  float v_nn = root->init_util_est;
-  float v_nn_adj =
-      (root->bias_cache_entry && root->last_weight_term != 0.0f)
-          ? v_nn - cfg_.bias_cache_lambda *
-                       (root->last_obs_bias_term / root->last_weight_term)
-          : v_nn;
-
-  std::string s;
-  s += "---- Move Num " + std::to_string(game_->num_moves()) + " ----\n";
-  s += "NN"
-       "  V=" +
-       std::to_string(v_nn) + "  Vz=" + std::to_string(root->init_outcome_est) +
-       "  Vadj=" + std::to_string(v_nn_adj) +
-       "  Score=" + std::to_string(root->init_score_est) +
-       "    Tree"
-       "  N=" +
-       std::to_string(static_cast<int>(N(root))) +
-       "  V=" + std::to_string(V(root)) +
-       "  Vz=" + std::to_string(VOutcome(root)) +
-       "  Vstd=" + std::to_string(std::sqrt(VVar(root))) +
-       "  Vzstd=" + std::to_string(std::sqrt(VOutcomeVar(root))) + "\n";
-
-  s += "Top Policy Moves:\n";
-  for (const auto& mv : GetTopPolicyMoves(root->move_probs)) {
-    s += "  " + GtpValueString(mv.first) + " = " + std::to_string(mv.second) +
-         "\n";
-  }
-
-  s += "Gumbel Selected Moves:\n";
-  for (const auto& child : result.child_stats) {
-    s += "  " + GtpValueString(child.move) + "  n=" + std::to_string(child.n) +
-         "  p=" + std::to_string(child.prob) +
-         "  p'=" + std::to_string(child.improved_policy) +
-         "  q=" + std::to_string(child.q) + "  qz=" + std::to_string(child.qz) +
-         "\n";
-  }
-
-#ifdef V_CATEGORICAL
-  s += VCategoricalHistogram(root);
-#endif
-
-  return s;
 }
 
 Response<std::string> ServiceImpl::GtpExplainLastMove(std::optional<int> id) {
@@ -496,15 +420,15 @@ std::string ServiceImpl::BuildExplainComment() {
 
 Response<std::string> ServiceImpl::GtpGenMoveDbg(std::optional<int> id,
                                                  game::Color color) {
-  GumbelResult search_result = GenMoveCommon(color);
-  std::string dbg_str = BuildMoveDbgString(search_result, color);
+  const auto mcts_move = GenMoveCommon(color);
+  std::string dbg_str = BuildExplainComment();
 
   if (V(current_root()) < -0.96f && game_->num_moves() > 50) {
     dbg_str += "p3achygo resigns :(";
     return MakeResponse(id, dbg_str);
   }
 
-  MakeMove(color, search_result.mcts_move);
+  MakeMove(color, mcts_move);
   dbg_str += "\n" + GtpBoardString(game_->board()) += "\n";
   return MakeResponse(id, dbg_str);
 }
@@ -543,22 +467,44 @@ Response<> ServiceImpl::GtpLoadSgf(std::optional<int> id,
   return MakeResponse(id);
 }
 
-GumbelResult ServiceImpl::GenMoveCommon(Color color) {
-  if (!(color == current_color_)) {
-    // We are moving twice consecutively. Fake a pass first.
-    game_->PlayMove(kPassLoc, current_color_);
-    TreeNode* next_root = current_root_->children[kPassLoc];
-    if (!next_root) {
-      next_root = node_table_->GetOrCreate(game_->board().hash(), color,
-                                           game_->IsGameOver());
-    }
-    node_table_->Reap(next_root);
-    if (bias_cache_) bias_cache_->PruneUnused();
-    current_root_ = next_root;
-    current_color_ = color;
+Response<> ServiceImpl::GtpTimeSettings(std::optional<int> id,
+                                        int main_time_secs,
+                                        int byoyomi_time_secs,
+                                        int byoyomi_periods) {
+  time_control_.SetTimeSettings(main_time_secs, byoyomi_time_secs,
+                                byoyomi_periods);
+  return MakeResponse(id);
+}
+
+Response<> ServiceImpl::GtpTimeLeft(std::optional<int> id, Color color,
+                                    int seconds, int stones) {
+  // stones == 0 means we are in main time; stones > 0 means byoyomi.
+  if (stones == 0) {
+    time_control_.SetTimeLeft(seconds, 0, 0);
+  } else {
+    time_control_.SetTimeLeft(0, seconds, stones);
   }
 
-  GumbelResult search_result =
+  return MakeResponse(id);
+}
+
+game::Loc ServiceImpl::GenMoveCommon(Color color) {
+  if (color != current_color_) {
+    // We are moving twice consecutively. Fake a pass first.
+    MakeMove(color, kPassLoc);
+  }
+
+  if (cfg_.num_threads_per_game > 1 || cfg_.time_ms != 0) {
+    // requires parallel search.
+    BiasCache* bias_cache = bias_cache_.has_value() ? &*bias_cache_ : nullptr;
+    Search s(nn_interface_->MakeSlot(0), bias_cache);
+    const int visit_budget = cfg_.time_ms == 0 ? 1 << 20 : cfg_.n;
+    const int time_ms = cfg_.time_ms == 0 ? -1 : cfg_.time_ms;
+    Search::Result res = s.Run(probability_, *game_, node_table_.get(),
+                               current_root(), color, MakeSearchParams(cfg_));
+    return res.move;
+  }
+  GumbelResult res =
       cfg_.use_puct
           ? gumbel_evaluator_->SearchRootPuct(
                 probability_, *game_, node_table_.get(), current_root(), color,
@@ -566,7 +512,7 @@ GumbelResult ServiceImpl::GenMoveCommon(Color color) {
           : gumbel_evaluator_->SearchRoot(
                 probability_, *game_, node_table_.get(), current_root(), color,
                 mcts::GumbelSearchParams{cfg_.n, cfg_.k, cfg_.noise_scaling});
-  return search_result;
+  return res.mcts_move;
 }
 
 std::vector<std::pair<game::Loc, float>> ServiceImpl::GetTopPolicyMoves(

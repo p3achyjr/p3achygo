@@ -33,6 +33,11 @@ class Service {
   virtual Response<game::Scores> GtpFinalScore(std::optional<int> id) = 0;
   virtual Response<> GtpUndo(std::optional<int> id) = 0;
   virtual Response<std::string> GtpExplainLastMove(std::optional<int> id) = 0;
+  virtual Response<> GtpTimeSettings(std::optional<int> id, int main_time_secs,
+                                     int byoyomi_time_secs,
+                                     int byoyomi_periods) = 0;
+  virtual Response<> GtpTimeLeft(std::optional<int> id, game::Color color,
+                                 int seconds, int stones) = 0;
 
   // Analysis methods. Call these from separate threads.
   virtual Response<> GtpStartAnalysis(std::optional<int> id,
