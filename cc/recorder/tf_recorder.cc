@@ -21,6 +21,25 @@
 namespace recorder {
 namespace {
 
+// Returns percentiles at p01, p05..p95 (5% steps), p99 — 21 values total.
+// vals is sorted in place.
+std::vector<float> ComputePercentiles(std::vector<float> vals) {
+  std::sort(vals.begin(), vals.end());
+  const int n = static_cast<int>(vals.size());
+  auto at_pct = [&](float pct) -> float {
+    if (n == 0) return 0.0f;
+    int idx = std::clamp(static_cast<int>(std::round(pct / 100.0f * (n - 1))),
+                         0, n - 1);
+    return vals[idx];
+  };
+  std::vector<float> out;
+  out.reserve(21);
+  out.push_back(at_pct(1.0f));
+  for (int i = 5; i <= 95; i += 5) out.push_back(at_pct(static_cast<float>(i)));
+  out.push_back(at_pct(99.0f));
+  return out;
+}
+
 using namespace ::game;
 
 using ::data::RecordWriter;
@@ -117,6 +136,7 @@ void TfRecorderImpl::Flush() {
   // Buffer examples first. We need to account for policy surprise weighting.
   std::vector<std::string> tf_examples;
   std::vector<MoveSearchStats> all_move_stats;
+  std::vector<float> all_freq_weights;
   for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
     std::vector<Record>& records = thread_records_[thread_id];
     if (records.empty()) {
@@ -232,12 +252,17 @@ void TfRecorderImpl::Flush() {
         board.PlayMove(move.loc, move.color);
       }
 
-      for (const auto& s : record.move_stats) {
+      for (size_t i = 0; i < record.move_stats.size(); ++i) {
+        const auto& s = record.move_stats[i];
         // Skip policy-sampled moves (no real search). visit_count == 1
         // means the root was evaluated but no Gumbel search was run, so
         // stats are not meaningful.
         if (!s.sampled_raw_policy && s.visit_count > 1.0f) {
           all_move_stats.push_back(s);
+          const float freq_weight =
+              avg_kld == 0.0f ? 1.0f
+                              : (0.5f + 0.5f * (record.klds[i] / avg_kld));
+          all_freq_weights.push_back(freq_weight);
         }
       }
     }
@@ -310,77 +335,131 @@ void TfRecorderImpl::Flush() {
                                         worker_id_);
   FILE* const stats_file = fopen(stats_filename.c_str(), "w");
 
-  // Helper: extract a field from all_move_stats (with optional filter),
-  // sort, and return percentiles at p01, p05..p95 (5% steps), p99 (21 values).
   const int n_stats = static_cast<int>(all_move_stats.size());
-  auto compute_percentiles =
-      [&](std::function<float(const MoveSearchStats&)> get,
-          std::function<bool(const MoveSearchStats&)> filter = {}) {
-        std::vector<float> vals;
-        vals.reserve(n_stats);
-        for (const auto& s : all_move_stats) {
-          if (s.sampled_raw_policy) continue;
-          if (!filter || filter(s)) {
-            float v = get(s);
-            if (std::isfinite(v)) vals.push_back(v);
-          }
-        }
-        std::sort(vals.begin(), vals.end());
-        const int n = static_cast<int>(vals.size());
-        auto at_pct = [&](float pct) -> float {
-          if (n == 0) return 0.0f;
-          int idx = std::clamp(
-              static_cast<int>(std::round(pct / 100.0f * (n - 1))), 0, n - 1);
-          return vals[idx];
-        };
-        std::vector<float> percentiles;
-        percentiles.push_back(at_pct(1.0f));  // p01
-        for (int i = 5; i <= 95; i += 5) {
-          percentiles.push_back(at_pct(static_cast<float>(i)));  // p05..p95
-        }
-        percentiles.push_back(at_pct(99.0f));  // p99
-        return percentiles;                    // 21 values
-      };
 
-  auto write_percentiles =
-      [&](const char* name, std::function<float(const MoveSearchStats&)> get,
-          std::function<bool(const MoveSearchStats&)> filter = {}) {
-        auto percentiles = compute_percentiles(get, filter);
-        absl::FPrintF(stats_file, "%-24s", name);
-        for (float v : percentiles) absl::FPrintF(stats_file, " %9.6f", v);
-        absl::FPrintF(stats_file, "\n");
-      };
+  // Step 1: collect — generic over any container.
+  // Default filter for move stats: skip sampled, zero, and non-finite.
+  auto collect_stats = [&](std::function<float(const MoveSearchStats&)> get) {
+    std::vector<float> vals;
+    vals.reserve(n_stats);
+    for (const auto& s : all_move_stats) {
+      if (s.sampled_raw_policy) continue;
+      const float v = get(s);
+      if (v == 0.0f || !std::isfinite(v)) continue;
+      vals.push_back(v);
+    }
+    return vals;
+  };
+
+  auto collect_weights = [&]() {
+    std::vector<float> vals;
+    vals.reserve(all_freq_weights.size());
+    for (float v : all_freq_weights) {
+      if (v != 0.0f && std::isfinite(v)) vals.push_back(v);
+    }
+    return vals;
+  };
+
+  // Step 3: write — plain write of pre-computed percentiles.
+  auto write_percentiles = [&](const char* name,
+                               const std::vector<float>& pcts) {
+    absl::FPrintF(stats_file, "%-24s", name);
+    for (float v : pcts) absl::FPrintF(stats_file, " %9.6f", v);
+    absl::FPrintF(stats_file, "\n");
+  };
 
   // Percentile header: p01, p05, p10, ..., p95, p99 (21 columns).
   absl::FPrintF(stats_file,
                 "# percentiles: p01 p05 p10 ... p95 p99 (%d moves)\n", n_stats);
   absl::FPrintF(stats_file, "%-24s", "field");
   absl::FPrintF(stats_file, " %9s", "p01");
-  for (int i = 5; i <= 95; i += 5) {
+  for (int i = 5; i <= 95; i += 5)
     absl::FPrintF(stats_file, " %9s", absl::StrFormat("p%02d", i).c_str());
-  }
   absl::FPrintF(stats_file, " %9s\n", "p99");
 
-  write_percentiles("nn_q", [](const MoveSearchStats& s) { return s.nn_q; });
+  write_percentiles("nn_q",
+                    ComputePercentiles(collect_stats(
+                        [](const MoveSearchStats& s) { return s.nn_q; })));
   write_percentiles("mcts_q",
-                    [](const MoveSearchStats& s) { return s.mcts_q; });
-  write_percentiles("nn_mcts_diff",
-                    [](const MoveSearchStats& s) { return s.nn_mcts_diff; });
-  write_percentiles("v_outcome_stddev", [](const MoveSearchStats& s) {
-    return s.v_outcome_stddev;
-  });
-  write_percentiles("prior_entropy",
-                    [](const MoveSearchStats& s) { return s.prior_entropy; });
-  write_percentiles("nn_uncertainty",
-                    [](const MoveSearchStats& s) { return s.nn_uncertainty; });
-  write_percentiles("kld", [](const MoveSearchStats& s) { return s.kld; });
+                    ComputePercentiles(collect_stats(
+                        [](const MoveSearchStats& s) { return s.mcts_q; })));
+  write_percentiles(
+      "nn_mcts_diff",
+      ComputePercentiles(collect_stats(
+          [](const MoveSearchStats& s) { return s.nn_mcts_diff; })));
+  write_percentiles(
+      "v_outcome_stddev",
+      ComputePercentiles(collect_stats(
+          [](const MoveSearchStats& s) { return s.v_outcome_stddev; })));
+  write_percentiles(
+      "prior_entropy",
+      ComputePercentiles(collect_stats(
+          [](const MoveSearchStats& s) { return s.prior_entropy; })));
+  write_percentiles(
+      "nn_uncertainty",
+      ComputePercentiles(collect_stats(
+          [](const MoveSearchStats& s) { return s.nn_uncertainty; })));
+  write_percentiles("kld",
+                    ComputePercentiles(collect_stats(
+                        [](const MoveSearchStats& s) { return s.kld; })));
   write_percentiles("pre_kld",
-                    [](const MoveSearchStats& s) { return s.pre_kld; });
-  write_percentiles("sel_mult_modifier", [](const MoveSearchStats& s) {
-    return s.sel_mult_modifier;
-  });
-  write_percentiles("visit_count",
-                    [](const MoveSearchStats& s) { return s.visit_count; });
+                    ComputePercentiles(collect_stats(
+                        [](const MoveSearchStats& s) { return s.pre_kld; })));
+  write_percentiles(
+      "sel_mult_modifier",
+      ComputePercentiles(collect_stats(
+          [](const MoveSearchStats& s) { return s.sel_mult_modifier; })));
+  write_percentiles(
+      "visit_count",
+      ComputePercentiles(collect_stats(
+          [](const MoveSearchStats& s) { return s.visit_count; })));
+  write_percentiles("freq_weight", ComputePercentiles(collect_weights()));
+
+  // Compute expected_std by visit_count_pre bin (intervals of 5, capped at
+  // 200). Everything at n>=200 is collapsed into a single weighted average.
+  constexpr int kExpectedStdCap = 200;
+  std::map<int, float> bin_expected_std;
+  {
+    std::map<int, std::pair<float, int>> bin_sum_count;
+    float above_cap_sum = 0.0f;
+    int above_cap_cnt = 0;
+    for (const auto& s : all_move_stats) {
+      if (s.sampled_raw_policy) continue;
+      if (s.v_outcome_stddev <= 0 || !std::isfinite(s.v_outcome_stddev))
+        continue;
+      if (s.visit_count_pre <= 0) continue;
+      const int n = static_cast<int>(s.visit_count_pre);
+      if (n >= kExpectedStdCap) {
+        above_cap_sum += s.v_outcome_stddev;
+        ++above_cap_cnt;
+      } else {
+        const int bin = (n / 5) * 5;
+        bin_sum_count[bin].first += s.v_outcome_stddev;
+        bin_sum_count[bin].second += 1;
+      }
+    }
+    for (const auto& [bin, sc] : bin_sum_count)
+      if (sc.second > 0) bin_expected_std[bin] = sc.first / sc.second;
+    if (above_cap_cnt > 0)
+      bin_expected_std[kExpectedStdCap] = above_cap_sum / above_cap_cnt;
+  }
+
+  // v_outcome_stddev_adj: self-consistent std_adj percentiles (written before
+  // expected_std.n* scalars so Python can read them in field order).
+  write_percentiles(
+      "v_outcome_stddev_adj",
+      ComputePercentiles(collect_stats([&](const MoveSearchStats& s) {
+        if (s.v_outcome_stddev <= 0 || s.visit_count_pre <= 0) return 0.0f;
+        const int n = static_cast<int>(s.visit_count_pre);
+        const int bin = n >= kExpectedStdCap ? kExpectedStdCap : (n / 5) * 5;
+        auto it = bin_expected_std.find(bin);
+        if (it == bin_expected_std.end() || it->second <= 0.0f) return 0.0f;
+        return s.v_outcome_stddev / it->second;
+      })));
+
+  // Write expected_std.nN= scalar lines (key=value, parsed by C++/Python).
+  for (const auto& [bin, expected] : bin_expected_std)
+    absl::FPrintF(stats_file, "expected_std.n%d=%f\n", bin, expected);
 
   // Write scalar metadata: mean sel_mult (used by Python to compute
   // sel_mult_base = 1 / mean for the next generation).

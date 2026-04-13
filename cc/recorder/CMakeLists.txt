@@ -57,6 +57,18 @@ target_link_libraries(game_recorder PUBLIC
     absl::log
 )
 
+# Tests
+if(BUILD_TESTS)
+    add_executable(tf_recorder_test __tests__/tf_recorder_test.cc)
+    target_link_libraries(tf_recorder_test PRIVATE
+        tf_recorder
+        game
+        constants
+        core_doctest
+    )
+    add_test(NAME tf_recorder_test COMMAND tf_recorder_test)
+endif()
+
 # Recorder umbrella library
 add_library(recorder INTERFACE)
 target_link_libraries(recorder INTERFACE

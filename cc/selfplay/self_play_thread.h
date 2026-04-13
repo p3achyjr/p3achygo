@@ -22,7 +22,11 @@ struct GumbelParams {
 // "p99". Use get() to look up a value with a hardcoded fallback default.
 struct SelMultCalibration {
   absl::flat_hash_map<std::string, float> v_outcome_stddev;
+  absl::flat_hash_map<std::string, float> v_outcome_stddev_adj;
   absl::flat_hash_map<std::string, float> pre_kld;
+  absl::flat_hash_map<std::string, float> nn_mcts_diff;
+  // visit_count_pre bin (rounded down to nearest 5) -> mean v_outcome_stddev.
+  absl::flat_hash_map<int, float> expected_std_by_n;
 
   float get(const absl::flat_hash_map<std::string, float>& m,
             const std::string& pct, float def) const {

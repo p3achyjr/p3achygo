@@ -21,6 +21,7 @@
 #include "cc/recorder/move_search_stats.h"
 #include "cc/selfplay/book.h"
 #include "cc/selfplay/fork_manager.h"
+#include "cc/selfplay/move_sel_manager.h"
 #include "cc/selfplay/reuse_buffer.h"
 
 #define LOG_TO_SINK(severity, sink) LOG(severity).ToSinkOnly(&sink)
@@ -311,6 +312,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
   FileSink sink(logfile.c_str());
   Probability probability(seed);
   int num_games_played = 0;
+  MoveSelManager move_sel_manager(
+      selfplay::kNnMctsBonus | selfplay::kKldPenalty, config.calibration);
 
   // Main loop.
   while (true) {
@@ -484,51 +487,14 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
                           ? ComputeKLD(ComputeImprovedPolicy(root_node, 0),
                                        root_node->move_probs)
                           : 0.0f;
-      // Selection probability multiplier.
-      //
-      // StddevBonus: sqrt(v_outcome_var) is high — tree-reuse variance
-      //   indicates genuine position uncertainty.
-      //   1.0→2.0 linearly from p50→p95 (uncapped; overall bonus capped
-      //   at 2.5).
-      const float sel_std_bonus = [&]() {
-        const float p50 = config.calibration.get(
-            config.calibration.v_outcome_stddev, "p50", 0.090f);
-        const float p95 = config.calibration.get(
-            config.calibration.v_outcome_stddev, "p95", 0.374f);
-        const float std_dev = std::sqrt(var_pre);
-        if (std_dev <= p50 || p95 <= p50) return 1.0f;
-        return 1.0f + (std_dev - p50) / (p95 - p50);
-      }();
-
-      // KLD bonus: pre-search KLD is high — reused tree strongly disagrees
-      //   with NN prior. 1.0→1.5 from p70→p95 (hard cap at 1.5).
-      const float sel_kld_bonus = [&]() {
-        const float p70 =
-            config.calibration.get(config.calibration.pre_kld, "p70", 0.310f);
-        const float p95 =
-            config.calibration.get(config.calibration.pre_kld, "p95", 1.166f);
-        if (pre_kld <= p70 || p95 <= p70) return 1.0f;
-        return std::min(1.5f, 1.0f + 0.5f * (pre_kld - p70) / (p95 - p70));
-      }();
-
-      // KLD penalty: pre-search KLD is low — reused tree agrees with NN prior;
-      //   search unlikely to produce a training surprise.
-      //   1.0→0.4 linearly from p35→p05 (floor at 0.4).
-      const float sel_kld_penalty = [&]() {
-        const float p05 =
-            config.calibration.get(config.calibration.pre_kld, "p05", 0.0002f);
-        const float p35 =
-            config.calibration.get(config.calibration.pre_kld, "p35", 0.038f);
-        if (pre_kld >= p35) return 1.0f;
-        if (pre_kld <= p05 || p35 <= p05) return 0.4f;
-        return 1.0f - 0.6f * (p35 - pre_kld) / (p35 - p05);
-      }();
-
       const bool apply_sel_mult = config.sel_mult_base > 0.0f;
-      const float sel_bonus =
-          std::min(std::max(sel_std_bonus, sel_kld_bonus), 2.5f);
-      const float sel_mult_modifier =
-          sampling_raw_policy ? 1.0f : sel_bonus * sel_kld_penalty;
+      const float q_canonical = qz_pre == 0.0f ? qz_nn : qz_pre;
+      // |NN-MCTS| pre-search: zero when root is uninitialized (n_pre==0).
+      const float nn_mcts_diff_pre = n_pre > 0 ? std::abs(qz_nn - q_pre) : 0.0f;
+      const MoveSelResult sel = move_sel_manager.Compute(
+          n_pre, std::sqrt(var_pre), pre_kld, nn_mcts_diff_pre, q_canonical,
+          config.sel_mult_scale_factor);
+      const float sel_mult_modifier = sampling_raw_policy ? 1.0f : sel.modifier;
       const float sel_mult =
           apply_sel_mult ? (config.sel_mult_base * sel_mult_modifier) : 1.0f;
 
@@ -711,7 +677,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
               .sampled_raw_policy(sampling_raw_policy)
               .nn_q(nn_util_est)
               .mcts_q(q_pre)
-              .nn_mcts_diff(nn_mcts_diff)
+              .nn_mcts_diff(nn_mcts_diff_pre)
               .v_outcome_stddev(std::sqrt(var_pre))
               .prior_entropy(prior_entropy)
               .nn_uncertainty(node_uncertainty)
@@ -721,6 +687,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
               .sel_mult_modifier_weight(select_move_prob_base /
                                         kMoveSelectedForTrainingProb)
               .visit_count(static_cast<float>(gumbel_res.visits))
+              .visit_count_pre(static_cast<float>(n_pre))
               .build());
       positions_for_regret.push_back({color_to_move, game.board(), move,
                                       nn_util_est, q_post,
@@ -732,11 +699,12 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       }
 
       // Fork before playing the move (ForkManager sees the pre-move board).
-      fork_manager.MaybeFork(game,
-                             ForkManager::MoveData{game.board(), color_to_move,
-                                                   move, nn_util_est, q_post,
-                                                   /*is_eligible=*/move_n != 0},
-                             probability);
+      fork_manager.MaybeFork(
+          game,
+          ForkManager::MoveData{game.board(), color_to_move, move, nn_util_est,
+                                q_post, Score(root_node),
+                                /*is_eligible=*/move_n != 0},
+          probability);
 
       // Play move, and calculate PA regions if we hit a checkpoint.
       game.PlayMove(move, color_to_move);
@@ -893,14 +861,19 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         s << "|NN-MCTS|=" << nn_mcts_diff << "  Avg=" << diff_avg
           << "  Min=" << diff_min << "  Max=" << diff_max
           << "  EMA=" << diff_ema << "\n";
-        s << "Var(pre)=" << var_pre << "  Var(post)=" << var_post
-          << "  Avg=" << var_avg << "  Min=" << var_min << "  Max=" << var_max
-          << "  EMA=" << var_ema << "\n";
+        s << "Std(pre)=" << std::sqrt(var_pre)
+          << "  Std(post)=" << std::sqrt(var_post) << "  Var(pre)=" << var_pre
+          << "  Var(post)=" << var_post << "  Avg=" << var_avg
+          << "  Min=" << var_min << "  Max=" << var_max << "  EMA=" << var_ema
+          << "\n";
         s << "SelMult=" << sel_mult << "  Base=" << config.sel_mult_base
-          << "  Modifier=" << sel_mult_modifier << "  Bonus=" << sel_bonus
-          << "  StdBonus=" << sel_std_bonus << "  KLDBonus=" << sel_kld_bonus
-          << "  KLDPenalty=" << sel_kld_penalty << "  Avg=" << sel_mult_avg
-          << "  EMA=" << sel_mult_ema << "\n";
+          << "  Modifier=" << sel_mult_modifier << "  AdjQ=" << sel.sel_q_adjust
+          << "  Bonus=" << sel.sel_bonus << "  Penalty=" << sel.sel_penalty
+          << "  StdBonus=" << sel.sel_std_bonus << "  StdAdj=" << sel.std_adj
+          << "  StdPenalty=" << sel.sel_std_penalty
+          << "  KldPenalty=" << sel.sel_kld_penalty
+          << "  NnMctsBonus=" << sel.sel_nn_mcts_bonus
+          << "  Avg=" << sel_mult_avg << "  EMA=" << sel_mult_ema << "\n";
         s << "Raw NN Move=" << mv_to_string(nn_move) << "\n  n = " << nn_move_n
           << "\n  q = " << nn_move_q << "\n  qz = " << nn_move_qz << "\n";
         s << "Gumbel Move=" << mv_to_string(move) << "\n  n = " << move_n

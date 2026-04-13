@@ -22,6 +22,7 @@ struct MoveSearchStats {
   float sel_mult_modifier_weight;  // how much this sel_mult_modifier affects
                                    // move selection across the game.
   float visit_count;               // MCTS visit count for this move
+  float visit_count_pre;           // visit count of reused tree before search
   class Builder;
 };
 
@@ -73,6 +74,10 @@ class MoveSearchStats::Builder {
   }
   Builder& visit_count(float v) {
     s_.visit_count = v;
+    return *this;
+  }
+  Builder& visit_count_pre(float v) {
+    s_.visit_count_pre = v;
     return *this;
   }
   MoveSearchStats build() { return s_; }

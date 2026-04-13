@@ -143,10 +143,9 @@ def loop(
         sel_mult_base = config.sel_mult_base
         if gen > 0:
             calib = calib_utils.compute_calibration(local_sp_chunk_dir, gen - 1)
+            calib_path = Path(local_run_dir) / f"sel_mult_calib.txt"
             if calib is not None:
-                calib_path = Path(local_run_dir) / f"sel_mult_calib.txt"
                 calib_utils.write_calibration_file(calib, calib_path)
-                calib_file = str(calib_path)
                 # Use 1/mean_sel_mult from last gen so average sel_mult ≈ 1.0.
                 computed_base = calib_utils.compute_sel_mult_base(calib)
                 if computed_base is not None:
@@ -155,6 +154,8 @@ def loop(
                         f"(1 / sel_mult_mean={calib['sel_mult_mean']:.4f})"
                     )
                     sel_mult_base = computed_base
+            if calib_path.is_file():
+                calib_file = calib_file = str(calib_path)
 
         cmd_str = (
             f"{bin_path} --num_threads={num_threads}"

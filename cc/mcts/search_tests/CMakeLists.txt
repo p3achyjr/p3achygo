@@ -9,16 +9,6 @@ set(SEARCH_DEPS
     absl::log
 )
 
-# Tests
-if(BUILD_TESTS)
-    add_executable(search_test search_test.cc)
-    target_link_libraries(search_test PRIVATE
-        ${SEARCH_DEPS}
-        doctest::doctest
-    )
-    add_test(NAME search_test COMMAND search_test)
-endif()
-
 # Benchmarks
 if(BUILD_BENCHMARKS)
     add_executable(search_benchmark search_benchmark.cc)

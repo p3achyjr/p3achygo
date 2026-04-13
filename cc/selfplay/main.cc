@@ -97,8 +97,18 @@ selfplay::SelMultCalibration ParseCalibrationFile(const std::string& path) {
     const std::string pct = key.substr(dot + 1);
     if (field == "v_outcome_stddev") {
       calib.v_outcome_stddev[pct] = val;
+    } else if (field == "v_outcome_stddev_adj") {
+      calib.v_outcome_stddev_adj[pct] = val;
     } else if (field == "pre_kld") {
       calib.pre_kld[pct] = val;
+    } else if (field == "nn_mcts_diff") {
+      calib.nn_mcts_diff[pct] = val;
+    } else if (field == "expected_std" && pct.size() > 1 && pct[0] == 'n') {
+      // pct is "n0", "n5", "n10", etc. — visit_count_pre bin.
+      try {
+        calib.expected_std_by_n[std::stoi(pct.substr(1))] = val;
+      } catch (...) {
+      }
     }
     // Unknown fields are silently ignored (forward-compatibility).
   }
@@ -213,10 +223,13 @@ int main(int argc, char** argv) {
   LOG(INFO) << "======= SelMult Calibration =======";
   LOG(INFO) << "  v_outcome_stddev: p50="
             << calibration.get(calibration.v_outcome_stddev, "p50", 0.090f)
+            << "  p60="
+            << calibration.get(calibration.v_outcome_stddev, "p60", 0.130f)
             << "  p95="
             << calibration.get(calibration.v_outcome_stddev, "p95", 0.374f);
   LOG(INFO) << "  pre_kld: p05="
             << calibration.get(calibration.pre_kld, "p05", 0.0002f)
+            << "  p20=" << calibration.get(calibration.pre_kld, "p20", 0.019f)
             << "  p35=" << calibration.get(calibration.pre_kld, "p35", 0.038f)
             << "  p70=" << calibration.get(calibration.pre_kld, "p70", 0.310f)
             << "  p95=" << calibration.get(calibration.pre_kld, "p95", 1.166f);

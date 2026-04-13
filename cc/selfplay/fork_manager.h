@@ -39,7 +39,7 @@ namespace selfplay {
 class ForkManager final {
  public:
   // Conditional probabilities at baseline reuse_prob=0.2.
-  static constexpr float kBaseProbs[5] = {0.0f, 0.08f, 0.0f, 0.0f, 0.02f};
+  static constexpr float kBaseProbs[5] = {0.0f, 0.09f, 0.0f, 0.0f, 0.01f};
   struct Params {
     // Probability of each fork kind. Must sum to 1.
     // Tuned for reuse_chance=0.2 (conditional on being a fresh game).
@@ -98,6 +98,7 @@ class ForkManager final {
     game::Loc move;
     float nn_value;
     float mcts_value;
+    float mcts_score;
     bool is_eligible;  // true iff move has MCTS visits (move_n != 0)
   };
 
@@ -171,6 +172,43 @@ class ForkManager final {
     if (started_from_forced_search_) return;
     if (game.IsGameOver()) return;
 
+    using LastMoves = absl::InlinedVector<game::Move, constants::kNumLastMoves>;
+
+    const game::Color color = data.color;
+    const game::Color opponent_color = game::OppositeColor(color);
+    const game::Board& board = data.board;
+    const int move_num = game.num_moves();
+
+    // kUniform: restart from the current position, optionally adjusting komi
+    // to make the game score-neutral (70% probability of adjustment).
+    if (kind_ == ForkKind::kUniform) {
+      constexpr float kSelectProb = 0.05f;
+      const auto wr_atten_factor = [&]() {
+        // don't add won/lost positions
+        constexpr float kWrLb = 0.5f;
+        constexpr float kWrUb = 0.9f;
+        return 1.0f -
+               std::clamp((std::abs(data.mcts_value) - kWrLb) / (kWrUb - kWrLb),
+                          0.0f, 1.0f);
+      }();
+      const float select_prob = kSelectProb * wr_atten_factor;
+      if (prob.Uniform() > select_prob) {
+        return;
+      }
+      game::Board restart_board = board;
+      const LastMoves last_moves = BuildLastMoves(game, move_num, {});
+      const float komi_delta = ComputeKomiDelta(data.mcts_score, color);
+      const float p_adjust_komi =
+          std::atan(std::abs(data.mcts_score) / 3.0) * M_2_PI;
+      if (prob.Uniform() < p_adjust_komi) {
+        restart_board.SetKomi(board.komi() + komi_delta);
+      }
+      sampled_positions_this_game_.push_back(InitState{
+          restart_board, BuildLastMoves(game, move_num, {}), color, move_num,
+          FirstMoveBehavior::kSample, InitState::Kind::kGoExploit, kind_});
+      return;
+    }
+
     if (kind_ == ForkKind::kRegret) {
       // Accumulate per-move data for end-of-game regret computation.
       positions_for_regret_.emplace_back(data.color, data.board, data.move,
@@ -180,34 +218,8 @@ class ForkManager final {
     }
 
     if (did_fork_) return;
-
-    const int move_num = game.num_moves();
     if (move_num != fork_mv_num_) return;
     did_fork_ = true;
-
-    using LastMoves = absl::InlinedVector<game::Move, constants::kNumLastMoves>;
-
-    const game::Color color = data.color;
-    const game::Color opponent_color = game::OppositeColor(color);
-    const game::Board& board = data.board;
-
-    // kUniform: restart from the current position, optionally adjusting komi
-    // to make the game score-neutral (70% probability of adjustment).
-    if (kind_ == ForkKind::kUniform) {
-      game::Board restart_board = board;
-      const LastMoves last_moves = BuildLastMoves(game, move_num, {});
-      const EvalResult eval = EvalBoard(board, color, last_moves, prob);
-      const float komi_delta = ComputeKomiDelta(eval.init_score_est, color);
-      const float p_adjust_komi =
-          std::atan(std::abs(eval.init_score_est) / 3.0) * M_2_PI;
-      if (prob.Uniform() < p_adjust_komi) {
-        restart_board.SetKomi(board.komi() + komi_delta);
-      }
-      reuse_buffer_->Add(InitState{
-          restart_board, BuildLastMoves(game, move_num, {}), color, move_num,
-          FirstMoveBehavior::kSample, InitState::Kind::kGoExploit, kind_});
-      return;
-    }
 
     // kEarly / kLate / kSampleT1 / kSampleT2 / kSampleUniform:
     // Sample one (or two) alternative moves and add the resulting position.
@@ -374,6 +386,14 @@ class ForkManager final {
   }
 
   void FinalizeGame(const game::Game& game, core::Probability& prob) {
+    if (kind_ == ForkKind::kUniform) {
+      if (sampled_positions_this_game_.empty()) return;
+      const int index =
+          core::RandRange(prob.prng(), 0, sampled_positions_this_game_.size());
+      reuse_buffer_->Add(sampled_positions_this_game_[index]);
+      sampled_positions_this_game_.clear();
+    }
+    // regret section.
     if (kind_ != ForkKind::kRegret) return;
     if (started_from_forced_search_) return;
     if (positions_for_regret_.empty()) return;
@@ -583,6 +603,7 @@ class ForkManager final {
   bool did_fork_;
   bool started_from_forced_search_;
   int fork_mv_num_;
+  std::vector<InitState> sampled_positions_this_game_;
 
   // Per-move accumulation for kRegret. Fields per entry:
   //   (color, board_before_move, move, nn_value, mcts_value, is_eligible)

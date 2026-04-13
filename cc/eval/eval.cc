@@ -586,20 +586,18 @@ void PlayEvalGame(size_t seed, int game_id, int total_num_workers,
   float score_diff = game_result.winner == BLACK
                          ? game_result.bscore - game_result.wscore
                          : game_result.wscore - game_result.bscore;
-  LOG_TO_SINK(INFO, sink) << "Winner: " << ToString(winner) << ". Cand is "
-                          << (cur_is_black ? "W" : "B") << ", Result: "
+  LOG_TO_SINK(INFO, sink) << "Winner=" << ToString(winner) << " ("
                           << (game_result.winner == BLACK ? "B" : "W") << "+"
                           << (player_resigned != EMPTY
                                   ? "R"
-                                  : absl::StrFormat("%.1f", score_diff));
-  LOG(INFO) << "Winner: " << ToString(winner) << ". Cand is "
-            << (cur_is_black ? "W" : "B")
-            << ", Result: " << (game_result.winner == BLACK ? "B" : "W") << "+"
+                                  : absl::StrFormat("%.1f", score_diff))
+                          << ")  Cand=" << (cur_is_black ? "W" : "B");
+  LOG(INFO) << "Winner=" << ToString(winner)
+            << " Cand=" << (cur_is_black ? "W" : "B") << " ("
+            << (game_result.winner == BLACK ? "B" : "W") << "+"
             << (player_resigned != EMPTY ? "R"
                                          : absl::StrFormat("%.1f", score_diff))
-            << ", Black Score: " << game_result.bscore
-            << ", White Score: " << game_result.wscore << " (" << game_id
-            << ")";
+            << ") Move Num=" << game.num_moves();
 
   const std::string& b_name = black_cfg.name;
   const std::string& w_name = white_cfg.name;

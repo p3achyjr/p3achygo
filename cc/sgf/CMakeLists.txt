@@ -52,7 +52,7 @@ target_link_libraries(sgf INTERFACE
 
 # Tests
 if(BUILD_TESTS)
-    add_executable(sgf_serializer_test sgf_serializer_test.cc)
+    add_executable(sgf_serializer_test __tests__/sgf_serializer_test.cc)
     target_link_libraries(sgf_serializer_test PRIVATE
         sgf_serializer
         core_doctest
@@ -60,7 +60,7 @@ if(BUILD_TESTS)
     target_link_libraries(sgf_serializer_test PRIVATE m)
     add_test(NAME sgf_serializer_test COMMAND sgf_serializer_test)
 
-    add_executable(sgf_parse_test parse_sgf_test.cc)
+    add_executable(sgf_parse_test __tests__/parse_sgf_test.cc)
     target_link_libraries(sgf_parse_test PRIVATE
         parse_sgf
         parse_sgf_test_data
