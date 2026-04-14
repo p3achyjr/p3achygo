@@ -14,7 +14,21 @@ namespace gtp {
 //   3. Call ComputeMoveTimeMs() to get the time budget for the next search.
 class TimeControl {
  public:
-  TimeControl() = default;
+  enum Flags : uint32_t {
+    kWinrateFactor = 1 << 0,
+    kObviousMoveFactor = 1 << 1,
+    kStddevFactor = 1 << 2,
+    kMiddleGameFactor = 1 << 3,
+  };
+  struct Metadata {
+    float base_ms;
+    int appx_moves_left;
+    int appx_moves_left_by_q;
+    float obv_move_factor;
+    float stddev_factor;
+    float middlegame_factor;
+  };
+  TimeControl(uint32_t flags) : flags_(flags) {}
 
   // Called on `time_settings <main_time> <byo_yomi_time> <byo_yomi_stones>`.
   // byo_yomi_periods == 0 means sudden-death (no byoyomi).
@@ -31,8 +45,8 @@ class TimeControl {
   // Returns the recommended search time in milliseconds for the current move.
   // Returns 0 if time control has not been configured (time_settings not yet
   // received), which keeps the engine in its default fixed-visit mode.
-  int ComputeMoveTimeMs(const game::Game& game,
-                        const mcts::TreeNode* root) const;
+  std::pair<int, Metadata> ComputeMoveTimeMs(const game::Game& game,
+                                             const mcts::TreeNode* root);
 
   void Enable(bool enable) { enabled_ = enable; }
   bool IsEnabled() const { return enabled_; }
@@ -50,6 +64,10 @@ class TimeControl {
   bool in_byoyomi_ = false;
 
   bool enabled_ = false;
+  const uint32_t flags_;
+
+  // track stddev ema
+  float stddev_ema_ = 0;
 };
 
 }  // namespace gtp

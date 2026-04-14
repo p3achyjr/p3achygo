@@ -8,7 +8,7 @@
 
 ABSL_FLAG(std::string, model_path, "", "Path to model.");
 ABSL_FLAG(std::string, config, "", "Path to player config file.");
-ABSL_FLAG(int, n, 100, "Number of visits (overrides config).");
+ABSL_FLAG(int, n, 0, "Number of visits (overrides config).");
 ABSL_FLAG(bool, verbose, false, "Log config on startup.");
 
 // GTP-specific defaults that differ from PlayerSearchConfig defaults.
@@ -97,14 +97,18 @@ int main(int argc, char** argv) {
       return 1;
     }
   }
-  cfg.n = absl::GetFlag(FLAGS_n);
+  const int n = absl::GetFlag(FLAGS_n);
+  if (n != 0) {
+    cfg.n = absl::GetFlag(FLAGS_n);
+  }
 
   if (absl::GetFlag(FLAGS_verbose)) {
     LogConfig(cfg);
   }
 
   std::unique_ptr<gtp::Client> client = std::make_unique<gtp::Client>();
-  absl::Status status = client->Start(model_path, cfg, absl::GetFlag(FLAGS_verbose));
+  absl::Status status =
+      client->Start(model_path, cfg, absl::GetFlag(FLAGS_verbose));
   if (!status.ok()) {
     std::cerr << status.message() << "\n";
     return 1;

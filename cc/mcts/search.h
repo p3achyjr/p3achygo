@@ -120,10 +120,12 @@ class Search final {
   Result Run(core::Probability& probability, game::Game& game,
              NodeTable* node_table, TreeNode* const root,
              game::Color color_to_move, Params params);
+  void StopSearch() { global_search_state_.should_stop = true; }
 
  private:
   nn::NNInterface::Slot slot_;
   BiasCache* bias_cache_ = nullptr;
+  GlobalSearchState global_search_state_{};
 };
 
 /*

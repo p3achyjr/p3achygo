@@ -67,7 +67,7 @@ static constexpr GTPCode kSupportedCommands[] = {
     GTPCode::kPrintBoard,
     GTPCode::kFinalScore,
     GTPCode::kAnalyze,
-    GTPCode::kGenMoveAnalyze,
+    // GTPCode::kGenMoveAnalyze,
     GTPCode::kUndo,
     GTPCode::kExplainLastMove,
     GTPCode::kTimeSettings,

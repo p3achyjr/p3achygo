@@ -284,6 +284,12 @@ void NNInterface::InferLoop() {
 }
 
 void NNInterface::Infer() {
+  struct RAIIFlagReset {
+    NNInterface* self = nullptr;
+    RAIIFlagReset() = delete;
+    explicit RAIIFlagReset(NNInterface* self) : self(self) {};
+    ~RAIIFlagReset() { self->num_signaled_search_tasks_ = 0; }
+  };
   // Always use a timeout (both kAuto and kExplicit).
   //
   // kExplicit would otherwise deadlock in eval: cur_nn is shared by 16 games
@@ -313,6 +319,7 @@ void NNInterface::Infer() {
     mu_.LockWhen(absl::Condition(this, &NNInterface::ShouldInfer));
   }
 
+  RAIIFlagReset r(this);
   if (num_registered_threads_ == 0) {
     mu_.Unlock();
     return;
@@ -345,8 +352,6 @@ void NNInterface::Infer() {
 
   // Run Inference.
   engine_->RunInference();
-  num_signaled_search_tasks_ = 0;
-
   for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
     ThreadInfo& thread = thread_info_[thread_id];
     if (thread.registered && thread.loaded_for_inference) {

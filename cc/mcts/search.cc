@@ -765,7 +765,7 @@ Search::Result Search::Run(core::Probability& probability, Game& game,
   };
 
   const auto search_begin = std::chrono::steady_clock::now();
-  GlobalSearchState global_search_state{};
+  GlobalSearchState& global_search_state = global_search_state_;
   {
     global_search_state.did_signal = false;
     global_search_state.round_parity = false;
