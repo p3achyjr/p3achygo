@@ -9,10 +9,13 @@ add_library(gtp
     parse.h
     service.cc
     service.h
+    time_control.cc
+    time_control.h
 )
 target_link_libraries(gtp PUBLIC
     analysis
     core_impl
+    player_config
     mcts
     nn
     engine_factory

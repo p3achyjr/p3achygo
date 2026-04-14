@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "cc/mcts/constants.h"
+#include "cc/mcts/search.h"
 
 namespace eval {
 
@@ -66,8 +67,15 @@ struct PlayerSearchConfig {
   // Time control (ms). 0 = disabled; use visit_budget instead.
   int time_ms = 0;
 
+  // Enable pondering (search on opponent's time).
+  bool enable_pondering = false;
+
+  // TimeControl::Flags bitmask. 0 = all factors disabled (fixed-visit mode).
+  // Pass an integer literal or "all" (= ~0u, all flags on).
+  uint32_t time_control_flags = 0;
+
   // Q function: "identity" | "virtual_loss" | "virtual_loss_soft"
-  std::string q_fn = "virtual_loss";
+  std::string q_fn = "virtual_loss_soft";
 
   // N function: "identity" | "virtual_visit"
   std::string n_fn = "virtual_visit";
@@ -195,7 +203,12 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
     else if (key == "num_threads_per_game")
       cfg.num_threads_per_game = std::stoi(val);
     else if (key == "time_ms")
-      cfg.time_ms = std::stoi(val);
+      cfg.time_ms = val == "auto" ? -1 : std::stoi(val);
+    else if (key == "enable_pondering")
+      cfg.enable_pondering = internal::ParseBool(val);
+    else if (key == "time_control_flags")
+      cfg.time_control_flags =
+          (val == "all") ? ~0u : static_cast<uint32_t>(std::stoul(val));
     else if (key == "q_fn")
       cfg.q_fn = val;
     else if (key == "n_fn")
@@ -270,6 +283,8 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
   ROW(root_fpu, f);
   ROW(num_threads_per_game, i_);
   ROW(time_ms, i_);
+  ROW(enable_pondering, b);
+  ROW(time_control_flags, i_);
   ROW(q_fn, s);
   ROW(n_fn, s);
   ROW(collision_policy, s);
@@ -308,5 +323,16 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
 
   return oss.str();
 }
+
+// Parsing utils
+mcts::ScoreUtilityParams MakeScoreUtilityParams(
+    const eval::PlayerSearchConfig& cfg);
+
+mcts::PuctParams MakePuctParams(const eval::PlayerSearchConfig& cfg);
+
+// Converts a PlayerSearchConfig into Search::Params for parallel search.
+// The Gumbel path in PlayEvalGame does not use this; it is here so that
+// integrating parallel search is a mechanical substitution.
+mcts::Search::Params MakeSearchParams(const eval::PlayerSearchConfig& cfg);
 
 }  // namespace eval

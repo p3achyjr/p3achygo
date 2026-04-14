@@ -72,11 +72,11 @@ Search::Params MakeParams(int num_threads, int time_ms, mcts::QFnKind q_fn_kind,
       .total_visit_budget = 1 << 20,  // large ceiling; time is the real limit
       .total_visit_time_ms = time_ms,
       .puct_params = PuctParams::Builder()
-                        .set_kind(PuctRootSelectionPolicy::kVisitCount)
-                        .build(),
+                         .set_kind(PuctRootSelectionPolicy::kVisitCount)
+                         .build(),
       .q_fn_kind = q_fn_kind,
       .n_fn_kind = n_fn_kind,
-      .descent_policy_kind = mcts::DescentPolicyKind::kBuUct,
+      .descent_policy_kind = mcts::DescentPolicyKind::kDeterministic,
       .collision_policy_kind = collision_policy_kind,
       .collision_detector_kind = mcts::CollisionDetectorKind::kNoOp,
       .mode = mcts::Search::Mode::kConcurrent,

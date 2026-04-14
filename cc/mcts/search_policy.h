@@ -7,6 +7,7 @@
 
 #include "absl/log/log.h"
 #include "cc/constants/constants.h"
+#include "cc/game/board.h"
 #include "cc/game/color.h"
 #include "cc/game/game.h"
 #include "cc/game/loc.h"

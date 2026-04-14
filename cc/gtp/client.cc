@@ -44,8 +44,8 @@ Client::~Client() {
   CHECK(response_queue_.empty());
 }
 
-absl::Status Client::Start(std::string model_path,
-                           eval::PlayerSearchConfig cfg, bool verbose) {
+absl::Status Client::Start(std::string model_path, eval::PlayerSearchConfig cfg,
+                           bool verbose) {
   absl::StatusOr<std::unique_ptr<Service>> service =
       Service::CreateService(model_path, cfg, verbose);
   if (!service.ok()) {
@@ -328,12 +328,67 @@ void Client::HandleCommand(Command cmd) {
             std::thread(&Client::GenmoveAnalyze, this, color, centiseconds);
         return;
       }
+    case GTPCode::kCgosGenmoveAnalyze:
+      ARITY_CHECK(cmd, 1);
+      {
+        game::Color color;
+        if (!ParseColor(cmd.arg_tokens[0], &color)) {
+          AddResponse(MakeErrorResponse(
+              cmd.id,
+              "cgos-genmove_analyze: could not parse argument into color."));
+          return;
+        }
+        std::string analysis_json;
+        game::Loc move = service_->GtpCgosGenmoveAnalyze(color, &analysis_json);
+        if (!analysis_json.empty()) {
+          AddRawResponse(analysis_json + "\n");
+        }
+        std::stringstream ss;
+        ss << "= play " << (color == BLACK ? "b" : "w") << " "
+           << GtpValueString(move) << "\n\n";
+        AddRawResponse(ss.str());
+        return;
+      }
     case GTPCode::kUndo:
       AddResponse(service_->GtpUndo(cmd.id));
       return;
     case GTPCode::kExplainLastMove:
       AddResponse(service_->GtpExplainLastMove(cmd.id));
       return;
+    case GTPCode::kTimeSettings:
+      ARITY_CHECK(cmd, 3);
+      {
+        int main_time, byoyomi_time, byoyomi_stones;
+        if (!absl::SimpleAtoi(cmd.arg_tokens[0], &main_time) ||
+            !absl::SimpleAtoi(cmd.arg_tokens[1], &byoyomi_time) ||
+            !absl::SimpleAtoi(cmd.arg_tokens[2], &byoyomi_stones)) {
+          AddResponse(MakeErrorResponse(
+              cmd.id, "time_settings: could not parse arguments into ints."));
+          return;
+        }
+        AddResponse(service_->GtpTimeSettings(cmd.id, main_time, byoyomi_time,
+                                              byoyomi_stones));
+        return;
+      }
+    case GTPCode::kTimeLeft:
+      ARITY_CHECK(cmd, 3);
+      {
+        game::Color color;
+        int seconds, stones;
+        if (!ParseColor(cmd.arg_tokens[0], &color)) {
+          AddResponse(MakeErrorResponse(
+              cmd.id, "time_left: could not parse argument into color."));
+          return;
+        }
+        if (!absl::SimpleAtoi(cmd.arg_tokens[1], &seconds) ||
+            !absl::SimpleAtoi(cmd.arg_tokens[2], &stones)) {
+          AddResponse(MakeErrorResponse(
+              cmd.id, "time_left: could not parse arguments into ints."));
+          return;
+        }
+        AddResponse(service_->GtpTimeLeft(cmd.id, color, seconds, stones));
+        return;
+      }
     case GTPCode::kPlayDbg:
       ARITY_CHECK(cmd, 2);
       {

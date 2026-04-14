@@ -6,6 +6,8 @@
 #include <chrono>
 #include <iomanip>
 #include <sstream>
+#include <stop_token>
+#include <thread>
 
 #include "absl/log/log.h"
 #include "absl/status/statusor.h"
@@ -13,9 +15,11 @@
 #include "cc/core/probability.h"
 #include "cc/eval/player_config.h"
 #include "cc/game/game.h"
+#include "cc/gtp/time_control.h"
 #include "cc/mcts/bias_cache.h"
 #include "cc/mcts/gumbel.h"
 #include "cc/mcts/node_table.h"
+#include "cc/mcts/search.h"
 #include "cc/mcts/search_policy.h"
 #include "cc/mcts/tree.h"
 #include "cc/nn/engine/engine_factory.h"
@@ -32,6 +36,7 @@ using namespace ::nn;
 using namespace ::mcts;
 using namespace ::recorder;
 using namespace ::sgf;
+using namespace ::eval;
 
 std::string GtpBoardString(const Board& board) {
   static constexpr char kColIndices[] =
@@ -76,47 +81,10 @@ std::string GtpBoardString(const Board& board) {
   return ss.str();
 }
 
-mcts::ScoreUtilityParams MakeScoreUtilityParams(
-    const eval::PlayerSearchConfig& cfg) {
-  mcts::ScoreUtilityMode mode = cfg.score_utility_mode == "integral"
-                                    ? mcts::ScoreUtilityMode::kIntegral
-                                    : mcts::ScoreUtilityMode::kDirect;
-  return mcts::ScoreUtilityParams{.score_weight = cfg.score_weight,
-                                  .mode = mode};
-}
-
-mcts::PuctParams MakePuctParams(const eval::PlayerSearchConfig& cfg) {
-  mcts::PuctRootSelectionPolicy policy;
-  if (cfg.puct_root_policy == "lcb") {
-    policy = mcts::PuctRootSelectionPolicy::kLcb;
-  } else if (cfg.puct_root_policy == "visit_count_sample") {
-    policy = mcts::PuctRootSelectionPolicy::kVisitCountSample;
-  } else if (cfg.puct_root_policy == "visit_count") {
-    policy = mcts::PuctRootSelectionPolicy::kVisitCount;
-  } else {
-    policy = cfg.use_lcb ? mcts::PuctRootSelectionPolicy::kLcb
-                         : mcts::PuctRootSelectionPolicy::kVisitCount;
-  }
-  return mcts::PuctParams::Builder()
-      .set_kind(policy)
-      .set_c_puct(cfg.c_puct)
-      .set_c_puct_visit_scaling(cfg.c_puct_visit_scaling)
-      .set_c_puct_v_2(cfg.c_puct_v_2)
-      .set_use_puct_v(cfg.use_puct_v)
-      .set_enable_var_scaling(cfg.var_scale_cpuct)
-      .set_var_scale_prior_visits(cfg.var_scale_prior_visits)
-      .set_tau(cfg.tau)
-      .set_enable_m3_bonus(cfg.enable_m3_bonus)
-      .set_m3_prior_visits(cfg.m3_prior_visits)
-      .set_p_opt_weight(cfg.p_opt_weight)
-      .build();
-}
-
 class ServiceImpl final : public Service {
  public:
   ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
               eval::PlayerSearchConfig cfg, bool verbose);
-  ~ServiceImpl() = default;
 
   Response<int> GtpProtocolVersion(std::optional<int> id) override;
   Response<std::string> GtpName(std::optional<int> id) override;
@@ -133,6 +101,11 @@ class ServiceImpl final : public Service {
   Response<game::Scores> GtpFinalScore(std::optional<int> id) override;
   Response<> GtpUndo(std::optional<int> id) override;
   Response<std::string> GtpExplainLastMove(std::optional<int> id) override;
+  Response<> GtpTimeSettings(std::optional<int> id, int main_time_secs,
+                             int byoyomi_time_secs,
+                             int byoyomi_periods) override;
+  Response<> GtpTimeLeft(std::optional<int> id, Color color, int seconds,
+                         int stones) override;
 
   // Analysis methods. Call these from separate threads.
   Response<> GtpStartAnalysis(std::optional<int> id,
@@ -140,6 +113,8 @@ class ServiceImpl final : public Service {
   analysis::AnalysisSnapshot GtpAnalysisSnapshot(game::Color color) override;
   void GtpStopAnalysis() override;
   game::Loc GtpGenMoveAnalyze(game::Color color) override;
+  game::Loc GtpCgosGenmoveAnalyze(game::Color color,
+                                  std::string* analysis_json) override;
 
   // Private Commands.
   Response<std::string> GtpPlayDbg(std::optional<int> id,
@@ -153,16 +128,31 @@ class ServiceImpl final : public Service {
   Response<> GtpLoadSgf(std::optional<int> id, std::string filename) override;
 
  private:
-  GumbelResult GenMoveCommon(game::Color color);
-  std::string BuildMoveDbgString(const GumbelResult& result, Color color);
+  game::Loc GenMoveCommon(game::Color color);
   std::string BuildExplainComment();
   std::vector<std::pair<game::Loc, float>> GetTopPolicyMoves(
       const std::array<float, constants::kMaxMovesPerPosition>& pi);
   void ClearBoard();
   void MakeMove(Color color, Loc loc);
+  void StopPondering();
+  void StartPondering();
+  void Ponder(std::stop_token token);
   inline TreeNode* current_root() const { return current_root_; }
 
-  eval::PlayerSearchConfig cfg_;
+  // RAII guard: stops pondering on construction, restarts on destruction.
+  // Must not be created as a temporary (use [[nodiscard]] to catch this).
+  struct [[nodiscard]] PonderPause {
+    explicit PonderPause(ServiceImpl& s) : s_(s) { s_.StopPondering(); }
+    ~PonderPause() { s_.StartPondering(); }
+    PonderPause(const PonderPause&) = delete;
+    PonderPause& operator=(const PonderPause&) = delete;
+
+   private:
+    ServiceImpl& s_;
+  };
+
+  const eval::PlayerSearchConfig cfg_;
+  TimeControl time_control_;
   bool verbose_;
   float komi_ = 7.5f;
   Probability probability_;
@@ -173,15 +163,19 @@ class ServiceImpl final : public Service {
   std::optional<mcts::BiasCache> bias_cache_;
   TreeNode* current_root_;
   Color current_color_;
+  Search::Params search_params_;
   std::string last_explain_comment_;
 
   std::atomic<bool> analysis_running_;
   std::thread analysis_thread_;
+
+  std::jthread ponder_thread_;
 };
 
 ServiceImpl::ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
                          eval::PlayerSearchConfig cfg, bool verbose)
     : cfg_(cfg),
+      time_control_(cfg.time_control_flags),
       verbose_(verbose),
       nn_interface_(std::move(nn_interface)),
       game_(std::make_unique<Game>(false)),
@@ -190,6 +184,7 @@ ServiceImpl::ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
               ? std::unique_ptr<NodeTable>(std::make_unique<McgsNodeTable>())
               : std::unique_ptr<NodeTable>(std::make_unique<MctsNodeTable>())),
       current_color_(BLACK),
+      search_params_(MakeSearchParams(cfg)),
       analysis_running_(false) {
   if (cfg_.use_bias_cache) {
     bias_cache_.emplace(cfg_.bias_cache_alpha, cfg_.bias_cache_lambda);
@@ -198,6 +193,7 @@ ServiceImpl::ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
       nn_interface_.get(), 0, MakeScoreUtilityParams(cfg_),
       bias_cache_ ? &*bias_cache_ : nullptr);
   current_root_ = node_table_->GetOrCreate(game_->board().hash(), BLACK, false);
+  StartPondering();
 }
 
 Response<int> ServiceImpl::GtpProtocolVersion(std::optional<int> id) {
@@ -224,7 +220,8 @@ Response<bool> ServiceImpl::GtpKnownCommand(std::optional<int> id,
 Response<std::string> ServiceImpl::GtpListCommands(std::optional<int> id) {
   std::string ls_str;
   for (const auto& code : kSupportedCommands) {
-    ls_str += (GTPCodeToString(code) + "\n");
+    if (!ls_str.empty()) ls_str += "\n";
+    ls_str += GTPCodeToString(code);
   }
 
   return MakeResponse(id, ls_str);
@@ -239,11 +236,13 @@ Response<> ServiceImpl::GtpBoardSize(std::optional<int> id, int board_size) {
 }
 
 Response<> ServiceImpl::GtpClearBoard(std::optional<int> id) {
+  PonderPause pause(*this);
   ClearBoard();
   return MakeResponse(id);
 }
 
 Response<> ServiceImpl::GtpKomi(std::optional<int> id, float komi) {
+  PonderPause pause(*this);
   komi_ = komi;
   game_->SetKomi(komi);
   return MakeResponse(id);
@@ -253,29 +252,28 @@ Response<> ServiceImpl::GtpPlay(std::optional<int> id, Move move) {
   if (!game_->IsValidMove(move.loc, move.color)) {
     return MakeErrorResponse(id, "illegal move");
   }
-
+  if (verbose_) {
+    std::cerr << "Playing " << move << "\n";
+  }
+  StopPondering();
   MakeMove(move.color, move.loc);
   return MakeResponse(id);
 }
 
 Response<Loc> ServiceImpl::GtpGenMove(std::optional<int> id, Color color) {
-  GumbelResult search_result = GenMoveCommon(color);
+  PonderPause pause(*this);
+  const auto mcts_move = GenMoveCommon(color);
   if (V(current_root()) < -0.96f && game_->num_moves() > 50) {
     return MakeResponse(id, kNoopLoc);
   }
 
-  last_explain_comment_ = BuildExplainComment();
-
+  MakeMove(color, mcts_move);
   if (verbose_) {
-    std::string dbg_str = BuildMoveDbgString(search_result, color);
-    MakeMove(color, search_result.mcts_move);
-    dbg_str += "\n" + GtpBoardString(game_->board());
-    std::cerr << dbg_str << "\n";
-  } else {
-    MakeMove(color, search_result.mcts_move);
+    std::cerr << last_explain_comment_ << "\n"
+              << GtpBoardString(game_->board()) << "\n";
   }
 
-  return MakeResponse(id, search_result.mcts_move);
+  return MakeResponse(id, mcts_move);
 }
 
 Response<std::string> ServiceImpl::GtpPrintBoard(std::optional<int> id) {
@@ -293,6 +291,7 @@ Response<> ServiceImpl::GtpUndo(std::optional<int> id) {
   if (game_->num_moves() == 0) {
     return MakeErrorResponse(id, "Nothing to undo.");
   }
+  PonderPause pause(*this);
 
   // Replay from beginning, excluding last move.
   std::unique_ptr<Game> new_game = std::make_unique<Game>(false);
@@ -341,6 +340,7 @@ analysis::AnalysisSnapshot ServiceImpl::GtpAnalysisSnapshot(Color color) {
   return analysis::AnalysisSnapshot{};
 }
 
+// This is a shitty implementation, we should fix it.
 void ServiceImpl::GtpStopAnalysis() {
   if (!analysis_running_.load(std::memory_order_acquire)) {
     return;
@@ -354,12 +354,36 @@ void ServiceImpl::GtpStopAnalysis() {
 
 game::Loc ServiceImpl::GtpGenMoveAnalyze(game::Color color) {
   analysis_running_.store(true, std::memory_order_release);
-  GumbelResult search_result = GenMoveCommon(color);
+  const auto mcts_move = GenMoveCommon(color);
   analysis_running_.store(false, std::memory_order_release);
 
-  last_explain_comment_ = BuildExplainComment();
-  MakeMove(color, search_result.mcts_move);
-  return search_result.mcts_move;
+  MakeMove(color, mcts_move);
+  return mcts_move;
+}
+
+game::Loc ServiceImpl::GtpCgosGenmoveAnalyze(game::Color color,
+                                             std::string* analysis_json) {
+  PonderPause pause(*this);
+  const auto mcts_move = GenMoveCommon(color);
+  if (V(current_root()) < -0.96f && game_->num_moves() > 50) {
+    return kNoopLoc;
+  }
+
+  TreeNode* root = current_root();
+  float winrate = (VOutcome(root) + 1.0f) / 2.0f;
+  float score = Score(root);
+
+  std::stringstream ss;
+  ss << std::fixed << std::setprecision(4);
+  ss << "{\"winrate\":" << winrate << ",\"score\":" << score << "}";
+  *analysis_json = ss.str();
+
+  MakeMove(color, mcts_move);
+  if (verbose_) {
+    std::cerr << last_explain_comment_ << "\n"
+              << GtpBoardString(game_->board()) << "\n";
+  }
+  return mcts_move;
 }
 
 Response<std::string> ServiceImpl::GtpPlayDbg(std::optional<int> id,
@@ -367,6 +391,7 @@ Response<std::string> ServiceImpl::GtpPlayDbg(std::optional<int> id,
   if (!game_->IsValidMove(move.loc, move.color)) {
     return MakeErrorResponse<std::string>(id, "illegal move");
   }
+  StopPondering();
 
   std::string dbg_str;
   dbg_str += "---- Move Num " + std::to_string(game_->num_moves()) + " ----\n";
@@ -380,54 +405,6 @@ Response<std::string> ServiceImpl::GtpPlayDbg(std::optional<int> id,
   dbg_str += "\n" + GtpBoardString(game_->board());
 
   return MakeResponse(id, dbg_str);
-}
-
-std::string ServiceImpl::BuildMoveDbgString(const GumbelResult& result,
-                                            Color color) {
-  TreeNode* root = current_root();
-
-  float v_nn = root->init_util_est;
-  float v_nn_adj =
-      (root->bias_cache_entry && root->last_weight_term != 0.0f)
-          ? v_nn - cfg_.bias_cache_lambda *
-                       (root->last_obs_bias_term / root->last_weight_term)
-          : v_nn;
-
-  std::string s;
-  s += "---- Move Num " + std::to_string(game_->num_moves()) + " ----\n";
-  s += "NN"
-       "  V=" +
-       std::to_string(v_nn) + "  Vz=" + std::to_string(root->init_outcome_est) +
-       "  Vadj=" + std::to_string(v_nn_adj) +
-       "  Score=" + std::to_string(root->init_score_est) +
-       "    Tree"
-       "  N=" +
-       std::to_string(static_cast<int>(N(root))) +
-       "  V=" + std::to_string(V(root)) +
-       "  Vz=" + std::to_string(VOutcome(root)) +
-       "  Vstd=" + std::to_string(std::sqrt(VVar(root))) +
-       "  Vzstd=" + std::to_string(std::sqrt(VOutcomeVar(root))) + "\n";
-
-  s += "Top Policy Moves:\n";
-  for (const auto& mv : GetTopPolicyMoves(root->move_probs)) {
-    s += "  " + GtpValueString(mv.first) + " = " + std::to_string(mv.second) +
-         "\n";
-  }
-
-  s += "Gumbel Selected Moves:\n";
-  for (const auto& child : result.child_stats) {
-    s += "  " + GtpValueString(child.move) + "  n=" + std::to_string(child.n) +
-         "  p=" + std::to_string(child.prob) +
-         "  p'=" + std::to_string(child.improved_policy) +
-         "  q=" + std::to_string(child.q) + "  qz=" + std::to_string(child.qz) +
-         "\n";
-  }
-
-#ifdef V_CATEGORICAL
-  s += VCategoricalHistogram(root);
-#endif
-
-  return s;
 }
 
 Response<std::string> ServiceImpl::GtpExplainLastMove(std::optional<int> id) {
@@ -496,15 +473,16 @@ std::string ServiceImpl::BuildExplainComment() {
 
 Response<std::string> ServiceImpl::GtpGenMoveDbg(std::optional<int> id,
                                                  game::Color color) {
-  GumbelResult search_result = GenMoveCommon(color);
-  std::string dbg_str = BuildMoveDbgString(search_result, color);
+  PonderPause pause(*this);
+  const auto mcts_move = GenMoveCommon(color);
+  std::string dbg_str = last_explain_comment_;
 
   if (V(current_root()) < -0.96f && game_->num_moves() > 50) {
     dbg_str += "p3achygo resigns :(";
     return MakeResponse(id, dbg_str);
   }
 
-  MakeMove(color, search_result.mcts_move);
+  MakeMove(color, mcts_move);
   dbg_str += "\n" + GtpBoardString(game_->board()) += "\n";
   return MakeResponse(id, dbg_str);
 }
@@ -535,6 +513,7 @@ Response<> ServiceImpl::GtpLoadSgf(std::optional<int> id,
 
   GameInfo game_info = ExtractGameInfo(sgf_root->get());
 
+  PonderPause pause(*this);
   ClearBoard();
   for (const auto& mv : game_info.main_variation) {
     MakeMove(mv.color, mv.loc);
@@ -543,30 +522,95 @@ Response<> ServiceImpl::GtpLoadSgf(std::optional<int> id,
   return MakeResponse(id);
 }
 
-GumbelResult ServiceImpl::GenMoveCommon(Color color) {
-  if (!(color == current_color_)) {
-    // We are moving twice consecutively. Fake a pass first.
-    game_->PlayMove(kPassLoc, current_color_);
-    TreeNode* next_root = current_root_->children[kPassLoc];
-    if (!next_root) {
-      next_root = node_table_->GetOrCreate(game_->board().hash(), color,
-                                           game_->IsGameOver());
-    }
-    node_table_->Reap(next_root);
-    if (bias_cache_) bias_cache_->PruneUnused();
-    current_root_ = next_root;
-    current_color_ = color;
+Response<> ServiceImpl::GtpTimeSettings(std::optional<int> id,
+                                        int main_time_secs,
+                                        int byoyomi_time_secs,
+                                        int byoyomi_periods) {
+  time_control_.Enable(true);
+  time_control_.SetTimeSettings(main_time_secs, byoyomi_time_secs,
+                                byoyomi_periods);
+  return MakeResponse(id);
+}
+
+Response<> ServiceImpl::GtpTimeLeft(std::optional<int> id, Color color,
+                                    int seconds, int stones) {
+  time_control_.Enable(true);
+  // stones == 0 means we are in main time; stones > 0 means byoyomi.
+  if (stones == 0) {
+    time_control_.SetTimeLeft(seconds, 0, 0);
+  } else {
+    time_control_.SetTimeLeft(0, seconds, stones);
   }
 
-  GumbelResult search_result =
-      cfg_.use_puct
-          ? gumbel_evaluator_->SearchRootPuct(
-                probability_, *game_, node_table_.get(), current_root(), color,
-                cfg_.n, MakePuctParams(cfg_))
-          : gumbel_evaluator_->SearchRoot(
-                probability_, *game_, node_table_.get(), current_root(), color,
-                mcts::GumbelSearchParams{cfg_.n, cfg_.k, cfg_.noise_scaling});
-  return search_result;
+  if (verbose_) {
+    std::cerr << "time_left=" << seconds << "s  byoyomi=" << stones << "\n";
+  }
+  return MakeResponse(id);
+}
+
+game::Loc ServiceImpl::GenMoveCommon(Color color) {
+  if (color != current_color_) {
+    // We are moving twice consecutively. Fake a pass first.
+    MakeMove(color, kPassLoc);
+  }
+
+  game::Loc move;
+  if (cfg_.num_threads_per_game > 1 || cfg_.time_ms != 0) {
+    // requires parallel search.
+    BiasCache* bias_cache = bias_cache_.has_value() ? &*bias_cache_ : nullptr;
+    Search s(nn_interface_->MakeSlot(0), bias_cache);
+    const bool use_visit_budget = cfg_.time_ms == 0;
+    const bool use_auto_time = cfg_.time_ms == -1;
+    const auto [time_auto, time_metadata] =
+        time_control_.ComputeMoveTimeMs(*game_, current_root());
+    const int time_ms = [&]() {
+      if (use_visit_budget) return -1;
+      if (!use_auto_time) return cfg_.time_ms;
+      // auto time.
+      if (!time_control_.IsEnabled()) return 1000;  // default 1s.
+      return time_auto;
+    }();
+    if (verbose_) {
+      std::cerr << "Thinking for " << time_auto << "ms\n";
+      if (use_auto_time) {
+        std::cerr << "base_ms=" << time_metadata.base_ms
+                  << "  appx_moves_left=" << time_metadata.appx_moves_left
+                  << "  appx_moves_left_by_q="
+                  << time_metadata.appx_moves_left_by_q
+                  << "  obv_move_factor=" << time_metadata.obv_move_factor
+                  << "  stddev_factor=" << time_metadata.stddev_factor
+                  << "  middlegame_factor=" << time_metadata.middlegame_factor
+                  << "\n";
+      }
+    }
+    Search::Params search_params = search_params_;
+    search_params.total_visit_budget = use_visit_budget ? cfg_.n : 1 << 20;
+    search_params.total_visit_time_ms = time_ms;
+    Search::Result res = s.Run(probability_, *game_, node_table_.get(),
+                               current_root(), color, search_params);
+    if (verbose_) {
+      std::cerr << "Thought for " << res.time_ms
+                << "ms. Visits=" << res.num_visits << "\n";
+    }
+    move = res.move;
+  } else {
+    GumbelResult res =
+        cfg_.use_puct
+            ? gumbel_evaluator_->SearchRootPuct(
+                  probability_, *game_, node_table_.get(), current_root(),
+                  color, cfg_.n, MakePuctParams(cfg_))
+            : gumbel_evaluator_->SearchRoot(
+                  probability_, *game_, node_table_.get(), current_root(),
+                  color,
+                  mcts::GumbelSearchParams{cfg_.n, cfg_.k, cfg_.noise_scaling});
+    move = res.mcts_move;
+  }
+
+  if (verbose_) {
+    last_explain_comment_ = BuildExplainComment();
+  }
+
+  return move;
 }
 
 std::vector<std::pair<game::Loc, float>> ServiceImpl::GetTopPolicyMoves(
@@ -594,8 +638,16 @@ void ServiceImpl::MakeMove(Color color, Loc loc) {
     next_root = node_table_->GetOrCreate(game_->board().hash(), current_color_,
                                          game_->IsGameOver());
   }
+  const auto start = std::chrono::steady_clock::now();
   node_table_->Reap(next_root);
   if (bias_cache_) bias_cache_->PruneUnused();
+  const auto end = std::chrono::steady_clock::now();
+  if (verbose_) {
+    const auto dur =
+        std::chrono::duration_cast<std::chrono::milliseconds>(end - start)
+            .count();
+    std::cerr << "Reap Took " << dur << "ms\n";
+  }
   current_root_ = next_root;
 }
 
@@ -608,16 +660,64 @@ void ServiceImpl::ClearBoard() {
           : std::unique_ptr<NodeTable>(std::make_unique<MctsNodeTable>());
   current_color_ = BLACK;
   current_root_ = node_table_->GetOrCreate(game_->board().hash(), BLACK, false);
+  node_table_->Reap(current_root_);
+  if (bias_cache_) bias_cache_->PruneUnused();
+}
+
+void ServiceImpl::StopPondering() {
+  ponder_thread_ = {};  // request_stop() + join()
+}
+
+void ServiceImpl::StartPondering() {
+  if (cfg_.enable_pondering) {
+    ponder_thread_ = std::jthread(&ServiceImpl::Ponder, this);
+  }
+}
+
+void ServiceImpl::Ponder(std::stop_token token) {
+  BiasCache* bias_cache = bias_cache_.has_value() ? &*bias_cache_ : nullptr;
+  Search s(nn_interface_->MakeSlot(0), bias_cache);
+  // StopSearch() fires immediately when the jthread stop is requested.
+  std::stop_callback stop_cb(token, [&s] { s.StopSearch(); });
+
+  const auto start = std::chrono::steady_clock::now();
+  const auto start_visits = current_root()->n;
+
+  if (verbose_) {
+    std::cerr << "Beginning Ponder...\n";
+  }
+
+  Search::Params params = search_params_;
+  params.total_visit_budget = 1 << 17;
+  params.total_visit_time_ms = -1;
+  s.Run(probability_, *game_, node_table_.get(), current_root(), current_color_,
+        params);
+
+  if (verbose_) {
+    const auto end = std::chrono::steady_clock::now();
+    const auto end_visits = current_root()->n;
+    const auto time_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(end - start)
+            .count();
+    std::cerr << "Pondered for " << time_ms << "ms, "
+              << (end_visits - start_visits) << " visits.\n";
+  }
 }
 }  // namespace
 
 /* static */ absl::StatusOr<std::unique_ptr<Service>> Service::CreateService(
     std::string model_path, eval::PlayerSearchConfig cfg, bool verbose) {
+  const int num_threads = cfg.num_threads_per_game;
+  const bool uses_psearch = num_threads > 1 || cfg.time_ms != 0;
   std::unique_ptr<nn::Engine> engine =
-      nn::CreateEngine(nn::KindFromEnginePath(model_path), model_path, 1,
-                       nn::GetVersionFromModelPath(model_path));
+      nn::CreateEngine(nn::KindFromEnginePath(model_path), model_path,
+                       num_threads, nn::GetVersionFromModelPath(model_path));
   std::unique_ptr<NNInterface> nn_interface = std::make_unique<NNInterface>(
-      1, std::numeric_limits<int64_t>::max(), 16384, std::move(engine));
+      num_threads, std::numeric_limits<int64_t>::max(), 16384,
+      std::move(engine),
+      uses_psearch ? NNInterface::SignalKind::kExplicit
+                   : NNInterface::SignalKind::kAuto,
+      1, NNInterface::WakeStrategy::kMutex);
   return std::make_unique<ServiceImpl>(std::move(nn_interface), cfg, verbose);
 }
 
