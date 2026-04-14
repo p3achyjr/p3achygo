@@ -78,6 +78,10 @@ class Client final {
     response_queue_.emplace_back("play " + GtpValueString(loc) + "\n");
   }
 
+  void AddRawResponse(std::string s) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+    response_queue_.emplace_back(std::move(s));
+  }
+
   friend std::ostream& operator<<(std::ostream& os, const std::monostate& _) {
     return os;
   }

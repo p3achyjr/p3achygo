@@ -45,6 +45,8 @@ class Service {
   virtual analysis::AnalysisSnapshot GtpAnalysisSnapshot(game::Color color) = 0;
   virtual void GtpStopAnalysis() = 0;
   virtual game::Loc GtpGenMoveAnalyze(game::Color color) = 0;
+  virtual game::Loc GtpCgosGenmoveAnalyze(game::Color color,
+                                          std::string* analysis_json) = 0;
 
   // Private Commands.
   virtual Response<std::string> GtpPlayDbg(std::optional<int> id,

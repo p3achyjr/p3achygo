@@ -328,6 +328,27 @@ void Client::HandleCommand(Command cmd) {
             std::thread(&Client::GenmoveAnalyze, this, color, centiseconds);
         return;
       }
+    case GTPCode::kCgosGenmoveAnalyze:
+      ARITY_CHECK(cmd, 1);
+      {
+        game::Color color;
+        if (!ParseColor(cmd.arg_tokens[0], &color)) {
+          AddResponse(MakeErrorResponse(
+              cmd.id,
+              "cgos-genmove_analyze: could not parse argument into color."));
+          return;
+        }
+        std::string analysis_json;
+        game::Loc move = service_->GtpCgosGenmoveAnalyze(color, &analysis_json);
+        if (!analysis_json.empty()) {
+          AddRawResponse(analysis_json + "\n");
+        }
+        std::stringstream ss;
+        ss << "= play " << (color == BLACK ? "b" : "w") << " "
+           << GtpValueString(move) << "\n\n";
+        AddRawResponse(ss.str());
+        return;
+      }
     case GTPCode::kUndo:
       AddResponse(service_->GtpUndo(cmd.id));
       return;

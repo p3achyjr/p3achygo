@@ -113,6 +113,8 @@ class ServiceImpl final : public Service {
   analysis::AnalysisSnapshot GtpAnalysisSnapshot(game::Color color) override;
   void GtpStopAnalysis() override;
   game::Loc GtpGenMoveAnalyze(game::Color color) override;
+  game::Loc GtpCgosGenmoveAnalyze(game::Color color,
+                                  std::string* analysis_json) override;
 
   // Private Commands.
   Response<std::string> GtpPlayDbg(std::optional<int> id,
@@ -265,13 +267,10 @@ Response<Loc> ServiceImpl::GtpGenMove(std::optional<int> id, Color color) {
     return MakeResponse(id, kNoopLoc);
   }
 
+  MakeMove(color, mcts_move);
   if (verbose_) {
-    std::string dbg_str = last_explain_comment_;
-    MakeMove(color, mcts_move);
-    dbg_str += "\n" + GtpBoardString(game_->board());
-    std::cerr << dbg_str << "\n";
-  } else {
-    MakeMove(color, mcts_move);
+    std::cerr << last_explain_comment_ << "\n"
+              << GtpBoardString(game_->board()) << "\n";
   }
 
   return MakeResponse(id, mcts_move);
@@ -359,6 +358,31 @@ game::Loc ServiceImpl::GtpGenMoveAnalyze(game::Color color) {
   analysis_running_.store(false, std::memory_order_release);
 
   MakeMove(color, mcts_move);
+  return mcts_move;
+}
+
+game::Loc ServiceImpl::GtpCgosGenmoveAnalyze(game::Color color,
+                                             std::string* analysis_json) {
+  PonderPause pause(*this);
+  const auto mcts_move = GenMoveCommon(color);
+  if (V(current_root()) < -0.96f && game_->num_moves() > 50) {
+    return kNoopLoc;
+  }
+
+  TreeNode* root = current_root();
+  float winrate = (VOutcome(root) + 1.0f) / 2.0f;
+  float score = Score(root);
+
+  std::stringstream ss;
+  ss << std::fixed << std::setprecision(4);
+  ss << "{\"winrate\":" << winrate << ",\"score\":" << score << "}";
+  *analysis_json = ss.str();
+
+  MakeMove(color, mcts_move);
+  if (verbose_) {
+    std::cerr << last_explain_comment_ << "\n"
+              << GtpBoardString(game_->board()) << "\n";
+  }
   return mcts_move;
 }
 
