@@ -20,6 +20,7 @@ struct ChildStats {
   float q;
   float qz;
   float score;
+  float var;
   float prob;
   float logit;
   float gumbel_noise;

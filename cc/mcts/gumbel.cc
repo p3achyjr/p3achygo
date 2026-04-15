@@ -264,8 +264,8 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
   int k = params.k;
   const float noise_scaling = params.noise_scaling;
   const bool disable_pass = params.disable_pass;
-  const bool early_stopping_enabled = params.early_stopping_enabled && false;
-  const bool over_search_enabled = params.over_search_enabled && false;
+  const bool early_stopping_enabled = params.early_stopping_enabled;
+  const bool over_search_enabled = params.over_search_enabled;
   const float tau = params.tau;
   int num_rounds = std::max(log2(k), 1);
 
@@ -317,29 +317,36 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
     top_k_actions.emplace_back(gmove_info[i].move_encoding);
   }
 
-  // checks whether none of the moves to be eliminated are the best move with
-  // 90% confidence.
-  static constexpr int kMinEarlyStoppingVisits = 6;
-  const auto bottom_half_ci_gating_check =
-      [&gmove_info, &root](const int visits_so_far, const int k) {
-        if (visits_so_far < kMinEarlyStoppingVisits) return false;
-        float top_lcb_90 = -2;
-        float bot_ucb_90 = -2;
-        for (auto i = 0; i < k; ++i) {
-          auto& move_info = gmove_info[i];
-          if (move_info.move_encoding == game::kInvalidMoveEncoding) {
-            continue;
-          }
-          const int a = move_info.move_encoding;
-          const int kb = k / 2 + k % 2;
-          if (i < k / 2) {
-            top_lcb_90 = std::max(top_lcb_90, Lcb(root, a, .05 / kb));
-          } else {
-            bot_ucb_90 = std::max(bot_ucb_90, Ucb(root, a, .05 / kb));
-          }
-        }
-        return bot_ucb_90 <= top_lcb_90;
-      };
+  // checks whether none of the moves to be eliminated are the best move. Aim
+  // for 95% confidence that we have found the best move through the entire
+  // search.
+  static constexpr int kMinEarlyStoppingVisits = 10;
+  const auto can_stop_early = [&gmove_info, &root, &num_rounds](
+                                  [[maybe_unused]] const int visits_so_far,
+                                  const int k) {
+    constexpr float kSearchConfidence = 0.95f;
+    const float lambda = std::pow(kSearchConfidence, 1.0f / num_rounds);
+    float top_lcb = -2;
+    float bot_ucb = -2;
+    for (auto i = 0; i < k; ++i) {
+      auto& move_info = gmove_info[i];
+      if (move_info.move_encoding == game::kInvalidMoveEncoding) {
+        continue;
+      }
+      const int a = move_info.move_encoding;
+      if (root->child(a) == nullptr ||
+          NAction(root, a) < kMinEarlyStoppingVisits) {
+        return false;
+      }
+      const int kb = k / 2 + k % 2;
+      if (i < k / 2) {
+        top_lcb = std::max(top_lcb, Lcb(root, a, lambda / kb));
+      } else {
+        bot_ucb = std::max(bot_ucb, Ucb(root, a, lambda / kb));
+      }
+    }
+    return bot_ucb <= top_lcb;
+  };
 
   const auto update_qtransform = [&gmove_info, &root](int k) {
     for (auto i = 0; i < k; ++i) {
@@ -390,8 +397,7 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
                                        over_search_enabled,
                                        v]() -> std::tuple<int, int, int> {
       if (early_stopping_enabled) {
-        return {v, ceil_div(v, 4),
-                std::max(v / 4, kMinEarlyStoppingVisits) - 1};
+        return {v, ceil_div(v, 4), ceil_div(v, 4) - 1};
       } else if (over_search_enabled) {
         return {v * 5 / 2, ceil_div(v, 4), v - 1};
       }
@@ -452,7 +458,7 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
           visit_num >= min_check_interval) {
         update_qtransform(k);
         std::sort(gmove_info, gmove_info + k, GumbelMoveInfoGreater);
-        if (bottom_half_ci_gating_check(visit_num, k)) {
+        if (can_stop_early(visit_num, k)) {
           break;
         }
       }
@@ -489,6 +495,7 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
         Q(root, gmove.move_encoding) /* q */,
         QOutcome(root, gmove.move_encoding) /* qz */,
         ChildScore(root, gmove.move_encoding) /* score */,
+        QVar(root, gmove.move_encoding) /* variance */,
         gmove.prob /* prob */,
         gmove.logit /* logit */,
         gmove.gumbel_noise /* gumbel_noise */,
@@ -639,6 +646,7 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
         Q(root, mv),
         QOutcome(root, mv),
         ChildScore(root, mv),
+        QVar(root, mv),
         root->move_probs[mv],
         root->move_logits[mv],
         0.0f,
