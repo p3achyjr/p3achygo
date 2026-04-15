@@ -421,6 +421,9 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     float sel_mult_avg = 0, sel_mult_ema = 0, select_move_prob_base_avg = 0,
           select_move_prob_avg = 0;
 
+    // Early Stopping tracking.
+    float visits_full_avg = 0, visits_fast_avg = 0;
+
     std::optional<mcts::BiasCache> bias_cache_storage;
     mcts::BiasCache* bias_cache = nullptr;
     if (config.bias_cache_lambda > 0.0f) {
@@ -561,7 +564,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       bool const is_move_over_search =
           (probability.Uniform() < over_search_prob &&
            is_move_selected_for_training && false);
-      bool const early_stopping_enabled = !is_move_over_search && false;
+      bool const early_stopping_enabled = !is_move_over_search;
       auto const [gumbel_n, gumbel_k, noise_scaling] = [&]() {
         int gumbel_n, gumbel_k;
         float noise_scaling = 1.0f;
@@ -887,6 +890,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
               << "  n=" << absl::StrFormat("%d", mv_stats.n)
               << "  q=" << absl::StrFormat("%.3f", mv_stats.q)
               << "  qz=" << absl::StrFormat("%.3f", mv_stats.qz)
+              << "  std=" << absl::StrFormat("%.3f", std::sqrt(mv_stats.var))
               << "  score=" << absl::StrFormat("%.3f", mv_stats.score) << "\n";
           }
         }
