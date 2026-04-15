@@ -544,7 +544,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       bool const is_move_over_search =
           (probability.Uniform() < over_search_prob &&
            is_move_selected_for_training && false);
-      bool const early_stopping_enabled = !is_move_over_search;
+      bool const early_stopping_enabled =
+          !is_move_over_search && config.early_stopping_enabled;
       auto const [gumbel_n, gumbel_k, noise_scaling] = [&]() {
         int gumbel_n, gumbel_k;
         float noise_scaling = 1.0f;
@@ -620,6 +621,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
                            ? ComputeKLD(ComputeImprovedPolicy(root_node, 0),
                                         root_node->move_probs)
                            : 0.0f;
+      const std::string v_histogram = VCategoricalHistogram(root_node);
 
       Loc nn_move = gumbel_res.nn_move;
       Loc move = gumbel_res.mcts_move;
@@ -877,7 +879,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
               << "  score=" << absl::StrFormat("%.3f", mv_stats.score) << "\n";
           }
         }
-        s << "MCTS Value:\n" << VCategoricalHistogram(root_node) << "\n";
+        s << "MCTS Value:\n" << v_histogram << "\n";
         s << "Board:\n" << game.board() << "\n";
         s << "Nodes Reaped=" << num_nodes_reaped
           << "  Reap Time=" << reap_time_us

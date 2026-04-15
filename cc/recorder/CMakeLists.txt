@@ -59,6 +59,14 @@ target_link_libraries(game_recorder PUBLIC
 
 # Tests
 if(BUILD_TESTS)
+    add_executable(sel_mult_test __tests__/sel_mult_test.cc)
+    target_link_libraries(sel_mult_test PRIVATE
+        tf_recorder
+        game
+        constants
+        mcts_constants
+        core_doctest
+    )
     add_executable(tf_recorder_test __tests__/tf_recorder_test.cc)
     target_link_libraries(tf_recorder_test PRIVATE
         tf_recorder
@@ -67,6 +75,7 @@ if(BUILD_TESTS)
         mcts_constants
         core_doctest
     )
+    add_test(NAME sel_mult_test COMMAND sel_mult_test)
     add_test(NAME tf_recorder_test COMMAND tf_recorder_test)
 endif()
 
