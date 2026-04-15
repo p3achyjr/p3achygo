@@ -62,6 +62,8 @@ ABSL_FLAG(std::string, cand_config, "",
 ABSL_FLAG(int, cur_n, kDefaultGumbelN, "N for current player");
 ABSL_FLAG(int, cur_k, kDefaultGumbelK, "K for current player");
 ABSL_FLAG(float, cur_noise_scaling, 1.0f, "Cur gumbel noise scaling");
+ABSL_FLAG(bool, cur_early_stopping_for_gumbel, false,
+          "Whether to use early stopping for Gumbel search for cur.");
 ABSL_FLAG(bool, cur_use_puct, true, "Whether to use PUCT for cur.");
 ABSL_FLAG(bool, cur_use_lcb, true, "Whether to use LCB in PUCT for cur.");
 ABSL_FLAG(float, cur_c_puct, 1.0f, "c_puct for cur.");
@@ -95,6 +97,8 @@ ABSL_FLAG(float, cur_root_fpu, 0.1f,
 ABSL_FLAG(int, cand_n, kDefaultGumbelN, "N for candidate player");
 ABSL_FLAG(int, cand_k, kDefaultGumbelK, "K for candidate player");
 ABSL_FLAG(float, cand_noise_scaling, 1.0f, "Cand gumbel noise scaling");
+ABSL_FLAG(bool, cand_early_stopping_for_gumbel, false,
+          "Whether to use early stopping for Gumbel search for cand.");
 ABSL_FLAG(bool, cand_use_puct, true, "Whether to use PUCT for cand.");
 ABSL_FLAG(bool, cand_use_lcb, true, "Whether to use LCB in PUCT for cand.");
 ABSL_FLAG(float, cand_c_puct, 1.0f, "c_puct for cand.");
@@ -144,6 +148,9 @@ void ApplyCurCommandLineFlags(eval::PlayerSearchConfig& cfg) {
   if (IsOnCommandLine("cur_k")) cfg.k = absl::GetFlag(FLAGS_cur_k);
   if (IsOnCommandLine("cur_noise_scaling"))
     cfg.noise_scaling = absl::GetFlag(FLAGS_cur_noise_scaling);
+  if (IsOnCommandLine("cur_early_stopping_for_gumbel"))
+    cfg.early_stopping_for_gumbel =
+        absl::GetFlag(FLAGS_cur_early_stopping_for_gumbel);
   if (IsOnCommandLine("cur_use_puct"))
     cfg.use_puct = absl::GetFlag(FLAGS_cur_use_puct);
   if (IsOnCommandLine("cur_use_lcb"))
@@ -189,6 +196,9 @@ void ApplyCandCommandLineFlags(eval::PlayerSearchConfig& cfg) {
   if (IsOnCommandLine("cand_k")) cfg.k = absl::GetFlag(FLAGS_cand_k);
   if (IsOnCommandLine("cand_noise_scaling"))
     cfg.noise_scaling = absl::GetFlag(FLAGS_cand_noise_scaling);
+  if (IsOnCommandLine("cand_early_stopping_for_gumbel"))
+    cfg.early_stopping_for_gumbel =
+        absl::GetFlag(FLAGS_cand_early_stopping_for_gumbel);
   if (IsOnCommandLine("cand_use_puct"))
     cfg.use_puct = absl::GetFlag(FLAGS_cand_use_puct);
   if (IsOnCommandLine("cand_use_lcb"))
@@ -234,6 +244,8 @@ eval::PlayerSearchConfig CurConfigFromFlags() {
   cfg.n = absl::GetFlag(FLAGS_cur_n);
   cfg.k = absl::GetFlag(FLAGS_cur_k);
   cfg.noise_scaling = absl::GetFlag(FLAGS_cur_noise_scaling);
+  cfg.early_stopping_for_gumbel =
+      absl::GetFlag(FLAGS_cur_early_stopping_for_gumbel);
   cfg.use_puct = absl::GetFlag(FLAGS_cur_use_puct);
   cfg.use_lcb = absl::GetFlag(FLAGS_cur_use_lcb);
   cfg.c_puct = absl::GetFlag(FLAGS_cur_c_puct);
@@ -261,6 +273,8 @@ eval::PlayerSearchConfig CandConfigFromFlags() {
   cfg.n = absl::GetFlag(FLAGS_cand_n);
   cfg.k = absl::GetFlag(FLAGS_cand_k);
   cfg.noise_scaling = absl::GetFlag(FLAGS_cand_noise_scaling);
+  cfg.early_stopping_for_gumbel =
+      absl::GetFlag(FLAGS_cand_early_stopping_for_gumbel);
   cfg.use_puct = absl::GetFlag(FLAGS_cand_use_puct);
   cfg.use_lcb = absl::GetFlag(FLAGS_cand_use_lcb);
   cfg.c_puct = absl::GetFlag(FLAGS_cand_c_puct);

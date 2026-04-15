@@ -546,10 +546,13 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
         }
       }
     }
-
-    root->n += child_stat.n;
   }
 
+  root->n =
+      std::accumulate(result.child_stats.begin(), result.child_stats.end(), 0,
+                      [](const int accum, const auto& child_stat) {
+                        return accum + child_stat.n;
+                      });
   result.kld = ComputeKLD(result.pi_improved, root->move_probs);
   result.visits = visits_spent;
   return result;

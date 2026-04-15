@@ -27,7 +27,8 @@ class TrainStepResult(NamedTuple):
     predictions: ModelPredictions
     total_loss: tf.Tensor
     policy_loss: tf.Tensor
-    policy_aux_loss: tf.Tensor
+    policy_aux_dist_loss: tf.Tensor
+    policy_aux_scalar_loss: tf.Tensor
     outcome_loss: tf.Tensor
     q6_loss: tf.Tensor
     q16_loss: tf.Tensor
@@ -41,6 +42,7 @@ class TrainStepResult(NamedTuple):
     q_score_err_loss: Optional[tf.Tensor] = None
     pi_soft_loss: Optional[tf.Tensor] = None
     pi_optimistic_loss: Optional[tf.Tensor] = None
+    mcts_dist_loss: Optional[tf.Tensor] = None
     grad_norm: float = 0.0
 
 
@@ -71,7 +73,6 @@ def train_step(
         # Get model outputs (v1: 46 outputs = 23 FVI + 23 BN)
         model_outputs = model(input, input_global_state, training=True)
 
-        # Extract FVI outputs (first 23)
         (
             pi_logits,
             pi,
@@ -96,9 +97,10 @@ def train_step(
             q50_score_err_pred,
             pi_logits_soft,
             pi_logits_optimistic,
+            mcts_dist_logits,
+            mcts_dist_probs,
         ) = model_outputs
 
-        # Create FVI predictions
         predictions = ModelPredictions(
             pi_logits=pi_logits,
             pi_logits_aux=pi_logits_aux,
@@ -120,6 +122,8 @@ def train_step(
             q50_score_err_pred=q50_score_err_pred,
             pi_logits_soft=pi_logits_soft,
             pi_logits_optimistic=pi_logits_optimistic,
+            mcts_dist_logits=mcts_dist_logits,
+            mcts_dist_probs=mcts_dist_probs,
         )
 
         # Compute losses for both heads
@@ -129,7 +133,8 @@ def train_step(
         (
             loss,
             policy_loss,
-            policy_aux_loss,
+            policy_aux_dist_loss,
+            policy_aux_scalar_loss,
             outcome_loss,
             q6_loss,
             q16_loss,
@@ -142,6 +147,7 @@ def train_step(
             q_score_err_loss,
             pi_soft_loss,
             pi_optimistic_loss,
+            mcts_dist_loss,
         ) = loss_outputs
 
         reg_loss = tf.math.add_n(model.losses)
@@ -161,7 +167,8 @@ def train_step(
         predictions=predictions,
         total_loss=total_loss,
         policy_loss=policy_loss,
-        policy_aux_loss=policy_aux_loss,
+        policy_aux_dist_loss=policy_aux_dist_loss,
+        policy_aux_scalar_loss=policy_aux_scalar_loss,
         outcome_loss=outcome_loss,
         q6_loss=q6_loss,
         q16_loss=q16_loss,
@@ -174,6 +181,7 @@ def train_step(
         q_score_err_loss=q_score_err_loss,
         pi_soft_loss=pi_soft_loss,
         pi_optimistic_loss=pi_optimistic_loss,
+        mcts_dist_loss=mcts_dist_loss,
         grad_norm=tf.linalg.global_norm(unscaled_gradients),
     )
 
@@ -190,7 +198,6 @@ def val_step(
     # Get model outputs (v1: 46 outputs = 23 FVI + 23 BN)
     model_outputs = model(input, input_global_state, training=False)
 
-    # Extract FVI outputs (first 23)
     (
         pi_logits,
         pi,
@@ -215,9 +222,10 @@ def val_step(
         q50_score_err_pred,
         pi_logits_soft,
         pi_logits_optimistic,
-    ) = model_outputs[:23]
+        mcts_dist_logits,
+        mcts_dist_probs,
+    ) = model_outputs
 
-    # Create FVI predictions
     predictions = ModelPredictions(
         pi_logits=pi_logits,
         pi_logits_aux=pi_logits_aux,
@@ -239,6 +247,8 @@ def val_step(
         q50_score_err_pred=q50_score_err_pred,
         pi_logits_soft=pi_logits_soft,
         pi_logits_optimistic=pi_logits_optimistic,
+        mcts_dist_logits=mcts_dist_logits,
+        mcts_dist_probs=mcts_dist_probs,
     )
 
     # Compute losses for both heads
@@ -248,7 +258,8 @@ def val_step(
     (
         loss,
         policy_loss,
-        policy_aux_loss,
+        policy_aux_dist_loss,
+        policy_aux_scalar_loss,
         outcome_loss,
         q6_loss,
         q16_loss,
@@ -261,6 +272,7 @@ def val_step(
         q_score_err_loss,
         pi_soft_loss,
         pi_optimistic_loss,
+        mcts_dist_loss,
     ) = loss_outputs
 
     reg_loss = tf.math.add_n(model.losses)
@@ -270,7 +282,8 @@ def val_step(
         predictions=predictions,
         total_loss=total_loss,
         policy_loss=policy_loss,
-        policy_aux_loss=policy_aux_loss,
+        policy_aux_dist_loss=policy_aux_dist_loss,
+        policy_aux_scalar_loss=policy_aux_scalar_loss,
         outcome_loss=outcome_loss,
         q6_loss=q6_loss,
         q16_loss=q16_loss,
@@ -283,6 +296,7 @@ def val_step(
         q_score_err_loss=q_score_err_loss,
         pi_soft_loss=pi_soft_loss,
         pi_optimistic_loss=pi_optimistic_loss,
+        mcts_dist_loss=mcts_dist_loss,
     )
 
 
@@ -302,7 +316,8 @@ class LossTracker:
 
         loss = result.total_loss.numpy()
         policy_loss = result.policy_loss.numpy()
-        policy_aux_loss = result.policy_aux_loss.numpy()
+        policy_aux_dist_loss = result.policy_aux_dist_loss.numpy()
+        policy_aux_scalar_loss = result.policy_aux_scalar_loss.numpy()
         outcome_loss = result.outcome_loss.numpy()
         score_pdf_loss = result.score_pdf_loss.numpy()
         score_cdf_loss = result.score_cdf_loss.numpy()
@@ -327,11 +342,19 @@ class LossTracker:
             if result.pi_optimistic_loss is not None
             else 0.0
         )
+        mcts_dist_loss = (
+            result.mcts_dist_loss.numpy() if result.mcts_dist_loss is not None else 0.0
+        )
 
         def update_mean_losses(r_m: float, r_c: float, losses: dict):
             losses["loss"] = losses["loss"] * r_m + loss * r_c
             losses["policy"] = losses["policy"] * r_m + policy_loss * r_c
-            losses["policy_aux"] = losses["policy_aux"] * r_m + policy_aux_loss * r_c
+            losses["policy_aux_dist"] = (
+                losses["policy_aux_dist"] * r_m + policy_aux_dist_loss * r_c
+            )
+            losses["policy_aux_scalar"] = (
+                losses["policy_aux_scalar"] * r_m + policy_aux_scalar_loss * r_c
+            )
             losses["outcome"] = losses["outcome"] * r_m + outcome_loss * r_c
             losses["score_pdf"] = losses["score_pdf"] * r_m + score_pdf_loss * r_c
             losses["score_cdf"] = losses["score_cdf"] * r_m + score_cdf_loss * r_c
@@ -346,11 +369,15 @@ class LossTracker:
             losses["pi_optimistic"] = (
                 losses["pi_optimistic"] * r_m + pi_optimistic_loss * r_c
             )
+            losses["mcts_dist"] = losses["mcts_dist"] * r_m + mcts_dist_loss * r_c
 
         self.min_losses["loss"] = min(self.min_losses["loss"], loss)
         self.min_losses["policy"] = min(self.min_losses["policy"], policy_loss)
-        self.min_losses["policy_aux"] = min(
-            self.min_losses["policy_aux"], policy_aux_loss
+        self.min_losses["policy_aux_dist"] = min(
+            self.min_losses["policy_aux_dist"], policy_aux_dist_loss
+        )
+        self.min_losses["policy_aux_scalar"] = min(
+            self.min_losses["policy_aux_scalar"], policy_aux_scalar_loss
         )
         self.min_losses["outcome"] = min(self.min_losses["outcome"], outcome_loss)
         self.min_losses["score_pdf"] = min(self.min_losses["score_pdf"], score_pdf_loss)
@@ -368,6 +395,7 @@ class LossTracker:
         self.min_losses["pi_optimistic"] = min(
             self.min_losses["pi_optimistic"], pi_optimistic_loss
         )
+        self.min_losses["mcts_dist"] = min(self.min_losses["mcts_dist"], mcts_dist_loss)
 
         r_m = 0.99 if self.n > 0 else 0.0
         r_c = 0.01 if self.n > 0 else 1.0
@@ -436,6 +464,7 @@ def train(
         w_q_score_err=coeffs.w_q_score_err,
         w_pi_soft=coeffs.w_pi_soft,
         w_pi_optimistic=coeffs.w_pi_optimistic,
+        w_mcts_dist=coeffs.w_mcts_dist,
     )
 
     if not optimizer:
@@ -577,6 +606,59 @@ def train(
     return batch_num, optimizer
 
 
+def _vcategorical_side_by_side(
+    target_counts: np.ndarray,  # (51,) uint32 raw counts
+    pred_probs: np.ndarray,  # (51,) float probabilities
+    granularity: int = 17,
+    bar_width: int = 20,
+) -> str:
+    """Return a side-by-side ASCII histogram: target (left) vs predicted (right)."""
+    NUM_BUCKETS = 51
+    bucket_range = 2.0 / NUM_BUCKETS
+
+    # Aggregate into display buckets
+    target_display = np.zeros(granularity, dtype=np.float64)
+    pred_display = np.zeros(granularity, dtype=np.float64)
+    for i in range(NUM_BUCKETS):
+        center = (i + 0.5) * bucket_range - 1.0
+        j = int((center + 1.0) / 2.0 * granularity)
+        j = max(0, min(granularity - 1, j))
+        target_display[j] += target_counts[i]
+        pred_display[j] += pred_probs[i]
+
+    # Normalize target to probabilities
+    total = target_display.sum()
+    if total > 0:
+        target_display /= total
+
+    # Find union of occupied range
+    lo, hi = granularity, -1
+    for j in range(granularity):
+        if target_display[j] > 0 or pred_display[j] > 0:
+            if j < lo:
+                lo = j
+            if j > hi:
+                hi = j
+    if hi < 0:
+        return "  (empty)\n"
+
+    t_max = target_display[lo : hi + 1].max() or 1.0
+    p_max = pred_display[lo : hi + 1].max() or 1.0
+    bw = bucket_range * granularity / granularity  # display bucket width
+
+    lines = []
+    header = f"  {'Predicted':>{bar_width}}   val    {'Target':<{bar_width}}"
+    lines.append(header)
+    for j in range(lo, hi + 1):
+        center = (j + 0.5) * (2.0 / granularity) - 1.0
+        t_len = int(target_display[j] / t_max * bar_width)
+        p_len = int(pred_display[j] / p_max * bar_width)
+        p_bar = ("█" * p_len).rjust(bar_width)
+        t_bar = ("█" * t_len).ljust(bar_width)
+        lines.append(f"  {p_bar}  {center:+.2f}  {t_bar}")
+    return "\n".join(lines) + "\n"
+
+
 def log_train(
     batch_num: int,
     losses: LossTracker,
@@ -588,7 +670,8 @@ def log_train(
 
     loss_avg = losses.ema_losses["loss"]
     policy_avg = losses.ema_losses["policy"]
-    policy_aux_avg = losses.ema_losses["policy_aux"]
+    policy_aux_dist_avg = losses.ema_losses["policy_aux_dist"]
+    policy_aux_scalar_avg = losses.ema_losses["policy_aux_scalar"]
     outcome_avg = losses.ema_losses["outcome"]
     score_pdf_avg = losses.ema_losses["score_pdf"]
     score_cdf_avg = losses.ema_losses["score_cdf"]
@@ -601,10 +684,12 @@ def log_train(
     q_score_err_avg = losses.ema_losses["q_score_err"]
     pi_soft_avg = losses.ema_losses["pi_soft"]
     pi_optimistic_avg = losses.ema_losses["pi_optimistic"]
+    mcts_dist_avg = losses.ema_losses["mcts_dist"]
 
     loss_min = losses.min_losses["loss"]
     policy_min = losses.min_losses["policy"]
-    policy_aux_min = losses.min_losses["policy_aux"]
+    policy_aux_dist_min = losses.min_losses["policy_aux_dist"]
+    policy_aux_scalar_min = losses.min_losses["policy_aux_scalar"]
     outcome_min = losses.min_losses["outcome"]
     score_pdf_min = losses.min_losses["score_pdf"]
     score_cdf_min = losses.min_losses["score_cdf"]
@@ -617,12 +702,14 @@ def log_train(
     q_score_err_min = losses.min_losses["q_score_err"]
     pi_soft_min = losses.min_losses["pi_soft"]
     pi_optimistic_min = losses.min_losses["pi_optimistic"]
+    mcts_dist_min = losses.min_losses["mcts_dist"]
 
     print(
         f"[batch {batch_num}] {mode_str}: "
         f"loss = {loss_avg:.4f} ({loss_min:.4f}), "
         f"policy = {policy_avg:.4f} ({policy_min:.4f}), "
-        f"policy_aux = {policy_aux_avg:.4f} ({policy_aux_min:.4f}), "
+        f"policy_aux_dist = {policy_aux_dist_avg:.4f} ({policy_aux_dist_min:.4f}), "
+        f"policy_aux_scalar = {policy_aux_scalar_avg:.4f} ({policy_aux_scalar_min:.4f}), "
         f"outcome = {outcome_avg:.4f} ({outcome_min:.4f}), "
         f"score_pdf = {score_pdf_avg:.4f} ({score_pdf_min:.4f}), "
         f"score_cdf = {score_cdf_avg:.4f} ({score_cdf_min:.4f}), "
@@ -635,13 +722,19 @@ def log_train(
         f"q_score_err = {q_score_err_avg:.4f} ({q_score_err_min:.4f}), "
         f"pi_soft = {pi_soft_avg:.4f} ({pi_soft_min:.4f}), "
         f"pi_optimistic = {pi_optimistic_avg:.4f} ({pi_optimistic_min:.4f}), "
+        f"mcts_dist = {mcts_dist_avg:.4f} ({mcts_dist_min:.4f}), "
         f"grad_norm = {grad_norm:.4f}"
     )
 
     with summary_writer.as_default():
         tf.summary.scalar(f"{mode_str}/loss", loss_avg, step=batch_num)
         tf.summary.scalar(f"{mode_str}/policy", policy_avg, step=batch_num)
-        tf.summary.scalar(f"{mode_str}/policy_aux", policy_aux_avg, step=batch_num)
+        tf.summary.scalar(
+            f"{mode_str}/policy_aux_dist", policy_aux_dist_avg, step=batch_num
+        )
+        tf.summary.scalar(
+            f"{mode_str}/policy_aux_scalar", policy_aux_scalar_avg, step=batch_num
+        )
         tf.summary.scalar(f"{mode_str}/outcome", outcome_avg, step=batch_num)
         tf.summary.scalar(f"{mode_str}/score_pdf", score_pdf_avg, step=batch_num)
         tf.summary.scalar(f"{mode_str}/score_cdf", score_cdf_avg, step=batch_num)
@@ -649,6 +742,7 @@ def log_train(
         tf.summary.scalar(f"{mode_str}/q6", q6_avg, step=batch_num)
         tf.summary.scalar(f"{mode_str}/q16", q16_avg, step=batch_num)
         tf.summary.scalar(f"{mode_str}/q50", q50_avg, step=batch_num)
+        tf.summary.scalar(f"{mode_str}/mcts_dist", mcts_dist_avg, step=batch_num)
 
 
 def log_board_position(
@@ -775,10 +869,10 @@ def log_board_position(
     own_lines.append(" ".join(list("ABCDEFGHJKLMNOPQRST")))
     own_target_lines.append(" ".join(list("ABCDEFGHJKLMNOPQRST")))
     print(
-        f"  {'Board':<40}{col_gap}{'Own Target(○=black ●=white)':<40}{col_gap}Own Pred"
+        f"  {'Board':<40}{col_gap}{'Own Target(○=black ●=white)':<37}{col_gap}Own Pred"
     )
     for bl, otl, ol in zip(board_lines, own_target_lines, own_lines):
-        print(f"  {bl:<40}{col_gap}{otl:<40}{col_gap}{ol}")
+        print(f"  {bl:<40}{col_gap}{otl:<37}{col_gap}{ol}")
     print()
 
     print(f"{'='*60}")
@@ -877,6 +971,55 @@ def log_board_position(
             f"  {pred_str:<{col_w}}{tgt_str:<{col_w}}{soft_str:<{col_w}}{soft_tgt_str:<{col_w}}{opt_str}"
         )
 
+    # Policy aux: top-4 predicted vs target (dist if available, else single move)
+    pi_aux_logits = predictions.pi_logits_aux[0].numpy()
+    pi_aux_probs = np.exp(pi_aux_logits - pi_aux_logits.max())
+    pi_aux_probs /= pi_aux_probs.sum()
+    top_aux_pred = np.argsort(pi_aux_probs)[-4:][::-1]
+    has_aux_dist = (
+        bool(targets.has_pi_aux_dist[0].numpy())
+        if targets.has_pi_aux_dist is not None
+        else False
+    )
+
+    if has_aux_dist:
+        aux_dist = targets.policy_aux_dist[0].numpy().astype(np.float32)
+        aux_dist_sum = aux_dist.sum()
+        if aux_dist_sum > 0:
+            aux_dist /= aux_dist_sum
+        top_aux_tgt = np.argsort(aux_dist)[-4:][::-1]
+        tgt_label = "Target (dist)"
+    else:
+        target_aux_move = int(targets.policy_aux[0].numpy())
+        top_aux_tgt = [target_aux_move] + [None] * 3
+        aux_dist = None
+        tgt_label = "Target"
+
+    print(f"\nPolicy Aux (next player):")
+    print(f"  {'Predicted':<20}  {tgt_label}")
+    for i in range(4):
+        pred_str = f"{move_to_coords(top_aux_pred[i]):>6} {pi_aux_probs[top_aux_pred[i]]:>6.1%}"
+        if has_aux_dist and aux_dist is not None:
+            tgt_str = (
+                f"{move_to_coords(top_aux_tgt[i]):>6} {aux_dist[top_aux_tgt[i]]:>6.1%}"
+            )
+        elif top_aux_tgt[i] is not None:
+            tgt_str = f"{move_to_coords(top_aux_tgt[i]):>6}"
+        else:
+            tgt_str = ""
+        print(f"  {pred_str:<20}  {tgt_str}")
+
+    # MCTS value distribution: side-by-side if available
+    if (
+        targets.has_mcts_value_dist is not None
+        and bool(targets.has_mcts_value_dist[0].numpy())
+        and predictions.mcts_dist_probs is not None
+    ):
+        target_counts = targets.mcts_value_dist[0].numpy().astype(np.float64)
+        pred_probs = predictions.mcts_dist_probs[0].numpy().astype(np.float64)
+        print(f"\nMCTS Value Distribution (pred | target):")
+        print(_vcategorical_side_by_side(target_counts, pred_probs), end="")
+
     print(f"{'='*60}\n")
 
 
@@ -925,6 +1068,7 @@ def val(
         w_q_score_err=coeffs.w_q_score_err,
         w_pi_soft=coeffs.w_pi_soft,
         w_pi_optimistic=coeffs.w_pi_optimistic,
+        w_mcts_dist=coeffs.w_mcts_dist,
     )
 
     val_fn = val_step
@@ -1033,13 +1177,15 @@ def log_val(
 ):
     loss_avg = losses.avg_losses["loss"]
     policy_avg = losses.avg_losses["policy"]
-    policy_aux_avg = losses.avg_losses["policy_aux"]
+    policy_aux_dist_avg = losses.avg_losses["policy_aux_dist"]
+    policy_aux_scalar_avg = losses.avg_losses["policy_aux_scalar"]
     outcome_avg = losses.avg_losses["outcome"]
     score_pdf_avg = losses.avg_losses["score_pdf"]
     own_avg = losses.avg_losses["own"]
     q6_avg = losses.avg_losses["q6"]
     q16_avg = losses.avg_losses["q16"]
     q50_avg = losses.avg_losses["q50"]
+    mcts_dist_avg = losses.avg_losses["mcts_dist"]
 
     move_acc = metrics.correct_moves / metrics.num_moves if metrics.num_moves > 0 else 0
     outcome_acc = (
@@ -1052,13 +1198,15 @@ def log_val(
         f"[batch {batch_num}] val: "
         f"loss = {loss_avg:.4f}, "
         f"policy = {policy_avg:.4f}, "
-        f"policy_aux = {policy_aux_avg:.4f}, "
+        f"policy_aux_dist = {policy_aux_dist_avg:.4f}, "
+        f"policy_aux_scalar = {policy_aux_scalar_avg:.4f}, "
         f"outcome = {outcome_avg:.4f}, "
         f"score_pdf = {score_pdf_avg:.4f}, "
         f"own = {own_avg:.4f}, "
         f"q6 = {q6_avg:.4f}, "
         f"q16 = {q16_avg:.4f}, "
         f"q50 = {q50_avg:.4f}, "
+        f"mcts_dist = {mcts_dist_avg:.4f}, "
         f"move_acc = {move_acc:.4f}, "
         f"outcome_acc = {outcome_acc:.4f}"
     )

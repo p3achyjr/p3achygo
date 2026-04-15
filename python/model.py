@@ -49,6 +49,8 @@ class ModelPredictions(NamedTuple):
     q50_score_err_pred: Optional[tf.Tensor] = None
     pi_logits_soft: Optional[tf.Tensor] = None
     pi_logits_optimistic: Optional[tf.Tensor] = None
+    mcts_dist_logits: Optional[tf.Tensor] = None
+    mcts_dist_probs: Optional[tf.Tensor] = None
 
 
 class GroundTruth(NamedTuple):
@@ -93,6 +95,7 @@ class LossWeights(NamedTuple):
     w_q_score_err: float = 0.0
     w_pi_soft: float = 0.0
     w_pi_optimistic: float = 0.0
+    w_mcts_dist: float = 0.0
 
 
 def make_conv(
@@ -857,8 +860,9 @@ class ValueHead(keras.layers.Layer):
         )
 
         # Game Outcome/Q Subhead
-        self.outcome_q_biases = make_dense(c_val, name="value_outcome_q_biases")
+        self.outcome_q_embed = make_dense(c_val, name="value_outcome_q_biases")
         self.outcome_q_output = make_dense(14, name="value_outcome_q_output")
+        self.outcome_mcts_dist = make_dense(51, name="value_outcome_mcts_dist")
 
         # Ownership Subhead
         self.conv_ownership = make_conv(1, kernel_size=1, name="value_conv_ownership")
@@ -886,15 +890,18 @@ class ValueHead(keras.layers.Layer):
         v_pooled = self.gpool(v)
 
         # Compute Game Outcome Values (Outcome Logits + Q-values).
-        game_outcome = self.outcome_q_biases(v_pooled)
-        game_outcome = self.act(game_outcome)
-        game_outcome = self.outcome_q_output(game_outcome)
+        game_outcome_embed = self.outcome_q_embed(v_pooled)
+        game_outcome_embed = self.act(game_outcome_embed)
+        game_outcome = self.outcome_q_output(game_outcome_embed)
 
         outcome_logits = game_outcome[:, 0:2]
 
         q6 = keras.activations.tanh(game_outcome[:, 2])
         q16 = keras.activations.tanh(game_outcome[:, 3])
         q50 = keras.activations.tanh(game_outcome[:, 4])
+
+        mcts_dist_logits = self.outcome_mcts_dist(game_outcome_embed)
+        mcts_dist_probs = keras.activations.softmax(mcts_dist_logits)
 
         # Compute Game Ownership
         game_ownership = self.conv_ownership(v)
@@ -967,6 +974,8 @@ class ValueHead(keras.layers.Layer):
             q6_score_err,
             q16_score_err,
             q50_score_err,
+            mcts_dist_logits,
+            mcts_dist_probs,
         )
 
     def get_config(self):
@@ -1184,6 +1193,9 @@ class P3achyGoModel(keras.Model):
 
         ## Initialize Loss Objects. Defer reduction strategy to loss objects ##
         self.scce_logits = keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+        self.scce_logits_per_example = keras.losses.SparseCategoricalCrossentropy(
+            from_logits=True, reduction="none"
+        )
         self.scce = keras.losses.SparseCategoricalCrossentropy(from_logits=False)
         self.cce_logits = keras.losses.CategoricalCrossentropy(from_logits=True)
         self.mse = keras.losses.MeanSquaredError()
@@ -1247,14 +1259,14 @@ class P3achyGoModel(keras.Model):
             q6_score_err,
             q16_score_err,
             q50_score_err,
+            mcts_dist_logits,
+            mcts_dist_probs,
         ) = self.value_head(x, scores=scores)
         pi = keras.activations.softmax(pi_logits)
         outcome_probs = keras.activations.softmax(outcome_logits)
         score_probs = keras.activations.softmax(score_logits)
 
-        # v1 + one-batch-norm: 23 FVI outputs + 23 BN outputs = 46 total
         return (
-            # FVI outputs (23)
             keras.ops.cast(pi_logits, "float32"),
             keras.ops.cast(pi, "float32"),
             keras.ops.cast(outcome_logits, "float32"),
@@ -1278,6 +1290,8 @@ class P3achyGoModel(keras.Model):
             keras.ops.cast(q50_score_err, "float32"),
             keras.ops.cast(pi_logits_soft, "float32"),
             keras.ops.cast(pi_logits_optimistic, "float32"),
+            keras.ops.cast(mcts_dist_logits, "float32"),
+            keras.ops.cast(mcts_dist_probs, "float32"),
         )
 
     def compute_losses(
@@ -1292,10 +1306,25 @@ class P3achyGoModel(keras.Model):
             tf.cast(targets.policy, tf.float32), pi_probs
         )
         policy_loss = tf.reduce_mean(policy_loss)
-        policy_aux_loss = self.scce_logits(
-            targets.policy_aux, predictions.pi_logits_aux
-        )
-        policy_aux_loss = tf.clip_by_value(policy_aux_loss, 0.0, 50.0)
+
+        # Policy aux loss: per-example masked.
+        # If has_pi_aux_dist: KLD(policy_aux_dist, pi_logits_aux) at full weight.
+        # Else: SCCE(policy_aux, pi_logits_aux) at 0.4 * weight.
+        # Exactly one term is nonzero per example.
+        has_dist_mask = tf.cast(targets.has_pi_aux_dist, tf.float32)  # (batch,)
+        pi_aux_logits = tf.cast(predictions.pi_logits_aux, tf.float32)
+
+        # KLD term: KLD(target_dist, predicted_probs) per example
+        pi_aux_probs = keras.activations.softmax(pi_aux_logits)
+        policy_aux_dist_target = tf.cast(targets.policy_aux_dist, tf.float32)
+        # policy_aux_dist is raw float32 probs (already normalized from recorder)
+        per_ex_kld = keras.metrics.kl_divergence(policy_aux_dist_target, pi_aux_probs)
+        policy_aux_dist_loss = tf.reduce_mean(has_dist_mask * per_ex_kld)
+
+        # Scalar term: SCCE(policy_aux, pi_logits_aux) per example
+        per_ex_scce = self.scce_logits_per_example(targets.policy_aux, pi_aux_logits)
+        per_ex_scce = tf.clip_by_value(per_ex_scce, 0.0, 50.0)
+        policy_aux_scalar_loss = tf.reduce_mean((1.0 - has_dist_mask) * per_ex_scce)
 
         # Outcome Loss
         outcome_loss = self.cce_logits(targets.game_outcome, predictions.game_outcome)
@@ -1348,11 +1377,28 @@ class P3achyGoModel(keras.Model):
             + wscore_cdf_loss  # Outside w_val to prevent score variance
         )
 
+        # MCTS value distribution loss: KLD(normalized_mcts_dist, mcts_dist_logits)
+        # Zero out examples where mcts_value_dist was absent.
+        mv_mask = tf.cast(targets.has_mcts_value_dist, tf.float32)  # (batch,)
+        mcts_dist_target_int = tf.cast(targets.mcts_value_dist, tf.float32)
+        mcts_dist_total = tf.reduce_sum(mcts_dist_target_int, axis=1, keepdims=True)
+        # Avoid division by zero for masked-out examples (sentinel zeros → total=0)
+        mcts_dist_total = tf.maximum(mcts_dist_total, 1.0)
+        mcts_dist_normalized = mcts_dist_target_int / mcts_dist_total  # (batch, 51)
+        mcts_dist_logits = tf.cast(predictions.mcts_dist_logits, tf.float32)
+        mcts_dist_probs = keras.activations.softmax(mcts_dist_logits)
+        per_ex_mcts_kld = keras.metrics.kl_divergence(
+            mcts_dist_normalized, mcts_dist_probs
+        )
+        mcts_dist_loss = tf.reduce_mean(mv_mask * per_ex_mcts_kld)
+
         loss = (
             weights.w_pi * tf.cast(policy_loss, tf.float32)
-            + weights.w_pi_aux * tf.cast(policy_aux_loss, tf.float32)
+            + weights.w_pi_aux * tf.cast(policy_aux_dist_loss, tf.float32)
+            + weights.w_pi_aux * 0.6 * tf.cast(policy_aux_scalar_loss, tf.float32)
             + tf.cast(val_loss, tf.float32)
             + tf.cast(gamma_loss, tf.float32)
+            + weights.w_mcts_dist * tf.cast(mcts_dist_loss, tf.float32)
         )
 
         # v1 losses (only computed if v1 outputs are provided)
@@ -1382,7 +1428,8 @@ class P3achyGoModel(keras.Model):
         return (
             loss,
             policy_loss,
-            policy_aux_loss,
+            policy_aux_dist_loss,
+            policy_aux_scalar_loss,
             outcome_loss,
             q6_loss,
             q16_loss,
@@ -1396,6 +1443,7 @@ class P3achyGoModel(keras.Model):
             q_score_err_loss,
             pi_soft_loss,
             pi_optimistic_loss,
+            mcts_dist_loss,
         )
 
     def v1_loss_terms(

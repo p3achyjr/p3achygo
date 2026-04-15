@@ -55,7 +55,8 @@ def _reduce_result(
         predictions=predictions,
         total_loss=r(result.total_loss),
         policy_loss=r(result.policy_loss),
-        policy_aux_loss=r(result.policy_aux_loss),
+        policy_aux_dist_loss=r(result.policy_aux_dist_loss),
+        policy_aux_scalar_loss=r(result.policy_aux_scalar_loss),
         outcome_loss=r(result.outcome_loss),
         q6_loss=r(result.q6_loss),
         q16_loss=r(result.q16_loss),
@@ -68,6 +69,7 @@ def _reduce_result(
         q_score_err_loss=r(result.q_score_err_loss),
         pi_soft_loss=r(result.pi_soft_loss),
         pi_optimistic_loss=r(result.pi_optimistic_loss),
+        mcts_dist_loss=r(result.mcts_dist_loss),
         grad_norm=r(result.grad_norm),
     )
 
