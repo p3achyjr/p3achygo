@@ -125,9 +125,8 @@ int SampleFromPolicy(
   }
   // Build log message for all failure modes.
   std::ostringstream dbg;
-  dbg << "SampleFromPolicy: failed to sample"
-      << " (p=" << p << " mass=" << mass << " total=" << total << " tau=" << tau
-      << ")\n"
+  dbg << "SampleFromPolicy: failed to sample" << " (p=" << p << " mass=" << mass
+      << " total=" << total << " tau=" << tau << ")\n"
       << game::ToString(board.position()) << "\n";
   for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
     if (policy[a] == 0.0f) continue;
@@ -622,8 +621,10 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
       case PuctRootSelectionPolicy::kLcb:
         return best_lcb_move(root);
       case PuctRootSelectionPolicy::kVisitCountSample:
-        return game::AsLoc(SampleFromPolicy(pi_improved, puct_params.tau,
-                                            probability, game.board()));
+        return puct_params.tau > 0.0f
+                   ? game::AsLoc(Argmax(visit_counts))
+                   : game::AsLoc(SampleFromPolicy(pi_improved, puct_params.tau,
+                                                  probability, game.board()));
     }
 
     return game::AsLoc(Argmax(visit_counts));

@@ -20,6 +20,16 @@ target_link_libraries(self_play PUBLIC
     absl::strings
 )
 
+# Tests
+if(BUILD_TESTS)
+    add_executable(move_sel_manager_test __tests__/move_sel_manager_test.cc)
+    target_link_libraries(move_sel_manager_test PRIVATE
+        self_play
+        core_doctest
+    )
+    add_test(NAME move_sel_manager_test COMMAND move_sel_manager_test)
+endif()
+
 # Self-play binary
 option(BUILD_BINARIES "Build binary executables" ON)
 if(BUILD_BINARIES)

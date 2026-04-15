@@ -89,7 +89,7 @@ def parse(run_id: str) -> RunConfig:
         wd_lr_max = obj.get("wd_lr_max", None)
         if wd_auto_scale:
             if wd_lr_exponent is None:
-                wd_lr_exponent = 0.42
+                wd_lr_exponent = 0.70
             if wd_lr_max is None:
                 wd_lr_max = max_lr
 

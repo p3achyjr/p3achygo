@@ -106,6 +106,16 @@ class ConvMuon(keras.optimizers.Muon):
             flat_dim *= d
         return float(max(flat_dim, out_dim)) ** 0.5 * self.rms_rate
 
+    def _lr_scale(self):
+        if self.wd_lr_exponent is not None and self.wd_lr_max is not None:
+            lr = ops.cast(self.learning_rate, "float32")
+            lr_ratio = lr / ops.cast(self.wd_lr_max, "float32")
+            # Clamp to (0, 1] — WD should not exceed the base value.
+            lr_ratio = ops.minimum(lr_ratio, 1.0)
+            return ops.power(lr_ratio, self.wd_lr_exponent)
+        else:
+            return 1.0
+
     def _apply_weight_decay(self, variables):
         for variable in variables:
             if not self._use_weight_decay(variable):
@@ -121,14 +131,7 @@ class ConvMuon(keras.optimizers.Muon):
                     if self.scale_weight_decay_by_rms
                     else 1.0
                 )
-                if self.wd_lr_exponent is not None and self.wd_lr_max is not None:
-                    lr = ops.cast(self.learning_rate, "float32")
-                    lr_ratio = lr / ops.cast(self.wd_lr_max, "float32")
-                    # Clamp to (0, 1] — WD should not exceed the base value.
-                    lr_ratio = ops.minimum(lr_ratio, 1.0)
-                    lr_scale_factor = ops.power(lr_ratio, self.wd_lr_exponent)
-                else:
-                    lr_scale_factor = 1.0
+                lr_scale_factor = self._lr_scale()
             if wd_value is None:
                 continue
             wd = ops.cast(wd_value, variable.dtype)

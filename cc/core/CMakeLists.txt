@@ -83,21 +83,21 @@ target_link_libraries(core INTERFACE core_impl)
 
 # Tests
 if(BUILD_TESTS)
-    add_executable(core_rand_test rand_test.cc)
+    add_executable(core_rand_test __tests__/rand_test.cc)
     target_link_libraries(core_rand_test PRIVATE
         core_rand
         core_doctest
     )
     add_test(NAME core_rand_test COMMAND core_rand_test)
 
-    add_executable(core_vmath_test vmath_test.cc)
+    add_executable(core_vmath_test __tests__/vmath_test.cc)
     target_link_libraries(core_vmath_test PRIVATE
         core_vmath
         core_doctest
     )
     add_test(NAME core_vmath_test COMMAND core_vmath_test)
 
-    add_executable(core_probability_test probability_test.cc)
+    add_executable(core_probability_test __tests__/probability_test.cc)
     target_link_libraries(core_probability_test PRIVATE
         core_probability
         core_doctest

@@ -131,6 +131,7 @@ def train_one_gen(
             f"\n  WD Auto Scale={config.wd_auto_scale}"
             f"\n  WD LR Exponent={inner_optimizer.wd_lr_exponent}"
             f"\n  WD LR Max={inner_optimizer.wd_lr_max}"
+            f"\n  LR Scale={inner_optimizer._lr_scale()}"
         )
     else:
         logging.info(

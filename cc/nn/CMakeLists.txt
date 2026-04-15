@@ -57,7 +57,7 @@ target_link_libraries(nn INTERFACE nn_interface)
 
 # Tests
 if(BUILD_TESTS)
-    add_executable(nn_interface_sync_test nn_interface_sync_test.cc)
+    add_executable(nn_interface_sync_test __tests__/nn_interface_sync_test.cc)
     target_link_libraries(nn_interface_sync_test PRIVATE
         nn_interface
         game
@@ -69,7 +69,7 @@ if(BUILD_TESTS)
 endif()
 
 if(BUILD_TESTS AND USE_TENSORFLOW)
-    add_executable(nn_board_utils_test nn_board_utils_test.cc)
+    add_executable(nn_board_utils_test __tests__/nn_board_utils_test.cc)
     target_link_libraries(nn_board_utils_test PRIVATE
         create_tensor_shape
         nn_board_utils

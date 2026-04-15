@@ -85,7 +85,7 @@ target_link_libraries(game INTERFACE
 
 # Tests
 if(BUILD_TESTS)
-    add_executable(game_board_test board_test.cc)
+    add_executable(game_board_test __tests__/board_test.cc)
     target_link_libraries(game_board_test PRIVATE
         board
         board_dsl
@@ -95,7 +95,7 @@ if(BUILD_TESTS)
     target_link_libraries(game_board_test PRIVATE m)
     add_test(NAME game_board_test COMMAND game_board_test)
 
-    add_executable(game_symmetry_test symmetry_test.cc)
+    add_executable(game_symmetry_test __tests__/symmetry_test.cc)
     target_link_libraries(game_symmetry_test PRIVATE
         symmetry
         core_doctest

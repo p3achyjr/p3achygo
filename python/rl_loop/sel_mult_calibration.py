@@ -79,10 +79,7 @@ def compute_calibration(stats_dir: Path, gen: int) -> Optional[dict[str, float]]
     """
     stats_files = sorted(stats_dir.glob(f"gen{gen:03d}_*.stats"))
     if not stats_files:
-        logging.info(
-            f"No .stats files found for gen {gen} in {stats_dir}. "
-            "Using C++ default sel_mult thresholds."
-        )
+        logging.info(f"No .stats files found for gen {gen} in {stats_dir}. ")
         return None
 
     # Accumulate percentile table: field -> label -> [values across files]
