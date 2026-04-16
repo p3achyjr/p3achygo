@@ -1,5 +1,5 @@
 {
-  "num_generations": 250,
+  "num_generations": 390,
   "model_config": "b8c128nbt",
   "games_first_gen": 5000,
   "games_per_gen": 5000,
@@ -24,10 +24,6 @@
     [
       165,
       1e-4
-    ],
-    [
-      250,
-      7e-5
     ]
   ],
   "lr_growth_window": 10,
@@ -54,7 +50,7 @@
   "sel_mult_scale_factor": 0.0,
   "bias_cache_lambda": 0.3,
   "bias_cache_alpha": 0.8,
-  "nonroot_var_scale_prior_visits": 10,
+  "nonroot_var_scale_prior_visits": -1,
   "muon_wd": 0.02,
   "adam_wd": 0.01
 }

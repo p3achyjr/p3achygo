@@ -18,8 +18,13 @@ namespace fs = std::filesystem;
 using namespace ::core;
 
 TfRecordWatcher::TfRecordWatcher(std::string dir, int train_window_size,
-                                 bool is_local)
-    : dir_(dir), num_new_games_(0), is_local_(is_local) {
+                                 bool is_local, std::optional<int> max_gen)
+    : dir_(dir), num_new_games_(0), is_local_(is_local), max_gen_(max_gen) {
+  if (max_gen_.has_value()) {
+    LOG(INFO) << "Skipping all files above gen " << max_gen_.value();
+  } else {
+    LOG(INFO) << "No max_gen_ specified. Considering all files.";
+  }
   PopulateInitialTrainingWindow(train_window_size);
 }
 
@@ -37,10 +42,14 @@ std::vector<std::string> TfRecordWatcher::UpdateAndGetNew() {
     }
 
     if (!files_.contains(f)) {
-      new_files.emplace_back(f);
       std::optional<ChunkInfo> chunk_info =
           ParseChunkFilename(fs::path(f).filename());
       CHECK(chunk_info);
+      if (max_gen_.has_value() && chunk_info->gen > max_gen_.value()) {
+        LOG(INFO) << "Skipping file due to max_gen check: " << f;
+        continue;
+      }
+      new_files.emplace_back(f);
       num_new_games_ += chunk_info->num_games;
     }
   }
@@ -111,10 +120,15 @@ void TfRecordWatcher::PopulateInitialTrainingWindow(int train_window_size) {
   };
   absl::flat_hash_set<std::string> files = GlobFiles();
   std::vector<ChunkData> file_data;
+  int num_skipped_max_gen = 0;
   for (const auto& file : files) {
     std::optional<ChunkInfo> chunk_info =
         ParseChunkFilename(fs::path(file).filename());
     CHECK(chunk_info);
+    if (max_gen_.has_value() && chunk_info->gen > max_gen_.value()) {
+      ++num_skipped_max_gen;
+      continue;
+    }
     file_data.emplace_back(ChunkData{file, chunk_info.value()});
   }
 
@@ -154,7 +168,7 @@ void TfRecordWatcher::PopulateInitialTrainingWindow(int train_window_size) {
             << max_generation << "]\n  Total Num Examples: " << window_size
             << "\n  Number of Examples in Training Window: "
             << num_examples_in_window
-            << "\n  Number of Games in Training Window: "
-            << num_games_in_window;
+            << "\n  Number of Games in Training Window: " << num_games_in_window
+            << "\n  Number of Files > max_gen: " << num_skipped_max_gen;
 }
 }  // namespace shuffler

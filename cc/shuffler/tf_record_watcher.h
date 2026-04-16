@@ -24,7 +24,8 @@ namespace shuffler {
  */
 class TfRecordWatcher final {
  public:
-  TfRecordWatcher(std::string dir, int train_window_size, bool is_local);
+  TfRecordWatcher(std::string dir, int train_window_size, bool is_local,
+                  std::optional<int> max_gen);
   ~TfRecordWatcher() = default;
 
   // Disable Copy
@@ -45,6 +46,7 @@ class TfRecordWatcher final {
   absl::flat_hash_set<std::string> excluded_files_;
   int num_new_games_;
   const bool is_local_;
+  const std::optional<int> max_gen_;
 };
 }  // namespace shuffler
 
