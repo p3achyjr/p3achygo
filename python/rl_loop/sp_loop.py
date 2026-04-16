@@ -209,14 +209,14 @@ def loop(
                 break
 
             # If new golden model, download and restart process.
-            next_model_gen = fs.get_most_recent_model(run_id)
-            if next_model_gen > model_gen:
-                logging.info("Found new model. Fetching and reloading self-play.")
-                model_gen = next_model_gen
-                model_path = fs.download_model(run_id, str(local_run_dir), model_gen)
-                model_p = Path(model_path)
-                model_path = str(model_p.parent / "_onnx" / (model_p.stem + ".trt"))
-                break
+            # next_model_gen = fs.get_most_recent_model(run_id)
+            # if next_model_gen > model_gen:
+            #     logging.info("Found new model. Fetching and reloading self-play.")
+            #     model_gen = next_model_gen
+            #     model_path = fs.download_model(run_id, str(local_run_dir), model_gen)
+            #     model_p = Path(model_path)
+            #     model_path = str(model_p.parent / "_onnx" / (model_p.stem + ".trt"))
+            #     break
 
             if queue and not queue.empty():
                 logging.info("Received shutdown signal. Shutting down...")

@@ -25,7 +25,7 @@ using namespace ::mcts;
 using namespace ::nn;
 
 // Threshold under which to immediately resign.
-static constexpr float kResignThreshold = -.96f;
+static constexpr float kResignThreshold = -.92f;
 
 std::string ToString(const Color& color) {
   switch (color) {
