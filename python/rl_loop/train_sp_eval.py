@@ -84,6 +84,7 @@ def eval(
     local_run_dir: str,
     k: int,
     n: int,
+    gpu_ids: list[int] = None,
 ) -> EvalResult:
     """`cur_model_path` and `cand_model_path` are the _base_ paths of the models."""
     cur_p = Path(cur_model_path)
@@ -91,7 +92,9 @@ def eval(
     cur_model_path_trt = str(cur_p.parent / "_onnx" / (cur_p.stem + ".trt"))
     cand_model_path_trt = str(cand_p.parent / "_onnx" / (cand_p.stem + ".trt"))
 
-    num_workers = len(GPU_IDS)
+    if gpu_ids is None:
+        gpu_ids = GPU_IDS
+    num_workers = len(gpu_ids)
     games_per_worker = min(
         math.ceil(TARGET_EVAL_GAMES / num_workers), MAX_EVAL_GAMES_PER_WORKER
     )
@@ -100,7 +103,7 @@ def eval(
     def run_worker(i: int):
         worker_env = os.environ.copy()
         worker_env["LD_PRELOAD"] = "/usr/local/lib/libmimalloc.so"
-        worker_env["CUDA_VISIBLE_DEVICES"] = str(GPU_IDS[i])
+        worker_env["CUDA_VISIBLE_DEVICES"] = str(gpu_ids[i])
         cmd = (
             f"{eval_bin_path} --cur_model_path={cur_model_path_trt}"
             + f" --cand_model_path={cand_model_path_trt}"
@@ -113,7 +116,7 @@ def eval(
             + f" --cand_n={n} --cand_use_puct=1 --cand_use_lcb=1 --cand_use_bias_cache=true"
             + f" --cand_var_scale_cpuct=true --cand_var_scale_prior_visits=10 --cand_p_opt_weight=0.5"
         )
-        logging.info(f"Running Eval Worker {i} (GPU {GPU_IDS[i]}):\n'{cmd}'")
+        logging.info(f"Running Eval Worker {i} (GPU {gpu_ids[i]}):\n'{cmd}'")
         exit_code = proc.run_proc(cmd, env=worker_env)
         logging.info(f"Eval Worker {i} Exited with Status {exit_code}")
 
@@ -196,6 +199,7 @@ def loop(
         next_model_gen: int,
         eval_res_path: str,
         config: config_module.RunConfig,
+        gpu_ids: list[int] = None,
     ):
         # Play against current _best_ model.
         current_golden_gen = fs.get_most_recent_model(run_id)
@@ -220,6 +224,7 @@ def loop(
             local_run_dir,
             config.eval_k,
             get_eval_n(config, next_model_gen),
+            gpu_ids=gpu_ids,
         )
         if eval_result.winner == EvalResult.CAND:
             # The cand model is stronger. Upload it as new golden.
@@ -420,10 +425,18 @@ def loop(
             train_gpu_id=train_gpu_id,
         )
 
-        # Training done. Stop remaining SP workers before running eval on all GPUs.
-        logging.info("Training complete. Stopping remaining SP workers for eval.")
+        # Training done. Use 2 GPUs for eval.
+        logging.info("Training complete. Starting eval.")
+        stop_sp_worker(sp_queues, sp_threads, 0)
+        stop_sp_worker(sp_queues, sp_threads, 1)
+        eval_new_model(
+            run_id,
+            next_model_gen,
+            eval_res_path,
+            config,
+            gpu_ids=[GPU_IDS[0], GPU_IDS[1]] if len(GPU_IDS) > 1 else [GPU_IDS[0]],
+        )
         stop_sp(sp_queues, sp_threads)
-        eval_new_model(run_id, next_model_gen, eval_res_path, config)
         fs.remove_local_chunk(local_golden_chunk_dir, next_model_gen)
         model_gen = next_model_gen
         logging.info("Eval finished. Restarting self-play -> train -> eval loop.")
