@@ -32,13 +32,8 @@ class GameRecorderImpl final : public GameRecorder {
   GameRecorderImpl& operator=(GameRecorderImpl&&) = delete;
 
   void RecordGame(int thread_id, const game::Board& init_board,
-                  const game::Game& game, const ImprovedPolicies& mcts_pis,
-                  const std::vector<uint8_t>& move_trainables,
-                  const std::vector<float>& root_qs,
-                  const std::vector<float>& root_scores,
-                  const std::vector<float>& klds,
-                  const std::vector<mcts::TreeNode*>& roots,
-                  const std::vector<MoveSearchStats>& move_stats) override;
+                  const game::Game& game,
+                  const std::vector<MoveSearchRecord>& move_infos) override;
 
   void RecordEvalGame(int thread_id, const game::Game& game,
                       const std::string& b_name,
@@ -99,23 +94,21 @@ GameRecorderImpl::~GameRecorderImpl() {
 
 void GameRecorderImpl::RecordGame(
     int thread_id, const game::Board& init_board, const game::Game& game,
-    const ImprovedPolicies& mcts_pis,
-    const std::vector<uint8_t>& is_move_trainable,
-    const std::vector<float>& root_qs, const std::vector<float>& root_scores,
-    const std::vector<float>& klds, const std::vector<mcts::TreeNode*>& roots,
-    const std::vector<MoveSearchStats>& move_stats) {
+    const std::vector<MoveSearchRecord>& move_infos) {
   if (path_.empty()) {
     return;
   }
 
   thread_mus_[thread_id].Lock();
   if (init_board.IsEmpty()) {
+    std::vector<mcts::TreeNode*> roots(move_infos.size());
+    std::transform(
+        move_infos.begin(), move_infos.end(), roots.begin(),
+        [](const MoveSearchRecord& move_info) { return move_info.root; });
     sgf_recorder_->RecordGame(thread_id, game, kP3achyGoName, kP3achyGoName,
                               roots);
   }
-  tf_recorder_->RecordGame(thread_id, init_board, game, mcts_pis,
-                           is_move_trainable, root_qs, root_scores, klds,
-                           move_stats);
+  tf_recorder_->RecordGame(thread_id, init_board, game, move_infos);
   thread_mus_[thread_id].Unlock();
 
   absl::MutexLock lock(&mu_);

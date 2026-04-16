@@ -65,6 +65,8 @@ ABSL_FLAG(std::string, sel_mult_calibration_file, "",
           "Path to key=value file with per-generation sel_mult thresholds. "
           "Written by the Python RL loop from .stats files. If empty, "
           "hardcoded defaults in SelMultCalibration are used.");
+ABSL_FLAG(bool, early_stopping_enabled, false,
+          "Whether to enable stopping search early.");
 
 selfplay::SelMultCalibration ParseCalibrationFile(const std::string& path) {
   selfplay::SelMultCalibration calib;
@@ -255,7 +257,7 @@ int main(int argc, char** argv) {
             absl::GetFlag(FLAGS_bias_cache_lambda),
             absl::GetFlag(FLAGS_bias_cache_alpha),
             absl::GetFlag(FLAGS_nonroot_var_scale_prior_visits), fork_params,
-            calibration});
+            calibration, absl::GetFlag(FLAGS_early_stopping_enabled)});
     threads.emplace_back(std::move(thread));
   }
 

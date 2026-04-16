@@ -56,6 +56,8 @@ struct SPConfig {
   const ForkManager::Params fork_params = ForkManager::Params{};
   // Per-generation sel_mult threshold calibration.
   const SelMultCalibration calibration = {};
+  // Whether early stopping is enabled for search.
+  const bool early_stopping_enabled;
 };
 
 void Run(size_t seed, int thread_id, nn::NNInterface* nn_interface,

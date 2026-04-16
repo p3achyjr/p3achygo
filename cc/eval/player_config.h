@@ -24,6 +24,7 @@ struct PlayerSearchConfig {
   int n = 128;
   int k = 8;
   float noise_scaling = 1.0f;
+  bool early_stopping_for_gumbel = false;
 
   // PUCT (shared between Gumbel's SearchRootPuct and parallel Search)
   bool use_puct = true;
@@ -156,6 +157,8 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.k = std::stoi(val);
     else if (key == "noise_scaling")
       cfg.noise_scaling = std::stof(val);
+    else if (key == "early_stopping_for_gumbel")
+      cfg.early_stopping_for_gumbel = internal::ParseBool(val);
     // PUCT (shared)
     else if (key == "use_puct")
       cfg.use_puct = internal::ParseBool(val);
@@ -261,6 +264,7 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
   ROW(n, i_);
   ROW(k, i_);
   ROW(noise_scaling, f);
+  ROW(early_stopping_for_gumbel, b);
   ROW(use_puct, b);
   ROW(c_puct, f);
   ROW(c_puct_visit_scaling, f);

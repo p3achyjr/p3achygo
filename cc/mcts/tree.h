@@ -45,9 +45,7 @@ struct TreeNode final {
   float v_var = 0;
   double v_m3 = 0;  // non-standardized skewness (3rd moment)
 
-#ifdef V_CATEGORICAL
-  std::array<int16_t, kNumVBuckets> v_categorical{};
-#endif
+  std::array<uint32_t, kNumVBuckets> v_categorical{};
 
   float w_outcome = 0;
   float v_outcome = 0;
@@ -68,7 +66,8 @@ struct TreeNode final {
   std::array<float, constants::kMaxMovesPerPosition> opt_probs{};
   float init_outcome_est = 0;
   float init_score_est = 0;
-  float init_score_var = 0;  // Var[score] under the NN's predicted distribution.
+  float init_score_var =
+      0;                    // Var[score] under the NN's predicted distribution.
   float init_util_est = 0;  // mix value estimate and score estimate.
   float init_err_est = 0;   // initial NN estimate of err.
 
@@ -241,9 +240,7 @@ inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f) {
   node->v_err = v_err;
 }
 
-#ifdef V_CATEGORICAL
-std::string VCategoricalHistogram(TreeNode* node);
-#endif
+std::string VCategoricalHistogram(TreeNode* node, int granularity = 17);
 
 }  // namespace mcts
 

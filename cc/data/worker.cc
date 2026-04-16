@@ -151,12 +151,14 @@ void Worker(int worker_id, Coordinator* coordinator, const std::string out_dir,
                            : Move{OppositeColor(move.color), kPassLoc};
       std::array<float, constants::kMaxMovesPerPosition> pi{};
       pi[move.loc] = 1.0;
+      std::array<float, constants::kMaxMovesPerPosition> pi_aux{};
+      pi_aux[next_move.loc] = 1.0;
       tensorflow::Example example = recorder::MakeTfExample(
           board.position(), last_moves, board.GetStonesInAtari(),
           board.GetStonesWithLiberties(2), board.GetStonesWithLiberties(3),
-          board.GetLadderedStones(), pi, next_move.loc, game_info.result,
-          0 /* q30 */, 0 /* q100 */, 0 /* q200 */, 0, 0, 0, move.color,
-          game_info.komi, BOARD_LEN);
+          board.GetLadderedStones(), pi, next_move.loc, pi_aux,
+          game_info.result, /*mcts_value_dist=*/{}, 0 /* q30 */, 0 /* q100 */,
+          0 /* q200 */, 0, 0, 0, move.color, game_info.komi, BOARD_LEN);
       examples.emplace_back(example);
       if (examples.size() == kShardLen) {
         FlushShard(coordinator->GetShardNum(), examples, out_dir, probability,

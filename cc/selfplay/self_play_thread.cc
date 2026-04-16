@@ -343,34 +343,14 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     TreeNode* root_node = node_table->GetOrCreate(
         game.board().hash(), color_to_move, /*is_terminal=*/false);
 
-    // Completed Q-values for each timestep.
-    std::vector<std::array<float, constants::kMaxMovesPerPosition>> mcts_pis;
-
-    // Root Q values for each timestep (outcome only).
-    std::vector<float> root_q_outcomes;
-
-    // Root Score values for each timestep.
-    std::vector<float> root_scores;
-
-    // Whether the i'th move is trainable.
-    std::vector<uint8_t> move_trainables;
-
-    // The KLD of the i'th move from the prior.
-    std::vector<float> klds;
-
-    // Per-move search diagnostics (for offline threshold analysis).
-    // visit_count and is_trainable are stored here rather than in separate
-    // vectors so all per-move data travels together.
-    std::vector<MoveSearchStats> move_stats;
+    // Aggregate Info for each move.
+    std::vector<MoveSearchRecord> move_infos;
 
     // Number of consecutive moves at which we are beneath kDownBadThreshold.
     int num_consecutive_down_bad_moves = 0;
 
     // Whether to log full MCTS search trees.
     bool const log_mcts_trees = probability.Uniform() < kLogFullTreeProb;
-
-    // Tree roots throughout game (if logging full trees).
-    std::vector<TreeNode*> search_roots;
 
     // Starting positions throughout game.
     PositionsForRegret positions_for_regret;
@@ -564,7 +544,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       bool const is_move_over_search =
           (probability.Uniform() < over_search_prob &&
            is_move_selected_for_training && false);
-      bool const early_stopping_enabled = !is_move_over_search;
+      bool const early_stopping_enabled =
+          !is_move_over_search && config.early_stopping_enabled;
       auto const [gumbel_n, gumbel_k, noise_scaling] = [&]() {
         int gumbel_n, gumbel_k;
         float noise_scaling = 1.0f;
@@ -640,6 +621,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
                            ? ComputeKLD(ComputeImprovedPolicy(root_node, 0),
                                         root_node->move_probs)
                            : 0.0f;
+      const std::string v_histogram = VCategoricalHistogram(root_node);
 
       Loc nn_move = gumbel_res.nn_move;
       Loc move = gumbel_res.mcts_move;
@@ -664,18 +646,12 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       float nn_mcts_diff = std::abs(nn_util_est - q_pre);
 
       // Update tracking data structures.
-      mcts_pis.push_back(gumbel_res.pi_improved);
-      move_trainables.push_back(is_move_selected_for_training);
-      root_q_outcomes.push_back(root_q_outcome);
-      root_scores.push_back(root_score);
-      klds.push_back(gumbel_res.kld);
-
       float prior_entropy = 0.0f;
       for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
         float p = root_node->move_probs[a];
         if (p > 0.0f) prior_entropy -= p * std::log(p);
       }
-      move_stats.push_back(
+      MoveSearchStats move_stats =
           MoveSearchStats::Builder()
               .sampled_raw_policy(sampling_raw_policy)
               .nn_q(nn_util_est)
@@ -689,9 +665,20 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
               .sel_mult_modifier(sel_mult_modifier)
               .sel_mult_modifier_weight(select_move_prob_base /
                                         kMoveSelectedForTrainingProb)
-              .visit_count(static_cast<float>(gumbel_res.visits))
               .visit_count_pre(static_cast<float>(n_pre))
-              .build());
+              .build();
+      MoveSearchRecord move_info =
+          MoveSearchRecord::Builder()
+              .mcts_pi(gumbel_res.pi_improved)
+              .move_trainable(is_move_selected_for_training)
+              .root_q_outcome(root_q_outcome)
+              .root_score(root_score)
+              .kld(gumbel_res.kld)
+              .root(log_mcts_trees ? root_node : nullptr)
+              .mcts_value_dist(root_node->v_categorical)
+              .move_stats(move_stats)
+              .build();
+      move_infos.push_back(move_info);
       positions_for_regret.push_back({color_to_move, game.board(), move,
                                       nn_util_est, q_post,
                                       /*is_eligible=*/move_n != 0});
@@ -729,9 +716,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
       // Store root for tree logging if enabled.
       int num_nodes_reaped = 0, reap_time_us = 0;
-      if (log_mcts_trees) {
-        search_roots.emplace_back(root_node);
-      } else {
+      if (!log_mcts_trees) {
         auto reap_begin = std::chrono::steady_clock::now();
         num_nodes_reaped = node_table->Reap(next_root);
         auto reap_end = std::chrono::steady_clock::now();
@@ -894,6 +879,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
               << "  score=" << absl::StrFormat("%.3f", mv_stats.score) << "\n";
           }
         }
+        s << "MCTS Value:\n" << v_histogram << "\n";
         s << "Board:\n" << game.board() << "\n";
         s << "Nodes Reaped=" << num_nodes_reaped
           << "  Reap Time=" << reap_time_us
@@ -918,9 +904,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     fork_manager.FinalizeGame(game, probability);
 
     auto begin = std::chrono::high_resolution_clock::now();
-    game_recorder->RecordGame(thread_id, init_state.board, game, mcts_pis,
-                              move_trainables, root_q_outcomes, root_scores,
-                              klds, search_roots, move_stats);
+    game_recorder->RecordGame(thread_id, init_state.board, game, move_infos);
     auto end = std::chrono::high_resolution_clock::now();
 
     LOG_TO_SINK(INFO, sink)

@@ -14,6 +14,7 @@
 #include "cc/mcts/gumbel.h"
 #include "cc/mcts/node_table.h"
 #include "cc/mcts/search.h"
+#include "cc/mcts/tree.h"
 
 #define LOG_TO_SINK(severity, sink) LOG(severity).ToSinkOnly(&sink)
 
@@ -257,8 +258,13 @@ void PlayEvalGame(size_t seed, int game_id, int total_num_workers,
                         .build())
               : gumbel.SearchRoot(
                     probability, game, player_table, player_tree, color_to_move,
-                    mcts::GumbelSearchParams{active_cfg.n, active_cfg.k,
-                                             active_cfg.noise_scaling});
+                    mcts::GumbelSearchParams::Builder()
+                        .set_n(active_cfg.n)
+                        .set_k(active_cfg.k)
+                        .set_noise_scaling(active_cfg.noise_scaling)
+                        .set_early_stopping_enabled(
+                            active_cfg.early_stopping_for_gumbel)
+                        .build());
       move = gumbel_res.mcts_move;
     }
     auto end = std::chrono::high_resolution_clock::now();
@@ -297,6 +303,8 @@ void PlayEvalGame(size_t seed, int game_id, int total_num_workers,
     // Capture top moves BEFORE PlayMove/Reap invalidates the tree nodes.
     auto cur_top_moves = TopMoves(cur_tree, 8);
     auto cand_top_moves = TopMoves(cand_tree, 8);
+    auto cur_vhist = VCategoricalHistogram(cur_tree);
+    auto cand_vhist = VCategoricalHistogram(cand_tree);
 
     const bool active_is_cur = (color_to_move == BLACK) == cur_is_black;
     if (active_is_cur) {
@@ -431,7 +439,7 @@ void PlayEvalGame(size_t seed, int game_id, int total_num_workers,
             << "  q=" << absl::StrFormat("%.3f", m.q)
             << "  lcb=" << absl::StrFormat("%.3f", m.lcb)
             << "  p=" << absl::StrFormat("%.3f", m.p)
-            << "  p'=" << absl::StrFormat("%.3f", m.p_opt)
+            << "  po=" << absl::StrFormat("%.3f", m.p_opt)
             << "  std=" << absl::StrFormat("%.3f", m.stddev) << "\n";
         }
       }
@@ -443,11 +451,13 @@ void PlayEvalGame(size_t seed, int game_id, int total_num_workers,
             << "  q=" << absl::StrFormat("%.3f", m.q)
             << "  lcb=" << absl::StrFormat("%.3f", m.lcb)
             << "  p=" << absl::StrFormat("%.3f", m.p)
-            << "  p'=" << absl::StrFormat("%.3f", m.p_opt)
+            << "  po=" << absl::StrFormat("%.3f", m.p_opt)
             << "  std=" << absl::StrFormat("%.3f", m.stddev) << "\n";
         }
       }
 
+      s << "Cur VHist\n" << cur_vhist;
+      s << "Cand VHist\n" << cand_vhist;
       s << game.board() << "\n";
       s << "Reaped=" << num_nodes_reaped << "  ReapTime=" << reap_time_us
         << "us  BiasCachePruned=" << num_bias_cache_entries_pruned << "\n";

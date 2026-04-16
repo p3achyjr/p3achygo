@@ -21,6 +21,7 @@ class LossCoeffs:
     w_q_score_err: float  # weight for q score error predictions (18-20)
     w_pi_soft: float  # weight for soft policy (21)
     w_pi_optimistic: float  # weight for optimistic policy (22)
+    w_mcts_dist: float = 0.0  # weight for mcts value distribution KLD
 
     @staticmethod
     def SLCoeffs():
@@ -30,7 +31,7 @@ class LossCoeffs:
     def RLCoeffs():
         return LossCoeffs(
             1.0,
-            0.06,  # policy aux
+            0.15,  # policy aux
             1.0,
             1.5,
             0.02,  # score
@@ -44,4 +45,5 @@ class LossCoeffs:
             0.2,  # short-term score err
             4.0,  # soft policy
             1.0,  # optimistic policy
+            0.125,  # mcts dist
         )

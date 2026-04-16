@@ -1,5 +1,11 @@
 #pragma once
 
+#include <array>
+#include <cstdint>
+
+#include "cc/constants/constants.h"
+#include "cc/mcts/tree.h"
+
 namespace recorder {
 
 // Per-move search diagnostics collected during self-play.
@@ -84,6 +90,60 @@ class MoveSearchStats::Builder {
 
  private:
   MoveSearchStats s_{};
+};
+
+using PolicyArray = std::array<float, constants::kMaxMovesPerPosition>;
+using MctsValueDist = std::array<uint32_t, mcts::kNumVBuckets>;
+struct MoveSearchRecord {
+  PolicyArray mcts_pi;
+  uint8_t move_trainable;
+  float root_q_outcome;
+  float root_score;
+  float kld;
+  mcts::TreeNode* root = nullptr;
+  MctsValueDist mcts_value_dist;
+  MoveSearchStats move_stats;
+  class Builder;
+};
+
+class MoveSearchRecord::Builder {
+ public:
+  Builder& mcts_pi(const PolicyArray& v) {
+    s_.mcts_pi = v;
+    return *this;
+  }
+  Builder& move_trainable(bool b) {
+    s_.move_trainable = b;
+    return *this;
+  }
+  Builder& root_q_outcome(float v) {
+    s_.root_q_outcome = v;
+    return *this;
+  }
+  Builder& root_score(float v) {
+    s_.root_score = v;
+    return *this;
+  }
+  Builder& kld(float v) {
+    s_.kld = v;
+    return *this;
+  }
+  Builder& root(mcts::TreeNode* root) {
+    s_.root = root;
+    return *this;
+  }
+  Builder& mcts_value_dist(const MctsValueDist& v) {
+    s_.mcts_value_dist = v;
+    return *this;
+  }
+  Builder& move_stats(const MoveSearchStats& v) {
+    s_.move_stats = v;
+    return *this;
+  }
+  MoveSearchRecord build() { return s_; }
+
+ private:
+  MoveSearchRecord s_{};
 };
 
 }  // namespace recorder

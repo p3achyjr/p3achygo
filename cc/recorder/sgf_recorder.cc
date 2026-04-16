@@ -47,9 +47,7 @@ TreeNode* CloneTree(const TreeNode* node, std::optional<int> blocked_action,
   cloned->n = node->n;
   cloned->w = node->w;
   cloned->v = node->v;
-#ifdef V_CATEGORICAL
   cloned->v_categorical = node->v_categorical;
-#endif
   cloned->w_outcome = node->w_outcome;
   cloned->v_outcome = node->v_outcome;
   cloned->v_outcome_var = node->v_outcome_var;

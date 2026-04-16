@@ -123,6 +123,10 @@ int SampleFromPolicy(
       mass += prob;
     }
   }
+
+  if (p == 1.0f) {
+    return last_nonzero;
+  }
   // Build log message for all failure modes.
   std::ostringstream dbg;
   dbg << "SampleFromPolicy: failed to sample" << " (p=" << p << " mass=" << mass
@@ -532,7 +536,6 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
             (root->n + child_stat.n - 2);
       }
 
-#ifdef V_CATEGORICAL
       // Update categorical distribution.
       TreeNode* child = root->children[child_stat.move];
       if (child != nullptr) {
@@ -542,12 +545,14 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
               child->v_categorical[kNumVBuckets - v_bucket - 1];
         }
       }
-#endif
     }
-
-    root->n += child_stat.n;
   }
 
+  root->n =
+      std::accumulate(result.child_stats.begin(), result.child_stats.end(), 0,
+                      [](const int accum, const auto& child_stat) {
+                        return accum + child_stat.n;
+                      });
   result.kld = ComputeKLD(result.pi_improved, root->move_probs);
   result.visits = visits_spent;
   return result;
@@ -804,13 +809,15 @@ void GumbelEvaluator::SingleBackup(TreeNode* node, game::Loc action,
     }
   }
 
-#ifdef V_CATEGORICAL
   // Add V to bucket.
+  // This is inaccurate with idempotent updates. We will miss entries from
+  // transposing paths in MCGS, and will not account for bias correction from
+  // the bias cache. However, idempotent updates to this field are very
+  // expensive, so we will keep it incremental.
   int v_bucket =
       std::clamp(static_cast<int>((leaf_q_outcome + 1.0f) / kBucketRange), 0,
                  kNumVBuckets - 1);
   node->v_categorical[v_bucket] += 1;
-#endif
 }
 
 }  // namespace mcts

@@ -4,6 +4,7 @@
 #include "cc/constants/constants.h"
 #include "cc/game/color.h"
 #include "cc/game/game.h"
+#include "cc/mcts/constants.h"
 #include "example.pb.h"
 
 namespace recorder {
@@ -25,8 +26,11 @@ inline tensorflow::Example MakeTfExample(
         stones_three_liberties,
     const std::array<game::Color, BOARD_LEN * BOARD_LEN>& stones_in_ladder,
     const std::array<float, constants::kMaxMovesPerPosition>& pi_improved,
-    int16_t pi_aux, const game::Game::Result result, const float q6,
-    const float q16, const float q50, const float q6_score,
+    int16_t pi_aux,
+    const std::array<float, constants::kMaxMovesPerPosition>& pi_aux_dist,
+    const game::Game::Result result,
+    const std::array<uint32_t, mcts::kNumVBuckets>& mcts_value_dist,
+    const float q6, const float q16, const float q50, const float q6_score,
     const float q16_score, const float q50_score, game::Color color, float komi,
     uint8_t bsize) {
   tensorflow::Example example;
@@ -51,6 +55,13 @@ inline tensorflow::Example MakeTfExample(
   // Moves past the end of the game are just encoded as pass.
   features["pi_aux"].mutable_bytes_list()->add_value(
       reinterpret_cast<const void*>(&pi_aux), sizeof(int16_t));
+
+  // Distribution of the next move's policy (float[kMaxMovesPerPosition]).
+  features["pi_aux_dist"] = MakeBytesFeature(pi_aux_dist);
+
+  // Distribution of value estimates accumulated during MCTS
+  // (uint32[kNumVBuckets]).
+  features["mcts_value_dist"] = MakeBytesFeature(mcts_value_dist);
 
   float margin = color == BLACK ? result.bscore - result.wscore
                                 : result.wscore - result.bscore;

@@ -145,6 +145,10 @@ void LeafEvaluator::EvaluateRoot(core::Probability& probability,
   node->v = node->init_util_est;
   node->v_outcome = node->init_outcome_est;
   node->v_err = node->init_err_est;
+  int v_bucket =
+      std::clamp(static_cast<int>((node->init_util_est + 1.0f) / kBucketRange),
+                 0, kNumVBuckets - 1);
+  node->v_categorical[v_bucket] += 1;
 }
 
 void LeafEvaluator::EvaluateLeaf(core::Probability& probability,
@@ -157,7 +161,6 @@ void LeafEvaluator::EvaluateLeaf(core::Probability& probability,
   float score_utility = ScoreUtility(
       node->init_score_est, std::sqrt(node->init_score_var), root_score_est);
   node->init_util_est = node->init_outcome_est + score_utility;
-  node->v_err = node->init_err_est;
 }
 
 void LeafEvaluator::EvaluateTerminal(const Scores& scores,

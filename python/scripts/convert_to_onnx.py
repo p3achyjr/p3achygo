@@ -104,8 +104,13 @@ def fix_cast_output_types(model: onnx.ModelProto) -> onnx.ModelProto:
                 # Check Cast node's 'to' attribute
                 for attr in node.attribute:
                     if attr.name == "to":
-                        if attr.i != expected_type and expected_type == TensorProto.FLOAT16:
-                            logging.info(f"Fixing Cast '{node.name}': changing 'to' from {attr.i} to FLOAT16")
+                        if (
+                            attr.i != expected_type
+                            and expected_type == TensorProto.FLOAT16
+                        ):
+                            logging.info(
+                                f"Fixing Cast '{node.name}': changing 'to' from {attr.i} to FLOAT16"
+                            )
                             attr.i = TensorProto.FLOAT16
                             fixed_count += 1
                         break
@@ -129,9 +134,7 @@ def fix_mixed_precision_inputs(model: onnx.ModelProto) -> onnx.ModelProto:
     # node_block_list case (fix_fp16_graph_outputs reconnected a blocked node
     # directly, so there is no Cast wrapper to inspect).
     fp32_outputs = {
-        o.name
-        for o in g.output
-        if o.type.tensor_type.elem_type == TensorProto.FLOAT
+        o.name for o in g.output if o.type.tensor_type.elem_type == TensorProto.FLOAT
     }
 
     if not fp32_outputs:
@@ -185,11 +188,15 @@ def fix_mixed_precision_inputs(model: onnx.ModelProto) -> onnx.ModelProto:
                     cast_out = f"{inp}_to_fp16_{cast_id}"
                     cast_id += 1
                     cast_cache[inp] = cast_out
-                    new_nodes.append(helper.make_node(
-                        "Cast", [inp], [cast_out],
-                        name=f"_fix_mixed_cast_{cast_id}",
-                        to=TensorProto.FLOAT16,
-                    ))
+                    new_nodes.append(
+                        helper.make_node(
+                            "Cast",
+                            [inp],
+                            [cast_out],
+                            name=f"_fix_mixed_cast_{cast_id}",
+                            to=TensorProto.FLOAT16,
+                        )
+                    )
                 rewritten_inputs[idx] = cast_cache[inp]
                 needs_rewrite = True
         if needs_rewrite:
@@ -305,7 +312,10 @@ def fix_value_head_minimum_fp16_inputs(model: onnx.ModelProto) -> onnx.ModelProt
         """Return True if inp_name is already produced by an explicit Cast(→fp32)."""
         p = producer.get(inp_name)
         if p is not None and p.op_type == "Cast":
-            return next((a.i for a in p.attribute if a.name == "to"), None) == TensorProto.FLOAT
+            return (
+                next((a.i for a in p.attribute if a.name == "to"), None)
+                == TensorProto.FLOAT
+            )
         return False
 
     new_nodes: list[onnx.NodeProto] = []
@@ -421,8 +431,6 @@ def main(_):
 
         @tf.function
         def model_fn(board_state: tf.Tensor, game_state: tf.Tensor):
-            # v1 model returns 46 outputs (23 FVI + 23 BN)
-            # Include all outputs to avoid grappler optimization issues
             (
                 pi_logits,
                 pi,
@@ -447,10 +455,11 @@ def main(_):
                 q50_score_err,
                 pi_logits_soft,
                 pi_logits_optimistic,
+                mcts_dist_logits,
+                mcts_dist_probs,
             ) = model(board_state, game_state, training=False, scores=scores)
 
             return {
-                # FVI outputs (0-22)
                 "00:pi_logits": pi_logits,
                 "01:pi": pi,
                 "02:outcome_logits": outcome_logits,
@@ -474,6 +483,8 @@ def main(_):
                 "20:q50_score_err": q50_score_err,
                 "21:pi_logits_soft": pi_logits_soft,
                 "22:pi_logits_optimistic": pi_logits_optimistic,
+                "23:mcts_dist_logits": mcts_dist_logits,
+                "24:mcts_dist_probs": mcts_dist_probs,
             }
 
         input_signature = [
@@ -555,6 +566,11 @@ def main(_):
             score,
             _,
             policy,
+            _,
+            _,
+            _,
+            _,
+            _,
             _,
             _,
             _,
