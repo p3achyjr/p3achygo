@@ -354,13 +354,17 @@ void PlayEvalGame(size_t seed, int game_id, int total_num_workers,
       std::string rc = ToString(OppositeColor(color_to_move));
       std::stringstream s;
       s << "\n----- Move " << game.num_moves() << " -----\n";
-      s << "N=" << active_cfg.n << "  K=" << active_cfg.k
-        << "  PUCT=" << active_cfg.use_puct << "  LCB=" << active_cfg.use_lcb
-        << "  cPUCT=" << active_cfg.c_puct
-        << "  VarScale=" << active_cfg.var_scale_cpuct
-        << "  MCGS=" << active_cfg.use_mcgs
-        << "  PUCT-V=" << active_cfg.use_puct_v
-        << "  cPUCT_2=" << active_cfg.c_puct_v_2 << "\n";
+      s << "N=" << active_cfg.n << "  K=" << active_cfg.k;
+      if (active_cfg.use_puct) {
+        s << "  PUCT=" << active_cfg.use_puct << "  LCB=" << active_cfg.use_lcb
+          << "  cPUCT=" << active_cfg.c_puct
+          << "  VarScale=" << active_cfg.var_scale_cpuct
+          << "  MCGS=" << active_cfg.use_mcgs
+          << "  PUCT-V=" << active_cfg.use_puct_v
+          << "  cPUCT_2=" << active_cfg.c_puct_v_2 << "\n";
+      } else {
+        s << "  Noise Scaling=" << active_cfg.noise_scaling;
+      }
       s << "Move=" << LocToString(move) << "  q=" << move_q
         << "  Visits=" << num_visits << "  Aborts=" << num_aborted
         << "  Collisions=" << num_collisions << "\n";
