@@ -943,19 +943,43 @@ def log_board_position(
     q6_err_p = predictions.q6_err_pred[0].numpy()
     q16_err_p = predictions.q16_err_pred[0].numpy()
     q50_err_p = predictions.q50_err_pred[0].numpy()
+    q6_score_p = predictions.q6_score_pred[0].numpy()
+    q16_score_p = predictions.q16_score_pred[0].numpy()
+    q50_score_p = predictions.q50_score_pred[0].numpy()
+    q6_score_err_p = predictions.q6_score_err_pred[0].numpy()
+    q16_score_err_p = predictions.q16_score_err_pred[0].numpy()
+    q50_score_err_p = predictions.q50_score_err_pred[0].numpy()
     z6 = (targets.q6[0].numpy() - q6_p) / np.sqrt(q6_err_p + epsilon)
     z16 = (targets.q16[0].numpy() - q16_p) / np.sqrt(q16_err_p + epsilon)
     z50 = (targets.q50[0].numpy() - q50_p) / np.sqrt(q50_err_p + epsilon)
+    z6_score = (targets.q6_score[0].numpy() - q6_score_p) / np.sqrt(
+        q6_score_err_p + epsilon
+    )
+    z16_score = (targets.q16_score[0].numpy() - q16_score_p) / np.sqrt(
+        q16_score_err_p + epsilon
+    )
+    z50_score = (targets.q50_score[0].numpy() - q50_score_p) / np.sqrt(
+        q50_score_err_p + epsilon
+    )
+
+    def compute_opt_weight(z_wd, z6, z16, z50):
+        return (z_wd * 3 * z6 + z_wd * 1.5 * z16 + z_wd * 0.75 * z50) / 3.0
+
+    def sigmoid(x):
+        return 1 / (1 + np.exp(-x))
+
     z_wd = 4.0 / 7.0
-    z_val = (z_wd * 3 * z6 + z_wd * 1.5 * z16 + z_wd * 0.75 * z50) / 3.0
-    opt_weight = float(np.clip(1 / (1 + np.exp(-(z_val - 1.0) * 3)), 0.0, 1.0))
+    z_val = compute_opt_weight(z_wd, z6, z16, z50)
+    z_score = compute_opt_weight(z_wd, z6_score, z16_score, z50_score)
+    z_combined = (z_val + z_score * 0.5) / 1.5
+    opt_weight = float(np.clip(sigmoid((z_combined - 1.0) * 3.0), 0.0, 1.0))
 
     # Top 5 moves table
     col_w = 20
     print(f"\nTop 5 Policy Moves:")
     print(
         f"  {'Predicted':<{col_w}}{'Target':<{col_w}}{'Soft Predicted':<{col_w}}{'Soft Target':<{col_w}}"
-        f"Optimistic (w={opt_weight:.2f}, z={z_val:.2f})"
+        f"Optimistic (w={opt_weight:.2f}, z_val={z_val:.2f}, z_score={z_score:.2f}, z_combined={z_combined:.2f})"
     )
     for i in range(5):
         pred_str = (

@@ -1542,15 +1542,25 @@ class P3achyGoModel(keras.Model):
         c_z16 = z_weight_decay * 1.5
         c_z50 = z_weight_decay * 0.75
         z_value = (c_z6 * z_value_q6 + c_z16 * z_value_q16 + c_z50 * z_value_q50) / 3.0
-        # if targets.q6_score is not None:
-        #     z_score = (
-        #         targets.q6_score / 20 - tf.stop_gradient(predictions.q6_score_pred)
-        #     ) / (tf.stop_gradient(tf.sqrt(predictions.q6_score_err_pred + epsilon)))
-        # else:
-        #     z_score = tf.zeros_like(z_value)
+        if targets.q6_score is not None:
+            z_score_q6 = (
+                targets.q6_score - tf.stop_gradient(predictions.q6_score_pred)
+            ) / (tf.stop_gradient(tf.sqrt(predictions.q6_score_err_pred + epsilon)))
+            z_score_q16 = (
+                targets.q16_score - tf.stop_gradient(predictions.q16_score_pred)
+            ) / (tf.stop_gradient(tf.sqrt(predictions.q16_score_err_pred + epsilon)))
+            z_score_q50 = (
+                targets.q50_score - tf.stop_gradient(predictions.q50_score_pred)
+            ) / (tf.stop_gradient(tf.sqrt(predictions.q50_score_err_pred + epsilon)))
+            z_score = (
+                c_z6 * z_score_q6 + c_z16 * z_score_q16 + c_z50 * z_score_q50
+            ) / 3.0
+            z_combined = (z_value + z_score * 0.5) / 1.5
+        else:
+            z_combined = z_value
 
         optimistic_weight = tf.clip_by_value(
-            tf.nn.sigmoid((z_value - 1.0) * 3),
+            tf.nn.sigmoid((z_combined - 1.0) * 3),
             0.0,
             1.0,
         )
