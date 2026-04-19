@@ -366,7 +366,7 @@ def loop(
 
     def stop_sp_worker(queues, threads, idx):
         """Stop a single SP worker by index. Sets threads[idx] = None when done."""
-        if threads[idx] is None:
+        if idx >= len(threads) or threads[idx] is None:
             return
         queues[idx].put(())
         threads[idx].join()

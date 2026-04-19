@@ -14,8 +14,6 @@ import sys
 
 import numpy as np
 
-os.environ.setdefault("XLA_FLAGS", "--xla_gpu_cache_dir=/p3achygo-data/xla_cache")
-
 import gcs_utils as gcs
 import tensorflow as tf
 import keras
@@ -150,8 +148,9 @@ def main(_):
                 ),
             )
         live_model.save(live_model_path)
-        if not Path(swa_model_path).exists():
-            swa_model_path = live_model_path
+
+    if not Path(swa_model_path).exists():
+        swa_model_path = live_model_path
 
     live_model = keras.models.load_model(live_model_path)
     optimizer = getattr(live_model, "optimizer", None)

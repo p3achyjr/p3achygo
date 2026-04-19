@@ -16,7 +16,11 @@ NUM_BATCHES_FULL_CHECKPOINT = 1000
 
 
 def new_model(name: str, model_config="small", optimizer="sgd") -> P3achyGoModel:
-    config = ModelConfig.from_str(model_config)
+    config = (
+        ModelConfig.from_generic_arch(model_config)
+        if isinstance(model_config, dict)
+        else ModelConfig.from_str(model_config)
+    )
     if optimizer == "muon":
         config.c_l2 = 0
     return P3achyGoModel.create(
