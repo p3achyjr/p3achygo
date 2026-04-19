@@ -979,7 +979,7 @@ def log_board_position(
     print(f"\nTop 5 Policy Moves:")
     print(
         f"  {'Predicted':<{col_w}}{'Target':<{col_w}}{'Soft Predicted':<{col_w}}{'Soft Target':<{col_w}}"
-        f"Optimistic (w={opt_weight:.2f}, z_val={z_val:.2f}, z_score={z_score:.2f}, z_combined={z_combined:.2f})"
+        f"Opt (w={opt_weight:.2f}, zv={z_val:.2f}, zs={z_score:.2f}, z={z_combined:.2f})"
     )
     for i in range(5):
         pred_str = (

@@ -115,6 +115,7 @@ def eval(
             + f" --cur_var_scale_cpuct=true --cur_var_scale_prior_visits=10 --cur_p_opt_weight=0.5"
             + f" --cand_n={n} --cand_use_puct=1 --cand_use_lcb=1 --cand_use_bias_cache=true"
             + f" --cand_var_scale_cpuct=true --cand_var_scale_prior_visits=10 --cand_p_opt_weight=0.5"
+            + f" --id={i}"
         )
         logging.info(f"Running Eval Worker {i} (GPU {gpu_ids[i]}):\n'{cmd}'")
         exit_code = proc.run_proc(cmd, env=worker_env)

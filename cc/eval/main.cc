@@ -46,6 +46,7 @@ ABSL_FLAG(int, num_games, 0, "Number of eval games");
 ABSL_FLAG(int, cache_size, constants::kDefaultNNCacheSize / 2,
           "Default size of cache.");
 ABSL_FLAG(int, timeout, kTimeoutUs, "NNInterface timeout in us.");
+ABSL_FLAG(std::string, id, "", "Optional Run ID");
 
 // Per-player config files. When provided, each file sets the base config for
 // that player. Individual flags below still take priority if explicitly passed
@@ -438,7 +439,8 @@ int main(int argc, char** argv) {
     size_t seed = absl::HashOf(time, game_id);
     std::thread thread(PlayEvalGame, seed, game_id, num_games,
                        cur_nn_interface.get(), cand_nn_interface.get(),
-                       absl::StrFormat("/tmp/eval%d_log.txt", game_id),
+                       absl::StrFormat("/tmp/eval_%d_%s.log", game_id,
+                                       absl::GetFlag(FLAGS_id)),
                        std::move(eval_result), game_recorder.get(), config);
     threads.emplace_back(std::move(thread));
   }

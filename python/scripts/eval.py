@@ -55,7 +55,7 @@ def make_unique_cmd(cmd: str, gpu_id: int, inv_id: int) -> str:
         path = re.sub(r"_gpu\d+_inv\d+$", "", path)
         return f"--res_write_path={path}_gpu{gpu_id}_inv{inv_id}"
 
-    return re.sub(r"--res_write_path=(\S+)", replace_path, cmd)
+    return re.sub(r"--res_write_path=(\S+)", replace_path, cmd) + f" --id={gpu_id}"
 
 
 def parse_output(output: str) -> dict | None:
