@@ -45,7 +45,7 @@ void WriteChunkToDisk(std::string filename,
 
 ChunkManager::ChunkManager(std::string dir, int gen, float p, int games_per_gen,
                            int train_window_size, bool is_continuous,
-                           bool is_local)
+                           bool is_local, std::optional<int> max_gen)
     : dir_(dir),
       gen_(gen),
       p_(p),
@@ -53,7 +53,7 @@ ChunkManager::ChunkManager(std::string dir, int gen, float p, int games_per_gen,
       poll_interval_s_(kDefaultPollIntervalS),
       games_per_gen_(games_per_gen),
       is_continuous_(is_continuous),
-      watcher_(dir_, train_window_size, is_local),
+      watcher_(dir_, train_window_size, is_local, max_gen),
       fbuffer_(watcher_.GetFiles()),
       running_(true) {
   fs_thread_ = std::thread(&ChunkManager::FsThread, this);
@@ -136,6 +136,7 @@ void ChunkManager::ShuffleAndFlush() {
   std::string chunk_size_filename =
       fs::path(chunk_dir) / absl::StrFormat(kGoldenChunkSizeFormat, gen_);
   fs::create_directory(chunk_dir);
+  LOG(INFO) << "Writing chunk " << chunk_filename;
 
   // write to disk.
   start = std::chrono::steady_clock::now();

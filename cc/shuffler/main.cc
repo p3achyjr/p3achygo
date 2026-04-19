@@ -27,6 +27,8 @@ ABSL_FLAG(bool, is_local, false,
           "shuffler will ensure that data chunks are fully written out to disk "
           "before reading. It does this by checking for the presence of a "
           "`.DONE` file, written by the self-play process.");
+ABSL_FLAG(int, max_gen, -1,
+          "Max generation to include in chunk. -1 = no max gen.");
 
 void WaitForSignal(shuffler::ChunkManager* chunk_manager) {
   // any line from stdin is a shutdown signal.
@@ -66,6 +68,7 @@ int main(int argc, char** argv) {
   }
 
   bool is_local = absl::GetFlag(FLAGS_is_local);
+  int max_gen = absl::GetFlag(FLAGS_max_gen);
 
   float p = absl::GetFlag(FLAGS_p);
   LOG(INFO) << "Using Training Window of n=" << train_window_size
@@ -74,7 +77,8 @@ int main(int argc, char** argv) {
 
   shuffler::ChunkManager chunk_manager(
       data_path, gen, p, games_this_gen, train_window_size,
-      absl::GetFlag(FLAGS_run_continuously), is_local);
+      absl::GetFlag(FLAGS_run_continuously), is_local,
+      max_gen == -1 ? std::nullopt : std::make_optional(max_gen));
   std::thread wait_thread(WaitForSignal, &chunk_manager);
 
   // CreateChunk blocks until we receive a signal, or play `games_per_gen`
