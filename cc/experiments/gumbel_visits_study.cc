@@ -89,7 +89,7 @@ static constexpr int kGumbelK = 16;
 static constexpr size_t kCacheSize = 32768;
 static constexpr int64_t kTimeoutUs = 400;
 
-static constexpr int kNValues[] = {64, 100, 150, 200, 300, 400, 800};
+static constexpr int kNValues[] = {64, 100, 150, 200, 270, 300, 400, 800};
 static constexpr int kNumNValues =
     static_cast<int>(sizeof(kNValues) / sizeof(kNValues[0]));
 
@@ -176,6 +176,7 @@ game::Board BuildBoard(const std::array<Color, constants::kNumBoardLocs>& pos,
 struct SearchResult {
   std::array<float, constants::kMaxMovesPerPosition> pi_improved;
   game::Loc best_move;
+  uint32_t visits = 0;
   // Populated only by RunGroundTruth.
   std::array<float, constants::kMaxMovesPerPosition> prior_probs{};
   game::Loc prior_best_move = game::kNoopLoc;
@@ -218,7 +219,7 @@ SearchResult RunGroundTruth(GumbelEvaluator& evaluator, Game& game,
 // Gumbel(n, k) using the same fixed per-position seed.
 SearchResult RunSeededGumbel(GumbelEvaluator& evaluator, Game& game,
                              Color color_to_move, int n, int k, int seed_visits,
-                             uint64_t pos_seed) {
+                             uint64_t pos_seed, bool early_stopping = false) {
   auto node_table = std::make_unique<MctsNodeTable>();
   TreeNode* root =
       node_table->GetOrCreate(game.board().hash(), color_to_move, false);
@@ -235,9 +236,14 @@ SearchResult RunSeededGumbel(GumbelEvaluator& evaluator, Game& game,
   // Gumbel search: use the fixed per-position seed so that the Gumbel noise
   // (and thus the initial top-K action selection) matches RunGroundTruth.
   core::Probability gumbel_prob(pos_seed);
+  auto params = GumbelSearchParams::Builder()
+                    .set_n(n)
+                    .set_k(k)
+                    .set_early_stopping_enabled(early_stopping)
+                    .build();
   auto result = evaluator.SearchRoot(gumbel_prob, game, node_table.get(), root,
-                                     color_to_move, GumbelSearchParams{n, k});
-  return {ComputeImprovedPolicy(root, 0), result.mcts_move};
+                                     color_to_move, params);
+  return {ComputeImprovedPolicy(root, 0), result.mcts_move, result.visits};
 }
 
 // Returns the normalized empirical visit distribution: child_visits[a] / sum.
@@ -373,6 +379,10 @@ int main(int argc, char** argv) {
   std::vector<std::vector<float>> kld_prior_dist_samples(kNumNValues);
   // kld_prior_samples[i] = KLD(GT, nn_prior) for example i.
   std::vector<float> kld_prior_samples;
+  // N=800 + early stopping.
+  std::vector<float> kld_es_samples;
+  std::vector<float> kld_prior_dist_es_samples;
+  std::vector<float> visits_es_samples;
 
   SequentialRecordReader reader(chunk_path, RecordReaderOptions::Zlib());
   CHECK(reader.Init().ok()) << "Failed to open: " << chunk_path;
@@ -494,6 +504,28 @@ int main(int argc, char** argv) {
       kld_prior_dist_samples[ni].push_back(kld_prior_dist);
     }
 
+    // N=800 + early stopping.
+    SearchResult sr_es;
+    if (use_gumbel) {
+      const uint64_t pos_seed =
+          0xdeadbeef12345678ULL ^ static_cast<uint64_t>(processed);
+      BiasCache bias_cache(0.8f, 0.3f);
+      GumbelEvaluator evaluator(nn_interface.get(), /*thread_id=*/0,
+                                &bias_cache);
+      sr_es = RunSeededGumbel(evaluator, game, color_to_move, 800, kGumbelK,
+                              seed_visits, pos_seed, /*early_stopping=*/true);
+    } else {
+      BiasCache bias_cache(0.85f, 0.45f);
+      GumbelEvaluator evaluator(nn_interface.get(), /*thread_id=*/0,
+                                &bias_cache);
+      sr_es = RunPuct(evaluator, game, color_to_move, 800);
+    }
+    kld_es_samples.push_back(ComputeKLD(gt.pi_improved, sr_es.pi_improved));
+    kld_prior_dist_es_samples.push_back(
+        ComputeKLD(sr_es.pi_improved, gt.prior_probs));
+    visits_es_samples.push_back(static_cast<float>(sr_es.visits));
+    printf("  800es actual_visits: %u\n", sr_es.visits);
+
     if (verbose) {
       // nats/visit summary for all N values.
       for (int ni = 0; ni < kNumNValues; ++ni) {
@@ -506,12 +538,29 @@ int main(int argc, char** argv) {
             kNValues[ni], LocToString(n_results[ni].best_move).c_str(), kld,
             kld_pd, (kld_prior - kld) / kNValues[ni]);
       }
+      {
+        const float kld = ComputeKLD(gt.pi_improved, sr_es.pi_improved);
+        const float kld_pd = ComputeKLD(sr_es.pi_improved, gt.prior_probs);
+        printf(
+            "  N=%-4s  best: %-5s  KLD(GT||N): %.5f  KLD(N||prior): %.5f  "
+            "nats/visit: %.6f\n",
+            "800es", LocToString(sr_es.best_move).c_str(), kld, kld_pd,
+            (kld_prior - kld) / 800);
+      }
       // Top-5 moves for all N values.
       printf("\n");
       for (int ni = 0; ni < kNumNValues; ++ni) {
         auto top5 =
             TopKMoves(n_results[ni].pi_improved, game, color_to_move, 5);
         printf("  N=%-4d  top-5:", kNValues[ni]);
+        for (auto& [loc, prob] : top5) {
+          printf("  %s(%.3f)", LocToString(loc).c_str(), prob);
+        }
+        printf("\n");
+      }
+      {
+        auto top5 = TopKMoves(sr_es.pi_improved, game, color_to_move, 5);
+        printf("  N=%-4s  top-5:", "800es");
         for (auto& [loc, prob] : top5) {
           printf("  %s(%.3f)", LocToString(loc).c_str(), prob);
         }
@@ -542,16 +591,24 @@ int main(int argc, char** argv) {
   printf("Examples:     %d\n\n", processed);
   printf("KLD(GT, prior) -- mean: %.5f  p75: %.5f  p95: %.5f  max: %.5f\n\n",
          prior_stats.mean, prior_stats.p75, prior_stats.p95, prior_stats.max);
-  printf("%-8s  %-12s  %-12s  %-12s\n", "N", "KLD(GT||N)", "KLD(N||prior)",
-         "nats/visit");
-  printf("%-8s  %-12s  %-12s  %-12s\n", "--------", "------------",
-         "------------", "------------");
+  printf("%-8s  %-12s  %-12s  %-12s  %-12s\n", "N", "KLD(GT||N)",
+         "KLD(N||prior)", "nats/visit", "mean_visits");
+  printf("%-8s  %-12s  %-12s  %-12s  %-12s\n", "--------", "------------",
+         "------------", "------------", "------------");
   for (int ni = 0; ni < kNumNValues; ++ni) {
     Stats s = ComputeStats(kld_samples[ni]);
     Stats sp = ComputeStats(kld_prior_dist_samples[ni]);
     float nats_per_visit = (prior_stats.mean - s.mean) / kNValues[ni];
-    printf("%-8d  %-12.5f  %-12.5f  %-12.6f\n", kNValues[ni], s.mean, sp.mean,
-           nats_per_visit);
+    printf("%-8d  %-12.5f  %-12.5f  %-12.6f  %-12d\n", kNValues[ni], s.mean,
+           sp.mean, nats_per_visit, kNValues[ni]);
+  }
+  {
+    Stats s = ComputeStats(kld_es_samples);
+    Stats sp = ComputeStats(kld_prior_dist_es_samples);
+    Stats sv = ComputeStats(visits_es_samples);
+    float nats_per_visit = (prior_stats.mean - s.mean) / sv.mean;
+    printf("%-8s  %-12.5f  %-12.5f  %-12.6f  %-12.1f\n", "800es", s.mean,
+           sp.mean, nats_per_visit, sv.mean);
   }
 
   return 0;

@@ -557,6 +557,7 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
   game::Loc move;
   if (cfg_.num_threads_per_game > 1 || cfg_.time_ms != 0) {
     // requires parallel search.
+    CHECK(cfg_.sampling_num_moves == 0) << "Not Supported";
     BiasCache* bias_cache = bias_cache_.has_value() ? &*bias_cache_ : nullptr;
     Search s(nn_interface_->MakeSlot(0), bias_cache);
     const bool use_visit_budget = cfg_.time_ms == 0;
@@ -594,15 +595,23 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
     }
     move = res.move;
   } else {
-    GumbelResult res =
-        cfg_.use_puct
-            ? gumbel_evaluator_->SearchRootPuct(
-                  probability_, *game_, node_table_.get(), current_root(),
-                  color, cfg_.n, MakePuctParams(cfg_))
-            : gumbel_evaluator_->SearchRoot(
-                  probability_, *game_, node_table_.get(), current_root(),
-                  color,
-                  mcts::GumbelSearchParams{cfg_.n, cfg_.k, cfg_.noise_scaling});
+    CHECK(cfg_.use_puct || cfg_.sampling_num_moves == 0) << "Not Supported";
+    GumbelResult res = [&]() {
+      if (!cfg_.use_puct) {
+        return gumbel_evaluator_->SearchRoot(
+            probability_, *game_, node_table_.get(), current_root(), color,
+            mcts::GumbelSearchParams{cfg_.n, cfg_.k, cfg_.noise_scaling});
+      }
+      auto puct_params = MakePuctParams(cfg_);
+      if (game_->num_moves() < cfg_.sampling_num_moves) {
+        puct_params.kind = PuctRootSelectionPolicy::kVisitCountSample;
+        puct_params.tau = cfg_.sampling_temperature;
+      }
+
+      return gumbel_evaluator_->SearchRootPuct(
+          probability_, *game_, node_table_.get(), current_root(), color,
+          cfg_.n, puct_params);
+    }();
     move = res.mcts_move;
   }
 

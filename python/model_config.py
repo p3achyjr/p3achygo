@@ -172,6 +172,10 @@ class ModelConfig:
         )
 
     @staticmethod
+    def from_generic_arch(generic_arch: dict):
+        return ModelConfig(generic_arch=generic_arch)
+
+    @staticmethod
     def from_str(s: str):
         if s == "tiny":
             return ModelConfig.tiny()

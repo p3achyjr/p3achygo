@@ -400,7 +400,8 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
                                        over_search_enabled,
                                        v]() -> std::tuple<int, int, int> {
       if (early_stopping_enabled) {
-        return {v, ceil_div(v, 4), ceil_div(v, 4) - 1};
+        // return {v, ceil_div(v, 4), ceil_div(v, 4) - 1};
+        return {v, 3, ceil_div(v, 4) - 1};
       } else if (over_search_enabled) {
         return {v * 5 / 2, ceil_div(v, 4), v - 1};
       }
@@ -408,6 +409,7 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
       return {v, v, v};
     }();
     int visits_in_round = 0;
+    std::array<bool, 3> last_can_stop_early_checks = {{false, false, false}};
     for (int visit_num = 0; visit_num < visits_per_action; ++visit_num) {
       ++visits_in_round;
       for (auto i = 0; i < k; ++i) {
@@ -461,7 +463,13 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
           visit_num >= min_check_interval) {
         update_qtransform(k);
         std::sort(gmove_info, gmove_info + k, GumbelMoveInfoGreater);
-        if (can_stop_early(visit_num, k)) {
+        // sift.
+        last_can_stop_early_checks[2] = last_can_stop_early_checks[1];
+        last_can_stop_early_checks[1] = last_can_stop_early_checks[0];
+        last_can_stop_early_checks[0] = can_stop_early(visit_num, k);
+        if (std::all_of(last_can_stop_early_checks.begin(),
+                        last_can_stop_early_checks.end(),
+                        [](bool can_stop) { return can_stop; })) {
           break;
         }
       }
@@ -634,9 +642,9 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
         return best_lcb_move(root);
       case PuctRootSelectionPolicy::kVisitCountSample:
         return puct_params.tau > 0.0f
-                   ? game::AsLoc(Argmax(visit_counts))
-                   : game::AsLoc(SampleFromPolicy(pi_improved, puct_params.tau,
-                                                  probability, game.board()));
+                   ? game::AsLoc(SampleFromPolicy(pi_improved, puct_params.tau,
+                                                  probability, game.board()))
+                   : game::AsLoc(Argmax(visit_counts));
     }
 
     return game::AsLoc(Argmax(visit_counts));

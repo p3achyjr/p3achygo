@@ -59,6 +59,8 @@ struct PlayerSearchConfig {
   int m3_prior_visits = 20;
   float p_opt_weight = 0.0f;
   float root_fpu = 0.2f;
+  int sampling_num_moves = 0;
+  float sampling_temperature = 0.0f;
 
   // --- Config-file-only parallel search knobs (no-op for Gumbel) ---
 
@@ -202,6 +204,10 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.p_opt_weight = std::stof(val);
     else if (key == "root_fpu")
       cfg.root_fpu = std::stof(val);
+    else if (key == "sampling_temperature")
+      cfg.sampling_temperature = std::stof(val);
+    else if (key == "sampling_num_moves")
+      cfg.sampling_num_moves = std::stoi(val);
     // Parallel search knobs
     else if (key == "num_threads_per_game")
       cfg.num_threads_per_game = std::stoi(val);
@@ -285,6 +291,8 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
   ROW(m3_prior_visits, i_);
   ROW(p_opt_weight, f);
   ROW(root_fpu, f);
+  ROW(sampling_temperature, f);
+  ROW(sampling_num_moves, i_);
   ROW(num_threads_per_game, i_);
   ROW(time_ms, i_);
   ROW(enable_pondering, b);

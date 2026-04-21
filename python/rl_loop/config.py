@@ -12,7 +12,7 @@ from typing import List, Tuple
 @dataclass
 class RunConfig(object):
     from_existing_run: str
-    model_config: str
+    model_config: str | dict
 
     # Training Controls
     num_generations: int

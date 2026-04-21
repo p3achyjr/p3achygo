@@ -293,6 +293,163 @@ def make_conv_block(output_channels: int, conv_size: int, variance=1.0, name=Non
 
 
 @keras.saving.register_keras_serializable(package="p3achygo")
+class GlobalPool(keras.layers.Layer):
+    """
+    Computes mean and max of each channel. Given a tensor with shape (n, h, w, c),
+    outputs a tensor of shape (n, 2c).
+    """
+
+    def __init__(self, name=None):
+        super(GlobalPool, self).__init__(name=name)
+
+    def call(self, x):
+        # Reduce over spatial dims (h, w)
+        x_mean = keras.ops.mean(x, axis=(1, 2))  # (batch, c)
+        x_max = keras.ops.max(x, axis=(1, 2))  # (batch, c)
+        return keras.ops.concatenate([x_mean, x_max], axis=-1)  # (batch, 2c)
+
+    def get_config(self):
+        return {
+            "name": self.name,
+        }
+
+
+@keras.saving.register_keras_serializable(package="p3achygo")
+class GlobalPoolBias(keras.layers.Layer):
+    """
+    Takes in two vectors (x, y), and returns x + dense(gpool(y)), where gpool(y) is
+    a vector of the concatenated mean and max of each channel, and dense is a
+    fully connected layer to the number of channels in x (so that channelwise addition
+    works).
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        act=keras.activations.relu,
+        use_var_norm=False,
+        incoming_var=1.0,
+        name=None,
+    ):
+        super(GlobalPoolBias, self).__init__(name=name)
+        self.g_norm_layer = (
+            keras.layers.Identity()  # scaling done already
+            if use_var_norm
+            else keras.layers.BatchNormalization(
+                momentum=0.99, epsilon=1e-3, name="batch_norm_gpool"
+            )
+        )
+        self.gpool = GlobalPool(name="gpool")
+        self.dense = make_dense(
+            channels, kern_init=keras.initializers.VarianceScaling(1.0)
+        )
+
+        # save for serialization
+        self.channels = channels
+        self.use_var_norm = use_var_norm
+        self.incoming_var = incoming_var
+        self.act = act
+
+    def call(self, x, g, training=False):
+        assert x.shape == g.shape
+        assert len(x.shape) == 4
+        assert x.shape[3] == g.shape[3]
+
+        g = self.g_norm_layer(g, training=training)
+        g = self.act(g)
+        g_pooled = self.gpool(g)
+        g_biases = self.dense(g_pooled)  # shape = (N, C)
+        x = x + g_biases[:, None, None, :]
+
+        return (x, g_pooled)
+
+    def get_config(self):
+        return {
+            "channels": self.channels,
+            "act": keras.activations.serialize(self.act),
+            "use_var_norm": self.use_var_norm,
+            "incoming_var": self.incoming_var,
+            "name": self.name,
+        }
+
+    @classmethod
+    def from_config(cls, config):
+        return cls(
+            channels=config["channels"],
+            act=keras.activations.deserialize(config["act"]),
+            use_var_norm=config.get("use_var_norm", True),
+            incoming_var=config.get("incoming_var", 1.0),
+            name=config.get("name"),
+        )
+
+
+@keras.saving.register_keras_serializable(package="p3achygo")
+class SqueezeExcitation(keras.layers.Layer):
+    """
+    SqueezeExcitation (ECA) Layer.
+    """
+
+    def __init__(
+        self,
+        c: int,
+        name=None,
+    ):
+        super(SqueezeExcitation, self).__init__(name=name)
+        self.gpool = GlobalPool(name="se_gpool")
+        self.dense = make_dense(c, name="se_dense")
+
+        # save for serialization
+        self.c = c
+
+    def call(self, x, training=False):
+        avg_max = self.gpool(x, training=training)
+        embed = self.dense(avg_max)
+        attn_map = keras.ops.reshape(keras.ops.sigmoid(embed), (-1, 1, 1, self.c))
+        return x * attn_map
+
+    def get_config(self):
+        config = super().get_config()
+        config.update(
+            {
+                "c": self.c,
+            }
+        )
+        return config
+
+    @classmethod
+    def from_config(cls, config):
+        return cls(
+            c=config["c"],
+            name=config.get("name"),
+        )
+
+
+@keras.saving.register_keras_serializable(package="p3achygo")
+class SpatialAttention(keras.layers.Layer):
+    """
+    SpatialAttention Layer.
+    """
+
+    def __init__(
+        self,
+        name=None,
+    ):
+        super(SpatialAttention, self).__init__(name=name)
+        self.conv = make_conv(
+            output_channels=1, kernel_size=7, name="spatial_attention_conv"
+        )
+
+    def call(self, x, training=False):
+        red_mean = keras.ops.mean(x, axis=-1, keepdims=True)
+        red_max = keras.ops.max(x, axis=-1, keepdims=True)
+        cpool = keras.ops.concatenate([red_mean, red_max], axis=-1)
+
+        embed = self.conv(cpool)
+        attn_map = keras.ops.sigmoid(embed)
+        return x * attn_map
+
+
+@keras.saving.register_keras_serializable(package="p3achygo")
 class ResidualBlock(keras.layers.Layer):
     """
     Generalized residual block.
@@ -338,6 +495,8 @@ class ClassicResidualBlock(ResidualBlock):
         conv_size: int,
         stack_size=2,
         incoming_var=1.0,
+        use_se=False,
+        use_spatial_attn=False,
         name=None,
     ):
         blocks = []
@@ -350,6 +509,10 @@ class ClassicResidualBlock(ResidualBlock):
                 name=f"res_id_inner_{i}",
             )
             blocks.append(block)
+        if use_spatial_attn:
+            blocks.append(SpatialAttention(output_channels, name="spatial_attn"))
+        if use_se:
+            blocks.append(SqueezeExcitation(output_channels, name="se"))
         super(ClassicResidualBlock, self).__init__(blocks, name=name)
 
         # save for serialization
@@ -357,6 +520,8 @@ class ClassicResidualBlock(ResidualBlock):
         self.conv_size = conv_size
         self.stack_size = stack_size
         self.incoming_var = incoming_var
+        self.use_se = use_se
+        self.use_spatial_attn = use_spatial_attn
 
     def get_config(self):
         return {
@@ -364,6 +529,8 @@ class ClassicResidualBlock(ResidualBlock):
             "conv_size": self.conv_size,
             "stack_size": self.stack_size,
             "incoming_var": self.incoming_var,
+            "use_se": self.use_se,
+            "use_spatial_attn": self.use_spatial_attn,
             "name": self.name,
         }
 
@@ -389,6 +556,8 @@ class BottleneckResidualConvBlock(ResidualBlock):
         conv_size: int,
         stack_size=3,
         incoming_var=1.0,
+        use_se=False,
+        use_spatial_attn=False,
         name=None,
     ):
         blocks = []
@@ -407,6 +576,10 @@ class BottleneckResidualConvBlock(ResidualBlock):
                 )
             )
         blocks.append(make_conv_block(output_channels, 1, name="res_id_expand_dim_end"))
+        if use_spatial_attn:
+            blocks.append(SpatialAttention(output_channels, name="spatial_attn"))
+        if use_se:
+            blocks.append(SqueezeExcitation(output_channels, name="se"))
         super(BottleneckResidualConvBlock, self).__init__(blocks, name=name)
 
         # save for serialization
@@ -415,6 +588,8 @@ class BottleneckResidualConvBlock(ResidualBlock):
         self.conv_size = conv_size
         self.stack_size = stack_size
         self.incoming_var = incoming_var
+        self.use_se = use_se
+        self.use_spatial_attn = use_spatial_attn
 
     def get_config(self):
         return {
@@ -423,6 +598,8 @@ class BottleneckResidualConvBlock(ResidualBlock):
             "conv_size": self.conv_size,
             "stack_size": self.stack_size,
             "incoming_var": self.incoming_var,
+            "use_se": self.use_se,
+            "use_spatial_attn": self.use_spatial_attn,
             "name": self.name,
         }
 
@@ -439,6 +616,8 @@ class NbtResidualBlock(ResidualBlock):
         bottleneck_channels: int,
         conv_size: int,
         incoming_var=1.0,
+        use_se=False,
+        use_spatial_attn=False,
         name=None,
     ):
         blocks = []
@@ -468,6 +647,10 @@ class NbtResidualBlock(ResidualBlock):
         blocks.append(
             make_conv_block(output_channels, 1, variance=3.0, name="nbt_expand_dim")
         )
+        if use_spatial_attn:
+            blocks.append(SpatialAttention(output_channels, name="spatial_attn"))
+        if use_se:
+            blocks.append(SqueezeExcitation(output_channels, name="se"))
         super(NbtResidualBlock, self).__init__(blocks, name=name)
 
         # save for serialization
@@ -475,6 +658,8 @@ class NbtResidualBlock(ResidualBlock):
         self.bottleneck_channels = bottleneck_channels
         self.conv_size = conv_size
         self.incoming_var = incoming_var
+        self.use_se = use_se
+        self.use_spatial_attn = use_spatial_attn
 
     def get_config(self):
         return {
@@ -482,6 +667,8 @@ class NbtResidualBlock(ResidualBlock):
             "bottleneck_channels": self.bottleneck_channels,
             "conv_size": self.conv_size,
             "incoming_var": self.incoming_var,
+            "use_se": self.use_se,
+            "use_spatial_attn": self.use_spatial_attn,
             "name": self.name,
         }
 
@@ -627,97 +814,6 @@ class BroadcastResidualBlock(ResidualBlock):
             config["board_len"],
             config["incoming_var"],
             config["name"],
-        )
-
-
-@keras.saving.register_keras_serializable(package="p3achygo")
-class GlobalPool(keras.layers.Layer):
-    """
-    Computes mean and max of each channel. Given a tensor with shape (n, h, w, c),
-    outputs a tensor of shape (n, 2c).
-    """
-
-    def __init__(self, name=None):
-        super(GlobalPool, self).__init__(name=name)
-
-    def call(self, x):
-        # Reduce over spatial dims (h, w)
-        x_mean = keras.ops.mean(x, axis=(1, 2))  # (batch, c)
-        x_max = keras.ops.max(x, axis=(1, 2))  # (batch, c)
-        return keras.ops.concatenate([x_mean, x_max], axis=-1)  # (batch, 2c)
-
-    def get_config(self):
-        return {
-            "name": self.name,
-        }
-
-
-@keras.saving.register_keras_serializable(package="p3achygo")
-class GlobalPoolBias(keras.layers.Layer):
-    """
-    Takes in two vectors (x, y), and returns x + dense(gpool(y)), where gpool(y) is
-    a vector of the concatenated mean and max of each channel, and dense is a
-    fully connected layer to the number of channels in x (so that channelwise addition
-    works).
-    """
-
-    def __init__(
-        self,
-        channels: int,
-        act=keras.activations.relu,
-        use_var_norm=False,
-        incoming_var=1.0,
-        name=None,
-    ):
-        super(GlobalPoolBias, self).__init__(name=name)
-        self.g_norm_layer = (
-            keras.layers.Identity()  # scaling done already
-            if use_var_norm
-            else keras.layers.BatchNormalization(
-                momentum=0.99, epsilon=1e-3, name="batch_norm_gpool"
-            )
-        )
-        self.gpool = GlobalPool(name="gpool")
-        self.dense = make_dense(
-            channels, kern_init=keras.initializers.VarianceScaling(1.0)
-        )
-
-        # save for serialization
-        self.channels = channels
-        self.use_var_norm = use_var_norm
-        self.incoming_var = incoming_var
-        self.act = act
-
-    def call(self, x, g, training=False):
-        assert x.shape == g.shape
-        assert len(x.shape) == 4
-        assert x.shape[3] == g.shape[3]
-
-        g = self.g_norm_layer(g, training=training)
-        g = self.act(g)
-        g_pooled = self.gpool(g)
-        g_biases = self.dense(g_pooled)  # shape = (N, C)
-        x = x + g_biases[:, None, None, :]
-
-        return (x, g_pooled)
-
-    def get_config(self):
-        return {
-            "channels": self.channels,
-            "act": keras.activations.serialize(self.act),
-            "use_var_norm": self.use_var_norm,
-            "incoming_var": self.incoming_var,
-            "name": self.name,
-        }
-
-    @classmethod
-    def from_config(cls, config):
-        return cls(
-            channels=config["channels"],
-            act=keras.activations.deserialize(config["act"]),
-            use_var_norm=config.get("use_var_norm", True),
-            incoming_var=config.get("incoming_var", 1.0),
-            name=config.get("name"),
         )
 
 
@@ -1045,16 +1141,42 @@ def construct_trunk_legacy(
     return blocks
 
 
+def _block_output_channels(block_type: str, block_config: dict) -> int:
+    if block_type == "transformer":
+        return block_config["embed_dim"]
+    return block_config["output_channels"]
+
+
 def construct_trunk_from_generic_arch(generic_arch: dict, board_len: int = BOARD_LEN):
     blocks = []
     trunk_config = generic_arch["trunk"]
-    for i in range(len(trunk_config)):
-        block_type, block_config = trunk_config[i]
+    for i, (block_type, block_config) in enumerate(trunk_config):
+        cfg = dict(block_config)
+        name = f"{block_type}_{i}"
+
         if block_type == "transformer":
-            block_config.update({"pos_len": board_len, "name": f"transformer_{i}"})
-            blocks.append(TransformerBlock(**block_config))
+            if i > 0:
+                prev_type, prev_cfg = trunk_config[i - 1]
+                prev_channels = _block_output_channels(prev_type, prev_cfg)
+                if prev_channels != cfg["embed_dim"]:
+                    raise ValueError(
+                        f"transformer block at index {i} has embed_dim={cfg['embed_dim']} "
+                        f"but preceding block '{prev_type}_{i-1}' outputs {prev_channels} channels. "
+                        f"These must match."
+                    )
+            cfg.update({"pos_len": board_len, "name": name})
+            blocks.append(TransformerBlock(**cfg))
+        elif block_type == "classic":
+            blocks.append(ClassicResidualBlock(name=name, **cfg))
+        elif block_type == "btl":
+            blocks.append(BottleneckResidualConvBlock(name=name, **cfg))
+        elif block_type == "nbt":
+            blocks.append(NbtResidualBlock(name=name, **cfg))
+        elif block_type == "broadcast":
+            cfg["board_len"] = board_len
+            blocks.append(BroadcastResidualBlock(name=name, **cfg))
         else:
-            raise Exception("Unknown Block (Generic Arch)")
+            raise Exception(f"Unknown block type in generic arch: {block_type!r}")
 
     return blocks
 

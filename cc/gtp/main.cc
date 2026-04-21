@@ -32,6 +32,8 @@ void LogConfig(const eval::PlayerSearchConfig& cfg) {
     std::cerr << "  n:                    " << cfg.n << "  k: " << cfg.k
               << "\n";
   }
+  std::cerr << "  sampling_num_moves: " << cfg.sampling_num_moves
+            << "  sampling_temperature: " << cfg.sampling_temperature << "\n";
   std::cerr << "  use_puct:             " << b(cfg.use_puct) << "\n";
   std::cerr << "  c_puct:               " << cfg.c_puct << "\n";
   std::cerr << "  c_puct_visit_scaling: " << cfg.c_puct_visit_scaling << "\n";
