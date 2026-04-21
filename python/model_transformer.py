@@ -52,9 +52,6 @@ def spiral_rope_cos_sin_table(num_rotations: int, embed_dim: int, grid_len: int)
         theta_offset_base = (rot_offset // 2) * K
         theta_offset = theta_offset_base + (rot_offset % 2)
         theta_idx = min(len(thetas) - 1, theta_base + theta_offset)
-        # print(
-        #     f"i: {i}, k: {k}, k_norm: {k_norm}, theta_base: {theta_base}, rot_elem_offset: {rot_elem_offset}, rot_offset: {rot_offset}, theta_offset_base: {theta_offset_base}, theta_offset: {theta_offset}, theta_idx: {theta_idx}"
-        # )
         theta_table[i] = thetas[theta_idx]
 
     # now compute angle projections.
@@ -76,14 +73,6 @@ def spiral_rope_cos_sin_table(num_rotations: int, embed_dim: int, grid_len: int)
     rot_table = theta_table * angle_projs
     cos_table = np.cos(rot_table)
     sin_table = np.sin(rot_table)
-    # print(f"shape: {(seq_len, embed_dim)}, rotations: {num_rotations}")
-    # print("thetas\n", thetas)
-    # print("theta_table\n", theta_table)
-    # print("angles\n", angles)
-    # print("angle_projs\n", angle_projs)
-    # print("rot_table\n", rot_table)
-    # print("cos\n", cos_table)
-    # print("sin\n", sin_table)
     return cos_table, sin_table
 
 
@@ -125,8 +114,8 @@ class RoPE(keras.layers.Layer):
         # This swaps elements in each pair (x0, x1) -> (x1, x0)
         pair_swap_indices = np.zeros(head_dim, dtype=np.int32)
         for i in range(head_dim // 2):
-            pair_swap_indices[2 * i] = 2 * i + 1      # Even indices get odd values
-            pair_swap_indices[2 * i + 1] = 2 * i      # Odd indices get even values
+            pair_swap_indices[2 * i] = 2 * i + 1  # Even indices get odd values
+            pair_swap_indices[2 * i + 1] = 2 * i  # Odd indices get even values
         self._pair_swap_indices = tf.constant(pair_swap_indices, dtype=tf.int32)
 
         # Precompute sign patterns for RoPE formula: x0' = x0*cos + x1*sin, x1' = x0*sin - x1*cos

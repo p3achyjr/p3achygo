@@ -302,10 +302,10 @@ class GlobalPool(keras.layers.Layer):
     def __init__(self, name=None):
         super(GlobalPool, self).__init__(name=name)
 
-    def call(self, x):
+    def call(self, x, keepdims=False, training=False):
         # Reduce over spatial dims (h, w)
-        x_mean = keras.ops.mean(x, axis=(1, 2))  # (batch, c)
-        x_max = keras.ops.max(x, axis=(1, 2))  # (batch, c)
+        x_mean = keras.ops.mean(x, axis=(1, 2), keepdims=keepdims)  # (batch, c)
+        x_max = keras.ops.max(x, axis=(1, 2), keepdims=keepdims)  # (batch, c)
         return keras.ops.concatenate([x_mean, x_max], axis=-1)  # (batch, 2c)
 
     def get_config(self):
@@ -395,15 +395,24 @@ class SqueezeExcitation(keras.layers.Layer):
         name=None,
     ):
         super(SqueezeExcitation, self).__init__(name=name)
-        self.gpool = GlobalPool(name="se_gpool")
-        self.dense = make_dense(c, name="se_dense")
+        self.conv = keras.layers.Conv1D(
+            1,
+            5,
+            activation=None,
+            kernel_regularizer=L2(C_L2),
+            padding="same",
+            name="se_conv",
+        )
 
         # save for serialization
         self.c = c
 
     def call(self, x, training=False):
-        avg_max = self.gpool(x, training=training)
-        embed = self.dense(avg_max)
+        x_mean = keras.ops.mean(x, axis=(1, 2), keepdims=False)
+        x_max = keras.ops.max(x, axis=(1, 2), keepdims=False)
+        x_mean = keras.ops.expand_dims(x_mean, axis=-1)  # (batch, c, 1)
+        x_max = keras.ops.expand_dims(x_max, axis=-1)  # (batch, c, 1)
+        embed = self.conv(x_mean) + self.conv(x_max)  # still k params, shared conv
         attn_map = keras.ops.reshape(keras.ops.sigmoid(embed), (-1, 1, 1, self.c))
         return x * attn_map
 
@@ -510,7 +519,7 @@ class ClassicResidualBlock(ResidualBlock):
             )
             blocks.append(block)
         if use_spatial_attn:
-            blocks.append(SpatialAttention(output_channels, name="spatial_attn"))
+            blocks.append(SpatialAttention(name="spatial_attn"))
         if use_se:
             blocks.append(SqueezeExcitation(output_channels, name="se"))
         super(ClassicResidualBlock, self).__init__(blocks, name=name)
@@ -577,7 +586,7 @@ class BottleneckResidualConvBlock(ResidualBlock):
             )
         blocks.append(make_conv_block(output_channels, 1, name="res_id_expand_dim_end"))
         if use_spatial_attn:
-            blocks.append(SpatialAttention(output_channels, name="spatial_attn"))
+            blocks.append(SpatialAttention(name="spatial_attn"))
         if use_se:
             blocks.append(SqueezeExcitation(output_channels, name="se"))
         super(BottleneckResidualConvBlock, self).__init__(blocks, name=name)
@@ -648,7 +657,7 @@ class NbtResidualBlock(ResidualBlock):
             make_conv_block(output_channels, 1, variance=3.0, name="nbt_expand_dim")
         )
         if use_spatial_attn:
-            blocks.append(SpatialAttention(output_channels, name="spatial_attn"))
+            blocks.append(SpatialAttention(name="spatial_attn"))
         if use_se:
             blocks.append(SqueezeExcitation(output_channels, name="se"))
         super(NbtResidualBlock, self).__init__(blocks, name=name)

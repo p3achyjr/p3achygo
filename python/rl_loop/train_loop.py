@@ -147,6 +147,7 @@ def main(_):
                     dtype=tf.float32,
                 ),
             )
+        live_model.summary()
         live_model.save(live_model_path)
 
     if not Path(swa_model_path).exists():
