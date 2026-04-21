@@ -293,10 +293,9 @@ void TfRecorderImpl::Flush() {
 
   // Dump visit count info
   std::string visit_count_filename =
-      FilePath(path_) /
-      absl::StrFormat("gen%03d_b%03d_g%03d_n%05d_t%d_%s.visit_count", gen_,
-                      batch_num_, num_games, num_records, timestamp,
-                      worker_id_);
+      FilePath(path_) / absl::StrFormat(data::kVisitCountFormat, gen_,
+                                        batch_num_, num_games, num_records,
+                                        timestamp, worker_id_);
   FILE* const visit_count_file = fopen(visit_count_filename.c_str(), "w");
   absl::FPrintF(
       visit_count_file,

@@ -9,11 +9,11 @@ namespace data {
 
 // Format for selfplay chunk.
 static constexpr char kChunkFormat[] =
-    "gen%03d_b%03d_g%03d_n%05d_t%d_%s.tfrecord.zz";
+    "gen%04d_b%03d_g%03d_n%05d_t%d_%s.tfrecord.zz";
 
 // Format for lock-file, written once selfplay writing is finished.
 static constexpr char kChunkDoneFormat[] =
-    "gen%03d_b%03d_g%03d_n%05d_t%d_%s.done";
+    "gen%04d_b%03d_g%03d_n%05d_t%d_%s.done";
 
 // Regex for parsing selfplay chunk files.
 static constexpr char kChunkRegex[] =
@@ -24,19 +24,23 @@ static constexpr char kChunkDoneRegex[] =
     "gen(\\d+)_b(\\d+)_g(\\d+)_n(\\d+)_t(\\d+)_(.*)\\.done";
 
 // Format for SGFs
-static constexpr char kSgfFormat[] = "gen%03d_b%03d_g%03d_%s.sgf";
+static constexpr char kSgfFormat[] = "gen%04d_b%03d_g%03d_%s.sgf";
 
 // Format for SGF lock-file.
-static constexpr char kSgfDoneFormat[] = "gen%03d_b%03d_g%03d_%s.done";
+static constexpr char kSgfDoneFormat[] = "gen%04d_b%03d_g%03d_%s.done";
 
 // Format for SGFs with full game trees.
-static constexpr char kSgfFullFormat[] = "FULL_gen%03d_b%03d_g%03d_%s.sgf";
+static constexpr char kSgfFullFormat[] = "FULL_gen%04d_b%03d_g%03d_%s.sgf";
 
 // Format for game-tree SGF lock-file.
-static constexpr char kSgfFullDoneFormat[] = "FULL_gen%03d_b%03d_g%03d_%s.done";
+static constexpr char kSgfFullDoneFormat[] = "FULL_gen%04d_b%03d_g%03d_%s.done";
+
+// Format for per-batch visit counts file.
+static constexpr char kVisitCountFormat[] =
+    "gen%04d_b%03d_g%03d_n%05d_t%d_%s.visit_count";
 
 // Format for per-batch search stats file.
-static constexpr char kStatsFormat[] = "gen%03d_b%03d_g%03d_n%05d_t%d_%s.stats";
+static constexpr char kStatsFormat[] = "gen%04d_b%03d_g%03d_n%05d_t%d_%s.stats";
 
 // keep in sync with python/gcs_utils.py
 static constexpr char kGoldenChunkFormat[] = "chunk_%04d.tfrecord.zz";

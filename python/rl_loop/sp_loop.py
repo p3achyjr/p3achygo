@@ -161,7 +161,7 @@ def loop(
             f"{bin_path} --num_threads={num_threads}"
             + f" --model_path={str(model_path)}"
             + f" --recorder_path={local_run_dir}"
-            + f" --flush_interval={num_threads} --gen={gen}"
+            + f" --flush_interval={num_threads * 2} --gen={gen}"
             + f" --id={worker_id.upper()}"
             + f" --gumbel_selected_k={selected_k}"
             + f" --gumbel_selected_n={selected_n}"
