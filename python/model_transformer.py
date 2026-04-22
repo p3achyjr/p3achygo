@@ -136,8 +136,10 @@ class RoPE(keras.layers.Layer):
         # Slice to current sequence length and reshape for broadcasting
         # cos = self._rope_cos[: self.seq_len]  # (S, head_dim)
         # sin = self._rope_sin[: self.seq_len]  # (S, head_dim)
-        cos = self._rope_cos
-        sin = self._rope_sin
+        dtype = x.dtype
+        cos = tf.cast(self._rope_cos, dtype)
+        sin = tf.cast(self._rope_sin, dtype)
+        sign_cos = tf.cast(self._sign_cos, dtype)
 
         # Reshape: (S, head_dim) -> (1, S, 1, head_dim)
         cos = tf.reshape(cos, [1, self.seq_len, 1, self.head_dim])
@@ -148,7 +150,7 @@ class RoPE(keras.layers.Layer):
 
         # Apply RoPE formula: x' = x*cos*sign_cos + x_swapped*sin
         # For each pair (x0, x1): x0' = x0*cos + x1*sin, x1' = -x1*cos + x0*sin
-        return x * cos * self._sign_cos + x_swapped * sin
+        return x * cos * sign_cos + x_swapped * sin
 
     def get_config(self):
         config = super().get_config()

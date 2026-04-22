@@ -1596,7 +1596,8 @@ class P3achyGoModel(keras.Model):
             config.kBroadcastInterval,
             config.kTrunkBlockType,
             config.generic_arch,
-            config.c_l2,
+            config.is_transformer,
+            c_l2=config.c_l2,
             name=name,
         )
 

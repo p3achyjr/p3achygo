@@ -172,8 +172,18 @@ class ModelConfig:
         )
 
     @staticmethod
-    def from_generic_arch(generic_arch: dict):
-        return ModelConfig(generic_arch=generic_arch)
+    def from_generic_arch(generic_arch: dict) -> "ModelConfig":
+        trunk = generic_arch.get("trunk", [])
+        channels = 128
+        if trunk:
+            block_type, block_cfg = trunk[0]
+            if block_type == "transformer":
+                channels = block_cfg["embed_dim"]
+            elif block_type == "transformer_btl":
+                channels = block_cfg["output_dim"]
+            else:
+                channels = block_cfg.get("output_channels", 128)
+        return ModelConfig(channels=channels, generic_arch=generic_arch)
 
     @staticmethod
     def from_str(s: str):
