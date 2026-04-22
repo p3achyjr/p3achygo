@@ -12,6 +12,7 @@ from typing import List, Tuple
 @dataclass
 class RunConfig(object):
     from_existing_run: str
+    start_gen: int
     model_config: str | dict
 
     # Training Controls
@@ -65,6 +66,7 @@ def parse(run_id: str) -> RunConfig:
     with open(config_path) as f:
         obj = json.loads(f.read())
         from_existing_run = obj.get("from_existing_run", "")
+        start_gen = obj.get("start_gen", 0)
         model_config = obj.get("model_config", "small")
         num_generations = obj.get("num_generations", 0)
         games_per_gen = obj.get("games_per_gen", 0)
@@ -117,6 +119,7 @@ def parse(run_id: str) -> RunConfig:
 
         return RunConfig(
             from_existing_run,
+            start_gen,
             model_config,
             num_generations,
             games_first_gen,

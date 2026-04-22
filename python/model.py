@@ -762,7 +762,6 @@ class ValueHead(keras.layers.Layer):
         self.conv_ownership = make_conv(1, kernel_size=1, name="value_conv_ownership")
 
         # Score Distribution Subhead
-        self.gamma_pre = make_dense(c_val, name="value_gamma_pre")
         self.gamma_output = make_dense(1, kern_init="zeros", name="value_gamma_output")
 
         self.score_range = score_range
@@ -779,6 +778,7 @@ class ValueHead(keras.layers.Layer):
         self.incoming_var = incoming_var
 
     def call(self, x, scores):
+        batch_size = keras.ops.shape(x)[0]
         x = self.norm_layer(x)
         v = self.conv(x)
         v_pooled = self.gpool(v)
@@ -802,7 +802,10 @@ class ValueHead(keras.layers.Layer):
         game_ownership = keras.activations.tanh(game_ownership)
 
         # Compute Score Distribution
-        gamma = self.gamma_pre(v_pooled)
+        gamma_input = keras.ops.concatenate(
+            [v_pooled, keras.ops.zeros((batch_size, 1), dtype=v_pooled.dtype)], axis=-1
+        )
+        gamma = self.score_pre(gamma_input)
         gamma = self.act(gamma)
         gamma = self.gamma_output(gamma)
 
@@ -814,7 +817,6 @@ class ValueHead(keras.layers.Layer):
         scores = tf.cast(scores, dtype=v_pooled.dtype)
 
         # Reshape to broadcastable shapes
-        batch_size = keras.ops.shape(x)[0]
         pooled_features = keras.ops.shape(v_pooled)[1]
 
         v_pooled_exp = v_pooled[:, None, :]  # (batch, 1, features)
@@ -1056,14 +1058,14 @@ class P3achyGoModel(keras.Model):
         num_blocks,
         num_channels,
         num_bottleneck_channels,
-        num_head_channels,
+        num_policy_head_channels,
+        num_value_head_channels,
         c_val,
         bottleneck_length,
         conv_size,
         broadcast_interval,
         trunk_block_type="btl",
         generic_arch=None,
-        is_transformer=False,
         c_l2=1e-4,
         name=None,
     ):
@@ -1102,13 +1104,13 @@ class P3achyGoModel(keras.Model):
         )
 
         self.policy_head = PolicyHead(
-            channels=num_head_channels,
+            channels=num_policy_head_channels,
             use_var_norm=self.use_var_norm,
             incoming_var=float(num_blocks + 1),
             name="policy_head",
         )
         self.value_head = ValueHead(
-            num_head_channels,
+            num_value_head_channels,
             c_val,
             incoming_var=float(num_blocks + 1),
             name="value_head",
@@ -1132,14 +1134,14 @@ class P3achyGoModel(keras.Model):
         self.num_blocks = num_blocks
         self.num_channels = num_channels
         self.num_bottleneck_channels = num_bottleneck_channels
-        self.num_head_channels = num_head_channels
+        self.num_policy_head_channels = num_policy_head_channels
+        self.num_value_head_channels = num_value_head_channels
         self.c_val = c_val
         self.bottleneck_length = bottleneck_length
         self.conv_size = conv_size
         self.broadcast_interval = broadcast_interval
         self.trunk_block_type = trunk_block_type
         self.generic_arch = generic_arch
-        self.is_transformer = is_transformer
         self.c_l2 = c_l2
 
     def call(self, board_state, game_state, training=False, scores=None):
@@ -1512,14 +1514,14 @@ class P3achyGoModel(keras.Model):
             "num_blocks": self.num_blocks,
             "num_channels": self.num_channels,
             "num_bottleneck_channels": self.num_bottleneck_channels,
-            "num_head_channels": self.num_head_channels,
+            "num_policy_head_channels": self.num_policy_head_channels,
+            "num_value_head_channels": self.num_value_head_channels,
             "c_val": self.c_val,
             "bottleneck_length": self.bottleneck_length,
             "conv_size": self.conv_size,
             "broadcast_interval": self.broadcast_interval,
             "trunk_block_type": self.trunk_block_type,
             "generic_arch": self.generic_arch,
-            "is_transformer": self.is_transformer,
             "c_l2": self.c_l2,
             "name": self.name,
         }
@@ -1589,14 +1591,14 @@ class P3achyGoModel(keras.Model):
             config.kBlocks,
             config.kChannels,
             config.kBottleneckChannels,
-            config.kHeadChannels,
+            config.kPolicyHeadChannels,
+            config.kValueHeadChannels,
             config.kCVal,
             config.kInnerBottleneckLayers + 2,
             config.kConvSize,
             config.kBroadcastInterval,
             config.kTrunkBlockType,
             config.generic_arch,
-            config.is_transformer,
             c_l2=config.c_l2,
             name=name,
         )

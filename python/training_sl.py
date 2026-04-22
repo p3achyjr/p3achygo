@@ -61,6 +61,7 @@ flags.DEFINE_string("dataset_dir", "", "Directory to datasets.")
 flags.DEFINE_string("tensorboard_logdir", "/tmp/logs", "Tensorboard log directory.")
 flags.DEFINE_enum("model_config", "b10c128btl3", CONFIG_OPTIONS, "Model Config/Size.")
 flags.DEFINE_string("from_checkpoint", "", "Path to checkpoint to load weights from.")
+flags.DEFINE_enum("optimizer", "sgd", ["sgd", "muon"], "Optimizer to use.")
 
 
 def main(_):
@@ -95,7 +96,7 @@ def main(_):
     if FLAGS.from_checkpoint:
         model = keras.models.load_model(FLAGS.from_checkpoint)
         optimizer = model.optimizer
-    if optimizer is None and model.is_transformer:
+    if optimizer is None and FLAGS.optimizer == "muon":
         optimizer = ConvMuon(learning_rate=lr)
 
     # setup train ds.
