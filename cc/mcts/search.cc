@@ -69,7 +69,7 @@ void FetchLeafEval(GlobalSearchState& global_state,
   }
 }
 
-void UnsafeGlobalStateReset(GlobalSearchState& global_state) {
+void UnsafeGlobalStateRoundReset(GlobalSearchState& global_state) {
   global_state.descent_remaining = global_state.num_workers;
   global_state.did_signal = false;
   for (auto& p : global_state.pending_each_level) {
@@ -441,7 +441,7 @@ void SearchTask(const int worker_id, core::Probability& prob,
       absl::MutexLock l(&global_state.mu);
       if (--global_state.round_remaining == 0) {
         // Last worker through: reset for next round.
-        UnsafeGlobalStateReset(global_state);
+        UnsafeGlobalStateRoundReset(global_state);
       }
       // Wait for round_parity to flip (indicating the round has ended and
       // state has been reset for the next round).
@@ -633,7 +633,7 @@ void BatchSearch(GlobalSearchState& global_state, NNInterface::Slot slot,
     }
 
     // reset search control
-    UnsafeGlobalStateReset(global_state);
+    UnsafeGlobalStateRoundReset(global_state);
   }
 }
 
@@ -833,6 +833,7 @@ Search::Result Search::Run(core::Probability& probability, Game& game,
       global_search_state.total_num_aborted.load(std::memory_order_relaxed);
   const auto collision_count =
       global_search_state.total_num_collisions.load(std::memory_order_relaxed);
+  global_search_state_.reset();
   return Search::Result{best_move, size_t(visit_count), size_t(abort_count),
                         size_t(collision_count), size_t(time_ms)};
 }

@@ -91,7 +91,7 @@ struct PlayerSearchConfig {
 
   // Virtual loss magnitude (negative). Applied when q_fn is "virtual_loss" or
   // "virtual_loss_soft".
-  float vl_delta = -1.5f;
+  float vl_delta = -1.0f;
 
   // Maximum number of collision retries before aborting. Used by "retry" and
   // "smart_retry" collision policies.

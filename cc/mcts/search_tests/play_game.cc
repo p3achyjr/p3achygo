@@ -105,9 +105,6 @@ int main(int argc, char** argv) {
                     NNInterface::SignalKind::kExplicit,
                     /*num_shared_search_tasks=*/1);
 
-  Search search_p0(nn_p0.MakeSlot(0));
-  Search search_p1(nn_p1.MakeSlot(0));
-
   game::Game game;
   core::Probability probability;
   MctsNodeTable table_p0;
@@ -131,7 +128,8 @@ int main(int argc, char** argv) {
   while (!game.IsGameOver()) {
     ++move_num;
 
-    Search& active_search = (color == BLACK) ? search_p0 : search_p1;
+    Search active_search(color == BLACK ? nn_p0.MakeSlot(0)
+                                        : nn_p1.MakeSlot(0));
     TreeNode* active_root = (color == BLACK) ? root_p0 : root_p1;
     mcts::NodeTable* active_table =
         (color == BLACK) ? static_cast<mcts::NodeTable*>(&table_p0)

@@ -77,6 +77,26 @@ struct GlobalSearchState {
 
   // Optional bias cache
   BiasCache* bias_cache = nullptr;
+
+  void reset() {
+    did_signal = false;
+    round_parity = false;
+    num_workers = 0;
+    visit_budget = 0;
+    descent_remaining = 0;
+    pending = 0;
+    round_remaining = 0;
+    for (auto& pending : pending_each_level) {
+      pending.store(0, std::memory_order_relaxed);
+    }
+    max_pending_each_level = 0;
+    total_num_visits.store(0, std::memory_order_relaxed);
+    total_num_aborted.store(0, std::memory_order_relaxed);
+    total_num_collisions.store(0, std::memory_order_relaxed);
+    should_stop.store(false, std::memory_order_relaxed);
+    should_stop_this_round = false;
+    bias_cache = nullptr;
+  }
 };
 
 class Search final {
