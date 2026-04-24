@@ -24,11 +24,36 @@ class ConvMuon(keras.optimizers.Muon):
         wd_lr_exponent: If set, scales the Muon weight decay as
             wd × (lr / wd_lr_max)^wd_lr_exponent each step, matching KataGo
             upstream's sublinear WD decay (exponent=0.70). Defaults to None
-            (constant WD). Has no effect on AdamW variables.
+            (constant WD).
         wd_lr_max: The reference LR at which `weight_decay` is calibrated
             (typically the peak/starting LR). Required when wd_lr_exponent
             is set. Defaults to None.
+
+    Per-category WD scale factors (hardcoded in `_WD_SCALE_FACTORS`):
+    norm scale params (BN γ + RMSNorm scale), norm shift params (BN β),
+    body biases, head biases, and attention Q/K/V/O projection kernels
+    each receive `factor × weight_decay` instead of going through the
+    AdamW/Muon paths. RMS scaling is not applied to these categories;
+    lr-ratio scaling is.
     """
+
+    _GAMMA_SUFFIXES = ("/gamma", ".gamma", "/scale", ".scale")
+    _BETA_SUFFIXES = ("/beta", ".beta")
+    _BIAS_SUFFIXES = ("/bias", ".bias")
+    _QKVO_SUFFIXES = (
+        "/query/kernel",
+        "/key/kernel",
+        "/value/kernel",
+        "/output/kernel",
+    )
+
+    _WD_SCALE_FACTORS = {
+        "gamma": 0.1,
+        "beta": 1e-3,
+        "body_bias": 1e-2,
+        "head_bias": 1e-2,
+        "qkvo": 0.5,
+    }
 
     def __init__(
         self,
@@ -106,6 +131,24 @@ class ConvMuon(keras.optimizers.Muon):
             flat_dim *= d
         return float(max(flat_dim, out_dim)) ** 0.5 * self.rms_rate
 
+    def _wd_category(self, variable):
+        """Classify variable for `_WD_SCALE_FACTORS` lookup.
+
+        Returns one of "gamma", "beta", "body_bias", "head_bias", "qkvo",
+        or None if the variable is not in any scaled category.
+        """
+        p = variable.path.lower()
+        if p.endswith(self._GAMMA_SUFFIXES):
+            return "gamma"
+        if p.endswith(self._BETA_SUFFIXES):
+            return "beta"
+        if p.endswith(self._BIAS_SUFFIXES):
+            is_head = "policy_head" in p or "value_head" in p
+            return "head_bias" if is_head else "body_bias"
+        if "transformer_attention" in p and p.endswith(self._QKVO_SUFFIXES):
+            return "qkvo"
+        return None
+
     def _lr_scale(self):
         if self.wd_lr_exponent is not None and self.wd_lr_max is not None:
             lr = ops.cast(self.learning_rate, "float32")
@@ -120,10 +163,16 @@ class ConvMuon(keras.optimizers.Muon):
         for variable in variables:
             if not self._use_weight_decay(variable):
                 continue
-            if self._should_use_adamw(variable):
+            category = self._wd_category(variable)
+            scale_factor = self._WD_SCALE_FACTORS.get(category) if category else None
+            if scale_factor is not None and self.weight_decay is not None:
+                wd_value = self.weight_decay * scale_factor
+                rms_scale = 1.0
+                lr_scale_factor = self._lr_scale()
+            elif self._should_use_adamw(variable):
                 wd_value = self.adam_weight_decay
                 rms_scale = 1.0
-                lr_scale_factor = 1.0
+                lr_scale_factor = self._lr_scale()
             else:
                 wd_value = self.weight_decay
                 rms_scale = (

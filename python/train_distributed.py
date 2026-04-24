@@ -13,6 +13,7 @@ the mean loss over the full global batch.
 
 from __future__ import annotations
 
+import math
 import tensorflow as tf
 import keras
 from typing import Optional
@@ -370,6 +371,11 @@ def train(
                 optimizer,
             )
 
+            if math.isnan(result.total_loss.numpy()) or math.isinf(
+                result.total_loss.numpy()
+            ):
+                print(f"[batch {batch_num}] saw inf/nan gradients")
+
             losses_train.update_losses(result)
 
             local_batch_num += 1
@@ -382,7 +388,7 @@ def train(
                 log_train(
                     batch_num,
                     losses_train,
-                    result.grad_norm,
+                    result,
                     summary_writer,
                     mode,
                 )

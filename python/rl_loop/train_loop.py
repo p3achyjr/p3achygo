@@ -133,6 +133,7 @@ def _train_loop(strategy):
     gens_trained = 0
 
     while max_gens == 0 or gens_trained < max_gens:
+        config = rl_loop.config.parse(FLAGS.run_id)
         next_gen = model_gen + 1
         source_run_id = FLAGS.source_run_id or FLAGS.run_id
         chunk_path = _fetch_chunk(FLAGS.chunk_dir, source_run_id, next_gen)
@@ -157,10 +158,11 @@ def _train_loop(strategy):
         # Save live model checkpoint.
         live_model.compile(optimizer=optimizer)
         live_model.save(live_model_path)
-        if next_gen % 10 == 0:
-            live_ckpt_dir = Path(FLAGS.models_dir, "_live")
-            live_ckpt_dir.mkdir(exist_ok=True)
-            live_model.save(str(live_ckpt_dir / f"live_{next_gen:04d}.keras"))
+
+        # Save restart checkpoint.
+        live_ckpt_dir = Path(FLAGS.models_dir, "_live")
+        live_ckpt_dir.mkdir(exist_ok=True)
+        live_model.save(str(live_ckpt_dir / f"live_{next_gen:04d}.keras"))
 
         # Save SWA model for selfplay.
         if FLAGS.save_trt:

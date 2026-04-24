@@ -115,10 +115,12 @@ def train_one_gen(
                 learning_rate=lr_schedule,
                 exclude_layers=[r".*policy_head\/.*", r".*value_head\/.*"],
                 adam_weight_decay=config.adam_wd,
+                adam_lr_ratio=config.adam_lr_ratio,
                 weight_decay=config.muon_wd,
                 scale_weight_decay_by_rms=config.scale_weight_decay_by_rms,
                 wd_lr_exponent=config.wd_lr_exponent,
                 wd_lr_max=config.wd_lr_max,
+                global_clipnorm=config.global_clipnorm,
             )
         else:
             optimizer = keras.optimizers.SGD(
@@ -132,20 +134,33 @@ def train_one_gen(
 
     inner_optimizer = getattr(optimizer, "inner_optimizer", optimizer)
     if isinstance(inner_optimizer, ConvMuon):
+        inner_optimizer.learning_rate = lr_schedule
+        inner_optimizer.weight_decay = config.muon_wd
+        inner_optimizer.adam_weight_decay = config.adam_wd
+        inner_optimizer.adam_lr_ratio = config.adam_lr_ratio
+        inner_optimizer.global_clipnorm = config.global_clipnorm
+        inner_optimizer.wd_lr_exponent = config.wd_lr_exponent
+        inner_optimizer.wd_lr_max = config.wd_lr_max
         logging.info(
             f"Using ConvMuon Optimizer"
+            f"\n  Learning Rate={inner_optimizer.learning_rate}"
             f"\n  Weight Decay={inner_optimizer.weight_decay}"
             f"\n  AdamW Weight Decay={inner_optimizer.adam_weight_decay}"
+            f"\n  AdamW LR Ratio={inner_optimizer.adam_lr_ratio}"
             f"\n  Momentum={inner_optimizer.momentum}"
             f"\n  Scale WD by RMS={inner_optimizer.scale_weight_decay_by_rms}"
             f"\n  WD Auto Scale={config.wd_auto_scale}"
             f"\n  WD LR Exponent={inner_optimizer.wd_lr_exponent}"
             f"\n  WD LR Max={inner_optimizer.wd_lr_max}"
             f"\n  LR Scale={inner_optimizer._lr_scale()}"
+            f"\n  Global ClipNorm={inner_optimizer.global_clipnorm}"
         )
     else:
+        inner_optimizer.learning_rate = lr_schedule
+        inner_optimizer.global_clipnorm = config.global_clipnorm
         logging.info(
             f"Using ConvMuon SGD"
+            f"\n  Learning Rate={inner_optimizer.learning_rate}"
             f"\n  Momentum={inner_optimizer.momentum}"
             f"\n  ClipNorm={inner_optimizer.global_clipnorm}"
         )

@@ -29,11 +29,13 @@ class RunConfig(object):
     lr_growth_window: int
     optimizer: str  # 'sgd' or 'muon'
     adam_wd: float
+    adam_lr_ratio: float
     muon_wd: float
     scale_weight_decay_by_rms: bool
     wd_auto_scale: bool
     wd_lr_exponent: float
     wd_lr_max: float
+    global_clipnorm: float
 
     # Gumbel Controls
     min_train_selected_k: int
@@ -84,11 +86,13 @@ def parse(run_id: str) -> RunConfig:
         lr_growth_window = obj.get("lr_growth_window", 0)
         optimizer = obj.get("optimizer", "sgd")
         adam_wd = obj.get("adam_wd", 0.01)
+        adam_lr_ratio = obj.get("adam_lr_ratio", 1.0)
         muon_wd = obj.get("muon_wd", 0.02)
         scale_weight_decay_by_rms = obj.get("scale_weight_decay_by_rms", False)
         wd_auto_scale = obj.get("wd_auto_scale", False)
         wd_lr_exponent = obj.get("wd_lr_exponent", None)
         wd_lr_max = obj.get("wd_lr_max", None)
+        global_clipnorm = obj.get("global_clipnorm", 1000.0)
         if wd_auto_scale:
             if wd_lr_exponent is None:
                 wd_lr_exponent = 0.70
@@ -134,11 +138,13 @@ def parse(run_id: str) -> RunConfig:
             lr_growth_window,
             optimizer,
             adam_wd,
+            adam_lr_ratio,
             muon_wd,
             scale_weight_decay_by_rms,
             wd_auto_scale,
             wd_lr_exponent,
             wd_lr_max,
+            global_clipnorm,
             min_train_selected_k,
             min_train_selected_n,
             max_train_selected_k,
