@@ -20,10 +20,12 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -217,9 +219,13 @@ SearchResult RunGroundTruth(GumbelEvaluator& evaluator, Game& game,
 
 // Seeds the tree with PUCT visits (simulating self-play tree reuse), then runs
 // Gumbel(n, k) using the same fixed per-position seed.
+// If pi_seeded_out is non-null, it is populated with the improved policy of
+// the seeded tree *before* the Gumbel search runs.
 SearchResult RunSeededGumbel(GumbelEvaluator& evaluator, Game& game,
                              Color color_to_move, int n, int k, int seed_visits,
-                             uint64_t pos_seed, bool early_stopping = false) {
+                             uint64_t pos_seed,
+                             std::array<float, constants::kMaxMovesPerPosition>*
+                                 pi_seeded_out = nullptr) {
   auto node_table = std::make_unique<MctsNodeTable>();
   TreeNode* root =
       node_table->GetOrCreate(game.board().hash(), color_to_move, false);
@@ -233,14 +239,14 @@ SearchResult RunSeededGumbel(GumbelEvaluator& evaluator, Game& game,
         PuctParams::Builder().set_kind(PuctRootSelectionPolicy::kLcb).build());
   }
 
+  if (pi_seeded_out != nullptr) {
+    *pi_seeded_out = ComputeImprovedPolicy(root, 0);
+  }
+
   // Gumbel search: use the fixed per-position seed so that the Gumbel noise
   // (and thus the initial top-K action selection) matches RunGroundTruth.
   core::Probability gumbel_prob(pos_seed);
-  auto params = GumbelSearchParams::Builder()
-                    .set_n(n)
-                    .set_k(k)
-                    .set_early_stopping_enabled(early_stopping)
-                    .build();
+  auto params = GumbelSearchParams::Builder().set_n(n).set_k(k).build();
   auto result = evaluator.SearchRoot(gumbel_prob, game, node_table.get(), root,
                                      color_to_move, params);
   return {ComputeImprovedPolicy(root, 0), result.mcts_move, result.visits};
@@ -344,6 +350,60 @@ Stats ComputeStats(std::vector<float>& vals) {
   return Stats{mean, percentile(0.75f), percentile(0.95f), vals.back()};
 }
 
+// Maps KLD(seed||prior) to a dynamic N value.
+// Power 1.5: N(k) = clip(150 + 220*k^1.5, 150, 600), calibrated so E[N] ≈ 270.
+int NForKld(float kld) {
+  return std::clamp(static_cast<int>(150.f + 220.3f * std::pow(kld, 1.5f)), 150,
+                    600);
+}
+
+struct DynamicResult {
+  SearchResult sr;
+  std::array<float, constants::kMaxMovesPerPosition> pi_seeded;
+  float kld_band;  // KLD(seed || prior) — band signal for N selection
+  int n_chosen;
+};
+
+// Seeds the tree with PUCT visits, computes KLD(seed || prior) to pick N
+// dynamically, then runs Gumbel(N, k).
+DynamicResult RunDynamic(GumbelEvaluator& evaluator, Game& game,
+                         Color color_to_move, int k, int seed_visits,
+                         uint64_t pos_seed) {
+  auto node_table = std::make_unique<MctsNodeTable>();
+  TreeNode* root =
+      node_table->GetOrCreate(game.board().hash(), color_to_move, false);
+
+  if (seed_visits > 0) {
+    core::Probability puct_prob;
+    evaluator.SearchRootPuct(
+        puct_prob, game, node_table.get(), root, color_to_move, seed_visits,
+        PuctParams::Builder().set_kind(PuctRootSelectionPolicy::kLcb).build());
+  }
+
+  const auto pi_seeded = ComputeImprovedPolicy(root, 0);
+  // KLD(seed || prior): computable online, used as band signal for N selection.
+  const float kld_band = ComputeKLD(pi_seeded, root->move_probs);
+  const int n = NForKld(kld_band);
+
+  core::Probability gumbel_prob(pos_seed);
+  auto params = GumbelSearchParams::Builder().set_n(n).set_k(k).build();
+  auto result = evaluator.SearchRoot(gumbel_prob, game, node_table.get(), root,
+                                     color_to_move, params);
+
+  return {{ComputeImprovedPolicy(root, 0), result.mcts_move, result.visits},
+          pi_seeded,
+          kld_band,
+          n};
+}
+
+struct DynSample {
+  float kld_band;  // KLD(seed||prior) — band signal
+  int n_chosen;
+  float kld_gt_n;     // KLD(GT||dynamic_result)
+  float kld_prior;    // KLD(GT||prior) for this example
+  bool move_correct;  // dynamic best_move == gt best_move
+};
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -377,12 +437,18 @@ int main(int argc, char** argv) {
   std::vector<std::vector<float>> kld_samples(kNumNValues);
   // kld_prior_dist_samples[ni] = KLD(dist_at_N, prior) per example.
   std::vector<std::vector<float>> kld_prior_dist_samples(kNumNValues);
+  // n_move_correct[ni] = count of examples where N-visit best == GT best.
+  std::vector<int> n_move_correct(kNumNValues, 0);
   // kld_prior_samples[i] = KLD(GT, nn_prior) for example i.
   std::vector<float> kld_prior_samples;
-  // N=800 + early stopping.
-  std::vector<float> kld_es_samples;
-  std::vector<float> kld_prior_dist_es_samples;
-  std::vector<float> visits_es_samples;
+  // kld_pre_seeded_samples[i] = KLD(GT, improved_policy(seeded_tree)).
+  std::vector<float> kld_pre_seeded_samples;
+  // Dynamic allocation: KLD(GT || result) and actual N chosen.
+  std::vector<float> kld_dynamic_samples;
+  std::vector<float> kld_prior_dist_dynamic_samples;
+  std::vector<float> dynamic_visits_samples;
+  // Per-example data for band analysis.
+  std::vector<DynSample> dyn_samples;
 
   SequentialRecordReader reader(chunk_path, RecordReaderOptions::Zlib());
   CHECK(reader.Init().ok()) << "Failed to open: " << chunk_path;
@@ -502,32 +568,44 @@ int main(int argc, char** argv) {
           ComputeKLD(n_results[ni].pi_improved, gt.prior_probs);
       kld_samples[ni].push_back(kld);
       kld_prior_dist_samples[ni].push_back(kld_prior_dist);
+      if (n_results[ni].best_move == gt.best_move) ++n_move_correct[ni];
     }
 
-    // N=800 + early stopping.
-    SearchResult sr_es;
+    // Dynamic allocation: only runs in Gumbel mode.
+    std::optional<DynamicResult> dr_opt;
+    float kld_dyn = 0.f, kld_pd_dyn = 0.f, kld_gt_seed = 0.f;
     if (use_gumbel) {
       const uint64_t pos_seed =
           0xdeadbeef12345678ULL ^ static_cast<uint64_t>(processed);
       BiasCache bias_cache(0.8f, 0.3f);
       GumbelEvaluator evaluator(nn_interface.get(), /*thread_id=*/0,
                                 &bias_cache);
-      sr_es = RunSeededGumbel(evaluator, game, color_to_move, 800, kGumbelK,
-                              seed_visits, pos_seed, /*early_stopping=*/true);
-    } else {
-      BiasCache bias_cache(0.85f, 0.45f);
-      GumbelEvaluator evaluator(nn_interface.get(), /*thread_id=*/0,
-                                &bias_cache);
-      sr_es = RunPuct(evaluator, game, color_to_move, 800);
+      DynamicResult dr = RunDynamic(evaluator, game, color_to_move, kGumbelK,
+                                    seed_visits, pos_seed);
+      kld_gt_seed = ComputeKLD(gt.pi_improved, dr.pi_seeded);
+      kld_dyn = ComputeKLD(gt.pi_improved, dr.sr.pi_improved);
+      kld_pd_dyn = ComputeKLD(dr.sr.pi_improved, gt.prior_probs);
+      kld_pre_seeded_samples.push_back(dr.kld_band);
+      kld_dynamic_samples.push_back(kld_dyn);
+      kld_prior_dist_dynamic_samples.push_back(kld_pd_dyn);
+      dynamic_visits_samples.push_back(static_cast<float>(dr.n_chosen));
+      dyn_samples.push_back({dr.kld_band, dr.n_chosen, kld_dyn, kld_prior,
+                             dr.sr.best_move == gt.best_move});
+      dr_opt = std::move(dr);
     }
-    kld_es_samples.push_back(ComputeKLD(gt.pi_improved, sr_es.pi_improved));
-    kld_prior_dist_es_samples.push_back(
-        ComputeKLD(sr_es.pi_improved, gt.prior_probs));
-    visits_es_samples.push_back(static_cast<float>(sr_es.visits));
-    printf("  800es actual_visits: %u\n", sr_es.visits);
 
     if (verbose) {
-      // nats/visit summary for all N values.
+      // Dynamic line first (if available).
+      if (dr_opt) {
+        printf(
+            "  N=%-4s  best: %-5s  KLD(GT||N): %.5f  KLD(N||prior): %.5f  "
+            "nats/visit: %.6f  n_chosen: %d"
+            "  (KLD(seed||prior): %.5f  KLD(GT||seed): %.5f)\n",
+            "dyn", LocToString(dr_opt->sr.best_move).c_str(), kld_dyn,
+            kld_pd_dyn, (kld_prior - kld_dyn) / dr_opt->n_chosen,
+            dr_opt->n_chosen, dr_opt->kld_band, kld_gt_seed);
+      }
+      // Fixed-N nats/visit lines.
       for (int ni = 0; ni < kNumNValues; ++ni) {
         const float kld = ComputeKLD(gt.pi_improved, n_results[ni].pi_improved);
         const float kld_pd =
@@ -538,29 +616,20 @@ int main(int argc, char** argv) {
             kNValues[ni], LocToString(n_results[ni].best_move).c_str(), kld,
             kld_pd, (kld_prior - kld) / kNValues[ni]);
       }
-      {
-        const float kld = ComputeKLD(gt.pi_improved, sr_es.pi_improved);
-        const float kld_pd = ComputeKLD(sr_es.pi_improved, gt.prior_probs);
-        printf(
-            "  N=%-4s  best: %-5s  KLD(GT||N): %.5f  KLD(N||prior): %.5f  "
-            "nats/visit: %.6f\n",
-            "800es", LocToString(sr_es.best_move).c_str(), kld, kld_pd,
-            (kld_prior - kld) / 800);
-      }
-      // Top-5 moves for all N values.
+      // Top-5 moves.
       printf("\n");
-      for (int ni = 0; ni < kNumNValues; ++ni) {
-        auto top5 =
-            TopKMoves(n_results[ni].pi_improved, game, color_to_move, 5);
-        printf("  N=%-4d  top-5:", kNValues[ni]);
+      if (dr_opt) {
+        auto top5 = TopKMoves(dr_opt->sr.pi_improved, game, color_to_move, 5);
+        printf("  N=%-4s  top-5:", "dyn");
         for (auto& [loc, prob] : top5) {
           printf("  %s(%.3f)", LocToString(loc).c_str(), prob);
         }
         printf("\n");
       }
-      {
-        auto top5 = TopKMoves(sr_es.pi_improved, game, color_to_move, 5);
-        printf("  N=%-4s  top-5:", "800es");
+      for (int ni = 0; ni < kNumNValues; ++ni) {
+        auto top5 =
+            TopKMoves(n_results[ni].pi_improved, game, color_to_move, 5);
+        printf("  N=%-4d  top-5:", kNValues[ni]);
         for (auto& [loc, prob] : top5) {
           printf("  %s(%.3f)", LocToString(loc).c_str(), prob);
         }
@@ -589,26 +658,76 @@ int main(int argc, char** argv) {
            kGroundTruthVisits);
   }
   printf("Examples:     %d\n\n", processed);
-  printf("KLD(GT, prior) -- mean: %.5f  p75: %.5f  p95: %.5f  max: %.5f\n\n",
+  printf("KLD(GT, prior)    -- mean: %.5f  p75: %.5f  p95: %.5f  max: %.5f\n",
          prior_stats.mean, prior_stats.p75, prior_stats.p95, prior_stats.max);
-  printf("%-8s  %-12s  %-12s  %-12s  %-12s\n", "N", "KLD(GT||N)",
-         "KLD(N||prior)", "nats/visit", "mean_visits");
-  printf("%-8s  %-12s  %-12s  %-12s  %-12s\n", "--------", "------------",
-         "------------", "------------", "------------");
+  if (!kld_pre_seeded_samples.empty()) {
+    Stats pre_seeded_stats = ComputeStats(kld_pre_seeded_samples);
+    printf("KLD(seed||prior)  -- mean: %.5f  p75: %.5f  p95: %.5f  max: %.5f\n",
+           pre_seeded_stats.mean, pre_seeded_stats.p75, pre_seeded_stats.p95,
+           pre_seeded_stats.max);
+  }
+  printf("\n");
+  printf("%-8s  %-12s  %-12s  %-12s  %-12s  %-12s\n", "N", "KLD(GT||N)",
+         "KLD(N||prior)", "nats/visit", "mean_visits", "pct_correct");
+  printf("%-8s  %-12s  %-12s  %-12s  %-12s  %-12s\n", "--------",
+         "------------", "------------", "------------", "------------",
+         "------------");
   for (int ni = 0; ni < kNumNValues; ++ni) {
     Stats s = ComputeStats(kld_samples[ni]);
     Stats sp = ComputeStats(kld_prior_dist_samples[ni]);
     float nats_per_visit = (prior_stats.mean - s.mean) / kNValues[ni];
-    printf("%-8d  %-12.5f  %-12.5f  %-12.6f  %-12d\n", kNValues[ni], s.mean,
-           sp.mean, nats_per_visit, kNValues[ni]);
+    float pct_correct =
+        100.f * n_move_correct[ni] / static_cast<float>(processed);
+    printf("%-8d  %-12.5f  %-12.5f  %-12.6f  %-12d  %-12.1f\n", kNValues[ni],
+           s.mean, sp.mean, nats_per_visit, kNValues[ni], pct_correct);
   }
-  {
-    Stats s = ComputeStats(kld_es_samples);
-    Stats sp = ComputeStats(kld_prior_dist_es_samples);
-    Stats sv = ComputeStats(visits_es_samples);
+  if (!kld_dynamic_samples.empty()) {
+    Stats s = ComputeStats(kld_dynamic_samples);
+    Stats sp = ComputeStats(kld_prior_dist_dynamic_samples);
+    Stats sv = ComputeStats(dynamic_visits_samples);
     float nats_per_visit = (prior_stats.mean - s.mean) / sv.mean;
-    printf("%-8s  %-12.5f  %-12.5f  %-12.6f  %-12.1f\n", "800es", s.mean,
-           sp.mean, nats_per_visit, sv.mean);
+    int dyn_correct = 0;
+    for (const auto& ds : dyn_samples) {
+      if (ds.move_correct) ++dyn_correct;
+    }
+    float pct_correct = 100.f * dyn_correct / static_cast<float>(processed);
+    printf("%-8s  %-12.5f  %-12.5f  %-12.6f  %-12.1f  %-12.1f\n", "dynamic",
+           s.mean, sp.mean, nats_per_visit, sv.mean, pct_correct);
+  }
+
+  // Per-quintile analysis for dynamic allocation.
+  if (!dyn_samples.empty()) {
+    std::sort(dyn_samples.begin(), dyn_samples.end(),
+              [](const DynSample& a, const DynSample& b) {
+                return a.kld_band < b.kld_band;
+              });
+    const int n_total = static_cast<int>(dyn_samples.size());
+    const int band_size = (n_total + 4) / 5;
+
+    printf("\nDynamic per-quintile (sorted by KLD(seed||prior)):\n");
+    printf("%-5s  %-16s  %-6s  %-12s  %-8s  %-12s\n", "band", "kld_band_range",
+           "n", "pct_correct", "mean_n", "nats/visit");
+    printf("%-5s  %-16s  %-6s  %-12s  %-8s  %-12s\n", "-----",
+           "----------------", "------", "------------", "--------",
+           "------------");
+    for (int b = 0; b < 5; ++b) {
+      int lo = b * band_size;
+      int hi = std::min(lo + band_size, n_total);
+      if (lo >= n_total) break;
+      int n_band = hi - lo;
+      int n_correct = 0;
+      float sum_n = 0.f;
+      float sum_npv = 0.f;
+      for (int i = lo; i < hi; ++i) {
+        if (dyn_samples[i].move_correct) ++n_correct;
+        sum_n += dyn_samples[i].n_chosen;
+        sum_npv += (dyn_samples[i].kld_prior - dyn_samples[i].kld_gt_n) /
+                   dyn_samples[i].n_chosen;
+      }
+      printf("%-5d  [%.3f, %.3f]     %-6d  %-12.1f  %-8.1f  %-12.6f\n", b,
+             dyn_samples[lo].kld_band, dyn_samples[hi - 1].kld_band, n_band,
+             100.f * n_correct / n_band, sum_n / n_band, sum_npv / n_band);
+    }
   }
 
   return 0;

@@ -160,25 +160,6 @@ void PlayEvalGame(size_t seed, int game_id, int total_num_workers,
     bias_cache_w.emplace(white_cfg.bias_cache_alpha,
                          white_cfg.bias_cache_lambda);
 
-  std::optional<GumbelEvaluator> gumbel_b, gumbel_w;
-  std::optional<Search> search_b, search_w;
-  if (black_uses_search) {
-    search_b.emplace(
-        black_nn->MakeSlot(game_id * black_cfg.num_threads_per_game),
-        bias_cache_b ? &*bias_cache_b : nullptr);
-  } else {
-    gumbel_b.emplace(black_nn, game_id, MakeScoreUtilityParams(black_cfg),
-                     bias_cache_b ? &*bias_cache_b : nullptr);
-  }
-  if (white_uses_search) {
-    search_w.emplace(
-        white_nn->MakeSlot(game_id * white_cfg.num_threads_per_game),
-        bias_cache_w ? &*bias_cache_w : nullptr);
-  } else {
-    gumbel_w.emplace(white_nn, game_id, MakeScoreUtilityParams(white_cfg),
-                     bias_cache_w ? &*bias_cache_w : nullptr);
-  }
-
   int cur_total_visits = 0;
   int cand_total_visits = 0;
   float cur_total_time = 0;
@@ -228,14 +209,27 @@ void PlayEvalGame(size_t seed, int game_id, int total_num_workers,
     Loc move;
     int num_aborted = 0, num_collisions = 0;
     if (active_uses_search) {
-      Search& s = color_to_move == BLACK ? *search_b : *search_w;
+      Search s = color_to_move == BLACK
+                     ? Search(black_nn->MakeSlot(
+                                  game_id * black_cfg.num_threads_per_game),
+                              bias_cache_b ? &*bias_cache_b : nullptr)
+                     : Search(white_nn->MakeSlot(
+                                  game_id * white_cfg.num_threads_per_game),
+                              bias_cache_w ? &*bias_cache_w : nullptr);
       Search::Result res = s.Run(probability, game, player_table, player_tree,
                                  color_to_move, MakeSearchParams(active_cfg));
       move = res.move;
       num_aborted = res.num_aborted;
       num_collisions = res.num_collisions;
     } else {
-      GumbelEvaluator& gumbel = color_to_move == BLACK ? *gumbel_b : *gumbel_w;
+      GumbelEvaluator gumbel =
+          color_to_move == BLACK
+              ? GumbelEvaluator(black_nn, game_id,
+                                MakeScoreUtilityParams(black_cfg),
+                                bias_cache_b ? &*bias_cache_b : nullptr)
+              : GumbelEvaluator(white_nn, game_id,
+                                MakeScoreUtilityParams(white_cfg),
+                                bias_cache_w ? &*bias_cache_w : nullptr);
       GumbelResult gumbel_res =
           active_cfg.use_puct
               ? gumbel.SearchRootPuct(

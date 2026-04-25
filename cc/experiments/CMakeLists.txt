@@ -42,4 +42,41 @@ if(BUILD_BINARIES)
         m
         dl
     )
+
+    add_executable(value_visit_study
+        value_visit_study.cc
+    )
+    target_link_libraries(value_visit_study PRIVATE
+        core_impl
+        game
+        gumbel
+        node_table
+        nn_interface
+        engine_factory
+        tfrecord
+        tf_example_proto
+        absl::flags
+        absl::flags_parse
+        absl::log
+        absl::log_initialize
+        m
+        dl
+    )
+    add_executable(opening_sample_study
+        opening_sample_study.cc
+    )
+    target_link_libraries(opening_sample_study PRIVATE
+        core_impl
+        game
+        gumbel
+        node_table
+        nn_interface
+        engine_factory
+        absl::flags
+        absl::flags_parse
+        absl::log
+        absl::log_initialize
+        m
+        dl
+    )
 endif()

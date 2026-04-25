@@ -46,7 +46,7 @@ ABSL_FLAG(int, gumbel_default_k, 5,
 ABSL_FLAG(int, gumbel_default_n, 32,
           "Number of Low Playout Cap Randomization visits.");
 ABSL_FLAG(
-    float, use_seen_state_prob, 0.5f,
+    float, use_seen_state_prob, 0.2f,
     "Probability of drawing the initial game state from the reuse buffer.");
 ABSL_FLAG(float, sel_mult_base, 0.0f,
           "Base multiplier for training position selection probability. "
