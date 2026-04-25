@@ -118,6 +118,11 @@ class GumbelEvaluator final {
   GumbelEvaluator(GumbelEvaluator&&) = delete;
   GumbelEvaluator& operator=(GumbelEvaluator&&) = delete;
 
+  // Sample raw from policy
+  GumbelResult Sample(core::Probability& probability, game::Game& game,
+                      TreeNode* root, game::Color color_to_move,
+                      float tau = 1.0f);
+
   // Performs a full Gumbel root search. Returns a pair of the original move,
   // and the selected move.
   // If params.n == 1, we will sample a move directly from the policy.

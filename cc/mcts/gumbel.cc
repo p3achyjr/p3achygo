@@ -253,6 +253,22 @@ GumbelEvaluator::GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id,
                                  BiasCache* bias_cache)
     : leaf_evaluator_(nn_interface, thread_id), bias_cache_(bias_cache) {}
 
+GumbelResult GumbelEvaluator::Sample(core::Probability& probability,
+                                     game::Game& game, TreeNode* root,
+                                     game::Color color_to_move, float tau) {
+  if (root->state == TreeNodeState::kNew) {
+    leaf_evaluator_.EvaluateRoot(probability, game, root, color_to_move);
+    AssignBiasCacheEntry(game, root);
+  }
+
+  Loc raw_nn_move = game::AsLoc(Argmax(root->move_logits));
+  Loc mcts_move = game::AsLoc(
+      SampleFromPolicy(root->move_probs, tau, probability, game.board()));
+
+  return GumbelResult{raw_nn_move,        mcts_move, root->move_probs,
+                      /*child_stats=*/{}, /*kld=*/0, /*visits=*/0};
+}
+
 // `n`: total number of simulations.
 // `k`: initial number of actions selected.
 // `n` must be >= `klogk`.
