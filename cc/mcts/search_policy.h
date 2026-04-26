@@ -38,6 +38,9 @@ struct PuctParams {
   float p_opt_weight = 0.0f;
   // FPU reduction at the root. Set to 0 to disable root FPU (KataGo style).
   float root_fpu = kDefaultFPU;
+  // Distribution variance scaling knobs.
+  bool enable_v_cat_var_scaling = false;
+  int v_cat_var_scale_prior_visits = 10;
 
   // Forward-declared; defined below once PuctParams is complete.
   class Builder;
@@ -94,6 +97,14 @@ class PuctParams::Builder {
     p_.root_fpu = v;
     return *this;
   }
+  Builder& set_enable_v_cat_var_scaling(bool v) {
+    p_.enable_v_cat_var_scaling = v;
+    return *this;
+  }
+  Builder& set_v_cat_var_scale_prior_visits(int v) {
+    p_.v_cat_var_scale_prior_visits = v;
+    return *this;
+  }
   PuctParams build() const { return p_; }
 
  private:
@@ -145,6 +156,7 @@ class PuctScorer final {
         m3_prior_visits_(params.m3_prior_visits),
         p_opt_weight_(params.p_opt_weight),
         root_fpu_(params.root_fpu),
+        enable_v_cat_var_scaling_(params.enable_v_cat_var_scaling),
         q_fn_(q_fn),
         n_fn_(n_fn) {};
 
@@ -187,8 +199,12 @@ class PuctScorer final {
     std::array<int, constants::kMaxMovesPerPosition> child_visits_in_flight;
     std::array<float, constants::kMaxMovesPerPosition> qvars;
     std::array<double, constants::kMaxMovesPerPosition> q_m3s;
+    std::array<std::pair<float, float>, constants::kMaxMovesPerPosition>
+        q_up_down_stds{};
     float q_std_weighted_sum = 0.0f;
     double q_m3_std_weighted_sum = 0.0;
+    float q_std_down_weighted_sum = 0.0f;
+    float q_std_up_weighted_sum = 0.0f;
     for (int a = 0; a < qs.size(); ++a) {
       TreeNode* child = node->child(a);
       if (child == nullptr) {
@@ -208,9 +224,19 @@ class PuctScorer final {
         q_std_weighted_sum += std::sqrt(qvars[a]) * child_visits[a];
         q_m3_std_weighted_sum += std::cbrt(q_m3s[a]) * child_visits[a];
       }
+
+      if (enable_v_cat_var_scaling_) {
+        const float q_std_down = std::sqrt(child->v_cat_var_down);
+        const float q_std_up = std::sqrt(child->v_cat_var_up);
+        q_up_down_stds[a] = {q_std_down, q_std_up};
+        q_std_down_weighted_sum += q_std_down * child_visits[a];
+        q_std_up_weighted_sum += q_std_up * child_visits[a];
+      }
     }
     const float q_std_mean = q_std_weighted_sum / n;
     const double q_m3_std_mean = q_m3_std_weighted_sum / n;
+    const float q_std_down_mean = q_std_down_weighted_sum / n;
+    const float q_std_up_mean = q_std_up_weighted_sum / n;
     const float p_explored = [&]() {
       float mass = 0.0f;
       for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
@@ -289,6 +315,22 @@ class PuctScorer final {
       };
       const double m3_bonus = enable_m3_bonus_ ? compute_m3_bonus() : 0.0;
 
+      // Upweights children with better upside, and downweights children with
+      // worse downside.
+      const auto compute_q_std_up_down_factor = [&]() {
+        constexpr float kEps = 1e-6;
+        if (child_visits[a] == 0) {
+          return 1.0f;
+        }
+        const auto [q_std_down, q_std_up] = q_up_down_stds[a];
+        const auto down_factor = q_std_down / (q_std_down_mean + kEps);
+        const auto up_factor = q_std_up / (q_std_up_mean + kEps);
+        const auto factor = up_factor / (down_factor + kEps);
+        return factor;
+      };
+      const float q_std_up_down_factor =
+          enable_v_cat_var_scaling_ ? compute_q_std_up_down_factor() : 1.0f;
+
       // PUCT-V formula.
       const auto compute_puct_v_explore_term = [&]() {
         float var = child_visits[a] < 3 ? (n < 3 ? 1.0f : v_var) : qvars[a];
@@ -303,7 +345,9 @@ class PuctScorer final {
 
       // PUCT formula.
       const auto compute_puct_explore_term = [&]() {
-        return c_puct * c_puct_var_scale_factor * move_probs[a] *
+        const float c_puct_scaled =
+            c_puct * c_puct_var_scale_factor * q_std_up_down_factor;
+        return c_puct_scaled * move_probs[a] *
                (std::sqrt(canonical_n) / (1 + canonical_child_n));
       };
       const auto compute_explore_term = [&]() {
@@ -379,6 +423,7 @@ class PuctScorer final {
   const int m3_prior_visits_;
   const float p_opt_weight_;
   const float root_fpu_;
+  const bool enable_v_cat_var_scaling_;
   QFn q_fn_;
   NFn n_fn_;
 };

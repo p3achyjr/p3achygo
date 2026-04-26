@@ -283,7 +283,8 @@ void TopologicalBackup(BackupPriorityQueue& backup_pq, BiasCache* bias_cache) {
 }
 
 void BackupStep(int worker_id, TreeNode* node, game::Loc action, bool is_leaf,
-                BiasCache* bias_cache) {
+                BiasCache* bias_cache, const PuctParams& puct_params,
+                const float leaf_q_outcome) {
   // While running backup, we want to preserve the following invariant:
   // - When updating the stats for any node, that node's children are fully
   // updated.
@@ -306,6 +307,7 @@ void BackupStep(int worker_id, TreeNode* node, game::Loc action, bool is_leaf,
     }
   }
 
+  UpdateVCategorial(node, leaf_q_outcome);
   const int old_in_flight =
       node->n_in_flight.fetch_sub(1, std::memory_order_acq_rel);
   DCHECK(old_in_flight > 0);
@@ -321,17 +323,20 @@ void BackupStep(int worker_id, TreeNode* node, game::Loc action, bool is_leaf,
       const float obs_bias = FetchObsBias(bias_cache, node);
       RecomputeNodeStats(node, obs_bias);
     }
+    RecomputeVCategoricalStats(node, puct_params.v_cat_var_scale_prior_visits);
     node->is_pending_update.store(false, std::memory_order_release);
   }
 }
 
-void Backup(int worker_id, SearchPath& search_path, BiasCache* bias_cache) {
+void Backup(int worker_id, SearchPath& search_path, BiasCache* bias_cache,
+            const PuctParams puct_params) {
   // Can ignore the last node in the path because it is either a leaf or
   // terminal, from the perspective of this path.
+  const float leaf_q_outcome = std::get<0>(search_path.back())->v_outcome;
   for (int i = search_path.size() - 1; i >= 0; --i) {
     auto& [node, action, _] = search_path[i];
     BackupStep(worker_id, node, action, i == (int)search_path.size() - 1,
-               bias_cache);
+               bias_cache, puct_params, leaf_q_outcome);
   }
 }
 
@@ -344,7 +349,8 @@ void SearchTask(const int worker_id, core::Probability& prob,
                 const CollisionDetector& collision_detector, Game& game,
                 NodeTable* node_table, TreeNode* const root,
                 game::Color color_to_move,
-                ScoreUtilityParams score_util_params) {
+                const ScoreUtilityParams score_util_params,
+                const PuctParams puct_params) {
   LeafEvaluator leaf_evaluator(slot, worker_id, score_util_params);
   const auto should_stop = [&global_state]() {
     if (global_state.should_stop_this_round) {
@@ -425,7 +431,7 @@ void SearchTask(const int worker_id, core::Probability& prob,
     if (!collision_result.has_value()) {
       // We must keep the invariant that all collisions retry until abort before
       // reaching here.
-      Backup(worker_id, search_path, global_state.bias_cache);
+      Backup(worker_id, search_path, global_state.bias_cache, puct_params);
     }
 
     // Count this descent as a visit only if we successfully reached a leaf.
@@ -468,7 +474,8 @@ void SpawnSearchTasks(GlobalSearchState& global_state, NNInterface::Slot slot,
                       CollisionDetector collision_detector, Game& game,
                       NodeTable* node_table, TreeNode* root,
                       game::Color color_to_move, int num_threads,
-                      ScoreUtilityParams score_util_params) {
+                      ScoreUtilityParams score_util_params,
+                      PuctParams puct_params) {
   std::vector<std::thread> workers;
   workers.reserve(num_threads);
   for (int worker_id = 0; worker_id < num_threads; ++worker_id) {
@@ -476,7 +483,7 @@ void SpawnSearchTasks(GlobalSearchState& global_state, NNInterface::Slot slot,
       core::Probability prob;
       SearchTask(worker_id, prob, global_state, slot, descent_policy, cp,
                  collision_detector, game, node_table, root, color_to_move,
-                 score_util_params);
+                 score_util_params, puct_params);
     });
   }
   for (auto& w : workers) w.join();
@@ -657,7 +664,7 @@ void RunWithCollision(GlobalSearchState& global_state, NNInterface::Slot slot,
         SpawnSearchTasks(global_state, slot, dp, collision_policy,
                          collision_detector, game, node_table, root,
                          color_to_move, params.num_threads,
-                         params.score_util_params);
+                         params.score_util_params, params.puct_params);
       } else {
         BatchSearch(global_state, slot, dp, collision_policy,
                     collision_detector, game, node_table, root, color_to_move,
@@ -670,7 +677,7 @@ void RunWithCollision(GlobalSearchState& global_state, NNInterface::Slot slot,
         SpawnSearchTasks(global_state, slot, dp, collision_policy,
                          collision_detector, game, node_table, root,
                          color_to_move, params.num_threads,
-                         params.score_util_params);
+                         params.score_util_params, params.puct_params);
       } else {
         BatchSearch(global_state, slot, dp, collision_policy,
                     collision_detector, game, node_table, root, color_to_move,

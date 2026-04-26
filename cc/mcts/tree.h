@@ -45,7 +45,12 @@ struct TreeNode final {
   float v_var = 0;
   double v_m3 = 0;  // non-standardized skewness (3rd moment)
 
+  std::array<float, kNumVBuckets> v_categorical_prior{};
   std::array<uint32_t, kNumVBuckets> v_categorical{};
+  // combined upside/downside var. The weight of v_categorical_prior is
+  // specified by the user.
+  float v_cat_var_up = 0;
+  float v_cat_var_down = 0;
 
   float w_outcome = 0;
   float v_outcome = 0;
@@ -238,6 +243,54 @@ inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f) {
   node->v_m3 = m3 / node->n;
   node->v_outcome_m3 = m3_outcome / node->n;
   node->v_err = v_err;
+}
+
+inline void UpdateVCategorial(TreeNode* node, const float leaf_q_outcome) {
+  // Add V to bucket.
+  // This is inaccurate with idempotent updates. We will miss entries from
+  // transposing paths in MCGS, and will not account for bias correction from
+  // the bias cache. However, idempotent updates to this field are very
+  // expensive, so we will keep it incremental.
+  const int v_bucket =
+      std::clamp(static_cast<int>((leaf_q_outcome + 1.0f) / kBucketRange), 0,
+                 kNumVBuckets - 1);
+  node->v_categorical[v_bucket] += 1;
+}
+
+// Must be called after node->v_outcome is recomputed.
+inline void RecomputeVCategoricalStats(TreeNode* node,
+                                       const int v_cat_prior_visits = 0) {
+  // Recompute up/down variance.
+  const float v_mean = [&]() {
+    float w = 0.0f, n = 0.0f;
+    for (int i = 0; i < kNumVBuckets; ++i) {
+      const float bucket_mean =
+          (i - constants::kVBucketMidpoint) * kBucketRange;
+      const float bucket_n = v_cat_prior_visits * node->v_categorical_prior[i] +
+                             node->v_categorical[i];
+      w += bucket_mean * bucket_n;
+      n += bucket_n;
+    }
+    return n > 0 ? (w / n) : 0.0f;
+  }();
+  float dist2_down = 0, dist2_up = 0;
+  float n_down = 0, n_up = 0;
+  for (int i = 0; i < kNumVBuckets; ++i) {
+    const float bucket_mean = (i - constants::kVBucketMidpoint) * kBucketRange;
+    const float bucket_n = v_cat_prior_visits * node->v_categorical_prior[i] +
+                           node->v_categorical[i];
+    const float l1_dist = bucket_mean - v_mean;
+    if (bucket_mean < v_mean) {
+      dist2_down += bucket_n * l1_dist * l1_dist;
+      n_down += bucket_n;
+    } else {
+      dist2_up += bucket_n * l1_dist * l1_dist;
+      n_up += bucket_n;
+    }
+  }
+
+  node->v_cat_var_down = n_down > 0 ? dist2_down / n_down : 0.0f;
+  node->v_cat_var_up = n_up > 0 ? dist2_up / n_up : 0.0f;
 }
 
 std::string VCategoricalHistogram(TreeNode* node, int granularity = 17);

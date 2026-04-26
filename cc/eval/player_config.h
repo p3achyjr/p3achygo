@@ -57,6 +57,8 @@ struct PlayerSearchConfig {
   bool enable_m3_bonus = false;
   int var_scale_prior_visits = 0;
   int m3_prior_visits = 20;
+  bool enable_v_cat_var_scaling = false;
+  int v_cat_var_scale_prior_visits = 10;
   float p_opt_weight = 0.0f;
   float root_fpu = 0.2f;
   int sampling_num_moves = 0;
@@ -200,6 +202,10 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.var_scale_prior_visits = std::stoi(val);
     else if (key == "m3_prior_visits")
       cfg.m3_prior_visits = std::stoi(val);
+    else if (key == "enable_v_cat_var_scaling")
+      cfg.enable_v_cat_var_scaling = internal::ParseBool(val);
+    else if (key == "v_cat_var_scale_prior_visits")
+      cfg.v_cat_var_scale_prior_visits = std::stoi(val);
     else if (key == "p_opt_weight")
       cfg.p_opt_weight = std::stof(val);
     else if (key == "root_fpu")
@@ -289,6 +295,8 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
   ROW(enable_m3_bonus, b);
   ROW(var_scale_prior_visits, i_);
   ROW(m3_prior_visits, i_);
+  ROW(enable_v_cat_var_scaling, b);
+  ROW(v_cat_var_scale_prior_visits, i_);
   ROW(p_opt_weight, f);
   ROW(root_fpu, f);
   ROW(sampling_temperature, f);

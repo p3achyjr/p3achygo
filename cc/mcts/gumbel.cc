@@ -448,13 +448,14 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
         TreeNode* child = root->children[move_info.move_encoding];
         const bool enable_var_scaling =
             params.nonroot_var_scale_prior_visits >= 0;
-        PuctSearchPolicy nonroot_policy(
+        const PuctParams nonroot_puct_params =
             PuctParams::Builder()
                 .set_enable_var_scaling(enable_var_scaling)
                 .set_var_scale_prior_visits(
                     enable_var_scaling ? params.nonroot_var_scale_prior_visits
                                        : 0)
-                .build());
+                .build();
+        PuctSearchPolicy nonroot_policy(nonroot_puct_params);
         SearchPath search_path = Search(
             probability, search_game, node_table, child,
             game::OppositeColor(color_to_move), color_to_move,
@@ -463,7 +464,7 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
         // update tree
         const bool use_idempotent_updates =
             node_table->is_graph() || (bias_cache_ != nullptr);
-        Backward(search_path, use_idempotent_updates);
+        Backward(search_path, nonroot_puct_params, use_idempotent_updates);
         root->child_visits[move_info.move_encoding] += 1;
         // TODO: Update root max_child_n?
 #if 0
@@ -631,7 +632,7 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
                /*first_is_root=*/true);
     const bool use_idempotent_updates =
         node_table->is_graph() || (bias_cache_ != nullptr);
-    Backward(search_path, use_idempotent_updates);
+    Backward(search_path, puct_params, use_idempotent_updates);
   }
 
   // Build result.
@@ -759,7 +760,8 @@ void GumbelEvaluator::AssignBiasCacheEntry(const game::Game& game,
   node->bias_cache_entry = bias_cache_->GetOrCreate(*local_pattern);
 }
 
-void GumbelEvaluator::Backward(SearchPath& path, bool use_idempotent_updates) {
+void GumbelEvaluator::Backward(SearchPath& path, const PuctParams puct_params,
+                               bool use_idempotent_updates) {
   auto [_, leaf] = path.back();
   float leaf_q = leaf->init_util_est;
   float leaf_q_outcome = leaf->init_outcome_est;
@@ -772,13 +774,14 @@ void GumbelEvaluator::Backward(SearchPath& path, bool use_idempotent_updates) {
 
     SingleBackup(parent, parent_action, i == path.size() - 1,
                  leaf_q_mult * leaf_q, leaf_q_mult * leaf_q_outcome,
-                 leaf_q_mult * leaf_score, use_idempotent_updates);
+                 leaf_q_mult * leaf_score, puct_params, use_idempotent_updates);
   }
 }
 
 void GumbelEvaluator::SingleBackup(TreeNode* node, game::Loc action,
                                    bool is_leaf, float leaf_q,
                                    float leaf_q_outcome, float leaf_score,
+                                   const PuctParams puct_params,
                                    bool is_idempotent) {
   if (is_leaf) {
     node->n += 1;
@@ -786,6 +789,8 @@ void GumbelEvaluator::SingleBackup(TreeNode* node, game::Loc action,
     node->w_outcome = node->init_outcome_est;
     node->v = node->init_util_est;
     node->v_outcome = node->init_outcome_est;
+    UpdateVCategorial(node, leaf_q_outcome);
+    RecomputeVCategoricalStats(node, puct_params.v_cat_var_scale_prior_visits);
     return;
   }
 
@@ -833,15 +838,8 @@ void GumbelEvaluator::SingleBackup(TreeNode* node, game::Loc action,
     }
   }
 
-  // Add V to bucket.
-  // This is inaccurate with idempotent updates. We will miss entries from
-  // transposing paths in MCGS, and will not account for bias correction from
-  // the bias cache. However, idempotent updates to this field are very
-  // expensive, so we will keep it incremental.
-  int v_bucket =
-      std::clamp(static_cast<int>((leaf_q_outcome + 1.0f) / kBucketRange), 0,
-                 kNumVBuckets - 1);
-  node->v_categorical[v_bucket] += 1;
+  UpdateVCategorial(node, leaf_q_outcome);
+  RecomputeVCategoricalStats(node, puct_params.v_cat_var_scale_prior_visits);
 }
 
 }  // namespace mcts

@@ -150,12 +150,13 @@ class GumbelEvaluator final {
                     bool first_is_root);
 
   // Updates all nodes in tree, based on leaf evaluation.
-  void Backward(SearchPath& path, bool use_idempotent_updates);
+  void Backward(SearchPath& path, const PuctParams puct_params,
+                bool use_idempotent_updates);
 
   // Single Backward Step.
   void SingleBackup(TreeNode* node, game::Loc action, bool is_leaf,
                     float leaf_q, float leaf_q_outcome, float leaf_score,
-                    bool is_idempotent = false);
+                    const PuctParams puct_params, bool is_idempotent = false);
 
   // Assigns bias_cache_entry to node based on the current game position.
   void AssignBiasCacheEntry(const game::Game& game, TreeNode* node);
