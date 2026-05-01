@@ -92,6 +92,10 @@ ABSL_FLAG(int, cur_m3_prior_visits, 20,
           "Prior visits for m3 bonus dampening for cur.");
 ABSL_FLAG(float, cur_p_opt_weight, 0.0f,
           "Optimistic policy interpolation weight for cur.");
+ABSL_FLAG(bool, cur_enable_v_cat_var_scaling, false,
+          "Whether to scale c_puct by upside/downside variance ratio for cur.");
+ABSL_FLAG(int, cur_v_cat_var_scale_prior_visits, 10,
+          "Prior visits for v_cat upside/downside scaling for cur.");
 ABSL_FLAG(float, cur_root_fpu, 0.1f,
           "Root FPU reduction for cur (0 = no FPU at root).");
 ABSL_FLAG(int, cand_n, kDefaultGumbelN, "N for candidate player");
@@ -127,6 +131,11 @@ ABSL_FLAG(int, cand_m3_prior_visits, 20,
           "Prior visits for m3 bonus dampening for cand.");
 ABSL_FLAG(float, cand_p_opt_weight, 0.0f,
           "Optimistic policy interpolation weight for cand.");
+ABSL_FLAG(
+    bool, cand_enable_v_cat_var_scaling, false,
+    "Whether to scale c_puct by upside/downside variance ratio for cand.");
+ABSL_FLAG(int, cand_v_cat_var_scale_prior_visits, 10,
+          "Prior visits for v_cat upside/downside scaling for cand.");
 ABSL_FLAG(float, cand_root_fpu, 0.1f,
           "Root FPU reduction for cand (0 = no FPU at root).");
 
@@ -186,6 +195,12 @@ void ApplyCurCommandLineFlags(eval::PlayerSearchConfig& cfg) {
     cfg.m3_prior_visits = absl::GetFlag(FLAGS_cur_m3_prior_visits);
   if (IsOnCommandLine("cur_p_opt_weight"))
     cfg.p_opt_weight = absl::GetFlag(FLAGS_cur_p_opt_weight);
+  if (IsOnCommandLine("cur_enable_v_cat_var_scaling"))
+    cfg.enable_v_cat_var_scaling =
+        absl::GetFlag(FLAGS_cur_enable_v_cat_var_scaling);
+  if (IsOnCommandLine("cur_v_cat_var_scale_prior_visits"))
+    cfg.v_cat_var_scale_prior_visits =
+        absl::GetFlag(FLAGS_cur_v_cat_var_scale_prior_visits);
   if (IsOnCommandLine("cur_root_fpu"))
     cfg.root_fpu = absl::GetFlag(FLAGS_cur_root_fpu);
 }
@@ -234,6 +249,12 @@ void ApplyCandCommandLineFlags(eval::PlayerSearchConfig& cfg) {
     cfg.m3_prior_visits = absl::GetFlag(FLAGS_cand_m3_prior_visits);
   if (IsOnCommandLine("cand_p_opt_weight"))
     cfg.p_opt_weight = absl::GetFlag(FLAGS_cand_p_opt_weight);
+  if (IsOnCommandLine("cand_enable_v_cat_var_scaling"))
+    cfg.enable_v_cat_var_scaling =
+        absl::GetFlag(FLAGS_cand_enable_v_cat_var_scaling);
+  if (IsOnCommandLine("cand_v_cat_var_scale_prior_visits"))
+    cfg.v_cat_var_scale_prior_visits =
+        absl::GetFlag(FLAGS_cand_v_cat_var_scale_prior_visits);
   if (IsOnCommandLine("cand_root_fpu"))
     cfg.root_fpu = absl::GetFlag(FLAGS_cand_root_fpu);
 }
@@ -263,6 +284,10 @@ eval::PlayerSearchConfig CurConfigFromFlags() {
   cfg.var_scale_prior_visits = absl::GetFlag(FLAGS_cur_var_scale_prior_visits);
   cfg.m3_prior_visits = absl::GetFlag(FLAGS_cur_m3_prior_visits);
   cfg.p_opt_weight = absl::GetFlag(FLAGS_cur_p_opt_weight);
+  cfg.enable_v_cat_var_scaling =
+      absl::GetFlag(FLAGS_cur_enable_v_cat_var_scaling);
+  cfg.v_cat_var_scale_prior_visits =
+      absl::GetFlag(FLAGS_cur_v_cat_var_scale_prior_visits);
   cfg.root_fpu = absl::GetFlag(FLAGS_cur_root_fpu);
   return cfg;
 }
@@ -292,6 +317,10 @@ eval::PlayerSearchConfig CandConfigFromFlags() {
   cfg.var_scale_prior_visits = absl::GetFlag(FLAGS_cand_var_scale_prior_visits);
   cfg.m3_prior_visits = absl::GetFlag(FLAGS_cand_m3_prior_visits);
   cfg.p_opt_weight = absl::GetFlag(FLAGS_cand_p_opt_weight);
+  cfg.enable_v_cat_var_scaling =
+      absl::GetFlag(FLAGS_cand_enable_v_cat_var_scaling);
+  cfg.v_cat_var_scale_prior_visits =
+      absl::GetFlag(FLAGS_cand_v_cat_var_scale_prior_visits);
   cfg.root_fpu = absl::GetFlag(FLAGS_cand_root_fpu);
   return cfg;
 }

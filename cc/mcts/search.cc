@@ -333,10 +333,13 @@ void Backup(int worker_id, SearchPath& search_path, BiasCache* bias_cache,
   // Can ignore the last node in the path because it is either a leaf or
   // terminal, from the perspective of this path.
   const float leaf_q_outcome = std::get<0>(search_path.back())->v_outcome;
+  const auto leaf_parity = (search_path.size() - 1) % 2;
   for (int i = search_path.size() - 1; i >= 0; --i) {
     auto& [node, action, _] = search_path[i];
+    const auto parity = i % 2;
+    const auto leaf_sign = parity == leaf_parity ? 1 : -1;
     BackupStep(worker_id, node, action, i == (int)search_path.size() - 1,
-               bias_cache, puct_params, leaf_q_outcome);
+               bias_cache, puct_params, leaf_sign * leaf_q_outcome);
   }
 }
 

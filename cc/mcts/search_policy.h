@@ -319,14 +319,20 @@ class PuctScorer final {
       // worse downside.
       const auto compute_q_std_up_down_factor = [&]() {
         constexpr float kEps = 1e-6;
+        constexpr float kNormFactor = 0.0f;
         if (child_visits[a] == 0) {
           return 1.0f;
         }
         const auto [q_std_down, q_std_up] = q_up_down_stds[a];
-        const auto down_factor = q_std_down / (q_std_down_mean + kEps);
-        const auto up_factor = q_std_up / (q_std_up_mean + kEps);
+        if (q_std_up == 0 || q_std_down == 0) {
+          return 1.0f;
+        }
+        const auto down_factor =
+            (q_std_down + kNormFactor) / (q_std_down_mean + kNormFactor + kEps);
+        const auto up_factor =
+            (q_std_up + kNormFactor) / (q_std_up_mean + kNormFactor + kEps);
         const auto factor = up_factor / (down_factor + kEps);
-        return factor;
+        return (10 + child_visits[a] * up_factor) / (10 + child_visits[a]);
       };
       const float q_std_up_down_factor =
           enable_v_cat_var_scaling_ ? compute_q_std_up_down_factor() : 1.0f;
