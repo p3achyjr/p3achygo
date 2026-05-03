@@ -17,6 +17,7 @@ struct NNInferResult {
   alignas(MM_ALIGN)
       std::array<float, constants::kMaxMovesPerPosition> opt_move_probs;
   float err2_outcome;
+  std::array<float, constants::kNumVBuckets> mcts_value_dist;
 };
 
 class Engine {

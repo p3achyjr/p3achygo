@@ -71,6 +71,7 @@ class TrtEngineImpl : public TrtEngine {
   const std::array<int, 2> pi_shape_;
   const std::array<int, 2> outcome_shape_;
   const std::array<int, 2> score_shape_;
+  const std::array<int, 2> mcts_dist_shape_;
 
   // CUDA Graph Stuff
   void TryCaptureGraph();  // assumes one warmup enqueueV3 has already been run
@@ -94,7 +95,8 @@ TrtEngineImpl::TrtEngineImpl(std::string path, int batch_size, int version)
                                     : constants::kNumInputFeatureScalarsV1},
       pi_shape_{batch_size_, constants::kMaxMovesPerPosition},
       outcome_shape_{batch_size_, constants::kNumValueLogits},
-      score_shape_{batch_size_, constants::kNumScoreLogits} {
+      score_shape_{batch_size_, constants::kNumScoreLogits},
+      mcts_dist_shape_{batch_size_, constants::kNumVBuckets} {
   // Read back from file.
   std::string engine_data;
   FILE* const fp = fopen(path.c_str(), "r");
@@ -250,6 +252,7 @@ void TrtEngineImpl::RunInference() {
   BufferHandle output_opt_logits = buf_map_[nn::trt::output::kOptPiLogitsName];
   BufferHandle output_err2_outcome =
       buf_map_[nn::trt::output::kErrSquaredOutcome];
+  BufferHandle output_mcts_dist = buf_map_[nn::trt::output::kMctsDistName];
 
   cudaMemcpyAsync(input_planes.device_buf, input_planes.host_buf,
                   input_planes.size, cudaMemcpyHostToDevice, stream_);
@@ -294,6 +297,8 @@ void TrtEngineImpl::RunInference() {
     cudaMemcpyAsync(output_err2_outcome.host_buf,
                     output_err2_outcome.device_buf, output_err2_outcome.size,
                     cudaMemcpyDeviceToHost, stream_);
+    cudaMemcpyAsync(output_mcts_dist.host_buf, output_mcts_dist.device_buf,
+                    output_mcts_dist.size, cudaMemcpyDeviceToHost, stream_);
   }
   cudaStreamSynchronize(stream_);
 
@@ -314,10 +319,12 @@ void TrtEngineImpl::GetBatch(int batch_id, NNInferResult& result) {
       static_cast<float*>(buf_map_[nn::trt::output::kScoreName].host_buf);
   float* err2_buf = static_cast<float*>(
       buf_map_[nn::trt::output::kErrSquaredOutcome].host_buf);
+  float* mcts_dist_buf =
+      static_cast<float*>(buf_map_[nn::trt::output::kMctsDistName].host_buf);
 
-  int pi_slice_size = SliceSize(pi_shape_, 1);
-  int outcome_slice_size = SliceSize(outcome_shape_, 1);
-  int score_slice_size = SliceSize(score_shape_, 1);
+  const int pi_slice_size = SliceSize(pi_shape_, 1);
+  const int outcome_slice_size = SliceSize(outcome_shape_, 1);
+  const int score_slice_size = SliceSize(score_shape_, 1);
 
   // std::copy doesn't work here.
   float* pi_logits = pi_logits_buf + pi_slice_size * batch_id;
@@ -338,6 +345,7 @@ void TrtEngineImpl::GetBatch(int batch_id, NNInferResult& result) {
   }
 
   if (version_ != 0) {
+    // Optimistic Policy
     float* opt_logits_buf = static_cast<float*>(
         buf_map_[nn::trt::output::kOptPiLogitsName].host_buf);
     const int opt_slice_size =
@@ -346,7 +354,16 @@ void TrtEngineImpl::GetBatch(int batch_id, NNInferResult& result) {
     float* opt_logits = opt_logits_buf + opt_slice_size * batch_id;
     core::Softmax<constants::kMaxMovesPerPosition>(
         opt_logits, result.opt_move_probs.data());
+
+    // Squared Error
     result.err2_outcome = err2_buf[batch_id];
+
+    // Value Distribution
+    const int mcts_dist_slice_size = SliceSize(mcts_dist_shape_, 1);
+    float* mcts_dist = mcts_dist_buf + mcts_dist_slice_size * batch_id;
+    for (int i = 0; i < constants::kNumVBuckets; ++i) {
+      result.mcts_value_dist[i] = mcts_dist[i];
+    }
   }
 }
 

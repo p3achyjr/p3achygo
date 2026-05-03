@@ -364,14 +364,19 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     int const num_moves_raw_policy =
         !disable_sampling && max_raw_policy_moves > 0 &&
                 probability.Uniform() < kOpeningExploreProb
-            ? RandRange(probability.prng(), 0, max_raw_policy_moves)
+            ? RandRange(probability.prng(), 0, max_raw_policy_moves + 1)
             : 0;
+    const auto max_opening_tau_width =
+        num_moves_raw_policy == 0 ? 1.0f : 1.0f / (2 * num_moves_raw_policy);
+    const auto tau_opening =
+        1.0f + probability.Uniform() * max_opening_tau_width;
     LOG_TO_SINK(INFO, sink)
         << "\nNEW GAME  Kind=" << ToString(init_state.kind)
         << "  StartMove=" << init_state.move_num
         << "  Color=" << ToString(color_to_move)
         << "  Komi=" << init_state.board.komi()
         << "  Raw Policy Moves=" << num_moves_raw_policy
+        << "  Tau Opening=" << tau_opening
         << (init_state.fork_kind.has_value()
                 ? "  ForkKind=" + ToString(*init_state.fork_kind) +
                       "  Starting Position\n" +
@@ -582,33 +587,38 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
       // Run and Profile Search.
       auto begin = std::chrono::steady_clock::now();
-      GumbelResult gumbel_res =
-          is_move_selected_for_training || sampling_raw_policy ||
-                  !use_puct_fast_search
-              ? gumbel_evaluator.SearchRoot(
-                    probability, game, node_table.get(), root_node,
-                    color_to_move,
-                    GumbelSearchParams::Builder()
-                        .set_n(gumbel_n)
-                        .set_k(gumbel_k)
-                        .set_noise_scaling(noise_scaling)
-                        .set_early_stopping_enabled(early_stopping_enabled)
-                        .set_over_search_enabled(is_move_over_search)
-                        .set_tau(tau)
-                        .set_nonroot_var_scale_prior_visits(
-                            config.nonroot_var_scale_prior_visits)
-                        .build())
-              : gumbel_evaluator.SearchRootPuct(
-                    probability, game, node_table.get(), root_node,
-                    color_to_move, gumbel_n,
-                    PuctParams::Builder()
-                        .set_kind(PuctRootSelectionPolicy::kVisitCountSample)
-                        .set_c_puct(1.05f)
-                        .set_c_puct_visit_scaling(0.28f)
-                        .set_c_puct_v_2(0.0f)
-                        .set_tau(tau)
-                        .set_root_fpu(fast_move_root_fpu)
-                        .build());
+      GumbelResult gumbel_res = [&]() {
+        if (sampling_raw_policy) {
+          return gumbel_evaluator.Sample(probability, game, root_node,
+                                         color_to_move, tau_opening);
+        }
+        return is_move_selected_for_training || !use_puct_fast_search
+                   ? gumbel_evaluator.SearchRoot(
+                         probability, game, node_table.get(), root_node,
+                         color_to_move,
+                         GumbelSearchParams::Builder()
+                             .set_n(gumbel_n)
+                             .set_k(gumbel_k)
+                             .set_noise_scaling(noise_scaling)
+                             .set_early_stopping_enabled(early_stopping_enabled)
+                             .set_over_search_enabled(is_move_over_search)
+                             .set_tau(tau)
+                             .set_nonroot_var_scale_prior_visits(
+                                 config.nonroot_var_scale_prior_visits)
+                             .build())
+                   : gumbel_evaluator.SearchRootPuct(
+                         probability, game, node_table.get(), root_node,
+                         color_to_move, gumbel_n,
+                         PuctParams::Builder()
+                             .set_kind(
+                                 PuctRootSelectionPolicy::kVisitCountSample)
+                             .set_c_puct(1.05f)
+                             .set_c_puct_visit_scaling(0.28f)
+                             .set_c_puct_v_2(0.0f)
+                             .set_tau(tau)
+                             .set_root_fpu(fast_move_root_fpu)
+                             .build());
+      }();
       auto end = std::chrono::steady_clock::now();
 
       // Post Search Statstics.

@@ -3,6 +3,7 @@
 #include "absl/log/check.h"
 #include "cc/constants/constants.h"
 #include "cc/mcts/constants.h"
+#include "cc/mcts/tree.h"
 #include "cc/nn/engine/engine.h"
 
 namespace mcts {
@@ -108,6 +109,9 @@ inline void InitFields(const nn::NNInferResult& infer_result, TreeNode* node,
   node->init_score_var = score_sq_est - score_est * score_est;
   node->init_err_est = std::sqrt(infer_result.err2_outcome);
 
+  // prior over value distribution
+  node->v_categorical_prior = infer_result.mcts_value_dist;
+
   AdvanceState(node);
 }
 }  // namespace
@@ -145,9 +149,9 @@ void LeafEvaluator::EvaluateRoot(core::Probability& probability,
   node->v = node->init_util_est;
   node->v_outcome = node->init_outcome_est;
   node->v_err = node->init_err_est;
-  int v_bucket =
-      std::clamp(static_cast<int>((node->init_util_est + 1.0f) / kBucketRange),
-                 0, kNumVBuckets - 1);
+  int v_bucket = std::clamp(
+      static_cast<int>((node->init_outcome_est + 1.0f) / kBucketRange), 0,
+      kNumVBuckets - 1);
   node->v_categorical[v_bucket] += 1;
 }
 
@@ -185,6 +189,9 @@ void LeafEvaluator::EvaluateTerminal(const Scores& scores,
   terminal_node->init_util_est = empirical_q;
   terminal_node->init_outcome_est = empirical_outcome;
   terminal_node->init_score_est = final_score;
+  terminal_node->v_categorical_prior = {};
+  const auto v_cat_idx = empirical_outcome == -1.0f ? 0 : kNumVBuckets - 1;
+  terminal_node->v_categorical_prior[v_cat_idx] = 1.0f;
 }
 
 void LeafEvaluator::InitTreeNode(core::Probability& probability, TreeNode* node,

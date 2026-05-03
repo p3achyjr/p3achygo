@@ -79,4 +79,24 @@ if(BUILD_BINARIES)
         m
         dl
     )
+
+    add_executable(upside_var_study
+        upside_var_study.cc
+    )
+    target_link_libraries(upside_var_study PRIVATE
+        core_impl
+        game
+        gumbel
+        node_table
+        nn_interface
+        engine_factory
+        tfrecord
+        tf_example_proto
+        absl::flags
+        absl::flags_parse
+        absl::log
+        absl::log_initialize
+        m
+        dl
+    )
 endif()

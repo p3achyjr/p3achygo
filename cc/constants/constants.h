@@ -83,6 +83,15 @@ static constexpr size_t kDefaultNNCacheSize = 1048576;
 /* Go-Exploit Buffer Size. https://arxiv.org/pdf/2302.12359.pdf. */
 static constexpr int kGoExploitBufferSize = 8192;
 
+/* Num Value Buckets in categorical distribution */
+static constexpr int kNumVBuckets = 51;
+
+/* Value range of each bucket */
+static constexpr float kBucketRange = 2.0f / kNumVBuckets;
+
+/* Bucket Midpoint */
+static constexpr int kVBucketMidpoint = kNumVBuckets / 2;
+
 }  // namespace constants
 
 #endif  // CONSTANTS_CONSTANTS_H_
