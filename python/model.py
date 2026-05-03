@@ -13,16 +13,8 @@ import keras
 
 from constants import *
 from model_config import ModelConfig
+from model_layers_common import *
 from model_transformer import *
-
-L2 = keras.regularizers.L2
-C_L2 = 1e-4
-
-
-# mainly used when c_l2=0, for muon/adamw
-def set_global_c_l2(c_l2):
-    global C_L2
-    C_L2 = c_l2
 
 
 class ModelPredictions(NamedTuple):
@@ -98,200 +90,6 @@ class LossWeights(NamedTuple):
     w_mcts_dist: float = 0.0
 
 
-def make_conv(
-    output_channels: int,
-    kernel_size: int,
-    init="glorot_uniform",
-    use_bias=False,
-    name=None,
-):
-    return keras.layers.Conv2D(
-        output_channels,
-        kernel_size,
-        activation=None,
-        kernel_regularizer=L2(C_L2),
-        padding="same",
-        use_bias=use_bias,
-        kernel_initializer=init,
-        name=name,
-    )
-
-
-def make_dense(output_dim: int, kern_init="glorot_uniform", name=None):
-    return keras.layers.Dense(
-        output_dim,
-        kernel_initializer=kern_init,
-        kernel_regularizer=L2(C_L2),
-        name=name,
-    )
-
-
-def gamma(act):
-    if act == keras.activations.relu:
-        return 1.712
-    elif act == keras.activations.mish:
-        return 1.592
-    return 2.0**0.5
-
-
-@keras.saving.register_keras_serializable(package="p3achygo")
-class ConvSWS(keras.layers.Layer):
-    """
-    Implements scaled weight standardization
-    """
-
-    def __init__(self, output_channels: int, conv_size: int, gamma: float, **kwargs):
-        super(ConvSWS, self).__init__(**kwargs)
-        self._kern_init = keras.initializers.VarianceScaling(scale=1.0)
-        self._gamma = gamma
-        self._k = output_channels
-        self._r = conv_size
-        self._kernel = None
-
-    def build(self, input_shape):
-        c = input_shape[-1]
-        k = self._k
-        r = self._r
-        self._kernel = self.add_weight(
-            name="kernel",
-            shape=(r, r, c, k),  # HWIO
-            initializer=self._kern_init,
-            trainable=True,
-            regularizer=L2(C_L2),
-        )
-
-        self.fan_in = r * r * c
-        self.fan_in_sqrt = math.sqrt(self.fan_in)
-
-    def call(self, x, training=False):
-        w = self._kernel
-        eps = 1e-6
-        mean = tf.reduce_mean(w, axis=(0, 1, 2), keepdims=True)
-        var = tf.reduce_mean(tf.square(w - mean), axis=(0, 1, 2), keepdims=True)
-        std = tf.sqrt(var + eps)
-        w_hat = (w - mean) / (std * self.fan_in_sqrt)
-        w_hat = w_hat * self._gamma
-        y = tf.nn.conv2d(
-            x,
-            w_hat,
-            strides=(1, 1, 1, 1),
-            padding="SAME",
-        )
-        return y
-
-    def get_config(self):
-        config = super().get_config()
-        config.update(
-            {
-                "output_channels": self._k,
-                "conv_size": self._r,
-                "gamma": self._gamma,
-            }
-        )
-        return config
-
-    @classmethod
-    def from_config(cls, config):
-        # Need to deserialize initializer manually
-        config["kernel_initializer"] = keras.initializers.deserialize(
-            config["kernel_initializer"]
-        )
-        return cls(**config)
-
-
-@keras.saving.register_keras_serializable(package="p3achygo")
-class ConvBlock(keras.layers.Layer):
-    """
-    Basic convolutional block.
-    """
-
-    def __init__(
-        self,
-        output_channels: int,
-        conv_size: int,
-        activation=keras.activations.relu,
-        use_var_norm=True,
-        variance=1.0,
-        name=None,
-    ):
-        super(ConvBlock, self).__init__(name=name)
-        kern_init = (
-            keras.initializers.VarianceScaling(
-                scale=gamma(activation) ** 2,
-                mode="fan_in",
-                distribution="truncated_normal",
-            )
-            if use_var_norm
-            else "glorot_uniform"
-        )
-        self.conv = make_conv(output_channels, kernel_size=conv_size, init=kern_init)
-        self.norm_layer = (
-            keras.layers.Rescaling(scale=float(1.0 / (variance**0.5)), offset=0.0)
-            if use_var_norm
-            else keras.layers.BatchNormalization(momentum=0.99, epsilon=1e-3)
-        )
-        self.activation = activation
-        self.variance = variance
-
-        # save for serialization
-        self.output_channels = output_channels
-        self.conv_size = conv_size
-        self.use_var_norm = use_var_norm
-
-    def call(self, x, training=False):
-        raise Exception("Do not call directly")
-
-    def get_config(self):
-        return {
-            "output_channels": self.output_channels,
-            "conv_size": self.conv_size,
-            "activation": keras.activations.serialize(self.activation),
-            "use_var_norm": self.use_var_norm,
-            "variance": self.variance,
-            "name": self.name,
-        }
-
-    @classmethod
-    def from_config(cls, config):
-        return cls(
-            output_channels=config["output_channels"],
-            conv_size=config["conv_size"],
-            activation=keras.activations.deserialize(config["activation"]),
-            use_var_norm=config.get("use_var_norm", True),
-            variance=config.get("variance", 1.0),
-            name=config.get("name"),
-        )
-
-
-@keras.saving.register_keras_serializable(package="p3achygo")
-class ConvPostActivation(ConvBlock):
-    def call(self, x, training=False):
-        x = self.conv(x)
-        x = self.norm_layer(x, training=training)
-        x = self.activation(x)
-        return x
-
-
-@keras.saving.register_keras_serializable(package="p3achygo")
-class ConvPreActivation(ConvBlock):
-    def call(self, x, training=False):
-        x = self.norm_layer(x, training=training)
-        x = self.activation(x)
-        x = self.conv(x)
-        return x
-
-
-def make_conv_block(output_channels: int, conv_size: int, variance=1.0, name=None):
-    return ConvPreActivation(
-        output_channels=output_channels,
-        conv_size=conv_size,
-        activation=keras.activations.mish,
-        use_var_norm=False,
-        variance=variance,
-        name=name,
-    )
-
-
 @keras.saving.register_keras_serializable(package="p3achygo")
 class GlobalPool(keras.layers.Layer):
     """
@@ -302,10 +100,10 @@ class GlobalPool(keras.layers.Layer):
     def __init__(self, name=None):
         super(GlobalPool, self).__init__(name=name)
 
-    def call(self, x):
+    def call(self, x, keepdims=False, training=False):
         # Reduce over spatial dims (h, w)
-        x_mean = keras.ops.mean(x, axis=(1, 2))  # (batch, c)
-        x_max = keras.ops.max(x, axis=(1, 2))  # (batch, c)
+        x_mean = keras.ops.mean(x, axis=(1, 2), keepdims=keepdims)  # (batch, c)
+        x_max = keras.ops.max(x, axis=(1, 2), keepdims=keepdims)  # (batch, c)
         return keras.ops.concatenate([x_mean, x_max], axis=-1)  # (batch, 2c)
 
     def get_config(self):
@@ -402,8 +200,8 @@ class SqueezeExcitation(keras.layers.Layer):
         self.c = c
 
     def call(self, x, training=False):
-        avg_max = self.gpool(x, training=training)
-        embed = self.dense(avg_max)
+        x_mean_max = self.gpool(x, training=training)
+        embed = self.dense(x_mean_max)
         attn_map = keras.ops.reshape(keras.ops.sigmoid(embed), (-1, 1, 1, self.c))
         return x * attn_map
 
@@ -510,7 +308,7 @@ class ClassicResidualBlock(ResidualBlock):
             )
             blocks.append(block)
         if use_spatial_attn:
-            blocks.append(SpatialAttention(output_channels, name="spatial_attn"))
+            blocks.append(SpatialAttention(name="spatial_attn"))
         if use_se:
             blocks.append(SqueezeExcitation(output_channels, name="se"))
         super(ClassicResidualBlock, self).__init__(blocks, name=name)
@@ -577,7 +375,7 @@ class BottleneckResidualConvBlock(ResidualBlock):
             )
         blocks.append(make_conv_block(output_channels, 1, name="res_id_expand_dim_end"))
         if use_spatial_attn:
-            blocks.append(SpatialAttention(output_channels, name="spatial_attn"))
+            blocks.append(SpatialAttention(name="spatial_attn"))
         if use_se:
             blocks.append(SqueezeExcitation(output_channels, name="se"))
         super(BottleneckResidualConvBlock, self).__init__(blocks, name=name)
@@ -648,7 +446,7 @@ class NbtResidualBlock(ResidualBlock):
             make_conv_block(output_channels, 1, variance=3.0, name="nbt_expand_dim")
         )
         if use_spatial_attn:
-            blocks.append(SpatialAttention(output_channels, name="spatial_attn"))
+            blocks.append(SpatialAttention(name="spatial_attn"))
         if use_se:
             blocks.append(SqueezeExcitation(output_channels, name="se"))
         super(NbtResidualBlock, self).__init__(blocks, name=name)
@@ -964,7 +762,6 @@ class ValueHead(keras.layers.Layer):
         self.conv_ownership = make_conv(1, kernel_size=1, name="value_conv_ownership")
 
         # Score Distribution Subhead
-        self.gamma_pre = make_dense(c_val, name="value_gamma_pre")
         self.gamma_output = make_dense(1, kern_init="zeros", name="value_gamma_output")
 
         self.score_range = score_range
@@ -981,6 +778,7 @@ class ValueHead(keras.layers.Layer):
         self.incoming_var = incoming_var
 
     def call(self, x, scores):
+        batch_size = keras.ops.shape(x)[0]
         x = self.norm_layer(x)
         v = self.conv(x)
         v_pooled = self.gpool(v)
@@ -1004,7 +802,10 @@ class ValueHead(keras.layers.Layer):
         game_ownership = keras.activations.tanh(game_ownership)
 
         # Compute Score Distribution
-        gamma = self.gamma_pre(v_pooled)
+        gamma_input = keras.ops.concatenate(
+            [v_pooled, keras.ops.zeros((batch_size, 1), dtype=v_pooled.dtype)], axis=-1
+        )
+        gamma = self.score_pre(gamma_input)
         gamma = self.act(gamma)
         gamma = self.gamma_output(gamma)
 
@@ -1016,7 +817,6 @@ class ValueHead(keras.layers.Layer):
         scores = tf.cast(scores, dtype=v_pooled.dtype)
 
         # Reshape to broadcastable shapes
-        batch_size = keras.ops.shape(x)[0]
         pooled_features = keras.ops.shape(v_pooled)[1]
 
         v_pooled_exp = v_pooled[:, None, :]  # (batch, 1, features)
@@ -1165,7 +965,10 @@ def construct_trunk_from_generic_arch(generic_arch: dict, board_len: int = BOARD
                         f"These must match."
                     )
             cfg.update({"pos_len": board_len, "name": name})
-            blocks.append(TransformerBlock(**cfg))
+            blocks.append(TransformerResidualBlock(**cfg))
+        elif block_type == "transformer_btl":
+            cfg.update({"pos_len": board_len, "name": name})
+            blocks.append(TransformerBottleneckBlock(**cfg))
         elif block_type == "classic":
             blocks.append(ClassicResidualBlock(name=name, **cfg))
         elif block_type == "btl":
@@ -1255,14 +1058,14 @@ class P3achyGoModel(keras.Model):
         num_blocks,
         num_channels,
         num_bottleneck_channels,
-        num_head_channels,
+        num_policy_head_channels,
+        num_value_head_channels,
         c_val,
         bottleneck_length,
         conv_size,
         broadcast_interval,
         trunk_block_type="btl",
         generic_arch=None,
-        is_transformer=False,
         c_l2=1e-4,
         name=None,
     ):
@@ -1301,13 +1104,13 @@ class P3achyGoModel(keras.Model):
         )
 
         self.policy_head = PolicyHead(
-            channels=num_head_channels,
+            channels=num_policy_head_channels,
             use_var_norm=self.use_var_norm,
             incoming_var=float(num_blocks + 1),
             name="policy_head",
         )
         self.value_head = ValueHead(
-            num_head_channels,
+            num_value_head_channels,
             c_val,
             incoming_var=float(num_blocks + 1),
             name="value_head",
@@ -1331,14 +1134,14 @@ class P3achyGoModel(keras.Model):
         self.num_blocks = num_blocks
         self.num_channels = num_channels
         self.num_bottleneck_channels = num_bottleneck_channels
-        self.num_head_channels = num_head_channels
+        self.num_policy_head_channels = num_policy_head_channels
+        self.num_value_head_channels = num_value_head_channels
         self.c_val = c_val
         self.bottleneck_length = bottleneck_length
         self.conv_size = conv_size
         self.broadcast_interval = broadcast_interval
         self.trunk_block_type = trunk_block_type
         self.generic_arch = generic_arch
-        self.is_transformer = is_transformer
         self.c_l2 = c_l2
 
     def call(self, board_state, game_state, training=False, scores=None):
@@ -1664,15 +1467,25 @@ class P3achyGoModel(keras.Model):
         c_z16 = z_weight_decay * 1.5
         c_z50 = z_weight_decay * 0.75
         z_value = (c_z6 * z_value_q6 + c_z16 * z_value_q16 + c_z50 * z_value_q50) / 3.0
-        # if targets.q6_score is not None:
-        #     z_score = (
-        #         targets.q6_score / 20 - tf.stop_gradient(predictions.q6_score_pred)
-        #     ) / (tf.stop_gradient(tf.sqrt(predictions.q6_score_err_pred + epsilon)))
-        # else:
-        #     z_score = tf.zeros_like(z_value)
+        if targets.q6_score is not None:
+            z_score_q6 = (
+                targets.q6_score - tf.stop_gradient(predictions.q6_score_pred)
+            ) / (tf.stop_gradient(tf.sqrt(predictions.q6_score_err_pred + epsilon)))
+            z_score_q16 = (
+                targets.q16_score - tf.stop_gradient(predictions.q16_score_pred)
+            ) / (tf.stop_gradient(tf.sqrt(predictions.q16_score_err_pred + epsilon)))
+            z_score_q50 = (
+                targets.q50_score - tf.stop_gradient(predictions.q50_score_pred)
+            ) / (tf.stop_gradient(tf.sqrt(predictions.q50_score_err_pred + epsilon)))
+            z_score = (
+                c_z6 * z_score_q6 + c_z16 * z_score_q16 + c_z50 * z_score_q50
+            ) / 3.0
+            z_combined = (z_value + z_score * 0.5) / 1.5
+        else:
+            z_combined = z_value
 
         optimistic_weight = tf.clip_by_value(
-            tf.nn.sigmoid((z_value - 1.0) * 3),
+            tf.nn.sigmoid((z_combined - 1.0) * 3),
             0.0,
             1.0,
         )
@@ -1701,14 +1514,14 @@ class P3achyGoModel(keras.Model):
             "num_blocks": self.num_blocks,
             "num_channels": self.num_channels,
             "num_bottleneck_channels": self.num_bottleneck_channels,
-            "num_head_channels": self.num_head_channels,
+            "num_policy_head_channels": self.num_policy_head_channels,
+            "num_value_head_channels": self.num_value_head_channels,
             "c_val": self.c_val,
             "bottleneck_length": self.bottleneck_length,
             "conv_size": self.conv_size,
             "broadcast_interval": self.broadcast_interval,
             "trunk_block_type": self.trunk_block_type,
             "generic_arch": self.generic_arch,
-            "is_transformer": self.is_transformer,
             "c_l2": self.c_l2,
             "name": self.name,
         }
@@ -1778,14 +1591,15 @@ class P3achyGoModel(keras.Model):
             config.kBlocks,
             config.kChannels,
             config.kBottleneckChannels,
-            config.kHeadChannels,
+            config.kPolicyHeadChannels,
+            config.kValueHeadChannels,
             config.kCVal,
             config.kInnerBottleneckLayers + 2,
             config.kConvSize,
             config.kBroadcastInterval,
             config.kTrunkBlockType,
             config.generic_arch,
-            config.c_l2,
+            c_l2=config.c_l2,
             name=name,
         )
 

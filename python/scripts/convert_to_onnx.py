@@ -18,6 +18,7 @@ from model import P3achyGoModel
 from optimizer import ConvMuon
 from constants import *
 from lr_schedule import ConstantLRSchedule
+from .onnx_matchers import rewrite_rms_normalization
 
 FLAGS = flags.FLAGS
 DUMMY_BATCH_SIZE = 32
@@ -63,6 +64,15 @@ def update_val_stats(stats, pi_pred, outcome_pred, score_pred, policy, score):
     stats["correct_moves"] += np.sum(correct_move)
     stats["correct_outcomes"] += np.sum(correct_outcome)
     stats["score_diff"] += np.mean(score_diff)
+
+
+def _bump_opset(model: onnx.ModelProto, version: int) -> None:
+    for opset in model.opset_import:
+        if opset.domain in ("", "ai.onnx"):
+            if opset.version < version:
+                opset.version = version
+            return
+    model.opset_import.append(helper.make_opsetid("", version))
 
 
 def prune_unused_graph_inputs(model: onnx.ModelProto) -> onnx.ModelProto:
@@ -505,9 +515,11 @@ def main(_):
         onnx_model, _ = tf2onnx.convert.from_function(
             model_fn,
             input_signature=input_signature,
+            custom_rewriter=[rewrite_rms_normalization],
             # optimize=False,  # Uncomment to disable all optimizations
         )
         onnx_model = prune_unused_graph_inputs(onnx_model)
+        _bump_opset(onnx_model, 23)
         if FLAGS.fp16:
             logging.info("Converting ONNX model to FP16...")
             fp32_node_block_list = []

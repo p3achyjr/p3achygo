@@ -37,11 +37,11 @@ class ModelConfig:
         inner_bottleneck_layers=2,
         channels=128,
         bottleneck_channels=64,
-        head_channels=32,
+        policy_head_channels=32,
+        value_head_channels=32,
         c_val=64,
         trunk_block_type="btl",
         generic_arch=None,
-        is_transformer=False,
         c_l2=1e-4,
     ):
         self.kBlocks = blocks
@@ -50,12 +50,12 @@ class ModelConfig:
         self.kInnerBottleneckLayers = inner_bottleneck_layers
         self.kChannels = channels
         self.kBottleneckChannels = bottleneck_channels
-        self.kHeadChannels = head_channels
+        self.kPolicyHeadChannels = policy_head_channels
+        self.kValueHeadChannels = value_head_channels
         self.kCVal = c_val
         self.kTrunkBlockType = trunk_block_type
 
         self.generic_arch = generic_arch
-        self.is_transformer = is_transformer
         self.c_l2 = c_l2
 
     @staticmethod
@@ -66,7 +66,8 @@ class ModelConfig:
             inner_bottleneck_layers=1,
             channels=16,
             bottleneck_channels=8,
-            head_channels=8,
+            policy_head_channels=8,
+            value_head_channels=8,
             c_val=16,
         )
 
@@ -112,7 +113,8 @@ class ModelConfig:
             inner_bottleneck_layers=3,
             channels=384,
             bottleneck_channels=192,
-            head_channels=32,
+            policy_head_channels=32,
+            value_head_channels=32,
             c_val=80,
         )
 
@@ -122,7 +124,8 @@ class ModelConfig:
             blocks=15,
             broadcast_interval=6,
             channels=192,
-            head_channels=32,
+            policy_head_channels=32,
+            value_head_channels=32,
             c_val=80,
             trunk_block_type="classic",
         )
@@ -134,7 +137,8 @@ class ModelConfig:
             broadcast_interval=3,
             channels=128,
             bottleneck_channels=64,
-            head_channels=32,
+            policy_head_channels=32,
+            value_head_channels=32,
             trunk_block_type="nbt",
         )
 
@@ -145,7 +149,8 @@ class ModelConfig:
             broadcast_interval=3,
             channels=256,
             bottleneck_channels=128,
-            head_channels=32,
+            policy_head_channels=32,
+            value_head_channels=32,
             c_val=80,
             trunk_block_type="nbt",
         )
@@ -157,7 +162,8 @@ class ModelConfig:
             broadcast_interval=4,
             channels=384,
             bottleneck_channels=192,
-            head_channels=32,
+            policy_head_channels=32,
+            value_head_channels=32,
             c_val=80,
             trunk_block_type="nbt",
         )
@@ -167,13 +173,28 @@ class ModelConfig:
         return ModelConfig(
             channels=96,
             generic_arch=B14_D96_N3_TRANSFORMER,
-            is_transformer=True,
             c_l2=0.0,
         )
 
     @staticmethod
-    def from_generic_arch(generic_arch: dict):
-        return ModelConfig(generic_arch=generic_arch)
+    def from_generic_arch(generic_arch: dict) -> "ModelConfig":
+        trunk = generic_arch.get("trunk", [])
+        channels = 128
+        if trunk:
+            block_type, block_cfg = trunk[0]
+            if block_type == "transformer":
+                channels = block_cfg["embed_dim"]
+            elif block_type == "transformer_btl":
+                channels = block_cfg["output_dim"]
+            else:
+                channels = block_cfg.get("output_channels", 128)
+        return ModelConfig(
+            channels=channels,
+            generic_arch=generic_arch,
+            policy_head_channels=generic_arch.get("policy_head_channels", 32),
+            value_head_channels=generic_arch.get("value_head_channels", 32),
+            c_val=generic_arch.get("c_val", 64),
+        )
 
     @staticmethod
     def from_str(s: str):

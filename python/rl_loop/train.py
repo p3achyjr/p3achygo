@@ -5,6 +5,7 @@ import tensorflow as tf
 import keras
 import transforms
 import train
+import train_distributed
 import rl_loop.model_utils as model_utils
 
 from absl import logging
@@ -31,7 +32,10 @@ def get_ss_timestamps(num_batches):
 
 
 def get_lr(config: RunConfig, model_gen: int) -> float:
-    lr_scale = 0.1 + 0.9 * min(1.0, model_gen / config.lr_growth_window)
+    warmup_t = min(
+        1.0, max(0.0, (model_gen - config.start_gen) / config.lr_growth_window)
+    )
+    lr_scale = 0.1 + 0.9 * warmup_t
 
     lr = config.lr
     next_gen, next_lr = None, None
@@ -46,7 +50,12 @@ def get_lr(config: RunConfig, model_gen: int) -> float:
         t = 0.5 * (1.0 - math.cos(math.pi * (1.0 - (next_gen - model_gen) / window)))
         lr = lr + t * (next_lr - lr)
 
-    return lr_scale * lr
+    bs_scale = (
+        math.sqrt(config.batch_size / 256)
+        if config.optimizer == "muon"
+        else config.batch_size / 256
+    )
+    return lr_scale * lr * bs_scale
 
 
 def train_one_gen(
@@ -61,6 +70,7 @@ def train_one_gen(
     is_gpu=True,
     batch_num=0,
     chunk_size=None,
+    strategy: tf.distribute.Strategy = None,
 ):
     """
     Trains through dataset held at `chunk_path`.
@@ -105,10 +115,12 @@ def train_one_gen(
                 learning_rate=lr_schedule,
                 exclude_layers=[r".*policy_head\/.*", r".*value_head\/.*"],
                 adam_weight_decay=config.adam_wd,
+                adam_lr_ratio=config.adam_lr_ratio,
                 weight_decay=config.muon_wd,
                 scale_weight_decay_by_rms=config.scale_weight_decay_by_rms,
                 wd_lr_exponent=config.wd_lr_exponent,
                 wd_lr_max=config.wd_lr_max,
+                global_clipnorm=config.global_clipnorm,
             )
         else:
             optimizer = keras.optimizers.SGD(
@@ -117,25 +129,38 @@ def train_one_gen(
                 global_clipnorm=20.0,
                 nesterov=True,
             )
-        if is_gpu:
+        if is_gpu and not (strategy is not None and strategy.num_replicas_in_sync > 1):
             optimizer = keras.mixed_precision.LossScaleOptimizer(optimizer)
 
     inner_optimizer = getattr(optimizer, "inner_optimizer", optimizer)
     if isinstance(inner_optimizer, ConvMuon):
+        inner_optimizer.learning_rate = lr_schedule
+        inner_optimizer.weight_decay = config.muon_wd
+        inner_optimizer.adam_weight_decay = config.adam_wd
+        inner_optimizer.adam_lr_ratio = config.adam_lr_ratio
+        inner_optimizer.global_clipnorm = config.global_clipnorm
+        inner_optimizer.wd_lr_exponent = config.wd_lr_exponent
+        inner_optimizer.wd_lr_max = config.wd_lr_max
         logging.info(
             f"Using ConvMuon Optimizer"
+            f"\n  Learning Rate={inner_optimizer.learning_rate}"
             f"\n  Weight Decay={inner_optimizer.weight_decay}"
             f"\n  AdamW Weight Decay={inner_optimizer.adam_weight_decay}"
+            f"\n  AdamW LR Ratio={inner_optimizer.adam_lr_ratio}"
             f"\n  Momentum={inner_optimizer.momentum}"
             f"\n  Scale WD by RMS={inner_optimizer.scale_weight_decay_by_rms}"
             f"\n  WD Auto Scale={config.wd_auto_scale}"
             f"\n  WD LR Exponent={inner_optimizer.wd_lr_exponent}"
             f"\n  WD LR Max={inner_optimizer.wd_lr_max}"
             f"\n  LR Scale={inner_optimizer._lr_scale()}"
+            f"\n  Global ClipNorm={inner_optimizer.global_clipnorm}"
         )
     else:
+        inner_optimizer.learning_rate = lr_schedule
+        inner_optimizer.global_clipnorm = config.global_clipnorm
         logging.info(
             f"Using ConvMuon SGD"
+            f"\n  Learning Rate={inner_optimizer.learning_rate}"
             f"\n  Momentum={inner_optimizer.momentum}"
             f"\n  ClipNorm={inner_optimizer.global_clipnorm}"
         )
@@ -154,11 +179,7 @@ def train_one_gen(
 
     logging.info(f"Loss Coefficients: {loss_coeffs}")
     old_batch_num = batch_num
-    batch_num, optimizer = train.train(
-        live_model,
-        ds,
-        EPOCHS_PER_GEN,
-        MOMENTUM,
+    _train_kwargs = dict(
         optimizer=optimizer,
         lr_schedule=lr_schedule,
         log_interval=log_interval,
@@ -170,6 +191,19 @@ def train_one_gen(
         batch_num=batch_num,
         ss_manager=ss_manager,
     )
+    if strategy is not None and strategy.num_replicas_in_sync > 1:
+        batch_num, optimizer = train_distributed.train(
+            live_model,
+            ds,
+            EPOCHS_PER_GEN,
+            MOMENTUM,
+            strategy=strategy,
+            **_train_kwargs,
+        )
+    else:
+        batch_num, optimizer = train.train(
+            live_model, ds, EPOCHS_PER_GEN, MOMENTUM, **_train_kwargs
+        )
 
     print(
         f"SWA Momentum: {SWA_MOMENTUM}, "

@@ -1,5 +1,6 @@
 """Creates a new model and saves it to a given directory."""
 
+import json
 import sys
 import numpy as np
 import tensorflow as tf
@@ -10,13 +11,27 @@ from pathlib import Path
 from constants import *
 from model import P3achyGoModel
 from model_config import ModelConfig
+from rl_loop.model_utils import new_model
 
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string("model_config", "small", "Model config name.")
+flags.DEFINE_string("model_config_file", "", "Path to JSON model config file.")
 flags.DEFINE_string("output_dir", "", "Directory to save the model to.")
 flags.DEFINE_string("name", "p3achygo", "Model name.")
 flags.DEFINE_integer("batch_size", 32, "Batch size for initial forward pass.")
+
+
+def _create_model() -> P3achyGoModel:
+    if FLAGS.model_config_file:
+        with open(FLAGS.model_config_file) as f:
+            data = json.load(f)
+        return new_model(
+            name=FLAGS.name,
+            model_config=data["model_config"],
+            optimizer=data.get("optimizer", "sgd"),
+        )
+    return new_model(name=FLAGS.name, model_config=FLAGS.model_config)
 
 
 def main(_):
@@ -28,13 +43,7 @@ def main(_):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     with tf.device("/cpu:0"):
-        model = P3achyGoModel.create(
-            config=ModelConfig.from_str(FLAGS.model_config),
-            board_len=BOARD_LEN,
-            num_input_planes=num_input_planes(),
-            num_input_features=num_input_features(),
-            name=FLAGS.name,
-        )
+        model = _create_model()
         # Run a forward pass to build the model.
         model(
             tf.convert_to_tensor(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import math
 import numpy as np
 import tensorflow as tf
 import keras
@@ -315,6 +316,8 @@ class LossTracker:
     ):
 
         loss = result.total_loss.numpy()
+        if math.isnan(loss) or math.isinf(loss):
+            return
         policy_loss = result.policy_loss.numpy()
         policy_aux_dist_loss = result.policy_aux_dist_loss.numpy()
         policy_aux_scalar_loss = result.policy_aux_scalar_loss.numpy()
@@ -546,6 +549,11 @@ def train(
                 optimizer,
             )
 
+            if math.isnan(result.total_loss.numpy()) or math.isinf(
+                result.total_loss.numpy()
+            ):
+                print(f"[batch {batch_num}] saw inf/nan gradients")
+
             losses_train.update_losses(result)
 
             local_batch_num += 1
@@ -559,7 +567,7 @@ def train(
                 log_train(
                     batch_num,
                     losses_train,
-                    result.grad_norm,
+                    result,
                     summary_writer,
                     mode,
                 )
@@ -662,7 +670,7 @@ def _vcategorical_side_by_side(
 def log_train(
     batch_num: int,
     losses: LossTracker,
-    grad_norm: float,
+    result: TrainStepResult,
     summary_writer: tf.summary.SummaryWriter,
     mode: Mode,
 ):
@@ -686,43 +694,60 @@ def log_train(
     pi_optimistic_avg = losses.ema_losses["pi_optimistic"]
     mcts_dist_avg = losses.ema_losses["mcts_dist"]
 
-    loss_min = losses.min_losses["loss"]
-    policy_min = losses.min_losses["policy"]
-    policy_aux_dist_min = losses.min_losses["policy_aux_dist"]
-    policy_aux_scalar_min = losses.min_losses["policy_aux_scalar"]
-    outcome_min = losses.min_losses["outcome"]
-    score_pdf_min = losses.min_losses["score_pdf"]
-    score_cdf_min = losses.min_losses["score_cdf"]
-    own_min = losses.min_losses["own"]
-    q6_min = losses.min_losses["q6"]
-    q16_min = losses.min_losses["q16"]
-    q50_min = losses.min_losses["q50"]
-    q_err_min = losses.min_losses["q_err"]
-    q_score_min = losses.min_losses["q_score"]
-    q_score_err_min = losses.min_losses["q_score_err"]
-    pi_soft_min = losses.min_losses["pi_soft"]
-    pi_optimistic_min = losses.min_losses["pi_optimistic"]
-    mcts_dist_min = losses.min_losses["mcts_dist"]
+    loss_cur = result.total_loss.numpy()
+    policy_cur = result.policy_loss.numpy()
+    policy_aux_dist_cur = result.policy_aux_dist_loss.numpy()
+    policy_aux_scalar_cur = result.policy_aux_scalar_loss.numpy()
+    outcome_cur = result.outcome_loss.numpy()
+    score_pdf_cur = result.score_pdf_loss.numpy()
+    score_cdf_cur = result.score_cdf_loss.numpy()
+    own_cur = result.own_loss.numpy()
+    q6_cur = result.q6_loss.numpy()
+    q16_cur = result.q16_loss.numpy()
+    q50_cur = result.q50_loss.numpy()
+    q_err_cur = result.q_err_loss.numpy() if result.q_err_loss is not None else 0.0
+    q_score_cur = (
+        result.q_score_loss.numpy() if result.q_score_loss is not None else 0.0
+    )
+    q_score_err_cur = (
+        result.q_score_err_loss.numpy() if result.q_score_err_loss is not None else 0.0
+    )
+    pi_soft_cur = (
+        result.pi_soft_loss.numpy() if result.pi_soft_loss is not None else 0.0
+    )
+    pi_optimistic_cur = (
+        result.pi_optimistic_loss.numpy()
+        if result.pi_optimistic_loss is not None
+        else 0.0
+    )
+    mcts_dist_cur = (
+        result.mcts_dist_loss.numpy() if result.mcts_dist_loss is not None else 0.0
+    )
+    grad_norm = (
+        result.grad_norm.numpy()
+        if hasattr(result.grad_norm, "numpy")
+        else result.grad_norm
+    )
 
     print(
         f"[batch {batch_num}] {mode_str}: "
-        f"loss = {loss_avg:.4f} ({loss_min:.4f}), "
-        f"policy = {policy_avg:.4f} ({policy_min:.4f}), "
-        f"policy_aux_dist = {policy_aux_dist_avg:.4f} ({policy_aux_dist_min:.4f}), "
-        f"policy_aux_scalar = {policy_aux_scalar_avg:.4f} ({policy_aux_scalar_min:.4f}), "
-        f"outcome = {outcome_avg:.4f} ({outcome_min:.4f}), "
-        f"score_pdf = {score_pdf_avg:.4f} ({score_pdf_min:.4f}), "
-        f"score_cdf = {score_cdf_avg:.4f} ({score_cdf_min:.4f}), "
-        f"own = {own_avg:.4f} ({own_min:.4f}), "
-        f"q6 = {q6_avg:.4f} ({q6_min:.4f}), "
-        f"q16 = {q16_avg:.4f} ({q16_min:.4f}), "
-        f"q50 = {q50_avg:.4f} ({q50_min:.4f}), "
-        f"q_err = {q_err_avg:.4f} ({q_err_min:.4f}), "
-        f"q_score = {q_score_avg:.4f} ({q_score_min:.4f}), "
-        f"q_score_err = {q_score_err_avg:.4f} ({q_score_err_min:.4f}), "
-        f"pi_soft = {pi_soft_avg:.4f} ({pi_soft_min:.4f}), "
-        f"pi_optimistic = {pi_optimistic_avg:.4f} ({pi_optimistic_min:.4f}), "
-        f"mcts_dist = {mcts_dist_avg:.4f} ({mcts_dist_min:.4f}), "
+        f"loss = {loss_avg:.4f} ({loss_cur:.4f}), "
+        f"policy = {policy_avg:.4f} ({policy_cur:.4f}), "
+        f"policy_aux_dist = {policy_aux_dist_avg:.4f} ({policy_aux_dist_cur:.4f}), "
+        f"policy_aux_scalar = {policy_aux_scalar_avg:.4f} ({policy_aux_scalar_cur:.4f}), "
+        f"outcome = {outcome_avg:.4f} ({outcome_cur:.4f}), "
+        f"score_pdf = {score_pdf_avg:.4f} ({score_pdf_cur:.4f}), "
+        f"score_cdf = {score_cdf_avg:.4f} ({score_cdf_cur:.4f}), "
+        f"own = {own_avg:.4f} ({own_cur:.4f}), "
+        f"q6 = {q6_avg:.4f} ({q6_cur:.4f}), "
+        f"q16 = {q16_avg:.4f} ({q16_cur:.4f}), "
+        f"q50 = {q50_avg:.4f} ({q50_cur:.4f}), "
+        f"q_err = {q_err_avg:.4f} ({q_err_cur:.4f}), "
+        f"q_score = {q_score_avg:.4f} ({q_score_cur:.4f}), "
+        f"q_score_err = {q_score_err_avg:.4f} ({q_score_err_cur:.4f}), "
+        f"pi_soft = {pi_soft_avg:.4f} ({pi_soft_cur:.4f}), "
+        f"pi_optimistic = {pi_optimistic_avg:.4f} ({pi_optimistic_cur:.4f}), "
+        f"mcts_dist = {mcts_dist_avg:.4f} ({mcts_dist_cur:.4f}), "
         f"grad_norm = {grad_norm:.4f}"
     )
 
@@ -943,19 +968,43 @@ def log_board_position(
     q6_err_p = predictions.q6_err_pred[0].numpy()
     q16_err_p = predictions.q16_err_pred[0].numpy()
     q50_err_p = predictions.q50_err_pred[0].numpy()
+    q6_score_p = predictions.q6_score_pred[0].numpy()
+    q16_score_p = predictions.q16_score_pred[0].numpy()
+    q50_score_p = predictions.q50_score_pred[0].numpy()
+    q6_score_err_p = predictions.q6_score_err_pred[0].numpy()
+    q16_score_err_p = predictions.q16_score_err_pred[0].numpy()
+    q50_score_err_p = predictions.q50_score_err_pred[0].numpy()
     z6 = (targets.q6[0].numpy() - q6_p) / np.sqrt(q6_err_p + epsilon)
     z16 = (targets.q16[0].numpy() - q16_p) / np.sqrt(q16_err_p + epsilon)
     z50 = (targets.q50[0].numpy() - q50_p) / np.sqrt(q50_err_p + epsilon)
+    z6_score = (targets.q6_score[0].numpy() - q6_score_p) / np.sqrt(
+        q6_score_err_p + epsilon
+    )
+    z16_score = (targets.q16_score[0].numpy() - q16_score_p) / np.sqrt(
+        q16_score_err_p + epsilon
+    )
+    z50_score = (targets.q50_score[0].numpy() - q50_score_p) / np.sqrt(
+        q50_score_err_p + epsilon
+    )
+
+    def compute_opt_weight(z_wd, z6, z16, z50):
+        return (z_wd * 3 * z6 + z_wd * 1.5 * z16 + z_wd * 0.75 * z50) / 3.0
+
+    def sigmoid(x):
+        return 1 / (1 + np.exp(-x))
+
     z_wd = 4.0 / 7.0
-    z_val = (z_wd * 3 * z6 + z_wd * 1.5 * z16 + z_wd * 0.75 * z50) / 3.0
-    opt_weight = float(np.clip(1 / (1 + np.exp(-(z_val - 1.0) * 3)), 0.0, 1.0))
+    z_val = compute_opt_weight(z_wd, z6, z16, z50)
+    z_score = compute_opt_weight(z_wd, z6_score, z16_score, z50_score)
+    z_combined = (z_val + z_score * 0.5) / 1.5
+    opt_weight = float(np.clip(sigmoid((z_combined - 1.0) * 3.0), 0.0, 1.0))
 
     # Top 5 moves table
     col_w = 20
     print(f"\nTop 5 Policy Moves:")
     print(
         f"  {'Predicted':<{col_w}}{'Target':<{col_w}}{'Soft Predicted':<{col_w}}{'Soft Target':<{col_w}}"
-        f"Optimistic (w={opt_weight:.2f}, z={z_val:.2f})"
+        f"Opt (w={opt_weight:.2f}, zv={z_val:.2f}, zs={z_score:.2f}, z={z_combined:.2f})"
     )
     for i in range(5):
         pred_str = (

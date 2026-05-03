@@ -34,7 +34,6 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string("run_id", "", "ID corresponding to the current run.")
 flags.DEFINE_string("models_dir", "", "Directory containing model checkpoints.")
 flags.DEFINE_string("chunk_dir", "", "Directory containing training chunks.")
-flags.DEFINE_integer("gen", -1, "Starting generation (-1 = most recent).")
 flags.DEFINE_string("val_ds_path", "", "Path to validation dataset.")
 flags.DEFINE_string("batch_num_path", "", "File storing batch counter.")
 flags.DEFINE_boolean("save_trt", False, "Whether to save TRT model after each gen.")
@@ -43,13 +42,11 @@ flags.DEFINE_integer("max_gens", 0, "Number of generations to train (0 = run for
 flags.DEFINE_string(
     "source_run_id", "", "Run ID to fetch golden chunks from (defaults to run_id)."
 )
+flags.DEFINE_string("gpu_ids", "0", "GPUs to use")
 S3_BUCKET = "p3achygo"
 
 
-def _get_starting_gen(models_dir: str, gen: int) -> tuple[str, int]:
-    if gen != -1:
-        return str(Path(models_dir, gcs.MODEL_FORMAT.format(gen))), gen
-
+def _get_starting_gen(models_dir: str, start_gen: int) -> tuple[str, int]:
     model_paths = [
         f for f in Path(models_dir).glob("**/*") if gcs.MODEL_RE.fullmatch(f.name)
     ]
@@ -57,7 +54,7 @@ def _get_starting_gen(models_dir: str, gen: int) -> tuple[str, int]:
         model_paths, key=lambda f: int(gcs.MODEL_RE.fullmatch(f.name).group(1))
     )
     if not model_paths:
-        return str(Path(models_dir, gcs.MODEL_FORMAT.format(0))), 0
+        return str(Path(models_dir, gcs.MODEL_FORMAT.format(start_gen))), start_gen
     latest = model_paths[-1]
     return str(latest), int(gcs.MODEL_RE.fullmatch(latest.name).group(1))
 
@@ -75,43 +72,13 @@ def _fetch_chunk(chunk_dir: str, run_id: str, gen: int) -> str:
     return str(local_path)
 
 
-def main(_):
-    for flag_name, val in [
-        ("run_id", FLAGS.run_id),
-        ("models_dir", FLAGS.models_dir),
-        ("chunk_dir", FLAGS.chunk_dir),
-        ("val_ds_path", FLAGS.val_ds_path),
-        ("batch_num_path", FLAGS.batch_num_path),
-    ]:
-        if not val:
-            logging.error(f"No --{flag_name} specified.")
-            return
-    if FLAGS.save_trt and not FLAGS.trt_convert_path:
-        logging.error("No --trt_convert_path specified.")
-        return
-
-    gpus = tf.config.list_physical_devices("GPU")
-    logging.info(f"Available GPUs ({len(gpus)}): {[g.name for g in gpus]}")
-    is_gpu = bool(gpus)
-    if gpus:
-        tf.keras.mixed_precision.set_global_policy("mixed_float16")
-        for gpu in gpus:
-            tf.config.experimental.set_memory_growth(gpu, True)
-    else:
-        logging.warning("No GPU detected.")
-    strategy = (
-        tf.distribute.MirroredStrategy()
-        if len(gpus) > 1
-        else tf.distribute.get_strategy()
-    )
-    logging.info(f"Replicas in sync: {strategy.num_replicas_in_sync}")
-
+def _train_loop(strategy):
     config = rl_loop.config.parse(FLAGS.run_id)
 
     Path(FLAGS.models_dir).mkdir(parents=True, exist_ok=True)
     Path(FLAGS.chunk_dir).mkdir(parents=True, exist_ok=True)
 
-    swa_model_path, model_gen = _get_starting_gen(FLAGS.models_dir, FLAGS.gen)
+    swa_model_path, model_gen = _get_starting_gen(FLAGS.models_dir, config.start_gen)
     live_model_path = str(Path(FLAGS.models_dir, LIVE_MODEL_NAME))
 
     logging.info(f"Starting from generation {model_gen}")
@@ -147,6 +114,7 @@ def main(_):
                     dtype=tf.float32,
                 ),
             )
+        live_model.summary()
         live_model.save(live_model_path)
 
     if not Path(swa_model_path).exists():
@@ -165,6 +133,7 @@ def main(_):
     gens_trained = 0
 
     while max_gens == 0 or gens_trained < max_gens:
+        config = rl_loop.config.parse(FLAGS.run_id)
         next_gen = model_gen + 1
         source_run_id = FLAGS.source_run_id or FLAGS.run_id
         chunk_path = _fetch_chunk(FLAGS.chunk_dir, source_run_id, next_gen)
@@ -178,8 +147,9 @@ def main(_):
             chunk_path,
             val_ds,
             config=config,
-            is_gpu=is_gpu,
+            is_gpu=True,
             batch_num=batch_num,
+            strategy=strategy,
         )
 
         logging.info(f"Deleting local chunk {chunk_path}")
@@ -188,10 +158,11 @@ def main(_):
         # Save live model checkpoint.
         live_model.compile(optimizer=optimizer)
         live_model.save(live_model_path)
-        if next_gen % 10 == 0:
-            live_ckpt_dir = Path(FLAGS.models_dir, "_live")
-            live_ckpt_dir.mkdir(exist_ok=True)
-            live_model.save(str(live_ckpt_dir / f"live_{next_gen:04d}.keras"))
+
+        # Save restart checkpoint.
+        live_ckpt_dir = Path(FLAGS.models_dir, "_live")
+        live_ckpt_dir.mkdir(exist_ok=True)
+        live_model.save(str(live_ckpt_dir / f"live_{next_gen:04d}.keras"))
 
         # Save SWA model for selfplay.
         if FLAGS.save_trt:
@@ -214,6 +185,40 @@ def main(_):
         logging.info(
             f"Generation {next_gen} complete. Total trained this session: {gens_trained}."
         )
+
+
+def main(_):
+    for flag_name, val in [
+        ("run_id", FLAGS.run_id),
+        ("models_dir", FLAGS.models_dir),
+        ("chunk_dir", FLAGS.chunk_dir),
+        ("val_ds_path", FLAGS.val_ds_path),
+        ("batch_num_path", FLAGS.batch_num_path),
+    ]:
+        if not val:
+            logging.error(f"No --{flag_name} specified.")
+            return
+    if FLAGS.save_trt and not FLAGS.trt_convert_path:
+        logging.error("No --trt_convert_path specified.")
+        return
+
+    gpu_indices = [int(x.strip()) for x in FLAGS.gpu_ids.split(",")]
+    physical_gpus = tf.config.list_physical_devices("GPU")
+    assert physical_gpus, "No GPUs detected."
+    for gpu in physical_gpus:
+        tf.config.experimental.set_memory_growth(gpu, True)
+    policy = "mixed_bfloat16" if len(gpu_indices) > 1 else "mixed_float16"
+    keras.mixed_precision.set_global_policy(policy)
+    device_names = [f"/gpu:{i}" for i in gpu_indices]
+
+    logging.info(f"Using devices: {device_names}")
+    if len(gpu_indices) > 1:
+        strategy = tf.distribute.MirroredStrategy(devices=device_names)
+        logging.info(f"Replicas in sync: {strategy.num_replicas_in_sync}")
+        with strategy.scope():
+            _train_loop(strategy)
+    else:
+        _train_loop(None)
 
 
 if __name__ == "__main__":

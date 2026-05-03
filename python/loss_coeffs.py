@@ -32,18 +32,18 @@ class LossCoeffs:
         return LossCoeffs(
             1.0,
             0.15,  # policy aux
-            1.0,
-            1.5,
+            1.0,  # val
+            1.5,  # outcome
             0.02,  # score
             0.45,  # own
             0.7,  # q6
             0.4,  # q16
             0.3,  # q50
             0.005,  # gamma
-            3.0,  # q err
+            1.0,  # q err
             0.2,  # short-term score
             0.2,  # short-term score err
-            4.0,  # soft policy
+            2.5,  # soft policy
             1.0,  # optimistic policy
             0.125,  # mcts dist
         )
