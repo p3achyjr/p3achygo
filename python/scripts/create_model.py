@@ -3,7 +3,7 @@
 import json
 import sys
 import numpy as np
-import tensorflow as tf
+import keras
 
 from absl import app, flags, logging
 from pathlib import Path
@@ -42,59 +42,49 @@ def main(_):
     output_dir = Path(FLAGS.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    with tf.device("/cpu:0"):
-        model = _create_model()
-        # Run a forward pass to build the model.
-        model(
-            tf.convert_to_tensor(
-                np.random.random([FLAGS.batch_size] + model.input_planes_shape()),
-                dtype=tf.float32,
-            ),
-            tf.convert_to_tensor(
-                np.random.random([FLAGS.batch_size] + model.input_features_shape()),
-                dtype=tf.float32,
-            ),
+    model = _create_model()
+    # Trigger build with a dummy forward pass.
+    model(
+        np.zeros([FLAGS.batch_size, *model.input_planes_shape()], dtype=np.float32),
+        np.zeros([FLAGS.batch_size, *model.input_features_shape()], dtype=np.float32),
+    )
+    model.summary()
+
+    model_path = str(output_dir / "model_0000.keras")
+    model.save(model_path)
+    logging.info(f"Saved model to {model_path}")
+
+    # Sanity check: load the model back and verify output shapes match.
+    logging.info("Loading model back as sanity check...")
+    loaded_model = keras.models.load_model(model_path)
+    logging.info("Model loaded successfully!")
+
+    test_board = np.random.random(
+        [FLAGS.batch_size, *model.input_planes_shape()]
+    ).astype(np.float32)
+    test_features = np.random.random(
+        [FLAGS.batch_size, *model.input_features_shape()]
+    ).astype(np.float32)
+
+    original_outputs = model(test_board, test_features, training=False)
+    loaded_outputs = loaded_model(test_board, test_features, training=False)
+
+    logging.info(f"Original model outputs: {len(original_outputs)} tensors")
+    logging.info(f"Loaded model outputs: {len(loaded_outputs)} tensors")
+
+    # Verify outputs match
+    max_diff = 0.0
+    for i, (orig, loaded) in enumerate(zip(original_outputs, loaded_outputs)):
+        diff = float(keras.ops.max(keras.ops.abs(orig - loaded)))
+        max_diff = max(max_diff, diff)
+        logging.info(f"Output {i}: max diff = {diff:.6e}")
+
+    if max_diff < 1e-5:
+        logging.info(f"✓ Sanity check PASSED! Max difference: {max_diff:.6e}")
+    else:
+        logging.warning(
+            f"⚠ Sanity check: outputs differ by {max_diff:.6e} (may be due to dropout)"
         )
-        model.summary()
-
-        model_path = str(output_dir / "model_0000.keras")
-        model.save(model_path)
-        logging.info(f"Saved model to {model_path}")
-
-        # Sanity check: Load the model back
-        logging.info("Loading model back as sanity check...")
-        loaded_model = tf.keras.models.load_model(model_path)
-        logging.info("Model loaded successfully!")
-
-        # Run a forward pass with the loaded model
-        test_board = tf.convert_to_tensor(
-            np.random.random([FLAGS.batch_size] + model.input_planes_shape()),
-            dtype=tf.float32,
-        )
-        test_features = tf.convert_to_tensor(
-            np.random.random([FLAGS.batch_size] + model.input_features_shape()),
-            dtype=tf.float32,
-        )
-
-        original_outputs = model(test_board, test_features, training=False)
-        loaded_outputs = loaded_model(test_board, test_features, training=False)
-
-        logging.info(f"Original model outputs: {len(original_outputs)} tensors")
-        logging.info(f"Loaded model outputs: {len(loaded_outputs)} tensors")
-
-        # Verify outputs match
-        max_diff = 0.0
-        for i, (orig, loaded) in enumerate(zip(original_outputs, loaded_outputs)):
-            diff = tf.reduce_max(tf.abs(orig - loaded)).numpy()
-            max_diff = max(max_diff, diff)
-            logging.info(f"Output {i}: max diff = {diff:.6e}")
-
-        if max_diff < 1e-5:
-            logging.info(f"✓ Sanity check PASSED! Max difference: {max_diff:.6e}")
-        else:
-            logging.warning(
-                f"⚠ Sanity check: outputs differ by {max_diff:.6e} (may be due to dropout)"
-            )
 
 
 if __name__ == "__main__":

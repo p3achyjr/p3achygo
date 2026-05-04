@@ -1,11 +1,13 @@
+import itertools
+
 import tensorflow as tf
-import transforms
 import tf2onnx, onnx
 
 from pathlib import Path
 from tensorflow.python.compiler.tensorrt import trt_convert as trt
 from model import P3achyGoModel
 from constants import *
+from dataset import ChunkDataset
 
 NUM_CALIB_BATCHES = 10
 
@@ -13,16 +15,15 @@ NUM_CALIB_BATCHES = 10
 def get_converter(
     model_path: str, chunk_path: str, batch_size: int
 ) -> trt.TrtGraphConverterV2:
-    calib_ds = tf.data.TFRecordDataset(chunk_path, compression_type="ZLIB")
-    calib_ds = calib_ds.map(transforms.expand)
-    calib_ds = calib_ds.batch(batch_size)
-    calib_ds = calib_ds.take(NUM_CALIB_BATCHES)
-
     def calibration_input_fn():
-        for input, input_global_state, *_ in calib_ds:
+        calib_ds = ChunkDataset(chunk_path, batch_size)
+        for input, input_global_state, *_ in itertools.islice(
+            calib_ds, NUM_CALIB_BATCHES
+        ):
             yield input, input_global_state
 
     def input_fn():
+        calib_ds = ChunkDataset(chunk_path, batch_size)
         input, input_global_state, *_ = next(iter(calib_ds))
         yield input, input_global_state
 

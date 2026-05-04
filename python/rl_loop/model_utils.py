@@ -1,6 +1,5 @@
 from absl import logging
 
-import tensorflow as tf
 import keras
 import gcs_utils as gcs
 import rl_loop.fs_utils as fs

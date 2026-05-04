@@ -31,7 +31,6 @@ class RunConfig(object):
     adam_wd: float
     adam_lr_ratio: float
     muon_wd: float
-    scale_weight_decay_by_rms: bool
     wd_auto_scale: bool
     wd_lr_exponent: float
     wd_lr_max: float
@@ -88,7 +87,6 @@ def parse(run_id: str) -> RunConfig:
         adam_wd = obj.get("adam_wd", 0.01)
         adam_lr_ratio = obj.get("adam_lr_ratio", 1.0)
         muon_wd = obj.get("muon_wd", 0.02)
-        scale_weight_decay_by_rms = obj.get("scale_weight_decay_by_rms", False)
         wd_auto_scale = obj.get("wd_auto_scale", False)
         wd_lr_exponent = obj.get("wd_lr_exponent", None)
         wd_lr_max = obj.get("wd_lr_max", None)
@@ -140,7 +138,6 @@ def parse(run_id: str) -> RunConfig:
             adam_wd,
             adam_lr_ratio,
             muon_wd,
-            scale_weight_decay_by_rms,
             wd_auto_scale,
             wd_lr_exponent,
             wd_lr_max,

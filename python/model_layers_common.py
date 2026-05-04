@@ -1,4 +1,3 @@
-import tensorflow as tf
 import keras
 import math
 from absl import logging
@@ -83,16 +82,16 @@ class ConvSWS(keras.layers.Layer):
     def call(self, x, training=False):
         w = self._kernel
         eps = 1e-6
-        mean = tf.reduce_mean(w, axis=(0, 1, 2), keepdims=True)
-        var = tf.reduce_mean(tf.square(w - mean), axis=(0, 1, 2), keepdims=True)
-        std = tf.sqrt(var + eps)
+        mean = keras.ops.mean(w, axis=(0, 1, 2), keepdims=True)
+        var = keras.ops.mean(keras.ops.square(w - mean), axis=(0, 1, 2), keepdims=True)
+        std = keras.ops.sqrt(var + eps)
         w_hat = (w - mean) / (std * self.fan_in_sqrt)
         w_hat = w_hat * self._gamma
-        y = tf.nn.conv2d(
+        y = keras.ops.conv(
             x,
             w_hat,
-            strides=(1, 1, 1, 1),
-            padding="SAME",
+            strides=(1, 1),
+            padding="same",
         )
         return y
 

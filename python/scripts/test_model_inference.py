@@ -22,8 +22,8 @@ import tensorflow as tf
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from model import P3achyGoModel
-import transforms
 import constants
+from dataset import iter_records
 
 
 def load_model(model_path: str) -> tf.keras.Model:
@@ -34,16 +34,12 @@ def load_model(model_path: str) -> tf.keras.Model:
     return model
 
 
-def load_examples(tfrecord_path: str, num_examples: int) -> tf.data.Dataset:
-    """Load training examples from TFRecord file."""
+def load_examples(tfrecord_path: str, num_examples: int):
+    """Load training examples from TFRecord file. Yields per-record 20-tuples."""
+    import itertools
+
     print(f"Loading examples from {tfrecord_path}...")
-
-    ds = tf.data.TFRecordDataset(tfrecord_path, compression_type="ZLIB")
-    ds = ds.map(transforms.expand)
-    ds = ds.take(num_examples)
-
-    print(f"Dataset loaded successfully!")
-    return ds
+    return list(itertools.islice(iter_records(tfrecord_path), num_examples))
 
 
 def predict_p3achy(model: tf.keras.Model, example: tuple) -> dict:

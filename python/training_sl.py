@@ -6,17 +6,10 @@ We will train our model on samples generated from professional games.
 
 from __future__ import annotations
 
-import tensorflow as tf
-
-# Enable memory growth to prevent TF from allocating all GPU memory at once
-gpus = tf.config.experimental.list_physical_devices("GPU")
-for gpu in gpus:
-    tf.config.experimental.set_memory_growth(gpu, True)
-
 import sys
-import transforms
 import train
-import trt_convert
+from dataset import ChunkDataset
+from train_shim import configure_gpu
 import keras
 
 from absl import app, flags, logging
@@ -99,41 +92,30 @@ def main(_):
     if optimizer is None and FLAGS.optimizer == "muon":
         optimizer = ConvMuon(learning_rate=lr)
 
-    # setup train ds.
-    train_ds = tf.data.Dataset.from_tensor_slices(train_shards)
-    train_ds = train_ds.interleave(
-        lambda x: tf.data.TFRecordDataset(x, compression_type="ZLIB").map(
-            transforms.expand
-        ),
-        cycle_length=64,
-        block_length=16,
-        num_parallel_calls=tf.data.AUTOTUNE,
-    )
-    train_ds = train_ds.shuffle(FLAGS.shuf_buf_size)
-    train_ds = train_ds.batch(batch_size)
-    train_ds = train_ds.prefetch(tf.data.AUTOTUNE)
+    # setup train ds — sequential pass through each shard, front-to-back.
+    class _SequentialShards:
+        def __init__(self, paths, batch_size):
+            self._paths = paths
+            self._batch_size = batch_size
+
+        def __iter__(self):
+            for path in self._paths:
+                yield from ChunkDataset(path, self._batch_size)
+
+    train_ds = _SequentialShards(train_shards, batch_size)
 
     # setup validation dataset
-    val_ds = tf.data.TFRecordDataset(val_shard, compression_type="ZLIB")
-    val_ds = val_ds.map(transforms.expand)
-    val_ds = val_ds.batch(batch_size)
+    val_ds = ChunkDataset(val_shard, batch_size)
     lr_schedule = CyclicLRDecaySchedule(lr, lr * 10, ds_len * epochs)
     lr_schedule = ConstantLRSchedule(lr)
     print(lr_schedule.info())
     model.summary()
 
-    is_gpu = False
-    if tf.config.list_physical_devices("GPU"):
-        tf.keras.mixed_precision.set_global_policy("mixed_float16")
-        logging.info(
-            "Compute Policy dtype: %s"
-            % tf.keras.mixed_precision.global_policy().compute_dtype
-        )
-        logging.info(
-            "Variable Policy dtype: %s"
-            % tf.keras.mixed_precision.global_policy().variable_dtype
-        )
-        is_gpu = True
+    configure_gpu()
+    is_gpu = True
+    policy = keras.mixed_precision.global_policy()
+    logging.info("Compute Policy dtype: %s" % policy.compute_dtype)
+    logging.info("Variable Policy dtype: %s" % policy.variable_dtype)
 
     logging.info(f"Running initial validation...")
     train.val(model, mode=train.Mode.SL, val_ds=val_ds, batch_num=0)

@@ -15,9 +15,9 @@ import sys
 import numpy as np
 
 import gcs_utils as gcs
-import tensorflow as tf
 import keras
-import transforms
+from dataset import ChunkDataset
+from train_shim import configure_gpu
 import rl_loop.model_utils as model_utils
 import rl_loop.train
 import rl_loop.config
@@ -42,7 +42,6 @@ flags.DEFINE_integer("max_gens", 0, "Number of generations to train (0 = run for
 flags.DEFINE_string(
     "source_run_id", "", "Run ID to fetch golden chunks from (defaults to run_id)."
 )
-flags.DEFINE_string("gpu_ids", "0", "GPUs to use")
 S3_BUCKET = "p3achygo"
 
 
@@ -72,7 +71,7 @@ def _fetch_chunk(chunk_dir: str, run_id: str, gen: int) -> str:
     return str(local_path)
 
 
-def _train_loop(strategy):
+def _train_loop():
     config = rl_loop.config.parse(FLAGS.run_id)
 
     Path(FLAGS.models_dir).mkdir(parents=True, exist_ok=True)
@@ -85,10 +84,7 @@ def _train_loop(strategy):
     logging.info(f"Live model: {live_model_path}")
     logging.info(f"SWA model:  {swa_model_path}")
 
-    val_ds = tf.data.TFRecordDataset(FLAGS.val_ds_path, compression_type="ZLIB")
-    val_ds = val_ds.map(transforms.expand, num_parallel_calls=tf.data.AUTOTUNE)
-    val_ds = val_ds.batch(config.batch_size)
-    val_ds = val_ds.prefetch(tf.data.AUTOTUNE)
+    val_ds = ChunkDataset(FLAGS.val_ds_path, config.batch_size)
 
     if not Path(FLAGS.batch_num_path).exists():
         with open(FLAGS.batch_num_path, "w") as f:
@@ -100,20 +96,15 @@ def _train_loop(strategy):
         logging.info(
             f"No live model found at {live_model_path}. Creating new model from config '{config.model_config}'."
         )
-        with tf.device("/cpu:0"):
-            live_model = model_utils.new_model(
-                "p3achygo", config.model_config, config.optimizer
-            )
-            live_model(
-                tf.convert_to_tensor(
-                    np.random.random([1] + live_model.input_planes_shape()),
-                    dtype=tf.float32,
-                ),
-                tf.convert_to_tensor(
-                    np.random.random([1] + live_model.input_features_shape()),
-                    dtype=tf.float32,
-                ),
-            )
+        live_model = model_utils.new_model(
+            "p3achygo", config.model_config, config.optimizer
+        )
+        # Trigger build by calling the model on dummy inputs. Numpy arrays are
+        # accepted by keras 3 models on either backend; no tf.convert_to_tensor.
+        live_model(
+            np.zeros([1, *live_model.input_planes_shape()], dtype=np.float32),
+            np.zeros([1, *live_model.input_features_shape()], dtype=np.float32),
+        )
         live_model.summary()
         live_model.save(live_model_path)
 
@@ -149,7 +140,6 @@ def _train_loop(strategy):
             config=config,
             is_gpu=True,
             batch_num=batch_num,
-            strategy=strategy,
         )
 
         logging.info(f"Deleting local chunk {chunk_path}")
@@ -202,23 +192,9 @@ def main(_):
         logging.error("No --trt_convert_path specified.")
         return
 
-    gpu_indices = [int(x.strip()) for x in FLAGS.gpu_ids.split(",")]
-    physical_gpus = tf.config.list_physical_devices("GPU")
-    assert physical_gpus, "No GPUs detected."
-    for gpu in physical_gpus:
-        tf.config.experimental.set_memory_growth(gpu, True)
-    policy = "mixed_bfloat16" if len(gpu_indices) > 1 else "mixed_float16"
-    keras.mixed_precision.set_global_policy(policy)
-    device_names = [f"/gpu:{i}" for i in gpu_indices]
+    configure_gpu()
 
-    logging.info(f"Using devices: {device_names}")
-    if len(gpu_indices) > 1:
-        strategy = tf.distribute.MirroredStrategy(devices=device_names)
-        logging.info(f"Replicas in sync: {strategy.num_replicas_in_sync}")
-        with strategy.scope():
-            _train_loop(strategy)
-    else:
-        _train_loop(None)
+    _train_loop()
 
 
 if __name__ == "__main__":

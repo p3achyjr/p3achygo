@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import math
-import tensorflow as tf
 import keras
-import transforms
 import train
-import train_distributed
 import rl_loop.model_utils as model_utils
+from dataset import ChunkDataset
 
 from absl import logging
 from constants import *
@@ -64,24 +62,16 @@ def train_one_gen(
     optimizer: keras.optimizers.Optimizer,
     model_gen: int,
     chunk_path: str,
-    val_ds: tf.data.TFRecordDataset,
+    val_ds: ChunkDataset,
     config: RunConfig,
     log_interval=100,
     is_gpu=True,
     batch_num=0,
     chunk_size=None,
-    strategy: tf.distribute.Strategy = None,
 ):
     """
     Trains through dataset held at `chunk_path`.
     """
-
-    def find_num_batches(ds: tf.data.TFRecordDataset) -> int:
-        n = 0
-        for _ in ds.batch(config.batch_size):
-            n += 1
-
-        return n
 
     def get_ss_timestamps(num_batches: int) -> list[int]:
         TARGET_INTERVAL = 1000
@@ -93,21 +83,12 @@ def train_one_gen(
 
     batch_size = config.batch_size
     lr_schedule = ConstantLRSchedule(get_lr(config, model_gen))
-    # lr_schedule = CyclicLRSchedule(config.min_lr * lr_scale,
-    #                                config.max_lr * lr_scale, num_batches)
 
-    # logging.info(f'Running initial validation...')
-    # train.val(model, mode=train.Mode.RL, val_ds=val_ds, val_batch_num=-1)
-
-    ds = tf.data.TFRecordDataset(chunk_path, compression_type="ZLIB")
-    num_batches = find_num_batches(ds)
+    ds = ChunkDataset(chunk_path, batch_size)
+    num_batches = len(ds)
 
     logging.info(f"Batch Size: {batch_size}")
     logging.info(f"Learning Rate Schedule: {lr_schedule.info()}")
-
-    ds = ds.map(transforms.expand, num_parallel_calls=tf.data.AUTOTUNE)
-    ds = ds.batch(batch_size)
-    ds = ds.prefetch(tf.data.AUTOTUNE)
 
     if not optimizer:
         if config.optimizer == "muon":
@@ -117,7 +98,6 @@ def train_one_gen(
                 adam_weight_decay=config.adam_wd,
                 adam_lr_ratio=config.adam_lr_ratio,
                 weight_decay=config.muon_wd,
-                scale_weight_decay_by_rms=config.scale_weight_decay_by_rms,
                 wd_lr_exponent=config.wd_lr_exponent,
                 wd_lr_max=config.wd_lr_max,
                 global_clipnorm=config.global_clipnorm,
@@ -129,7 +109,7 @@ def train_one_gen(
                 global_clipnorm=20.0,
                 nesterov=True,
             )
-        if is_gpu and not (strategy is not None and strategy.num_replicas_in_sync > 1):
+        if is_gpu:
             optimizer = keras.mixed_precision.LossScaleOptimizer(optimizer)
 
     inner_optimizer = getattr(optimizer, "inner_optimizer", optimizer)
@@ -148,7 +128,6 @@ def train_one_gen(
             f"\n  AdamW Weight Decay={inner_optimizer.adam_weight_decay}"
             f"\n  AdamW LR Ratio={inner_optimizer.adam_lr_ratio}"
             f"\n  Momentum={inner_optimizer.momentum}"
-            f"\n  Scale WD by RMS={inner_optimizer.scale_weight_decay_by_rms}"
             f"\n  WD Auto Scale={config.wd_auto_scale}"
             f"\n  WD LR Exponent={inner_optimizer.wd_lr_exponent}"
             f"\n  WD LR Max={inner_optimizer.wd_lr_max}"
@@ -191,19 +170,9 @@ def train_one_gen(
         batch_num=batch_num,
         ss_manager=ss_manager,
     )
-    if strategy is not None and strategy.num_replicas_in_sync > 1:
-        batch_num, optimizer = train_distributed.train(
-            live_model,
-            ds,
-            EPOCHS_PER_GEN,
-            MOMENTUM,
-            strategy=strategy,
-            **_train_kwargs,
-        )
-    else:
-        batch_num, optimizer = train.train(
-            live_model, ds, EPOCHS_PER_GEN, MOMENTUM, **_train_kwargs
-        )
+    batch_num, optimizer = train.train(
+        live_model, ds, EPOCHS_PER_GEN, MOMENTUM, **_train_kwargs
+    )
 
     print(
         f"SWA Momentum: {SWA_MOMENTUM}, "

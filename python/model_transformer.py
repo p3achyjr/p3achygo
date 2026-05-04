@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import math
 import numpy as np
-import tensorflow as tf
 import keras
 
 from constants import BOARD_LEN
@@ -137,16 +136,16 @@ class RoPE(keras.layers.Layer):
         # cos = self._rope_cos[: self.seq_len]  # (S, head_dim)
         # sin = self._rope_sin[: self.seq_len]  # (S, head_dim)
         dtype = x.dtype
-        cos = tf.cast(self._rope_cos, dtype)
-        sin = tf.cast(self._rope_sin, dtype)
-        sign_cos = tf.cast(self._sign_cos, dtype)
+        cos = keras.ops.cast(self._rope_cos, dtype)
+        sin = keras.ops.cast(self._rope_sin, dtype)
+        sign_cos = keras.ops.cast(self._sign_cos, dtype)
 
         # Reshape: (S, head_dim) -> (1, S, 1, head_dim)
-        cos = tf.reshape(cos, [1, self.seq_len, 1, self.head_dim])
-        sin = tf.reshape(sin, [1, self.seq_len, 1, self.head_dim])
+        cos = keras.ops.reshape(cos, [1, self.seq_len, 1, self.head_dim])
+        sin = keras.ops.reshape(sin, [1, self.seq_len, 1, self.head_dim])
 
         # Swap pairs using gather: (x0, x1, x2, x3, ...) -> (x1, x0, x3, x2, ...)
-        x_swapped = tf.gather(x, self._pair_swap_indices, axis=-1)
+        x_swapped = keras.ops.take(x, self._pair_swap_indices, axis=-1)
 
         # Apply RoPE formula: x' = x*cos*sign_cos + x_swapped*sin
         # For each pair (x0, x1): x0' = x0*cos + x1*sin, x1' = -x1*cos + x0*sin
@@ -210,7 +209,7 @@ class TransformerAttention(keras.layers.Layer):
         self.O = keras.layers.Dense(embed_dim, use_bias=False, name="output")
 
     def call(self, x, training=False):
-        batch_size = tf.shape(x)[0]
+        batch_size = keras.ops.shape(x)[0]
         x = keras.ops.reshape(x, (batch_size, self.seq_len, self.embed_dim))
         x = self.rms(x)
 
@@ -364,11 +363,13 @@ class TransformerResidualBlock(keras.layers.Layer):
         self.transformer_ffn = TransformerFFN(embed_dim, num_heads, pos_len)
 
     def call(self, x, training=False):
-        batch_size = tf.shape(x)[0]
+        batch_size = keras.ops.shape(x)[0]
         x = keras.ops.reshape(x, (batch_size, self.seq_len, self.embed_dim))
         x = x + self.transformer_attn(x)
         x = x + self.transformer_ffn(x)
-        return tf.reshape(x, (batch_size, self.pos_len, self.pos_len, self.embed_dim))
+        return keras.ops.reshape(
+            x, (batch_size, self.pos_len, self.pos_len, self.embed_dim)
+        )
 
     def get_config(self):
         config = super().get_config()

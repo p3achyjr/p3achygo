@@ -6,9 +6,9 @@ from __future__ import annotations
 
 import sys
 import gcs_utils as gcs
-import tensorflow as tf
 import keras
-import transforms
+from dataset import ChunkDataset
+from train_shim import configure_gpu
 import rl_loop.model_utils as model_utils
 import rl_loop.train
 import rl_loop.config
@@ -79,16 +79,8 @@ def main(_):
         logging.error("No --trt_convert_path specified.")
         return
 
-    is_gpu = False
-    gpus = tf.config.list_physical_devices("GPU")
-    if gpus:
-        tf.keras.mixed_precision.set_global_policy("mixed_float16")
-        gpus = tf.config.experimental.list_physical_devices("GPU")
-        for gpu in gpus:
-            tf.config.experimental.set_memory_growth(gpu, True)
-        is_gpu = True
-    else:
-        logging.warning("No GPU detected.")
+    configure_gpu()
+    is_gpu = True
 
     config = rl_loop.config.parse(FLAGS.run_id)
 
@@ -105,10 +97,7 @@ def main(_):
     logging.info(f"Using Val Dataset: {FLAGS.val_ds_path}")
     logging.info(f"Using Model Checkpoint: {live_model_path}")
     logging.info(f"Using SWA Model: {swa_model_path}")
-    val_ds = tf.data.TFRecordDataset(FLAGS.val_ds_path, compression_type="ZLIB")
-    val_ds = val_ds.map(transforms.expand, num_parallel_calls=tf.data.AUTOTUNE)
-    val_ds = val_ds.batch(config.batch_size)
-    val_ds = val_ds.prefetch(tf.data.AUTOTUNE)
+    val_ds = ChunkDataset(FLAGS.val_ds_path, config.batch_size)
 
     with open(FLAGS.batch_num_path, "r") as f:  # assumes file is already created.
         batch_num = int(f.read())

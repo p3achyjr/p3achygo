@@ -1,6 +1,6 @@
 import tensorflow as tf
-import transforms
 import numpy as np
+from dataset import iter_records
 
 from absl import flags, app
 
@@ -76,10 +76,7 @@ def main(_):
         print("No data path provided")
         return
 
-    ds = tf.data.TFRecordDataset(ds_path, compression_type="ZLIB")
-    ds = ds.map(transforms.expand)
-    ds = ds.shuffle(1000)
-    ds = ds.prefetch(tf.data.AUTOTUNE)
+    ds = iter_records(ds_path)
 
     model = tf.keras.models.load_model(model_path)
 

@@ -8,64 +8,13 @@ from __future__ import annotations
 from typing import NamedTuple, Optional
 
 import math
-import tensorflow as tf
 import keras
 
 from constants import *
 from model_config import ModelConfig
 from model_layers_common import *
 from model_transformer import *
-
-
-class ModelPredictions(NamedTuple):
-    """Model prediction outputs."""
-
-    pi_logits: tf.Tensor
-    pi_logits_aux: tf.Tensor
-    game_outcome: tf.Tensor
-    score_logits: tf.Tensor
-    own_pred: tf.Tensor
-    q6_pred: tf.Tensor
-    q16_pred: tf.Tensor
-    q50_pred: tf.Tensor
-    gamma: tf.Tensor
-    # v1 predictions (optional)
-    q6_err_pred: Optional[tf.Tensor] = None
-    q16_err_pred: Optional[tf.Tensor] = None
-    q50_err_pred: Optional[tf.Tensor] = None
-    q6_score_pred: Optional[tf.Tensor] = None
-    q16_score_pred: Optional[tf.Tensor] = None
-    q50_score_pred: Optional[tf.Tensor] = None
-    q6_score_err_pred: Optional[tf.Tensor] = None
-    q16_score_err_pred: Optional[tf.Tensor] = None
-    q50_score_err_pred: Optional[tf.Tensor] = None
-    pi_logits_soft: Optional[tf.Tensor] = None
-    pi_logits_optimistic: Optional[tf.Tensor] = None
-    mcts_dist_logits: Optional[tf.Tensor] = None
-    mcts_dist_probs: Optional[tf.Tensor] = None
-
-
-class GroundTruth(NamedTuple):
-    """Ground truth labels for training."""
-
-    policy: tf.Tensor
-    policy_aux: tf.Tensor
-    score: tf.Tensor
-    score_one_hot: tf.Tensor
-    game_outcome: tf.Tensor
-    own: tf.Tensor
-    q6: tf.Tensor
-    q16: tf.Tensor
-    q50: tf.Tensor
-    # v1 labels (optional)
-    q6_score: Optional[tf.Tensor] = None
-    q16_score: Optional[tf.Tensor] = None
-    q50_score: Optional[tf.Tensor] = None
-    # new optional labels
-    policy_aux_dist: Optional[tf.Tensor] = None  # float32[NUM_MOVES]
-    has_pi_aux_dist: Optional[tf.Tensor] = None  # bool scalar
-    mcts_value_dist: Optional[tf.Tensor] = None  # int32[NUM_V_BUCKETS]
-    has_mcts_value_dist: Optional[tf.Tensor] = None  # bool scalar
+from train_shim import *
 
 
 class LossWeights(NamedTuple):
@@ -814,7 +763,7 @@ class ValueHead(keras.layers.Layer):
         # where each slice (batch, i, :) = [v_pooled_features..., score_bin_i]
 
         # Cast scores for mixed-precision without losing shape information
-        scores = tf.cast(scores, dtype=v_pooled.dtype)
+        scores = keras.ops.cast(scores, dtype=v_pooled.dtype)
 
         # Reshape to broadcastable shapes
         pooled_features = keras.ops.shape(v_pooled)[1]
@@ -837,9 +786,9 @@ class ValueHead(keras.layers.Layer):
         v_scores = self.act(v_scores)
         score_logits = self.score_output(v_scores)  # (n, 800, 1)
         score_logits = keras.ops.squeeze(score_logits, axis=2)  # (n, 800)
-        score_logits = tf.cast(
-            keras.ops.minimum(keras.ops.softplus(gamma), 10.0), dtype=tf.float32
-        ) * tf.cast(score_logits, dtype=tf.float32)
+        score_logits = keras.ops.cast(
+            keras.ops.minimum(keras.ops.softplus(gamma), 10.0), dtype="float32"
+        ) * keras.ops.cast(score_logits, dtype="float32")
 
         # q_err outputs predict squared error of q values (range [0, 4] since q is in [-1, 1])
         # Use 4 * sigmoid to constrain to [0, 4]
@@ -1146,9 +1095,10 @@ class P3achyGoModel(keras.Model):
 
     def call(self, board_state, game_state, training=False, scores=None):
         if scores is None:
-            # Use tf.range with explicit dtype to ensure shape inference works
+            # Use keras.ops.arange with explicit dtype to ensure shape inference works
             scores = (
-                0.05 * tf.range(-SCORE_RANGE // 2, SCORE_RANGE // 2, dtype=tf.float32)
+                0.05
+                * keras.ops.arange(-SCORE_RANGE // 2, SCORE_RANGE // 2, dtype="float32")
                 + 0.025
             )
 
@@ -1226,30 +1176,32 @@ class P3achyGoModel(keras.Model):
         weights: LossWeights,
     ):
         # Policy Loss
-        pi_probs = keras.activations.softmax(tf.cast(predictions.pi_logits, tf.float32))
-        policy_loss = keras.metrics.kl_divergence(
-            tf.cast(targets.policy, tf.float32), pi_probs
+        pi_probs = keras.activations.softmax(
+            keras.ops.cast(predictions.pi_logits, "float32")
         )
-        policy_loss = tf.reduce_mean(policy_loss)
+        policy_loss = keras.metrics.kl_divergence(
+            keras.ops.cast(targets.policy, "float32"), pi_probs
+        )
+        policy_loss = keras.ops.mean(policy_loss)
 
         # Policy aux loss: per-example masked.
         # If has_pi_aux_dist: KLD(policy_aux_dist, pi_logits_aux) at full weight.
         # Else: SCCE(policy_aux, pi_logits_aux) at 0.4 * weight.
         # Exactly one term is nonzero per example.
-        has_dist_mask = tf.cast(targets.has_pi_aux_dist, tf.float32)  # (batch,)
-        pi_aux_logits = tf.cast(predictions.pi_logits_aux, tf.float32)
+        has_dist_mask = keras.ops.cast(targets.has_pi_aux_dist, "float32")  # (batch,)
+        pi_aux_logits = keras.ops.cast(predictions.pi_logits_aux, "float32")
 
         # KLD term: KLD(target_dist, predicted_probs) per example
         pi_aux_probs = keras.activations.softmax(pi_aux_logits)
-        policy_aux_dist_target = tf.cast(targets.policy_aux_dist, tf.float32)
+        policy_aux_dist_target = keras.ops.cast(targets.policy_aux_dist, "float32")
         # policy_aux_dist is raw float32 probs (already normalized from recorder)
         per_ex_kld = keras.metrics.kl_divergence(policy_aux_dist_target, pi_aux_probs)
-        policy_aux_dist_loss = tf.reduce_mean(has_dist_mask * per_ex_kld)
+        policy_aux_dist_loss = keras.ops.mean(has_dist_mask * per_ex_kld)
 
         # Scalar term: SCCE(policy_aux, pi_logits_aux) per example
         per_ex_scce = self.scce_logits_per_example(targets.policy_aux, pi_aux_logits)
-        per_ex_scce = tf.clip_by_value(per_ex_scce, 0.0, 50.0)
-        policy_aux_scalar_loss = tf.reduce_mean((1.0 - has_dist_mask) * per_ex_scce)
+        per_ex_scce = keras.ops.clip(per_ex_scce, 0.0, 50.0)
+        policy_aux_scalar_loss = keras.ops.mean((1.0 - has_dist_mask) * per_ex_scce)
 
         # Outcome Loss
         outcome_loss = self.cce_logits(targets.game_outcome, predictions.game_outcome)
@@ -1262,24 +1214,24 @@ class P3achyGoModel(keras.Model):
         score_pdf_loss = self.cce_logits(
             targets.score_one_hot, predictions.score_logits
         )
-        score_cdf_loss = tf.math.reduce_mean(
-            tf.math.reduce_sum(
-                tf.math.square(
-                    tf.math.cumsum(targets.score_one_hot, axis=1)
-                    - tf.math.cumsum(score_distribution, axis=1)
+        score_cdf_loss = keras.ops.mean(
+            keras.ops.sum(
+                keras.ops.square(
+                    keras.ops.cumsum(targets.score_one_hot, axis=1)
+                    - keras.ops.cumsum(score_distribution, axis=1)
                 ),
                 axis=1,
             )
         )
 
         # Ownership Loss
-        own_pred_squeezed = tf.squeeze(predictions.own_pred, -1)  # tailing 1 dim.
+        own_pred_squeezed = keras.ops.squeeze(
+            predictions.own_pred, -1
+        )  # tailing 1 dim.
         own_loss = self.mse(targets.own, own_pred_squeezed)
 
-        gamma_squeezed = tf.squeeze(predictions.gamma, axis=-1)
-        gamma_loss = tf.math.reduce_mean(
-            gamma_squeezed * gamma_squeezed * weights.w_gamma
-        )
+        gamma_squeezed = keras.ops.squeeze(predictions.gamma, axis=-1)
+        gamma_loss = keras.ops.mean(gamma_squeezed * gamma_squeezed * weights.w_gamma)
 
         # Weight everything
         woutcome_loss = weights.w_outcome * outcome_loss
@@ -1304,34 +1256,34 @@ class P3achyGoModel(keras.Model):
 
         # MCTS value distribution loss: KLD(normalized_mcts_dist, mcts_dist_logits)
         # Zero out examples where mcts_value_dist was absent.
-        mv_mask = tf.cast(targets.has_mcts_value_dist, tf.float32)  # (batch,)
-        mcts_dist_target_int = tf.cast(targets.mcts_value_dist, tf.float32)
-        mcts_dist_total = tf.reduce_sum(mcts_dist_target_int, axis=1, keepdims=True)
+        mv_mask = keras.ops.cast(targets.has_mcts_value_dist, "float32")  # (batch,)
+        mcts_dist_target_int = keras.ops.cast(targets.mcts_value_dist, "float32")
+        mcts_dist_total = keras.ops.sum(mcts_dist_target_int, axis=1, keepdims=True)
         # Avoid division by zero for masked-out examples (sentinel zeros → total=0)
-        mcts_dist_total = tf.maximum(mcts_dist_total, 1.0)
+        mcts_dist_total = keras.ops.maximum(mcts_dist_total, 1.0)
         mcts_dist_normalized = mcts_dist_target_int / mcts_dist_total  # (batch, 51)
-        mcts_dist_logits = tf.cast(predictions.mcts_dist_logits, tf.float32)
+        mcts_dist_logits = keras.ops.cast(predictions.mcts_dist_logits, "float32")
         mcts_dist_probs = keras.activations.softmax(mcts_dist_logits)
         per_ex_mcts_kld = keras.metrics.kl_divergence(
             mcts_dist_normalized, mcts_dist_probs
         )
-        mcts_dist_loss = tf.reduce_mean(mv_mask * per_ex_mcts_kld)
+        mcts_dist_loss = keras.ops.mean(mv_mask * per_ex_mcts_kld)
 
         loss = (
-            weights.w_pi * tf.cast(policy_loss, tf.float32)
-            + weights.w_pi_aux * tf.cast(policy_aux_dist_loss, tf.float32)
-            + weights.w_pi_aux * 0.6 * tf.cast(policy_aux_scalar_loss, tf.float32)
-            + tf.cast(val_loss, tf.float32)
-            + tf.cast(gamma_loss, tf.float32)
-            + weights.w_mcts_dist * tf.cast(mcts_dist_loss, tf.float32)
+            weights.w_pi * keras.ops.cast(policy_loss, "float32")
+            + weights.w_pi_aux * keras.ops.cast(policy_aux_dist_loss, "float32")
+            + weights.w_pi_aux * 0.6 * keras.ops.cast(policy_aux_scalar_loss, "float32")
+            + keras.ops.cast(val_loss, "float32")
+            + keras.ops.cast(gamma_loss, "float32")
+            + weights.w_mcts_dist * keras.ops.cast(mcts_dist_loss, "float32")
         )
 
         # v1 losses (only computed if v1 outputs are provided)
-        q_err_loss = tf.constant(0.0)
-        q_score_loss = tf.constant(0.0)
-        q_score_err_loss = tf.constant(0.0)
-        pi_soft_loss = tf.constant(0.0)
-        pi_optimistic_loss = tf.constant(0.0)
+        q_err_loss = keras.ops.zeros((), dtype="float32")
+        q_score_loss = keras.ops.zeros((), dtype="float32")
+        q_score_err_loss = keras.ops.zeros((), dtype="float32")
+        pi_soft_loss = keras.ops.zeros((), dtype="float32")
+        pi_optimistic_loss = keras.ops.zeros((), dtype="float32")
 
         (
             q_err_loss,
@@ -1387,9 +1339,15 @@ class P3achyGoModel(keras.Model):
         # Q error losses (outputs 12-14): Huber loss
         # Target is squared diff between NN prediction and ground truth
         # Use stop_gradient on predictions used as targets
-        q6_err_target = tf.square(tf.stop_gradient(predictions.q6_pred) - targets.q6)
-        q16_err_target = tf.square(tf.stop_gradient(predictions.q16_pred) - targets.q16)
-        q50_err_target = tf.square(tf.stop_gradient(predictions.q50_pred) - targets.q50)
+        q6_err_target = keras.ops.square(
+            keras.ops.stop_gradient(predictions.q6_pred) - targets.q6
+        )
+        q16_err_target = keras.ops.square(
+            keras.ops.stop_gradient(predictions.q16_pred) - targets.q16
+        )
+        q50_err_target = keras.ops.square(
+            keras.ops.stop_gradient(predictions.q50_pred) - targets.q50
+        )
 
         q6_err_loss = self.huber(q6_err_target, predictions.q6_err_pred)
         q16_err_loss = self.huber(q16_err_target, predictions.q16_err_pred)
@@ -1397,8 +1355,8 @@ class P3achyGoModel(keras.Model):
         q_err_loss = (q6_err_loss + q16_err_loss + q50_err_loss) / 3.0
 
         # Q score losses (outputs 15-17): Huber loss on score predictions
-        q_score_loss = tf.constant(0.0)
-        q_score_err_loss = tf.constant(0.0)
+        q_score_loss = keras.ops.zeros((), dtype="float32")
+        q_score_err_loss = keras.ops.zeros((), dtype="float32")
         if targets.q6_score is not None:
             q6_score_normalized = targets.q6_score / 10.0
             q16_score_normalized = targets.q16_score / 10.0
@@ -1409,20 +1367,20 @@ class P3achyGoModel(keras.Model):
             q6_score_loss = self.huber(q6_score_normalized, q6_score_pred_normalized)
             q16_score_loss = self.huber(q16_score_normalized, q16_score_pred_normalized)
             q50_score_loss = self.huber(q50_score_normalized, q50_score_pred_normalized)
-            q_score_loss = tf.clip_by_value(
+            q_score_loss = keras.ops.clip(
                 (q6_score_loss + q16_score_loss + q50_score_loss) / 3.0, 0.0, 200.0
             )
 
             # Q score error losses (outputs 18-20): Huber loss
             # Use stop_gradient on predictions used as targets
-            q6_score_err_target = tf.square(
-                tf.stop_gradient(predictions.q6_score_pred) - targets.q6_score
+            q6_score_err_target = keras.ops.square(
+                keras.ops.stop_gradient(predictions.q6_score_pred) - targets.q6_score
             )
-            q16_score_err_target = tf.square(
-                tf.stop_gradient(predictions.q16_score_pred) - targets.q16_score
+            q16_score_err_target = keras.ops.square(
+                keras.ops.stop_gradient(predictions.q16_score_pred) - targets.q16_score
             )
-            q50_score_err_target = tf.square(
-                tf.stop_gradient(predictions.q50_score_pred) - targets.q50_score
+            q50_score_err_target = keras.ops.square(
+                keras.ops.stop_gradient(predictions.q50_score_pred) - targets.q50_score
             )
 
             q6_score_err_loss = self.huber(
@@ -1434,33 +1392,33 @@ class P3achyGoModel(keras.Model):
             q50_score_err_loss = self.huber(
                 q50_score_err_target / 100.0, predictions.q50_score_err_pred / 100.0
             )
-            q_score_err_loss = tf.clip_by_value(
+            q_score_err_loss = keras.ops.clip(
                 (q6_score_err_loss + q16_score_err_loss + q50_score_err_loss) / 3.0,
                 0.0,
                 1000.0,
             )
         # Soft policy loss (output 21): KLD on policy^0.25
-        policy_f32 = tf.cast(targets.policy, tf.float32)
-        policy_soft = tf.pow(policy_f32, 0.25)
-        policy_soft = policy_soft / tf.reduce_sum(policy_soft, axis=-1, keepdims=True)
+        policy_f32 = keras.ops.cast(targets.policy, "float32")
+        policy_soft = keras.ops.power(policy_f32, 0.25)
+        policy_soft = policy_soft / keras.ops.sum(policy_soft, axis=-1, keepdims=True)
 
         # Compute KLD loss
         pi_soft_probs = keras.activations.softmax(
-            tf.cast(predictions.pi_logits_soft, tf.float32)
+            keras.ops.cast(predictions.pi_logits_soft, "float32")
         )
         pi_soft_loss = keras.metrics.kl_divergence(policy_soft, pi_soft_probs)
-        pi_soft_loss = tf.reduce_mean(pi_soft_loss)
+        pi_soft_loss = keras.ops.mean(pi_soft_loss)
 
         # Optimistic policy loss
         # z_value is how many standard deviations the shortterm value is above the predicted shortterm value.
-        z_value_q6 = (targets.q6 - tf.stop_gradient(predictions.q6_pred)) / (
-            tf.stop_gradient(tf.sqrt(predictions.q6_err_pred + epsilon))
+        z_value_q6 = (targets.q6 - keras.ops.stop_gradient(predictions.q6_pred)) / (
+            keras.ops.stop_gradient(keras.ops.sqrt(predictions.q6_err_pred + epsilon))
         )
-        z_value_q16 = (targets.q16 - tf.stop_gradient(predictions.q16_pred)) / (
-            tf.stop_gradient(tf.sqrt(predictions.q16_err_pred + epsilon))
+        z_value_q16 = (targets.q16 - keras.ops.stop_gradient(predictions.q16_pred)) / (
+            keras.ops.stop_gradient(keras.ops.sqrt(predictions.q16_err_pred + epsilon))
         )
-        z_value_q50 = (targets.q50 - tf.stop_gradient(predictions.q50_pred)) / (
-            tf.stop_gradient(tf.sqrt(predictions.q50_err_pred + epsilon))
+        z_value_q50 = (targets.q50 - keras.ops.stop_gradient(predictions.q50_pred)) / (
+            keras.ops.stop_gradient(keras.ops.sqrt(predictions.q50_err_pred + epsilon))
         )
         z_weight_decay = 4.0 / 7.0
         c_z6 = z_weight_decay * 3
@@ -1469,14 +1427,26 @@ class P3achyGoModel(keras.Model):
         z_value = (c_z6 * z_value_q6 + c_z16 * z_value_q16 + c_z50 * z_value_q50) / 3.0
         if targets.q6_score is not None:
             z_score_q6 = (
-                targets.q6_score - tf.stop_gradient(predictions.q6_score_pred)
-            ) / (tf.stop_gradient(tf.sqrt(predictions.q6_score_err_pred + epsilon)))
+                targets.q6_score - keras.ops.stop_gradient(predictions.q6_score_pred)
+            ) / (
+                keras.ops.stop_gradient(
+                    keras.ops.sqrt(predictions.q6_score_err_pred + epsilon)
+                )
+            )
             z_score_q16 = (
-                targets.q16_score - tf.stop_gradient(predictions.q16_score_pred)
-            ) / (tf.stop_gradient(tf.sqrt(predictions.q16_score_err_pred + epsilon)))
+                targets.q16_score - keras.ops.stop_gradient(predictions.q16_score_pred)
+            ) / (
+                keras.ops.stop_gradient(
+                    keras.ops.sqrt(predictions.q16_score_err_pred + epsilon)
+                )
+            )
             z_score_q50 = (
-                targets.q50_score - tf.stop_gradient(predictions.q50_score_pred)
-            ) / (tf.stop_gradient(tf.sqrt(predictions.q50_score_err_pred + epsilon)))
+                targets.q50_score - keras.ops.stop_gradient(predictions.q50_score_pred)
+            ) / (
+                keras.ops.stop_gradient(
+                    keras.ops.sqrt(predictions.q50_score_err_pred + epsilon)
+                )
+            )
             z_score = (
                 c_z6 * z_score_q6 + c_z16 * z_score_q16 + c_z50 * z_score_q50
             ) / 3.0
@@ -1484,19 +1454,19 @@ class P3achyGoModel(keras.Model):
         else:
             z_combined = z_value
 
-        optimistic_weight = tf.clip_by_value(
-            tf.nn.sigmoid((z_combined - 1.0) * 3),
+        optimistic_weight = keras.ops.clip(
+            keras.ops.sigmoid((z_combined - 1.0) * 3),
             0.0,
             1.0,
         )
         pi_optimistic_probs = keras.activations.softmax(
-            tf.cast(predictions.pi_logits_optimistic, tf.float32)
+            keras.ops.cast(predictions.pi_logits_optimistic, "float32")
         )
         pi_optimistic_loss = keras.metrics.kl_divergence(
             targets.policy, pi_optimistic_probs
         )
         pi_optimistic_loss = pi_optimistic_loss * optimistic_weight
-        pi_optimistic_loss = tf.reduce_mean(pi_optimistic_loss)
+        pi_optimistic_loss = keras.ops.mean(pi_optimistic_loss)
 
         return (
             q_err_loss,

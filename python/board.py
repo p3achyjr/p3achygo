@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import bitstring, random
 import numpy as np
-import tensorflow as tf
 
 from constants import *
 
@@ -11,76 +10,79 @@ UINT_MAX = 2**128 - 1
 
 
 def opposite_color(color: int) -> int:
-  return WHITE if color == BLACK else BLACK
+    return WHITE if color == BLACK else BLACK
 
 
 def is_star_point(board, i, j) -> bool:
-  coords = [3, 9, 15]
-  # print(i, j, i in coords and j in coords)
-  return (i in coords and j in coords)
+    coords = [3, 9, 15]
+    # print(i, j, i in coords and j in coords)
+    return i in coords and j in coords
 
 
 def char_at(board, i, j):
-  if board[i][j] == EMPTY:
-    return '+' if is_star_point(board, i, j) else '⋅'
-  elif board[i][j] == BLACK:
-    return '○'
-  else:
-    return '●'
+    if board[i][j] == EMPTY:
+        return "+" if is_star_point(board, i, j) else "⋅"
+    elif board[i][j] == BLACK:
+        return "○"
+    else:
+        return "●"
 
 
 def to_char(x):
-  if x == EMPTY:
-    return '⋅'
-  elif x == BLACK:
-    return '○'
-  else:
-    return '●'
+    if x == EMPTY:
+        return "⋅"
+    elif x == BLACK:
+        return "○"
+    else:
+        return "●"
 
 
 class ZobristTable:
 
-  def __init__(self, len: int, piece_count: int) -> None:
-    self.len = len
-    self.piece_count = piece_count
-    self.__zobrist_hash_table = [[
-        bitstring.Bits(uint=random.randint(0, UINT_MAX), length=BITSTRING_LEN)
-        for _ in range(piece_count)
-    ]
-                                 for _ in range(len * len)]
-    self.__turn_bitstring = bitstring.Bits(uint=random.randint(0, UINT_MAX),
-                                           length=BITSTRING_LEN)
+    def __init__(self, len: int, piece_count: int) -> None:
+        self.len = len
+        self.piece_count = piece_count
+        self.__zobrist_hash_table = [
+            [
+                bitstring.Bits(uint=random.randint(0, UINT_MAX), length=BITSTRING_LEN)
+                for _ in range(piece_count)
+            ]
+            for _ in range(len * len)
+        ]
+        self.__turn_bitstring = bitstring.Bits(
+            uint=random.randint(0, UINT_MAX), length=BITSTRING_LEN
+        )
 
-  def bitstring_at(self, i, j, piece_index):
-    assert (i < self.len and j < self.len and piece_index < self.piece_count)
-    return self.__zobrist_hash_table[i * self.len + j][piece_index]
+    def bitstring_at(self, i, j, piece_index):
+        assert i < self.len and j < self.len and piece_index < self.piece_count
+        return self.__zobrist_hash_table[i * self.len + j][piece_index]
 
-  def turn_bitstring(self):
-    return self.__turn_bitstring
+    def turn_bitstring(self):
+        return self.__turn_bitstring
 
 
 class ZobristHash:
 
-  def __init__(self, board, b, zobrist_table: ZobristTable) -> None:
-    self.__hash = bitstring.Bits(uint=0, length=BITSTRING_LEN)
-    self.__zobrist_table = zobrist_table
-    for i in range(b):
-      for j in range(b):
-        self.__hash ^= self.__zobrist_table.bitstring_at(
-            i, j, board.board[i][j])
+    def __init__(self, board, b, zobrist_table: ZobristTable) -> None:
+        self.__hash = bitstring.Bits(uint=0, length=BITSTRING_LEN)
+        self.__zobrist_table = zobrist_table
+        for i in range(b):
+            for j in range(b):
+                self.__hash ^= self.__zobrist_table.bitstring_at(
+                    i, j, board.board[i][j]
+                )
 
-    self.__hash ^= self.__zobrist_table.turn_bitstring()
+        self.__hash ^= self.__zobrist_table.turn_bitstring()
 
-  def hash(self):
-    return self.__hash
+    def hash(self):
+        return self.__hash
 
-  def recompute_hash(self, transitions: list[tuple[int, int, int,
-                                                   int]]) -> None:
-    for (i, j, last_piece, current_piece) in transitions:
-      self.__hash ^= self.__zobrist_table.bitstring_at(i, j, last_piece)
-      self.__hash ^= self.__zobrist_table.bitstring_at(i, j, current_piece)
+    def recompute_hash(self, transitions: list[tuple[int, int, int, int]]) -> None:
+        for i, j, last_piece, current_piece in transitions:
+            self.__hash ^= self.__zobrist_table.bitstring_at(i, j, last_piece)
+            self.__hash ^= self.__zobrist_table.bitstring_at(i, j, current_piece)
 
-    self.__hash ^= self.__zobrist_table.turn_bitstring()
+        self.__hash ^= self.__zobrist_table.turn_bitstring()
 
 
 class GoBoard:
@@ -256,66 +258,63 @@ class GoBoard:
 
 
 class GameResult:
-  '''Simple class representing game result'''
-  UNKNOWN = 0
-  BLACK = 1
-  WHITE = 2
+    """Simple class representing game result"""
 
-  def __init__(self, winner=UNKNOWN, score_diff=0, by_resignation=False):
-    self.winner = winner
-    self.score_diff = score_diff
-    self.by_resignation = by_resignation
+    UNKNOWN = 0
+    BLACK = 1
+    WHITE = 2
 
-  def is_unknown(self):
-    return self.winner == self.UNKNOWN
+    def __init__(self, winner=UNKNOWN, score_diff=0, by_resignation=False):
+        self.winner = winner
+        self.score_diff = score_diff
+        self.by_resignation = by_resignation
 
-  def is_by_resignation(self):
-    return self.by_resignation
+    def is_unknown(self):
+        return self.winner == self.UNKNOWN
 
-  @staticmethod
-  def unknown():
-    return GameResult(winner=GameResult.UNKNOWN,
-                      score_diff=0,
-                      by_resignation=False)
+    def is_by_resignation(self):
+        return self.by_resignation
 
-  @staticmethod
-  def parse_score(score: str):
-    score = score.lower()
-    if '+' not in score:
-      return GameResult.unknown()
+    @staticmethod
+    def unknown():
+        return GameResult(winner=GameResult.UNKNOWN, score_diff=0, by_resignation=False)
 
-    tokens = score.split('+')
-    if len(tokens) < 2:
-      return GameResult.unknown()
+    @staticmethod
+    def parse_score(score: str):
+        score = score.lower()
+        if "+" not in score:
+            return GameResult.unknown()
 
-    if tokens[0] == 'b':
-      winner = GameResult.BLACK
-    elif tokens[0] == 'w':
-      winner = GameResult.WHITE
-    else:
-      return GameResult.unknown()
+        tokens = score.split("+")
+        if len(tokens) < 2:
+            return GameResult.unknown()
 
-    if tokens[1] == 'r':
-      return GameResult(winner=winner, by_resignation=True)
+        if tokens[0] == "b":
+            winner = GameResult.BLACK
+        elif tokens[0] == "w":
+            winner = GameResult.WHITE
+        else:
+            return GameResult.unknown()
 
-    try:
-      point_diff = float(tokens[1])
-    except ValueError:
-      return GameResult.unknown()
+        if tokens[1] == "r":
+            return GameResult(winner=winner, by_resignation=True)
 
-    return GameResult(winner=winner,
-                      score_diff=point_diff,
-                      by_resignation=False)
+        try:
+            point_diff = float(tokens[1])
+        except ValueError:
+            return GameResult.unknown()
+
+        return GameResult(winner=winner, score_diff=point_diff, by_resignation=False)
 
 
 def parse_move(move):
-  if move is None:
-    return
-  if len(move) < 2 or len(move) > 3:
-    return
-  if not move[0] in 'abcdefghijklmnopqrs':
-    return
-  if not move[1] in '0123456789':
-    return
+    if move is None:
+        return
+    if len(move) < 2 or len(move) > 3:
+        return
+    if not move[0] in "abcdefghijklmnopqrs":
+        return
+    if not move[1] in "0123456789":
+        return
 
-  return (abs(int(move[1:])), ord(move[0]) - ord('a'))
+    return (abs(int(move[1:])), ord(move[0]) - ord("a"))

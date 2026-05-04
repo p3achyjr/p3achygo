@@ -304,14 +304,8 @@ def loop(
                 optimizer=config.optimizer,
             )
             model(
-                tf.convert_to_tensor(
-                    np.random.random([batch_size] + model.input_planes_shape()),
-                    dtype=tf.float32,
-                ),
-                tf.convert_to_tensor(
-                    np.random.random([batch_size] + model.input_features_shape()),
-                    dtype=tf.float32,
-                ),
+                np.zeros([batch_size, *model.input_planes_shape()], dtype=np.float32),
+                np.zeros([batch_size, *model.input_features_shape()], dtype=np.float32),
             )
             model.summary()
             model.save(checkpoint_path)
