@@ -1,19 +1,18 @@
 from __future__ import annotations
 
 import math
-import keras
+from typing import Any
 import train
-import rl_loop.model_utils as model_utils
+import train_shim
 from dataset import ChunkDataset
 
 from absl import logging
 from constants import *
-from lr_schedule import ConstantLRSchedule, CyclicLRSchedule
+from lr_schedule import ConstantLRSchedule
 from model import P3achyGoModel
 from rl_loop.config import RunConfig
 from weight_snapshot import WeightSnapshotManager
 from loss_coeffs import LossCoeffs
-from optimizer import ConvMuon
 
 EPOCHS_PER_GEN = 1
 MOMENTUM = 0.9
@@ -59,7 +58,7 @@ def get_lr(config: RunConfig, model_gen: int) -> float:
 def train_one_gen(
     live_model: P3achyGoModel,
     last_swa_model: P3achyGoModel,
-    optimizer: keras.optimizers.Optimizer,
+    optimizer: Any,
     model_gen: int,
     chunk_path: str,
     val_ds: ChunkDataset,
@@ -90,37 +89,21 @@ def train_one_gen(
     logging.info(f"Batch Size: {batch_size}")
     logging.info(f"Learning Rate Schedule: {lr_schedule.info()}")
 
-    if not optimizer:
-        if config.optimizer == "muon":
-            optimizer = ConvMuon(
-                learning_rate=lr_schedule,
-                exclude_layers=[r".*policy_head\/.*", r".*value_head\/.*"],
-                adam_weight_decay=config.adam_wd,
-                adam_lr_ratio=config.adam_lr_ratio,
-                weight_decay=config.muon_wd,
-                wd_lr_exponent=config.wd_lr_exponent,
-                wd_lr_max=config.wd_lr_max,
-                global_clipnorm=config.global_clipnorm,
-            )
-        else:
-            optimizer = keras.optimizers.SGD(
-                learning_rate=lr_schedule,
-                momentum=MOMENTUM,
-                global_clipnorm=20.0,
-                nesterov=True,
-            )
-        if is_gpu:
-            optimizer = keras.mixed_precision.LossScaleOptimizer(optimizer)
-
+    # `optimizer` may be:
+    #   - an in-memory optimizer object (in-process hot-reload across gens),
+    #   - a state_dict-like (torch cross-process resume — what
+    #     `optimizer_state_from_model` returns on the torch backend),
+    #   - or None (build fresh).
+    if isinstance(optimizer, dict):
+        optimizer = train_shim.make_optimizer(
+            live_model, config, lr_schedule, is_gpu, optimizer_state=optimizer
+        )
+    else:
+        optimizer = train_shim.make_optimizer(
+            live_model, config, lr_schedule, is_gpu, optimizer=optimizer
+        )
     inner_optimizer = getattr(optimizer, "inner_optimizer", optimizer)
-    if isinstance(inner_optimizer, ConvMuon):
-        inner_optimizer.learning_rate = lr_schedule
-        inner_optimizer.weight_decay = config.muon_wd
-        inner_optimizer.adam_weight_decay = config.adam_wd
-        inner_optimizer.adam_lr_ratio = config.adam_lr_ratio
-        inner_optimizer.global_clipnorm = config.global_clipnorm
-        inner_optimizer.wd_lr_exponent = config.wd_lr_exponent
-        inner_optimizer.wd_lr_max = config.wd_lr_max
+    if isinstance(inner_optimizer, train_shim.ConvMuon):
         logging.info(
             f"Using ConvMuon Optimizer"
             f"\n  Learning Rate={inner_optimizer.learning_rate}"
@@ -131,28 +114,25 @@ def train_one_gen(
             f"\n  WD Auto Scale={config.wd_auto_scale}"
             f"\n  WD LR Exponent={inner_optimizer.wd_lr_exponent}"
             f"\n  WD LR Max={inner_optimizer.wd_lr_max}"
-            f"\n  LR Scale={inner_optimizer._lr_scale()}"
             f"\n  Global ClipNorm={inner_optimizer.global_clipnorm}"
         )
     else:
-        inner_optimizer.learning_rate = lr_schedule
-        inner_optimizer.global_clipnorm = config.global_clipnorm
         logging.info(
-            f"Using ConvMuon SGD"
+            f"Using SGD Optimizer"
             f"\n  Learning Rate={inner_optimizer.learning_rate}"
-            f"\n  Momentum={inner_optimizer.momentum}"
-            f"\n  ClipNorm={inner_optimizer.global_clipnorm}"
+            f"\n  Momentum={getattr(inner_optimizer, 'momentum', None)}"
+            f"\n  Global ClipNorm={inner_optimizer.global_clipnorm}"
         )
 
     ss_manager = WeightSnapshotManager(get_ss_timestamps(num_batches))
-    last_swa_weights = last_swa_model.get_weights()
+    last_swa_weights = train_shim.get_weights(last_swa_model)
     loss_coeffs = LossCoeffs.RLCoeffs()
     if model_gen <= 100:
         # downweight some terms as at this point it is just noise.
         loss_coeffs.w_q_score *= 0.5
         loss_coeffs.w_q_score_err *= 0.5
         loss_coeffs.w_pi_soft *= 0.25
-    if isinstance(inner_optimizer, ConvMuon):
+    if isinstance(inner_optimizer, train_shim.ConvMuon):
         # observed severe overfitting for outcome head.
         loss_coeffs.w_outcome *= 0.4
 
@@ -184,17 +164,16 @@ def train_one_gen(
     # num_batches_in_chunk = batch_num - old_batch_num
     # new_weights = model_utils.avg_weights(last_swa_weights, model.get_weights(),
     #                                       num_batches_in_chunk)
-    new_weights = model_utils.swa_avg_weights(
-        [last_swa_weights] + ss_manager.snapshots + [live_model.get_weights()],
+    new_weights = train_shim.swa_avg_weights(
+        [last_swa_weights]
+        + ss_manager.snapshots
+        + [train_shim.get_weights(live_model)],
         swa_momentum=SWA_MOMENTUM,
     )
     print(f"Last Model: {model_gen}, Next Model: {model_gen + 1}")
-    print(f"Last SWA Model Weights: {last_swa_weights[0][0][0][0][0:8]}")
-    print(f"Live Weights: {live_model.get_weights()[0][0][0][0][0:8]}")
-    print(f"New SWA Model Weights: {new_weights[0][0][0][0][0:8]}")
-    swa_model = keras.models.clone_model(live_model)
-    swa_model.set_weights(new_weights)
-    model_utils.recompute_bn_statistics(swa_model, ds)
+    swa_model = train_shim.clone_model(live_model)
+    train_shim.set_weights(swa_model, new_weights)
+    train_shim.recompute_bn_statistics(swa_model, ds)
     # model.set_weights(new_weights)
     logging.info(f"Running validation for live model...")
     train.val(live_model, mode=train.Mode.RL, val_ds=val_ds, batch_num=model_gen + 1)

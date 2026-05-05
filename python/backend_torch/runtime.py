@@ -16,14 +16,18 @@ sys.modules.setdefault(
 )
 
 import torch
-import keras
 from torch.utils.tensorboard import SummaryWriter as _TBWriter
 
 
 def configure_gpu(mixed_precision_policy: str = "mixed_float16"):
+    """No-op for torch.
+
+    Mixed precision is configured per-step via torch.amp.autocast at the
+    train_step call site (or via .to(dtype=...) for the model). Kept as a
+    backend-agnostic shim so callers can stay framework-blind.
+    """
     assert torch.cuda.is_available(), "No GPUs detected."
-    # torch's caching allocator already grows lazily — no memory_growth knob.
-    keras.mixed_precision.set_global_policy(mixed_precision_policy)
+    del mixed_precision_policy
 
 
 class SummaryWriter:

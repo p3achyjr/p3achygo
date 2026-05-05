@@ -4,9 +4,9 @@ A mechanism to snapshot weights.
 
 from __future__ import annotations
 
-from typing import List
+from typing import Any, List
 
-import keras
+import train_shim
 
 
 class WeightSnapshotManager(object):
@@ -18,5 +18,5 @@ class WeightSnapshotManager(object):
     def should_take_snapshot(self, step: int):
         return step in self.ss_steps
 
-    def take_snapshot(self, model: keras.Model):
-        self.snapshots.append(model.get_weights())
+    def take_snapshot(self, model: Any):
+        self.snapshots.append(train_shim.get_weights(model))

@@ -3,6 +3,8 @@ from __future__ import annotations
 import torch
 from typing import NamedTuple, Optional, TYPE_CHECKING
 
+from backend_torch.losses import compute_losses as _torch_compute_losses
+
 if TYPE_CHECKING:
     from model import P3achyGoModel, LossWeights
 
@@ -165,8 +167,9 @@ def train_step(
         mcts_dist_probs=mcts_dist_probs,
     )
 
-    # Compute losses for both heads
-    loss_outputs = model.compute_losses(predictions, targets, weights)
+    # Native-torch loss computation (port of `model.compute_losses`).
+    # See backend_torch/losses.py for parity notes.
+    loss_outputs = _torch_compute_losses(predictions, targets, weights)
 
     # Unpack loss outputs
     (
@@ -338,7 +341,7 @@ def val_step(
         pi_soft_loss,
         pi_optimistic_loss,
         mcts_dist_loss,
-    ) = model.compute_losses(predictions, targets, weights)
+    ) = _torch_compute_losses(predictions, targets, weights)
 
     return TrainStepResult(
         predictions=predictions,

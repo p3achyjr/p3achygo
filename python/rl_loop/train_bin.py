@@ -10,7 +10,7 @@ import gcs_utils as gcs
 import sys, time
 import keras
 from dataset import ChunkDataset
-from train_shim import configure_gpu
+from train_shim import configure_gpu, load_model
 import train
 import rl_loop.model_utils as model_utils
 import rl_loop.train
@@ -94,7 +94,7 @@ def main(_):
         )
     else:
         model_path = gcs.download_model(FLAGS.run_id, str(model_dir), model_gen)
-        model = keras.models.load_model(model_path)
+        model = load_model(model_path)
 
     model.summary(batch_size=BATCH_SIZE)
     val_ds = ChunkDataset(FLAGS.val_ds_path, BATCH_SIZE)

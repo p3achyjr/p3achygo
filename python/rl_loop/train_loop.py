@@ -15,9 +15,15 @@ import sys
 import numpy as np
 
 import gcs_utils as gcs
-import keras
 from dataset import ChunkDataset
-from train_shim import configure_gpu
+from train_shim import (
+    configure_gpu,
+    load_model,
+    save_model,
+    optimizer_state_from_model,
+    LIVE_MODEL_NAME,
+    MODEL_EXT,
+)
 import rl_loop.model_utils as model_utils
 import rl_loop.train
 import rl_loop.config
@@ -25,9 +31,6 @@ import rl_loop.config
 from absl import app, flags, logging
 from pathlib import Path
 from rl_loop.constants import SELFPLAY_BATCH_SIZE
-from optimizer import ConvMuon  # noqa: F401 — registers p3achygo>
-
-LIVE_MODEL_NAME = "live_model.keras"
 
 FLAGS = flags.FLAGS
 
@@ -105,20 +108,22 @@ def _train_loop():
             np.zeros([1, *live_model.input_planes_shape()], dtype=np.float32),
             np.zeros([1, *live_model.input_features_shape()], dtype=np.float32),
         )
-        live_model.summary()
-        live_model.save(live_model_path)
+        save_model(live_model, live_model_path)
 
     if not Path(swa_model_path).exists():
         swa_model_path = live_model_path
 
-    live_model = keras.models.load_model(live_model_path)
-    optimizer = getattr(live_model, "optimizer", None)
-    if not optimizer:
+    live_model = load_model(live_model_path)
+    optimizer_state = optimizer_state_from_model(live_model)
+    if optimizer_state is None:
         logging.info(
-            "No optimizer found in live model. "
+            "No optimizer state found in live model. "
             "This should only happen for model_0000."
         )
-    swa_model = keras.models.load_model(swa_model_path)
+    # On TF the rehydrated optimizer is itself usable; on torch it's a
+    # state_dict that make_optimizer will load after fresh construction.
+    optimizer = optimizer_state
+    swa_model = load_model(swa_model_path)
 
     max_gens = FLAGS.max_gens
     gens_trained = 0
@@ -145,14 +150,17 @@ def _train_loop():
         logging.info(f"Deleting local chunk {chunk_path}")
         Path(chunk_path).unlink(missing_ok=True)
 
-        # Save live model checkpoint.
-        live_model.compile(optimizer=optimizer)
-        live_model.save(live_model_path)
+        # Save live model checkpoint, bundling optimizer state.
+        save_model(live_model, live_model_path, optimizer=optimizer)
 
         # Save restart checkpoint.
         live_ckpt_dir = Path(FLAGS.models_dir, "_live")
         live_ckpt_dir.mkdir(exist_ok=True)
-        live_model.save(str(live_ckpt_dir / f"live_{next_gen:04d}.keras"))
+        save_model(
+            live_model,
+            str(live_ckpt_dir / f"live_{next_gen:04d}{MODEL_EXT}"),
+            optimizer=optimizer,
+        )
 
         # Save SWA model for selfplay.
         if FLAGS.save_trt:

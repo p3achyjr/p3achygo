@@ -6,9 +6,15 @@ from __future__ import annotations
 
 import sys
 import gcs_utils as gcs
-import keras
 from dataset import ChunkDataset
-from train_shim import configure_gpu
+from train_shim import (
+    configure_gpu,
+    load_model,
+    save_model,
+    optimizer_state_from_model,
+    LIVE_MODEL_NAME,
+    MODEL_EXT,
+)
 import rl_loop.model_utils as model_utils
 import rl_loop.train
 import rl_loop.config
@@ -18,11 +24,9 @@ from model import P3achyGoModel
 from pathlib import Path
 from rl_loop.constants import SELFPLAY_BATCH_SIZE
 from typing import Tuple
-from lr_schedule import ConstantLRSchedule
-from optimizer import ConvMuon  # noqa: F401 — registers p3achygo>ConvMuon
+from lr_schedule import ConstantLRSchedule  # noqa: F401 — registers schedule
 
 BATCH_SIZE = 256
-LIVE_MODEL_NAME = "live_model.keras"
 
 FLAGS = flags.FLAGS
 
@@ -86,13 +90,14 @@ def main(_):
 
     swa_model_path, _ = get_model_path(FLAGS.models_dir, FLAGS.gen)
     live_model_path = str(Path(FLAGS.models_dir, LIVE_MODEL_NAME))
-    live_model = keras.models.load_model(live_model_path)
-    optimizer = getattr(live_model, "optimizer", None)
-    if not optimizer:
+    live_model = load_model(live_model_path)
+    optimizer = optimizer_state_from_model(live_model)
+    if optimizer is None:
         logging.info(
-            "No optimizer found in model. This should only happen for model_0000."
+            "No optimizer state found in model. "
+            "This should only happen for model_0000."
         )
-    swa_model = keras.models.load_model(swa_model_path)
+    swa_model = load_model(swa_model_path)
     logging.info(f"Using Train Dataset: {FLAGS.chunk_path}")
     logging.info(f"Using Val Dataset: {FLAGS.val_ds_path}")
     logging.info(f"Using Model Checkpoint: {live_model_path}")
@@ -117,15 +122,14 @@ def main(_):
         batch_num=batch_num,
         chunk_size=FLAGS.chunk_size,
     )
-    live_model.compile(optimizer=optimizer)
-    live_model.save(live_model_path)
+    save_model(live_model, live_model_path, optimizer=optimizer)
 
     # save live checkpoint
     live_model_ckpt_path = str(
-        Path(FLAGS.models_dir, "_live", f"live_{FLAGS.next_gen:04d}.keras")
+        Path(FLAGS.models_dir, "_live", f"live_{FLAGS.next_gen:04d}{MODEL_EXT}")
     )
     Path(FLAGS.models_dir, "_live").mkdir(exist_ok=True)
-    live_model.save(live_model_ckpt_path)
+    save_model(live_model, live_model_ckpt_path, optimizer=optimizer)
     if FLAGS.save_trt:
         model_utils.save_onnx_trt(
             swa_model,

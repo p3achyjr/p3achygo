@@ -3,7 +3,6 @@ from __future__ import annotations
 import functools
 import math
 import numpy as np
-import keras
 from typing import Any, NamedTuple, Optional
 
 from board import GoBoard
@@ -15,6 +14,13 @@ from loss_coeffs import LossCoeffs
 from enum import Enum
 from weight_snapshot import WeightSnapshotManager
 from train_shim import *
+import train_shim
+
+
+def _softmax(x: np.ndarray, axis: int = -1) -> np.ndarray:
+    """Stable softmax over the last axis by default."""
+    e = np.exp(x - np.max(x, axis=axis, keepdims=True))
+    return e / e.sum(axis=axis, keepdims=True)
 
 
 class Mode(Enum):
@@ -154,11 +160,11 @@ def train(
     log_interval: int,
     mode: Mode,
     coeffs: LossCoeffs,
-    optimizer: Optional[keras.optimizers.Optimizer] = None,
+    optimizer: Optional[Any] = None,
     save_interval=1000,
     save_path="/tmp",
     tensorboard_log_dir="/tmp/logs",
-    lr_schedule: Optional[keras.optimizers.schedules.LearningRateSchedule] = None,
+    lr_schedule: Optional[Any] = None,
     is_gpu=True,
     batch_num=0,
     ss_manager: Optional[WeightSnapshotManager] = None,
@@ -191,15 +197,10 @@ def train(
         w_mcts_dist=coeffs.w_mcts_dist,
     )
 
-    if not optimizer:
-        optimizer = keras.optimizers.SGD(
-            learning_rate=lr_schedule,
-            momentum=momentum,
-            global_clipnorm=20.0,  # purely for numerical stability
-            nesterov=True,
-        )
-        if is_gpu:
-            optimizer = keras.mixed_precision.LossScaleOptimizer(optimizer)
+    assert optimizer is not None, (
+        "train() requires a pre-built optimizer; use train_shim.make_optimizer "
+        "to construct one (centralized factory)."
+    )
 
     losses_train = LossTracker()
     local_batch_num = 0
@@ -305,19 +306,17 @@ def train(
                     )
 
                     # Log policy entropy to detect flat distributions
-                    pi_probs = keras.activations.softmax(
-                        result.predictions.pi_logits[0]
-                    )
-                    policy_entropy = -keras.ops.sum(
-                        pi_probs * keras.ops.log(pi_probs + 1e-10)
-                    )
-                    target_entropy = -keras.ops.sum(
-                        targets.policy[0] * keras.ops.log(targets.policy[0] + 1e-10)
+                    pi_logits_np = train_shim.to_numpy(result.predictions.pi_logits[0])
+                    pi_probs = _softmax(pi_logits_np)
+                    policy_entropy = -float(np.sum(pi_probs * np.log(pi_probs + 1e-10)))
+                    target_np = train_shim.to_numpy(targets.policy[0])
+                    target_entropy = -float(
+                        np.sum(target_np * np.log(target_np + 1e-10))
                     )
                     print(
-                        f"Policy entropy - Predicted: {float(policy_entropy):.3f}, "
-                        f"Target: {float(target_entropy):.3f} "
-                        f"(max={float(keras.ops.log(362.0)):.3f})"
+                        f"Policy entropy - Predicted: {policy_entropy:.3f}, "
+                        f"Target: {target_entropy:.3f} "
+                        f"(max={math.log(362.0):.3f})"
                     )
 
     if save_path:
@@ -490,8 +489,8 @@ def log_board_position(
 ):
     """Log a sample board position with model predictions."""
     # Take first example from batch
-    planes = keras.ops.convert_to_numpy(input_planes[0])  # (19, 19, num_planes)
-    global_state = keras.ops.convert_to_numpy(input_global_state[0])
+    planes = train_shim.to_numpy(input_planes[0])  # (19, 19, num_planes)
+    global_state = train_shim.to_numpy(input_global_state[0])
 
     # Reconstruct board from planes
     # Planes 0-2: current position (our stones, opponent stones, empty)
@@ -515,66 +514,60 @@ def log_board_position(
         board[opp_stones > 0.5] = BLACK
 
     # Get predictions and ground truth
-    policy_pred = keras.ops.convert_to_numpy(
-        keras.ops.softmax(predictions.pi_logits[0])
-    )
-    outcome_pred = keras.ops.convert_to_numpy(
-        keras.ops.softmax(predictions.game_outcome[0])
-    )
-    score_pred = keras.ops.convert_to_numpy(
-        keras.ops.softmax(predictions.score_logits[0])
-    )
+    policy_pred = _softmax(train_shim.to_numpy(predictions.pi_logits[0]))
+    outcome_pred = _softmax(train_shim.to_numpy(predictions.game_outcome[0]))
+    score_pred = _softmax(train_shim.to_numpy(predictions.score_logits[0]))
 
-    policy_target = keras.ops.convert_to_numpy(targets.policy[0])
-    score_target = keras.ops.convert_to_numpy(targets.score[0])
+    policy_target = train_shim.to_numpy(targets.policy[0])
+    score_target = train_shim.to_numpy(targets.score[0])
 
     # Get top 5 policy moves
     top_indices = np.argsort(policy_pred)[-5:][::-1]
     top_indices_target = np.argsort(policy_target)[-5:][::-1]
 
     # short-term
-    q6_pred, q6 = keras.ops.convert_to_numpy(
-        predictions.q6_pred[0]
-    ), keras.ops.convert_to_numpy(targets.q6[0])
-    q16_pred, q16 = keras.ops.convert_to_numpy(
-        predictions.q16_pred[0]
-    ), keras.ops.convert_to_numpy(targets.q16[0])
-    q50_pred, q50 = keras.ops.convert_to_numpy(
-        predictions.q50_pred[0]
-    ), keras.ops.convert_to_numpy(targets.q50[0])
-    q6_err_pred, q6_err = keras.ops.convert_to_numpy(
-        predictions.q6_err_pred[0]
-    ), np.square(q6 - q6_pred)
-    q16_err_pred, q16_err = keras.ops.convert_to_numpy(
-        predictions.q16_err_pred[0]
-    ), np.square(q16 - q16_pred)
-    q50_err_pred, q50_err = keras.ops.convert_to_numpy(
-        predictions.q50_err_pred[0]
-    ), np.square(q50 - q50_pred)
+    q6_pred, q6 = train_shim.to_numpy(predictions.q6_pred[0]), train_shim.to_numpy(
+        targets.q6[0]
+    )
+    q16_pred, q16 = train_shim.to_numpy(predictions.q16_pred[0]), train_shim.to_numpy(
+        targets.q16[0]
+    )
+    q50_pred, q50 = train_shim.to_numpy(predictions.q50_pred[0]), train_shim.to_numpy(
+        targets.q50[0]
+    )
+    q6_err_pred, q6_err = train_shim.to_numpy(predictions.q6_err_pred[0]), np.square(
+        q6 - q6_pred
+    )
+    q16_err_pred, q16_err = train_shim.to_numpy(predictions.q16_err_pred[0]), np.square(
+        q16 - q16_pred
+    )
+    q50_err_pred, q50_err = train_shim.to_numpy(predictions.q50_err_pred[0]), np.square(
+        q50 - q50_pred
+    )
 
     # short-term score
     q6_score_pred, q6_score = (
-        keras.ops.convert_to_numpy(predictions.q6_score_pred[0]),
-        keras.ops.convert_to_numpy(targets.q6_score[0]),
+        train_shim.to_numpy(predictions.q6_score_pred[0]),
+        train_shim.to_numpy(targets.q6_score[0]),
     )
     q16_score_pred, q16_score = (
-        keras.ops.convert_to_numpy(predictions.q16_score_pred[0]),
-        keras.ops.convert_to_numpy(targets.q16_score[0]),
+        train_shim.to_numpy(predictions.q16_score_pred[0]),
+        train_shim.to_numpy(targets.q16_score[0]),
     )
     q50_score_pred, q50_score = (
-        keras.ops.convert_to_numpy(predictions.q50_score_pred[0]),
-        keras.ops.convert_to_numpy(targets.q50_score[0]),
+        train_shim.to_numpy(predictions.q50_score_pred[0]),
+        train_shim.to_numpy(targets.q50_score[0]),
     )
     q6_score_err_pred, q6_score_err = (
-        keras.ops.convert_to_numpy(predictions.q6_score_err_pred[0]),
+        train_shim.to_numpy(predictions.q6_score_err_pred[0]),
         np.square(q6_score - q6_score_pred),
     )
     q16_score_err_pred, q16_score_err = (
-        keras.ops.convert_to_numpy(predictions.q16_score_err_pred[0]),
+        train_shim.to_numpy(predictions.q16_score_err_pred[0]),
         np.square(q16_score - q16_score_pred),
     )
     q50_score_err_pred, q50_score_err = (
-        keras.ops.convert_to_numpy(predictions.q50_score_err_pred[0]),
+        train_shim.to_numpy(predictions.q50_score_err_pred[0]),
         np.square(q50_score - q50_score_pred),
     )
 
@@ -594,9 +587,9 @@ def log_board_position(
     print(f"Komi: {komi_actual:.1f} (normalized: {komi:+.3f})")
     print()
     # Ownership (own_pred is from current player perspective; convert to absolute black=positive)
-    own_pred = keras.ops.convert_to_numpy(predictions.own_pred[0]).squeeze()  # (19, 19)
+    own_pred = train_shim.to_numpy(predictions.own_pred[0]).squeeze()  # (19, 19)
     own_pred_abs = own_pred if to_play == BLACK else -own_pred
-    own = keras.ops.convert_to_numpy(targets.own[0]).squeeze()
+    own = train_shim.to_numpy(targets.own[0]).squeeze()
     own = own if to_play == BLACK else -own
 
     def ownership_char(x):
@@ -677,47 +670,39 @@ def log_board_position(
     top_indices_soft_target = np.argsort(policy_soft_target)[-5:][::-1]
 
     # Soft and optimistic predicted policies
-    pi_soft_probs = keras.ops.convert_to_numpy(
-        keras.activations.softmax(predictions.pi_logits_soft[0])
-    )
-    pi_optimistic_probs = keras.ops.convert_to_numpy(
-        keras.activations.softmax(predictions.pi_logits_optimistic[0])
+    pi_soft_probs = _softmax(train_shim.to_numpy(predictions.pi_logits_soft[0]))
+    pi_optimistic_probs = _softmax(
+        train_shim.to_numpy(predictions.pi_logits_optimistic[0])
     )
     top_soft = np.argsort(pi_soft_probs)[-5:][::-1]
     top_optimistic = np.argsort(pi_optimistic_probs)[-5:][::-1]
 
     # Optimistic weight (mirrors v1_loss_terms computation)
     epsilon = 1e-6
-    q6_p = keras.ops.convert_to_numpy(predictions.q6_pred[0])
-    q16_p = keras.ops.convert_to_numpy(predictions.q16_pred[0])
-    q50_p = keras.ops.convert_to_numpy(predictions.q50_pred[0])
-    q6_err_p = keras.ops.convert_to_numpy(predictions.q6_err_pred[0])
-    q16_err_p = keras.ops.convert_to_numpy(predictions.q16_err_pred[0])
-    q50_err_p = keras.ops.convert_to_numpy(predictions.q50_err_pred[0])
-    q6_score_p = keras.ops.convert_to_numpy(predictions.q6_score_pred[0])
-    q16_score_p = keras.ops.convert_to_numpy(predictions.q16_score_pred[0])
-    q50_score_p = keras.ops.convert_to_numpy(predictions.q50_score_pred[0])
-    q6_score_err_p = keras.ops.convert_to_numpy(predictions.q6_score_err_pred[0])
-    q16_score_err_p = keras.ops.convert_to_numpy(predictions.q16_score_err_pred[0])
-    q50_score_err_p = keras.ops.convert_to_numpy(predictions.q50_score_err_pred[0])
-    z6 = (keras.ops.convert_to_numpy(targets.q6[0]) - q6_p) / np.sqrt(
-        q6_err_p + epsilon
-    )
-    z16 = (keras.ops.convert_to_numpy(targets.q16[0]) - q16_p) / np.sqrt(
-        q16_err_p + epsilon
-    )
-    z50 = (keras.ops.convert_to_numpy(targets.q50[0]) - q50_p) / np.sqrt(
-        q50_err_p + epsilon
-    )
-    z6_score = (keras.ops.convert_to_numpy(targets.q6_score[0]) - q6_score_p) / np.sqrt(
+    q6_p = train_shim.to_numpy(predictions.q6_pred[0])
+    q16_p = train_shim.to_numpy(predictions.q16_pred[0])
+    q50_p = train_shim.to_numpy(predictions.q50_pred[0])
+    q6_err_p = train_shim.to_numpy(predictions.q6_err_pred[0])
+    q16_err_p = train_shim.to_numpy(predictions.q16_err_pred[0])
+    q50_err_p = train_shim.to_numpy(predictions.q50_err_pred[0])
+    q6_score_p = train_shim.to_numpy(predictions.q6_score_pred[0])
+    q16_score_p = train_shim.to_numpy(predictions.q16_score_pred[0])
+    q50_score_p = train_shim.to_numpy(predictions.q50_score_pred[0])
+    q6_score_err_p = train_shim.to_numpy(predictions.q6_score_err_pred[0])
+    q16_score_err_p = train_shim.to_numpy(predictions.q16_score_err_pred[0])
+    q50_score_err_p = train_shim.to_numpy(predictions.q50_score_err_pred[0])
+    z6 = (train_shim.to_numpy(targets.q6[0]) - q6_p) / np.sqrt(q6_err_p + epsilon)
+    z16 = (train_shim.to_numpy(targets.q16[0]) - q16_p) / np.sqrt(q16_err_p + epsilon)
+    z50 = (train_shim.to_numpy(targets.q50[0]) - q50_p) / np.sqrt(q50_err_p + epsilon)
+    z6_score = (train_shim.to_numpy(targets.q6_score[0]) - q6_score_p) / np.sqrt(
         q6_score_err_p + epsilon
     )
-    z16_score = (
-        keras.ops.convert_to_numpy(targets.q16_score[0]) - q16_score_p
-    ) / np.sqrt(q16_score_err_p + epsilon)
-    z50_score = (
-        keras.ops.convert_to_numpy(targets.q50_score[0]) - q50_score_p
-    ) / np.sqrt(q50_score_err_p + epsilon)
+    z16_score = (train_shim.to_numpy(targets.q16_score[0]) - q16_score_p) / np.sqrt(
+        q16_score_err_p + epsilon
+    )
+    z50_score = (train_shim.to_numpy(targets.q50_score[0]) - q50_score_p) / np.sqrt(
+        q50_score_err_p + epsilon
+    )
 
     def compute_opt_weight(z_wd, z6, z16, z50):
         return (z_wd * 3 * z6 + z_wd * 1.5 * z16 + z_wd * 0.75 * z50) / 3.0
@@ -753,27 +738,25 @@ def log_board_position(
         )
 
     # Policy aux: top-4 predicted vs target (dist if available, else single move)
-    pi_aux_logits = keras.ops.convert_to_numpy(predictions.pi_logits_aux[0])
+    pi_aux_logits = train_shim.to_numpy(predictions.pi_logits_aux[0])
     pi_aux_probs = np.exp(pi_aux_logits - pi_aux_logits.max())
     pi_aux_probs /= pi_aux_probs.sum()
     top_aux_pred = np.argsort(pi_aux_probs)[-4:][::-1]
     has_aux_dist = (
-        bool(keras.ops.convert_to_numpy(targets.has_pi_aux_dist[0]))
+        bool(train_shim.to_numpy(targets.has_pi_aux_dist[0]))
         if targets.has_pi_aux_dist is not None
         else False
     )
 
     if has_aux_dist:
-        aux_dist = keras.ops.convert_to_numpy(targets.policy_aux_dist[0]).astype(
-            np.float32
-        )
+        aux_dist = train_shim.to_numpy(targets.policy_aux_dist[0]).astype(np.float32)
         aux_dist_sum = aux_dist.sum()
         if aux_dist_sum > 0:
             aux_dist /= aux_dist_sum
         top_aux_tgt = np.argsort(aux_dist)[-4:][::-1]
         tgt_label = "Target (dist)"
     else:
-        target_aux_move = int(keras.ops.convert_to_numpy(targets.policy_aux[0]))
+        target_aux_move = int(train_shim.to_numpy(targets.policy_aux[0]))
         top_aux_tgt = [target_aux_move] + [None] * 3
         aux_dist = None
         tgt_label = "Target"
@@ -795,13 +778,13 @@ def log_board_position(
     # MCTS value distribution: side-by-side if available
     if (
         targets.has_mcts_value_dist is not None
-        and bool(keras.ops.convert_to_numpy(targets.has_mcts_value_dist[0]))
+        and bool(train_shim.to_numpy(targets.has_mcts_value_dist[0]))
         and predictions.mcts_dist_probs is not None
     ):
-        target_counts = keras.ops.convert_to_numpy(targets.mcts_value_dist[0]).astype(
+        target_counts = train_shim.to_numpy(targets.mcts_value_dist[0]).astype(
             np.float64
         )
-        pred_probs = keras.ops.convert_to_numpy(predictions.mcts_dist_probs[0]).astype(
+        pred_probs = train_shim.to_numpy(predictions.mcts_dist_probs[0]).astype(
             np.float64
         )
         print(f"\nMCTS Value Distribution (pred | target):")
@@ -812,14 +795,17 @@ def log_board_position(
 
 def save_model(
     model: P3achyGoModel,
-    opt: keras.optimizers.Optimizer,
+    opt: Any,
     batch_num: int,
     save_path: str,
 ):
-    filename = f"model_{batch_num}.keras"
+    """Mid-training checkpoint. Loses optimizer state — these are crash-resume
+    artifacts within one chunk's training, not release artifacts. The end-of-
+    generation save in rl_loop/train.py persists optimizer state separately."""
+    del opt  # not bundled in the intermediate snapshot
+    filename = f"model_{batch_num}{train_shim.MODEL_EXT}"
     filepath = Path(save_path) / filename
-    model.compile(optimizer=opt)
-    model.save(filepath)
+    train_shim.save_model(model, str(filepath))
 
 
 def val(
@@ -924,19 +910,17 @@ def val(
         num_outcomes = score.shape[0]
 
         def compute_accuracy(predictions: ModelPredictions):
-            predicted_moves = keras.ops.argmax(predictions.pi_logits, axis=1)
-            actual_moves = keras.ops.argmax(policy, axis=1)
-            correct_moves = int(
-                keras.ops.sum(keras.ops.cast(predicted_moves == actual_moves, "int32"))
+            predicted_moves = np.argmax(
+                train_shim.to_numpy(predictions.pi_logits), axis=1
             )
+            actual_moves = np.argmax(train_shim.to_numpy(policy), axis=1)
+            correct_moves = int((predicted_moves == actual_moves).sum())
 
-            predicted_outcomes = keras.ops.argmax(predictions.game_outcome, axis=1) == 1
-            actual_outcomes = score >= 0  # Actual win
-            correct_outcomes = int(
-                keras.ops.sum(
-                    keras.ops.cast(predicted_outcomes == actual_outcomes, "int32")
-                )
+            predicted_outcomes = (
+                np.argmax(train_shim.to_numpy(predictions.game_outcome), axis=1) == 1
             )
+            actual_outcomes = train_shim.to_numpy(score) >= 0  # Actual win
+            correct_outcomes = int((predicted_outcomes == actual_outcomes).sum())
             return correct_moves, correct_outcomes
 
         correct_moves, correct_outcomes = compute_accuracy(result.predictions)

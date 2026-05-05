@@ -1,6 +1,5 @@
 from absl import logging
 
-import keras
 import gcs_utils as gcs
 import rl_loop.fs_utils as fs
 
@@ -8,6 +7,7 @@ from model import P3achyGoModel
 from model_config import ModelConfig
 from constants import *
 import proc
+import train_shim
 
 from pathlib import Path
 
@@ -31,91 +31,15 @@ def new_model(name: str, model_config="small", optimizer="sgd") -> P3achyGoModel
     )
 
 
-def swa_avg_weights(weights: list, swa_momentum: float = 0.75) -> list:
-    swa_weights = weights[0]
-    for i in range(1, len(weights), 1):
-        swa_weights = [
-            prev_layer_weights * swa_momentum + layer_weights * (1 - swa_momentum)
-            for prev_layer_weights, layer_weights in zip(swa_weights, weights[i])
-        ]
-
-    return swa_weights
+# `swa_avg_weights` and `recompute_bn_statistics` now live in train_shim
+# (backend-agnostic). Re-exported here for callers still importing them via
+# `rl_loop.model_utils`. Form of `weights` is backend-natural: list-of-arrays
+# on TF, state_dict on torch.
+swa_avg_weights = train_shim.swa_avg_weights
 
 
 def recompute_bn_statistics(model, ds, num_batches=150):
-    """
-    Recompute BatchNorm running_mean and running_variance by doing
-    forward passes through the ds.
-
-    Note: Running with training=True without a GradientTape context does NOT
-    compute or propagate gradients. It only tells BatchNorm layers to update
-    their running statistics.
-    """
-
-    def _get_all_layers_recursive(layer):
-        """Recursively get all layers including nested ones."""
-        layers = [layer]
-        # Use _layers (private) since custom layers don't expose public .layers
-        sublayers = getattr(layer, "_layers", [])
-        for sublayer in sublayers:
-            layers.extend(_get_all_layers_recursive(sublayer))
-        return layers
-
-    def _get_bn_layers(model):
-        """Get all BatchNorm layers in the model."""
-        all_layers = []
-        for layer in model.layers:
-            all_layers.extend(_get_all_layers_recursive(layer))
-        return [
-            layer
-            for layer in all_layers
-            if isinstance(layer, keras.layers.BatchNormalization)
-        ]
-
-    def _log_bn_stats(layer, prefix=""):
-        """Log mean/var statistics for a BatchNorm layer."""
-        mean = layer.moving_mean.numpy()
-        var = layer.moving_variance.numpy()
-        print(f"{prefix}BN layer '{layer.name}':")
-        print(
-            f"  moving_mean  - min: {mean.min():.6f}, max: {mean.max():.6f}, mean: {mean.mean():.6f}"
-        )
-        print(
-            f"  moving_var   - min: {var.min():.6f}, max: {var.max():.6f}, mean: {var.mean():.6f}"
-        )
-
-    bn_layers = _get_bn_layers(model)
-    first_bn = bn_layers[0] if bn_layers else None
-    print(f"Found {len(bn_layers)} BatchNorm layers")
-
-    # Reset BN statistics
-    # for layer in bn_layers:
-    #     layer.moving_mean.assign(tf.zeros_like(layer.moving_mean))
-    #     layer.moving_variance.assign(tf.ones_like(layer.moving_variance))
-
-    if first_bn:
-        print("=== Initial BN statistics (after reset) ===")
-        _log_bn_stats(first_bn)
-
-    # Forward passes to recompute statistics
-    for i, batch in enumerate(ds.take(num_batches)):
-        # batch[0] = input (board planes)
-        # batch[1] = input_global_state
-        input_board = batch[0]
-        input_global = batch[1]
-
-        _ = model(input_board, input_global, training=True)
-
-        if (i + 1) % 20 == 0:
-            print(
-                f"=== recompute_bn_statistics: Processed {i + 1}/{num_batches} batches ==="
-            )
-            if first_bn:
-                _log_bn_stats(first_bn)
-
-    if first_bn:
-        print("=== Final BN statistics ===")
-        _log_bn_stats(first_bn)
+    return train_shim.recompute_bn_statistics(model, ds, num_batches=num_batches)
 
 
 def avg_weights(

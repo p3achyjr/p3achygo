@@ -7,21 +7,20 @@ We will train our model on samples generated from professional games.
 from __future__ import annotations
 
 import sys
+import types
 import train
+import train_shim
 from dataset import ChunkDataset
 from train_shim import configure_gpu
-import keras
 
 from absl import app, flags, logging
 from constants import *
-from lr_schedule import CyclicLRDecaySchedule, ConstantLRSchedule
-from optimizer import ConvMuon  # noqa: F401 — registers p3achygo>ConvMuon
+from lr_schedule import ConstantLRSchedule
 from model import P3achyGoModel
 from model_config import ModelConfig, CONFIG_OPTIONS
 from pathlib import Path
 
 from loss_coeffs import LossCoeffs
-from optimizer import ConvMuon
 
 sys.stdout.reconfigure(line_buffering=True)  # pytype: disable=attribute-error
 sys.stderr.reconfigure(line_buffering=True)  # pytype: disable=attribute-error
@@ -87,10 +86,8 @@ def main(_):
     )
     optimizer = None
     if FLAGS.from_checkpoint:
-        model = keras.models.load_model(FLAGS.from_checkpoint)
-        optimizer = model.optimizer
-    if optimizer is None and FLAGS.optimizer == "muon":
-        optimizer = ConvMuon(learning_rate=lr)
+        model = train_shim.load_model(FLAGS.from_checkpoint)
+        optimizer = train_shim.optimizer_state_from_model(model)
 
     # setup train ds — sequential pass through each shard, front-to-back.
     class _SequentialShards:
@@ -106,16 +103,32 @@ def main(_):
 
     # setup validation dataset
     val_ds = ChunkDataset(val_shard, batch_size)
-    lr_schedule = CyclicLRDecaySchedule(lr, lr * 10, ds_len * epochs)
     lr_schedule = ConstantLRSchedule(lr)
     print(lr_schedule.info())
     model.summary()
 
     configure_gpu()
     is_gpu = True
-    policy = keras.mixed_precision.global_policy()
-    logging.info("Compute Policy dtype: %s" % policy.compute_dtype)
-    logging.info("Variable Policy dtype: %s" % policy.variable_dtype)
+
+    # SL uses defaults for everything ConvMuon-related; build a stand-in
+    # config struct that satisfies `train_shim.make_optimizer`.
+    sl_opt_config = types.SimpleNamespace(
+        optimizer=FLAGS.optimizer,
+        muon_wd=0.1,
+        adam_wd=0.004,
+        adam_lr_ratio=1.0,
+        wd_lr_exponent=None,
+        wd_lr_max=None,
+        global_clipnorm=float("inf"),
+    )
+    optimizer = train_shim.make_optimizer(
+        model,
+        sl_opt_config,
+        lr_schedule,
+        is_gpu,
+        optimizer=optimizer if not isinstance(optimizer, dict) else None,
+        optimizer_state=optimizer if isinstance(optimizer, dict) else None,
+    )
 
     logging.info(f"Running initial validation...")
     train.val(model, mode=train.Mode.SL, val_ds=val_ds, batch_num=0)
@@ -142,9 +155,8 @@ def main(_):
     logging.info(f"Running final validation...")
     train.val(model, mode=train.Mode.SL, val_ds=val_ds, batch_num=1)
 
-    model_path = str(Path(FLAGS.model_save_path, "p3achygo_sl.keras"))
-    model.compile(optimizer=optimizer)
-    model.save(model_path)
+    model_path = str(Path(FLAGS.model_save_path, f"p3achygo_sl{train_shim.MODEL_EXT}"))
+    train_shim.save_model(model, model_path, optimizer=optimizer)
 
 
 if __name__ == "__main__":

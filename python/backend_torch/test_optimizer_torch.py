@@ -15,9 +15,39 @@ import torch
 unittest.mock.patch("torch.compile", lambda fn, **kw: fn).start()
 
 sys.path.insert(0, os.path.dirname(__file__))
-from backend_torch.optimizer import ConvMuon, _newtonschulz
+from backend_torch.optimizer import (
+    ConvMuon,
+    _newtonschulz,
+    build_convmuon_param_groups,
+)
 
 torch.manual_seed(42)
+
+
+_HELPER_KEYS = {
+    "lr",
+    "adam_lr_ratio",
+    "exclude_layers",
+    "momentum",
+    "nesterov",
+    "ns_steps",
+}
+
+
+def _make_opt(named, **kwargs):
+    """Test-side adapter for the old `ConvMuon(named, ...)` call form.
+
+    Splits kwargs between `build_convmuon_param_groups` (group construction)
+    and `ConvMuon.__init__` (per-step hparams). Mirrors the public migration
+    pattern used by RL/SL callers.
+    """
+    helper_kwargs = {k: kwargs.pop(k) for k in list(kwargs) if k in _HELPER_KEYS}
+    groups, wd_factors = build_convmuon_param_groups(named, **helper_kwargs)
+    # `adam_lr_ratio` lives on both — pass it through to the optimizer too
+    # so the LR setter can re-derive the adamw group's LR.
+    if "adam_lr_ratio" in helper_kwargs:
+        kwargs.setdefault("adam_lr_ratio", helper_kwargs["adam_lr_ratio"])
+    return ConvMuon(groups, wd_factors=wd_factors, **kwargs)
 
 
 # ------------------------------------------------------------------ #
@@ -91,7 +121,7 @@ def test_muon_step():
         )
 
         param = torch.nn.Parameter(p0.clone())
-        opt = ConvMuon(
+        opt = _make_opt(
             [("body.kernel", param)],
             lr=LR,
             weight_decay=WD,
@@ -118,7 +148,7 @@ def test_muon_step():
     g1 = torch.randn(32, 64) * 0.01
 
     param = torch.nn.Parameter(p0.clone())
-    opt = ConvMuon(
+    opt = _make_opt(
         [("body.kernel", param)],
         lr=LR,
         weight_decay=WD,
@@ -193,7 +223,7 @@ def test_adamw_step():
         )
 
         param = torch.nn.Parameter(p0.clone())
-        opt = ConvMuon(
+        opt = _make_opt(
             [(name, param)],
             lr=LR_MAIN,
             weight_decay=WD_MUON,
@@ -224,7 +254,7 @@ def test_wd_lr_scaling():
         (0.5e-3, 1e-3, 0.7, 0.5**0.7),  # lr == lr_max/2
         (2e-3, 1e-3, 0.7, 1.0),  # lr > lr_max → clamped to 1
     ]
-    opt = ConvMuon(
+    opt = _make_opt(
         [("p", torch.nn.Parameter(torch.zeros(1)))],
         lr=1e-3,
         wd_lr_exponent=0.7,
@@ -270,7 +300,7 @@ def test_wd_categories():
     named = [
         (name, torch.nn.Parameter(torch.randn(*shape))) for name, shape, _, _ in cases
     ]
-    opt = ConvMuon(
+    opt = _make_opt(
         named,
         lr=1e-3,
         weight_decay=WD_MUON,
@@ -280,7 +310,10 @@ def test_wd_categories():
     )
     all_ok = True
     for (name, param), (_, _, expected, tag) in zip(named, cases):
-        actual = opt._wd_base[id(param)]
+        # _wd_for resolves (base_kind, factor) against the optimizer's current
+        # base scalars — replaces the old `_wd_base` lookup, which couldn't
+        # propagate setter changes.
+        actual = opt._wd_for(param)
         ok = abs(actual - expected) < 1e-9
         print(
             f"  [{'PASS' if ok else 'FAIL'}] {tag:<20}  actual={actual:.5f}  expected={expected:.5f}"
@@ -302,7 +335,7 @@ def test_multistep():
         ("trunk.bn.gamma", torch.nn.Parameter(torch.randn(64) * 0.1)),
         ("policy_head.out.kernel", torch.nn.Parameter(torch.randn(128, 362) * 0.1)),
     ]
-    opt = ConvMuon(
+    opt = _make_opt(
         named,
         lr=1e-3,
         weight_decay=0.1,
