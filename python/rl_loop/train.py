@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from typing import Any
 import train
-import train_shim
+import backend_shim
 from dataset import ChunkDataset
 
 from absl import logging
@@ -89,21 +89,14 @@ def train_one_gen(
     logging.info(f"Batch Size: {batch_size}")
     logging.info(f"Learning Rate Schedule: {lr_schedule.info()}")
 
-    # `optimizer` may be:
-    #   - an in-memory optimizer object (in-process hot-reload across gens),
-    #   - a state_dict-like (torch cross-process resume — what
-    #     `optimizer_state_from_model` returns on the torch backend),
-    #   - or None (build fresh).
-    if isinstance(optimizer, dict):
-        optimizer = train_shim.make_optimizer(
-            live_model, config, lr_schedule, is_gpu, optimizer_state=optimizer
-        )
-    else:
-        optimizer = train_shim.make_optimizer(
-            live_model, config, lr_schedule, is_gpu, optimizer=optimizer
-        )
+    # `optimizer` is opaque — None on cold start, an in-memory optimizer
+    # on in-process hot-reload, or a state_dict on cross-process resume.
+    # `make_optimizer` sniffs the type internally.
+    optimizer = backend_shim.make_optimizer(
+        live_model, config, lr_schedule, is_gpu, loaded_state=optimizer
+    )
     inner_optimizer = getattr(optimizer, "inner_optimizer", optimizer)
-    if isinstance(inner_optimizer, train_shim.ConvMuon):
+    if isinstance(inner_optimizer, backend_shim.ConvMuon):
         logging.info(
             f"Using ConvMuon Optimizer"
             f"\n  Learning Rate={inner_optimizer.learning_rate}"
@@ -125,14 +118,14 @@ def train_one_gen(
         )
 
     ss_manager = WeightSnapshotManager(get_ss_timestamps(num_batches))
-    last_swa_weights = train_shim.get_weights(last_swa_model)
+    last_swa_weights = backend_shim.get_weights(last_swa_model)
     loss_coeffs = LossCoeffs.RLCoeffs()
     if model_gen <= 100:
         # downweight some terms as at this point it is just noise.
         loss_coeffs.w_q_score *= 0.5
         loss_coeffs.w_q_score_err *= 0.5
         loss_coeffs.w_pi_soft *= 0.25
-    if isinstance(inner_optimizer, train_shim.ConvMuon):
+    if isinstance(inner_optimizer, backend_shim.ConvMuon):
         # observed severe overfitting for outcome head.
         loss_coeffs.w_outcome *= 0.4
 
@@ -164,16 +157,16 @@ def train_one_gen(
     # num_batches_in_chunk = batch_num - old_batch_num
     # new_weights = model_utils.avg_weights(last_swa_weights, model.get_weights(),
     #                                       num_batches_in_chunk)
-    new_weights = train_shim.swa_avg_weights(
+    new_weights = backend_shim.swa_avg_weights(
         [last_swa_weights]
         + ss_manager.snapshots
-        + [train_shim.get_weights(live_model)],
+        + [backend_shim.get_weights(live_model)],
         swa_momentum=SWA_MOMENTUM,
     )
     print(f"Last Model: {model_gen}, Next Model: {model_gen + 1}")
-    swa_model = train_shim.clone_model(live_model)
-    train_shim.set_weights(swa_model, new_weights)
-    train_shim.recompute_bn_statistics(swa_model, ds)
+    swa_model = backend_shim.clone_model(live_model)
+    backend_shim.set_weights(swa_model, new_weights)
+    backend_shim.recompute_bn_statistics(swa_model, ds)
     # model.set_weights(new_weights)
     logging.info(f"Running validation for live model...")
     train.val(live_model, mode=train.Mode.RL, val_ds=val_ds, batch_num=model_gen + 1)

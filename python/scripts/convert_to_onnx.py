@@ -422,7 +422,10 @@ def main(_):
 
     with tf.device("/cpu:0"):
         tf.keras.mixed_precision.set_global_policy("float32")
-        model = keras.models.load_model(model_path)
+        # `compile=False` skips optimizer rehydration; safe for export and
+        # avoids breaking when the saved optimizer config has fields that the
+        # current keras Muon API doesn't accept.
+        model = keras.models.load_model(model_path, compile=False)
         planes_shape = model.input_planes_shape()
         features_shape = model.input_features_shape()
         model(

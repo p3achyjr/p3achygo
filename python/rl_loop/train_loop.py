@@ -12,15 +12,14 @@ import os
 import subprocess
 import sys
 
-import numpy as np
-
 import gcs_utils as gcs
 from dataset import ChunkDataset
-from train_shim import (
+from backend_shim import (
     configure_gpu,
     load_model,
+    load_with_optimizer,
     save_model,
-    optimizer_state_from_model,
+    compile_for_training,
     LIVE_MODEL_NAME,
     MODEL_EXT,
 )
@@ -102,28 +101,22 @@ def _train_loop():
         live_model = model_utils.new_model(
             "p3achygo", config.model_config, config.optimizer
         )
-        # Trigger build by calling the model on dummy inputs. Numpy arrays are
-        # accepted by keras 3 models on either backend; no tf.convert_to_tensor.
-        live_model(
-            np.zeros([1, *live_model.input_planes_shape()], dtype=np.float32),
-            np.zeros([1, *live_model.input_features_shape()], dtype=np.float32),
-        )
         save_model(live_model, live_model_path)
 
     if not Path(swa_model_path).exists():
         swa_model_path = live_model_path
 
-    live_model = load_model(live_model_path)
-    optimizer_state = optimizer_state_from_model(live_model)
-    if optimizer_state is None:
+    live_model, optimizer = load_with_optimizer(live_model_path)
+    if optimizer is None:
         logging.info(
             "No optimizer state found in live model. "
             "This should only happen for model_0000."
         )
-    # On TF the rehydrated optimizer is itself usable; on torch it's a
-    # state_dict that make_optimizer will load after fresh construction.
-    optimizer = optimizer_state
     swa_model = load_model(swa_model_path)
+
+    # Apply backend-specific training-time transforms (fp16 + channels_last
+    # + torch.compile reduce-overhead for torch; no-op for TF).
+    live_model = compile_for_training(live_model)
 
     max_gens = FLAGS.max_gens
     gens_trained = 0

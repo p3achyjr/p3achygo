@@ -111,6 +111,18 @@ def _newtonschulz_batched(Gs: Tensor, steps: int) -> Tensor:
 # ---------------------------------------------------------------------------
 
 
+def _param_out_dim(param: Tensor) -> int:
+    """Output-feature dim of a torch parameter.
+
+    torch convention is "out leading": `Linear.weight` has shape
+    `(out_features, in_features)`, `Conv2d.weight` has shape
+    `(out_channels, in_channels, H, W)`. So `shape[0]` is always the
+    output dim — both 2D and 4D. (Keras' `Dense.kernel` is `(in, out)`,
+    which is where the previous `shape[-1]` reading came from.)
+    """
+    return param.shape[0]
+
+
 def _is_muon_param(name: str, param: Tensor, exclude_patterns) -> bool:
     if param.ndim < 2:
         return False
@@ -118,19 +130,17 @@ def _is_muon_param(name: str, param: Tensor, exclude_patterns) -> bool:
         return False
     if any(p.search(name) for p in exclude_patterns):
         return False
-    if param.ndim == 4:
-        # torch conv: (Cout, Cin, H, W). out=dim 0, flat=Cin*H*W.
-        out_dim = param.shape[0]
-    else:
-        out_dim = param.shape[-1]
+    out_dim = _param_out_dim(param)
     flat_dim = param.numel() // out_dim
     return out_dim > 4 and flat_dim > 4
 
 
 def _wd_category(name: str, is_bn: bool) -> Optional[str]:
-    """Match keras' classifier on torch-style param names. See parity-gaps doc
-    §A7 for the wrinkles around `transformer_attention.*.kernel` (torch will
-    use `.weight` instead, so qkvo currently never matches in pure-torch)."""
+    """Match keras' classifier on torch-style param names. Recognizes BOTH
+    naming conventions:
+    - keras: `transformer_attention/{query,key,value,output}/kernel`
+    - torch native: `transformer_attn.{Q,K,V,O}.weight`
+    """
     n = name.lower()
     if is_bn:
         if n.endswith(".weight"):
@@ -143,53 +153,44 @@ def _wd_category(name: str, is_bn: bool) -> Optional[str]:
         return "beta"
     if n.endswith(".bias"):
         return "head_bias" if ("policy_head" in n or "value_head" in n) else "body_bias"
+    # qkvo: match either keras-style ".query.kernel" etc., or the torch-native
+    # transformer module's ".transformer_attn.Q.weight" / .K / .V / .O.
     if "transformer_attention" in n and any(
         n.endswith(s)
         for s in (".query.kernel", ".key.kernel", ".value.kernel", ".output.kernel")
+    ):
+        return "qkvo"
+    if "transformer_attn" in n and n.endswith(
+        (".q.weight", ".k.weight", ".v.weight", ".o.weight")
     ):
         return "qkvo"
     return None
 
 
 def _ns_input_shape(p: Tensor) -> Tuple[int, int]:
-    """The 2D shape NS5 sees after the keras-layout flatten.
-    For 4D conv (Cout, Cin, H, W): (H*W*Cin, Cout).
-    For 2D Linear (Cout, Cin): (Cout, Cin) — already 2D.
+    """The 2D shape NS5 sees after the conv-flatten.
+
+    Matches KataGo / Keller-Jordan upstream: 4D conv `(Cout, Cin, H, W)`
+    flattens to `(Cout, Cin*H*W)` via plain `view(len(p), -1)`. 2D
+    `(Cout, Cin)` is passed through unchanged. NS5's internal transpose
+    handles the wide-vs-tall choice.
     """
     if p.ndim == 4:
         Cout, Cin, H, W = p.shape
-        return (H * W * Cin, Cout)
+        return (Cout, Cin * H * W)
     return tuple(p.shape)
 
 
-def _to_keras_2d(g: Tensor) -> Tuple[Tensor, torch.Size]:
-    """Flatten a Muon-path parameter gradient to the 2D shape NS5 expects.
+def _flatten_to_2d(g: Tensor) -> Tensor:
+    """Flatten a Muon-path gradient to the 2D matrix NS5 operates on.
 
-    For 4D conv tensors (torch layout (Cout, Cin, H, W)), permute to keras
-    layout (H, W, Cin, Cout) so the row-major reshape collapses (H, W, Cin)
-    correctly. For 2D tensors no work is needed.
-
-    Returns (g_2d, keras_intermediate_shape). The intermediate shape is
-    needed by `_from_keras_2d` to reverse the permutation.
+    Matches KataGo `muon.muon_update`: 4D conv `(Cout, Cin, H, W)` becomes
+    `(Cout, Cin*H*W)` via `view(len(g), -1)`; 2D Linear `(Cout, Cin)` is
+    returned as-is.
     """
     if g.ndim == 4:
-        g = g.permute(2, 3, 1, 0).contiguous()  # (H, W, Cin, Cout)
-        keras_shape = g.shape
-        return g.reshape(-1, keras_shape[-1]), keras_shape
-    # Non-4D: no permutation; keras_shape == g.shape.
-    return g, g.shape
-
-
-def _from_keras_2d(
-    upd: Tensor, keras_shape: torch.Size, original_shape: torch.Size
-) -> Tensor:
-    """Inverse of `_to_keras_2d`. Restores the original (Cout, Cin, H, W) or
-    (Cout, Cin) layout for `upd`, which came back from NS5 as 2D."""
-    if len(original_shape) == 4:
-        return upd.reshape(keras_shape).permute(3, 2, 0, 1).contiguous()
-    if upd.shape != original_shape:
-        return upd.reshape(original_shape)
-    return upd
+        return g.view(g.size(0), -1)
+    return g
 
 
 def _build_muon_ns_groups(muon_params: List[Tensor]) -> List[Dict]:
@@ -393,7 +394,7 @@ class ConvMuon(Optimizer):
     def _rms_wd_scale(self, param: Tensor) -> float:
         if not self._scale_wd_by_rms or self._rms_rate is None:
             return 1.0
-        out_dim = param.shape[0] if param.ndim == 4 else param.shape[-1]
+        out_dim = _param_out_dim(param)
         flat_dim = param.numel() // out_dim
         return math.sqrt(max(flat_dim, out_dim)) * self._rms_rate
 
@@ -601,12 +602,9 @@ class ConvMuon(Optimizer):
                     continue
             stack_inputs: List[Tensor] = []
             originals: List[torch.Size] = []
-            keras_shapes: List[torch.Size] = []
             for fi in filt_idxs:
-                g_2d, keras_shape = _to_keras_2d(update_gs[fi])
-                stack_inputs.append(g_2d)
+                stack_inputs.append(_flatten_to_2d(update_gs[fi]))
                 originals.append(update_gs[fi].shape)
-                keras_shapes.append(keras_shape)
             stacked = torch.stack(stack_inputs, dim=0)
             # `.clone()` is required because reduce-overhead mode reuses the
             # output buffer across calls; without it, bucket N+1 silently
@@ -620,9 +618,9 @@ class ConvMuon(Optimizer):
                 else lr
             )
             for batch_i, fi in enumerate(filt_idxs):
-                updates[fi] = _from_keras_2d(
-                    stacked_upd[batch_i], keras_shapes[batch_i], originals[batch_i]
-                )
+                # Plain reshape — matches KataGo's `update.reshape(p.shape)`.
+                # No permute needed since the flatten was a plain `view`.
+                updates[fi] = stacked_upd[batch_i].reshape(originals[batch_i])
                 adj_lrs[fi] = bucket_adj_lr
 
         # Per-param weight-decay factor: depends on (kind, factor) tag and
@@ -679,68 +677,157 @@ class ConvMuon(Optimizer):
 
 
 # ---------------------------------------------------------------------------
+# GradScaler-backed shim: exposes the same `.scale_loss / .apply` API as
+# keras LossScaleOptimizer so train_step's existing code path works
+# unchanged for the torch backend.
+# ---------------------------------------------------------------------------
+
+
+class TorchLossScaleOptimizer:
+    """Wrap a torch optimizer + `torch.amp.GradScaler` so it speaks the keras
+    LossScaleOptimizer API (`scale_loss`, `apply`, `dynamic_scale`,
+    `initial_scale`, `built`, `inner_optimizer`).
+
+    Used when `is_gpu=True` on torch backend so the train_step's
+    `hasattr(optimizer, "scale_loss")` branch fires and we get fp16 loss
+    scaling like the keras path does.
+    """
+
+    def __init__(self, inner: Optimizer, init_scale: float = 65536.0):
+        self.inner_optimizer = inner
+        self.scaler = torch.amp.GradScaler("cuda", init_scale=init_scale)
+        self.initial_scale = init_scale
+
+    def scale_loss(self, loss):
+        return self.scaler.scale(loss)
+
+    def apply(self, grads=None, variables=None):
+        # `grads`/`variables` ignored — keras LSO's contract was to assign
+        # incoming grads then step, but pure-torch grads already live on
+        # `param.grad`. Just unscale and step.
+        self.scaler.step(self.inner_optimizer)
+        self.scaler.update()
+
+    @property
+    def dynamic_scale(self):
+        return float(self.scaler.get_scale())
+
+    @property
+    def built(self) -> bool:
+        # `scaler.get_scale()` always returns a meaningful value (initial
+        # scale before first step, dynamic scale after), so we can always
+        # use the dynamic-scale path. The `built` flag exists purely for
+        # keras-LSO API parity; for our purposes it's always True.
+        return True
+
+    # Passthrough save/load so save_model + load-from-disk both work on the
+    # wrapped form the production callsites pass around.
+    def state_dict(self):
+        return {
+            "inner": self.inner_optimizer.state_dict(),
+            "scaler": self.scaler.state_dict(),
+        }
+
+    def load_state_dict(self, state):
+        # Accept either the wrapper-format dict (with "inner"/"scaler" keys)
+        # or a bare inner optimizer state_dict (cross-process resume from a
+        # snapshot that wasn't wrapped at save time).
+        if isinstance(state, dict) and "inner" in state and "scaler" in state:
+            self.inner_optimizer.load_state_dict(state["inner"])
+            self.scaler.load_state_dict(state["scaler"])
+        else:
+            self.inner_optimizer.load_state_dict(state)
+
+    # Forward LR / WD setter API so callers that mutate scalar fields on the
+    # optimizer (e.g. rl_loop's hot-reload path) hit the inner optimizer.
+    @property
+    def learning_rate(self):
+        return self.inner_optimizer.learning_rate
+
+    @learning_rate.setter
+    def learning_rate(self, value):
+        self.inner_optimizer.learning_rate = value
+
+    @property
+    def last_grad_norm(self) -> float:
+        """Most-recent global grad norm computed by the inner optimizer's
+        `clip_grad_norm_` call. Available "for free" — no extra fp32 sum
+        in train_step needed."""
+        return self.inner_optimizer.last_grad_norm
+
+
+# ---------------------------------------------------------------------------
 # Optimizer factory
 # ---------------------------------------------------------------------------
 
 _MUON_EXCLUDE_LAYERS_TORCH = [r".*policy_head.*", r".*value_head.*"]
 
 
-def make_optimizer(
-    model, config, lr_schedule, is_gpu, optimizer=None, optimizer_state=None
-):
-    """Build (when `optimizer is None`) or hot-reload the torch optimizer.
+def make_optimizer(model, config, lr_schedule, is_gpu, *, loaded_state=None):
+    """Build (when `loaded_state is None`) or rehydrate the torch optimizer.
 
-    Returns a torch-native optimizer. Mixed-precision wrapping (LSO/GradScaler)
-    is NOT applied here — see context/torch_parity_gaps.md §B1; the keras-on-
-    torch train_step uses a `hasattr(opt, 'scale_loss')` guard, so an
-    unwrapped torch optimizer naturally takes the fp32 path.
+    `loaded_state` is opaque from the caller's perspective — pass back
+    whatever `load_with_optimizer` (or a previous `make_optimizer`) gave you:
+      - `None`: build a fresh optimizer.
+      - A `state_dict`-shaped mapping (cross-process resume from .pt):
+        build fresh, then `load_state_dict(loaded_state)`.
+      - An optimizer object (in-process hot-reload across generations):
+        mutate its config-driven fields in place.
 
-    `optimizer_state` (torch backend): a state_dict produced by a prior
-    `optimizer.state_dict()` and serialized to .pt. When `optimizer is None`
-    and `optimizer_state` is provided, build fresh and call `load_state_dict`.
+    Returns the torch-native optimizer. When `is_gpu=True` the result is
+    always wrapped in `TorchLossScaleOptimizer` (mirrors the keras
+    LossScaleOptimizer wrap on the TF backend) so train_step's
+    `hasattr(opt, "scale_loss")` branch fires.
 
     SGD on torch backend is not wired yet — raises NotImplementedError.
     """
-    del is_gpu  # unused; mixed precision is not configured per-optimizer here
+    is_state_dict = isinstance(loaded_state, dict)
+    have_optimizer_object = loaded_state is not None and not is_state_dict
 
-    if optimizer is None:
-        if config.optimizer == "muon":
-            seed_lr = (
-                float(lr_schedule(0)) if callable(lr_schedule) else float(lr_schedule)
-            )
-            groups, wd_factors = build_convmuon_param_groups(
-                model,
-                lr=seed_lr,
-                adam_lr_ratio=config.adam_lr_ratio,
-                exclude_layers=_MUON_EXCLUDE_LAYERS_TORCH,
-            )
-            optimizer = ConvMuon(
-                groups,
-                wd_factors=wd_factors,
-                weight_decay=config.muon_wd,
-                adam_weight_decay=config.adam_wd,
-                adam_lr_ratio=config.adam_lr_ratio,
-                wd_lr_exponent=config.wd_lr_exponent,
-                wd_lr_max=config.wd_lr_max,
-                global_clipnorm=config.global_clipnorm,
-            )
-            optimizer.learning_rate = lr_schedule  # store the schedule callable
-            if optimizer_state is not None:
-                optimizer.load_state_dict(optimizer_state)
-        else:
+    if have_optimizer_object:
+        optimizer = loaded_state
+    else:
+        if config.optimizer != "muon":
             raise NotImplementedError(
                 "SGD on torch backend not wired. Use config.optimizer='muon' "
                 "or run on the keras (TF) backend."
             )
-    else:
-        # Hot-reload config-driven fields. Parity with TF backend's hot-reload.
-        optimizer.learning_rate = lr_schedule
-        if isinstance(optimizer, ConvMuon):
-            optimizer.weight_decay = config.muon_wd
-            optimizer.adam_weight_decay = config.adam_wd
-            optimizer.adam_lr_ratio = config.adam_lr_ratio
-            optimizer.wd_lr_exponent = config.wd_lr_exponent
-            optimizer.wd_lr_max = config.wd_lr_max
-        optimizer.global_clipnorm = config.global_clipnorm
+        seed_lr = float(lr_schedule(0)) if callable(lr_schedule) else float(lr_schedule)
+        groups, wd_factors = build_convmuon_param_groups(
+            model,
+            lr=seed_lr,
+            adam_lr_ratio=config.adam_lr_ratio,
+            exclude_layers=_MUON_EXCLUDE_LAYERS_TORCH,
+        )
+        optimizer = ConvMuon(
+            groups,
+            wd_factors=wd_factors,
+            weight_decay=config.muon_wd,
+            adam_weight_decay=config.adam_wd,
+            adam_lr_ratio=config.adam_lr_ratio,
+            wd_lr_exponent=config.wd_lr_exponent,
+            wd_lr_max=config.wd_lr_max,
+            global_clipnorm=config.global_clipnorm,
+        )
+
+    # Wrap before load so the wrapper-format state_dict (with {"inner",
+    # "scaler"} keys) round-trips correctly. `TorchLossScaleOptimizer.
+    # load_state_dict` accepts both wrapper-format and bare-inner dicts.
+    if is_gpu and not isinstance(optimizer, TorchLossScaleOptimizer):
+        optimizer = TorchLossScaleOptimizer(optimizer)
+    if is_state_dict:
+        optimizer.load_state_dict(loaded_state)
+
+    # Hot-reload config-driven fields. Always run — same code path whether we
+    # built fresh, reloaded a state_dict, or got an existing optimizer object.
+    inner = getattr(optimizer, "inner_optimizer", optimizer)
+    inner.learning_rate = lr_schedule
+    if isinstance(inner, ConvMuon):
+        inner.weight_decay = config.muon_wd
+        inner.adam_weight_decay = config.adam_wd
+        inner.adam_lr_ratio = config.adam_lr_ratio
+        inner.wd_lr_exponent = config.wd_lr_exponent
+        inner.wd_lr_max = config.wd_lr_max
+    inner.global_clipnorm = config.global_clipnorm
 
     return optimizer

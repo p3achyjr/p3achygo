@@ -14,7 +14,7 @@ from constants import *
 from model_config import ModelConfig
 from model_layers_common import *
 from model_transformer import *
-from train_shim import *
+from backend_shim import *
 
 
 class LossWeights(NamedTuple):

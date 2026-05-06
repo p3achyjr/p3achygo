@@ -12,9 +12,6 @@ from typing import Any, Dict, Optional
 import keras
 import numpy as np
 
-LIVE_MODEL_NAME = "live_model.keras"
-MODEL_EXT = ".keras"
-
 
 def save_model(model, path: str, optimizer=None) -> None:
     """Save model to a `.keras` file. If `optimizer` is given, compile() it
@@ -26,31 +23,53 @@ def save_model(model, path: str, optimizer=None) -> None:
 
 
 def load_model(path: str):
-    # Lazy: model.py imports train_shim, which imports this module — deferring
+    """Load model only; the keras-rehydrated optimizer (which lives on
+    `model.optimizer` after compile=True) is discarded. Use
+    `load_with_optimizer` for resume."""
+    model, _ = load_with_optimizer(path)
+    return model
+
+
+def load_with_optimizer(path: str):
+    """Load model + the keras Optimizer that was bundled in via
+    `model.compile(optimizer=...)` at save time. Returns
+    `(model, optimizer_or_None)`."""
+    # Lazy: model.py imports backend_shim, which imports this module — deferring
     # the P3achyGoModel import here breaks the cycle.
     from model import P3achyGoModel
 
-    # compile=True so any bundled optimizer is rehydrated and accessible via
-    # `model.optimizer`. Cross-process resume relies on this.
-    return keras.models.load_model(
+    model = keras.models.load_model(
         path,
         custom_objects=P3achyGoModel.custom_objects(),
         compile=True,
     )
+    return model, getattr(model, "optimizer", None)
 
 
-def optimizer_state_from_model(model):
-    """Return the optimizer attached to a freshly-loaded model, or None.
-    On TF, this is the keras Optimizer rehydrated by `compile=True` in
-    `load_model`."""
-    return getattr(model, "optimizer", None)
-
-
-def new_model(config: Dict):
+def new_model(
+    config,
+    board_len: int,
+    num_input_planes: int,
+    num_input_features: int,
+    name: str,
+):
+    """Build a fresh keras `P3achyGoModel` from a `ModelConfig` + run-wide
+    constants, and trigger variable materialization with a dummy forward
+    pass so the returned model is ready to save / serialize."""
     from model import P3achyGoModel
 
-    c = dict(config)
-    return P3achyGoModel.from_config(c)
+    model = P3achyGoModel.create(
+        config=config,
+        board_len=board_len,
+        num_input_planes=num_input_planes,
+        num_input_features=num_input_features,
+        name=name,
+    )
+    model(
+        np.zeros([1, *model.input_planes_shape()], dtype=np.float32),
+        np.zeros([1, *model.input_features_shape()], dtype=np.float32),
+    )
+    return model
 
 
 def clone_model(model):
@@ -77,6 +96,20 @@ def to_numpy(t):
     return np.asarray(t)
 
 
+def summary(model) -> None:
+    """Print a human-readable model summary. Delegates to keras' built-in."""
+    model.summary()
+
+
+def compile_for_training(model, *, fp16: bool = True, channels_last: bool = True):
+    """No-op on TF — `keras.mixed_precision.set_global_policy("mixed_float16")`
+    set in `configure_gpu` already covers the equivalent transforms. The TF
+    backend handles channels_last and graph compilation via XLA / @tf.function
+    inside `train_step` itself."""
+    del fp16, channels_last
+    return model
+
+
 def swa_avg_weights(weights_list, swa_momentum: float = 0.75):
     """Cascading EMA across snapshots:
 
@@ -93,17 +126,40 @@ def swa_avg_weights(weights_list, swa_momentum: float = 0.75):
 
 
 def recompute_bn_statistics(model, ds, num_batches: int = 150):
-    """Run forward passes with training=True so keras BN layers update their
-    `moving_mean` / `moving_variance` in-place. Does NOT compute gradients."""
+    """Recompute BN moving mean/variance to be the EXACT batch-statistics
+    average over `num_batches` forwards (not an EMA approximation).
+
+    keras BN uses `moving = momentum * moving + (1 - momentum) * batch_stat`.
+    With moving stats reset to zero and momentum set to `(i-1)/i` at the
+    i-th batch (1-indexed), the recurrence becomes the cumulative running
+    average — `moving_n = (1/n) * Σ batch_stat_k` — converging to the exact
+    mean over the visited batches. Restores the original momentum at exit.
+    Mirrors the `bn.momentum = None` trick on the torch backend (see
+    `torch.optim.swa_utils.update_bn`).
+
+    Does NOT compute gradients."""
     bn_layers = _get_bn_layers(model)
     print(f"Found {len(bn_layers)} BatchNorm layers (TF backend)")
-    for i, batch in enumerate(ds.take(num_batches)):
-        input_board, input_global = batch[0], batch[1]
-        _ = model(input_board, input_global, training=True)
-        if (i + 1) % 20 == 0:
-            print(
-                f"=== recompute_bn_statistics: Processed {i + 1}/{num_batches} batches ==="
-            )
+    saved_momentum = [bn.momentum for bn in bn_layers]
+    # Reset moving stats so the cumulative average starts from zero.
+    for bn in bn_layers:
+        bn.moving_mean.assign(keras.ops.zeros_like(bn.moving_mean))
+        bn.moving_variance.assign(keras.ops.zeros_like(bn.moving_variance))
+    try:
+        for i, batch in enumerate(ds.take(num_batches)):
+            n = i + 1  # 1-indexed batch count
+            new_momentum = (n - 1) / n
+            for bn in bn_layers:
+                bn.momentum = new_momentum
+            input_board, input_global = batch[0], batch[1]
+            _ = model(input_board, input_global, training=True)
+            if n % 20 == 0:
+                print(
+                    f"=== recompute_bn_statistics: Processed {n}/{num_batches} batches ==="
+                )
+    finally:
+        for bn, mom in zip(bn_layers, saved_momentum):
+            bn.momentum = mom
 
 
 # ---------------------------------------------------------------------------
@@ -125,26 +181,24 @@ def make_optimizer(
     config: Any,
     lr_schedule: Any,
     is_gpu: bool,
-    optimizer: Optional[Any] = None,
-    optimizer_state: Optional[Any] = None,
+    *,
+    loaded_state: Optional[Any] = None,
 ) -> Any:
-    """Build (when `optimizer is None`) or hot-reload an optimizer.
+    """Build (when `loaded_state is None`) or rehydrate an optimizer.
+
+    `loaded_state` is opaque from the caller's perspective — pass back
+    whatever `load_with_optimizer` (or a previous `make_optimizer`) gave
+    you. On the keras (TF) backend the rehydrated value is always a
+    previously-built keras Optimizer object (state lives on the object
+    itself), so reload reduces to "mutate config-driven fields in place".
 
     Returns an optimizer ready for the keras-on-{tf,torch} train_step.
     Wraps in `keras.mixed_precision.LossScaleOptimizer` when `is_gpu` and
     not already wrapped.
-
-    `optimizer_state` (TF backend): a previously-built keras Optimizer
-    rehydrated from disk via `load_model(compile=True)`. Treated equivalent
-    to passing `optimizer=...` (in-process hot-reload). The keras flow
-    bundles state on the optimizer object itself, so there is no separate
-    state container to apply.
     """
     from optimizer import ConvMuon  # keras ConvMuon
 
-    if optimizer is None and optimizer_state is not None:
-        optimizer = optimizer_state
-
+    optimizer = loaded_state
     inner = _inner(optimizer)
     if inner is None:
         if config.optimizer == "muon":

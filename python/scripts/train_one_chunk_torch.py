@@ -4,7 +4,7 @@ Loads a torch-native checkpoint, iterates batches from a TFRecord chunk,
 runs forward + backward + optimizer.step, logs loss + ms/batch.
 
 Loss subset for the benchmark (full-loss parity is a follow-up under
-Task 6 once train_shim exposes a backend-agnostic train_step):
+Task 6 once backend_shim exposes a backend-agnostic train_step):
   policy CE + game-outcome CE + score-distribution CE
   + ownership BCE + Q-value MSE (q6/q16/q50)
 
@@ -66,7 +66,7 @@ def main():
     if args.cudnn_benchmark:
         torch.backends.cudnn.benchmark = True
 
-    from train_shim import load_model
+    from backend_shim import load_model
     from backend_torch.optimizer import ConvMuon, build_convmuon_param_groups
     from backend_torch.dataset import ChunkDataset
 

@@ -107,12 +107,12 @@ def train_step(
     Returns:
         TrainStepResult with predictions and losses
     """
-    # Zero gradients on all trainable variables (keras-side .value is the
-    # underlying torch.Tensor parameter).
-    for v in model.trainable_weights:
-        if v.value.grad is not None:
-            v.value.grad = None
-    model_outputs = model(input, input_global_state, training=True)
+    # Zero gradients (set_to_none avoids a second pass to write zeros).
+    model.zero_grad(set_to_none=True)
+    # True mixed precision: weights stay fp32, compute drops to fp16 for
+    # matmul/conv kernels.
+    with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
+        model_outputs = model(input, input_global_state, training=True)
 
     (
         pi_logits,
@@ -192,11 +192,10 @@ def train_step(
         mcts_dist_loss,
     ) = loss_outputs
 
-    # L2 regularization is handled by weight_decay in the keras optimizer.
+    # L2 regularization is handled by weight_decay in the optimizer.
     total_loss = loss
 
-    # Use keras's loss-scaling pre/post hooks if the optimizer is a
-    # LossScaleOptimizer; otherwise the call is identity.
+    # GradScaler-backed loss scaling on GPU; identity otherwise.
     scaled_loss = (
         optimizer.scale_loss(total_loss)
         if hasattr(optimizer, "scale_loss")
@@ -204,37 +203,11 @@ def train_step(
     )
     scaled_loss.backward()
 
-    # Compute the total grad norm for logging. Keras' optimizer applies its
-    # configured clipping (e.g. `global_clipnorm`) inside `apply` itself, so
-    # we don't clip here — that would double-clip and ignore the user's
-    # `global_clipnorm` setting.
-    #
-    # When wrapped in LossScaleOptimizer, `.grad` is the loss-scaled gradient
-    # (loss_scale_factor × true gradient). Keras unscales internally inside
-    # `apply`, but we report grad_norm in the unscaled space so the value is
-    # comparable to TF's output and the user-set `global_clipnorm`.
-    params = [v.value for v in model.trainable_weights]
-    grads = [p.grad for p in params]
-    scaled_norm = torch.sqrt(
-        sum(
-            torch.sum(g.detach().to(torch.float32) ** 2) for g in grads if g is not None
-        )
-    )
-    # LossScaleOptimizer scale lives on `dynamic_scale` post-build,
-    # `initial_scale` pre-build; mirrors `LossScaleOptimizer.scale_loss`.
-    if hasattr(optimizer, "scale_loss"):
-        loss_scale = float(
-            optimizer.dynamic_scale if optimizer.built else optimizer.initial_scale
-        )
-    else:
-        loss_scale = 1.0
-    grad_norm = scaled_norm / loss_scale
-
-    # Apply via keras 3's unified optimizer API (`apply` works on either
-    # backend and across LossScaleOptimizer / ConvMuon / SGD). Keras does
-    # *not* zero out `.grad` after applying — torch's autograd accumulates,
-    # so we zero out at the top of the next train_step.
-    optimizer.apply(grads, model.trainable_weights)
+    # ConvMuon's step calls `clip_grad_norm_` which computes the global
+    # norm in fp32 and stashes it on `last_grad_norm` — read it back, no
+    # second fp32 reduction needed.
+    optimizer.apply()  # GradScaler reads param.grad; takes no args
+    grad_norm = float(getattr(optimizer, "last_grad_norm", 0.0))
 
     return TrainStepResult(
         predictions=predictions,
@@ -255,7 +228,7 @@ def train_step(
         pi_soft_loss=pi_soft_loss,
         pi_optimistic_loss=pi_optimistic_loss,
         mcts_dist_loss=mcts_dist_loss,
-        grad_norm=grad_norm.item(),
+        grad_norm=grad_norm,
     )
 
 
@@ -268,7 +241,8 @@ def val_step(
     model: P3achyGoModel,
 ) -> TrainStepResult:
     """Validation step — forward + loss only, no gradient update."""
-    model_outputs = model(input, input_global_state, training=False)
+    with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
+        model_outputs = model(input, input_global_state, training=False)
 
     (
         pi_logits,

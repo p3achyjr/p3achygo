@@ -9,9 +9,9 @@ from __future__ import annotations
 import sys
 import types
 import train
-import train_shim
+import backend_shim
 from dataset import ChunkDataset
-from train_shim import configure_gpu
+from backend_shim import configure_gpu
 
 from absl import app, flags, logging
 from constants import *
@@ -86,8 +86,7 @@ def main(_):
     )
     optimizer = None
     if FLAGS.from_checkpoint:
-        model = train_shim.load_model(FLAGS.from_checkpoint)
-        optimizer = train_shim.optimizer_state_from_model(model)
+        model, optimizer = backend_shim.load_with_optimizer(FLAGS.from_checkpoint)
 
     # setup train ds — sequential pass through each shard, front-to-back.
     class _SequentialShards:
@@ -105,29 +104,27 @@ def main(_):
     val_ds = ChunkDataset(val_shard, batch_size)
     lr_schedule = ConstantLRSchedule(lr)
     print(lr_schedule.info())
-    model.summary()
+    backend_shim.summary(model)
 
     configure_gpu()
     is_gpu = True
 
+    # Apply backend-specific training-time transforms (no-op on TF).
+    model = backend_shim.compile_for_training(model)
+
     # SL uses defaults for everything ConvMuon-related; build a stand-in
-    # config struct that satisfies `train_shim.make_optimizer`.
+    # config struct that satisfies `backend_shim.make_optimizer`.
     sl_opt_config = types.SimpleNamespace(
         optimizer=FLAGS.optimizer,
         muon_wd=0.1,
-        adam_wd=0.004,
+        adam_wd=0.1,
         adam_lr_ratio=1.0,
         wd_lr_exponent=None,
         wd_lr_max=None,
         global_clipnorm=float("inf"),
     )
-    optimizer = train_shim.make_optimizer(
-        model,
-        sl_opt_config,
-        lr_schedule,
-        is_gpu,
-        optimizer=optimizer if not isinstance(optimizer, dict) else None,
-        optimizer_state=optimizer if isinstance(optimizer, dict) else None,
+    optimizer = backend_shim.make_optimizer(
+        model, sl_opt_config, lr_schedule, is_gpu, loaded_state=optimizer
     )
 
     logging.info(f"Running initial validation...")
@@ -155,8 +152,10 @@ def main(_):
     logging.info(f"Running final validation...")
     train.val(model, mode=train.Mode.SL, val_ds=val_ds, batch_num=1)
 
-    model_path = str(Path(FLAGS.model_save_path, f"p3achygo_sl{train_shim.MODEL_EXT}"))
-    train_shim.save_model(model, model_path, optimizer=optimizer)
+    model_path = str(
+        Path(FLAGS.model_save_path, f"p3achygo_sl{backend_shim.MODEL_EXT}")
+    )
+    backend_shim.save_model(model, model_path, optimizer=optimizer)
 
 
 if __name__ == "__main__":

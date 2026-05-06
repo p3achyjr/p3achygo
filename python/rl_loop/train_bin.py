@@ -10,7 +10,7 @@ import gcs_utils as gcs
 import sys, time
 import keras
 from dataset import ChunkDataset
-from train_shim import configure_gpu, load_model
+from backend_shim import configure_gpu, load_model
 import train
 import rl_loop.model_utils as model_utils
 import rl_loop.train

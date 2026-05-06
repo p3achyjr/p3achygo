@@ -60,7 +60,10 @@ class GlobalPoolBias(nn.Module):
         g = mish(self.bn(g))  # BN + activation on g
         g_pooled = self.pool(g)  # (N, 2C)
         bias = self.dense(g_pooled)  # (N, C)
-        return x + bias.view(bias.shape[0], bias.shape[1], 1, 1), g_pooled
+        # `bias[..., None, None]` is two static `Unsqueeze` ops in ONNX —
+        # unlike `bias.view(bias.shape[0], bias.shape[1], 1, 1)` which would
+        # rebuild the shape via Shape→Gather→Concat at runtime.
+        return x + bias[..., None, None], g_pooled
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +196,10 @@ class BroadcastResidualBlock(nn.Module):
     def __init__(self, channels: int, board_len: int = 19):
         super().__init__()
         spatial = board_len * board_len
+        # Cache for forward (used as constants in Reshape calls).
+        self._channels = channels
+        self._board_len = board_len
+        self._spatial = spatial
         # Two ConvPreActivation blocks (each owns a BN)
         self.conv_first = ConvPreActivation(channels, channels, 1)
         self.dense_mix = make_dense(spatial, spatial, use_bias=True)
@@ -200,11 +207,14 @@ class BroadcastResidualBlock(nn.Module):
 
     def forward(self, x: torch.Tensor, training: bool = False) -> torch.Tensor:
         residual = x
-        N, C, H, W = x.shape
         h = self.conv_first(x)  # BN → mish → conv
         # broadcast mix: mish + spatial dense (no BN — matches BroadcastPreAct)
         h = mish(h)
-        h = self.dense_mix(h.view(N, C, H * W)).view(N, C, H, W)
+        # Use -1 for batch and the cached static C/H/W to keep the exported
+        # Reshape ops constant-shape (no Shape→Gather→Concat dynamic arithmetic).
+        h = self.dense_mix(h.view(-1, self._channels, self._spatial)).view(
+            -1, self._channels, self._board_len, self._board_len
+        )
         h = self.conv_last(h)  # BN → mish → conv
         return h + residual
 
@@ -292,7 +302,10 @@ class PolicyHead(nn.Module):
         self.opt_pass = make_dense(2 * head_channels, 1)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, ...]:
-        N, C, H, W = x.shape
+        # All non-batch dims are static (board_len fixed at module construction).
+        # Use -1 for batch in every Reshape so the exported ONNX has constant
+        # shape tensors instead of Shape→Gather→Concat dynamic arithmetic.
+        spatial = self.board_len * self.board_len
         p = self.conv_p(x)
         g = self.conv_g(x)
         p, g_pooled = self.gpool(p, g)  # g_pooled: (N, 2*head_ch)
@@ -301,18 +314,18 @@ class PolicyHead(nn.Module):
         # main + aux policy
         board = self.output_moves(p)  # (N,2,H,W)
         pass_logits = self.output_pass(g_pooled) - 3  # (N,2)
-        board_pi = board[:, 0].reshape(N, H * W)
-        board_aux = board[:, 1].reshape(N, H * W)
+        board_pi = board[:, 0].reshape(-1, spatial)
+        board_aux = board[:, 1].reshape(-1, spatial)
         pi_logits = torch.cat([board_pi, pass_logits[:, :1]], dim=1)
         pi_aux = torch.cat([board_aux, pass_logits[:, 1:]], dim=1)
 
         # soft auxiliary
-        soft_board = self.soft_moves(p).reshape(N, H * W)
+        soft_board = self.soft_moves(p).reshape(-1, spatial)
         soft_pass = self.soft_pass(g_pooled) - 3  # (N,1)
         pi_soft = torch.cat([soft_board, soft_pass], dim=1)
 
         # optimistic auxiliary
-        opt_board = self.opt_moves(p).reshape(N, H * W)
+        opt_board = self.opt_moves(p).reshape(-1, spatial)
         opt_pass = self.opt_pass(g_pooled) - 3
         pi_opt = torch.cat([opt_board, opt_pass], dim=1)
 
@@ -380,8 +393,6 @@ class ValueHead(nn.Module):
     def forward(
         self, x: torch.Tensor, scores: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, ...]:
-        N, C, H, W = x.shape
-
         v = self.conv(x)  # (N, C, H, W)
         g = self.pool(v)  # (N, 2C)
 
@@ -410,19 +421,25 @@ class ValueHead(nn.Module):
         # Ownership
         own = torch.tanh(self.conv_own(v)).squeeze(1)  # (N, H, W)
 
-        # Gamma (score scale) — uses SHARED score_pre
-        gamma_in = torch.cat(
-            [g, torch.zeros(N, 1, device=g.device, dtype=g.dtype)], dim=1
-        )  # (N, 2C+1)
+        # Gamma (score scale) — uses SHARED score_pre.
+        # `F.pad(g, (0, 1))` appends one zero column on the last dim — single
+        # Pad op vs the cat-with-zeros pattern which needs an explicit
+        # zero-tensor of dynamic batch shape.
+        gamma_in = F.pad(g, (0, 1))  # (N, 2C+1)
         gamma = self.gamma_output(mish(self.score_pre(gamma_in)))  # (N, 1)
 
-        # Score distribution — per-bin MLP over 800 bins
+        # Score distribution — per-bin MLP over 800 bins.
         if scores is None:
             scores = self._default_scores(g.device, g.dtype)  # (800,)
         scores = scores.to(g.dtype)
-        # (N, 800, 2C)  + (N, 800, 1)  → (N, 800, 2C+1)
-        g_exp = g.unsqueeze(1).expand(N, self.score_range, g.shape[1])
-        s_exp = scores.unsqueeze(0).unsqueeze(-1).expand(N, self.score_range, 1)
+        # Concatenate g (broadcast over score_range) with scores (broadcast
+        # over batch) into (N, 800, 2C+1). `expand(-1, ...)` keeps existing
+        # dim sizes — the dynamic batch dim N stays a -1 in the exported
+        # Reshape rather than being looked up via Shape→Gather.
+        g_exp = g.unsqueeze(1).expand(-1, self.score_range, -1)  # (N, 800, 2C)
+        s_exp = scores.view(1, self.score_range, 1).expand(
+            g.size(0), -1, -1
+        )  # (N, 800, 1)
         v_scores = torch.cat([g_exp, s_exp], dim=-1)  # (N, 800, 2C+1)
         score_logits = self.score_output(mish(self.score_pre(v_scores))).squeeze(
             -1
@@ -579,12 +596,13 @@ class P3achyGoModel(nn.Module):
         x = board_state.permute(0, 3, 1, 2).contiguous(
             memory_format=torch.channels_last
         )
-        N, C, H, W = x.shape
 
         # Stem: conv + game-state broadcast bias
         x = self.init_board_conv(x)
         g = self.init_game_layer(game_state)  # (N, channels)
-        x = x + g.view(N, -1, 1, 1)  # broadcast (N,C,1,1) over H,W
+        # `g[..., None, None]` is two static Unsqueeze ops in ONNX; `g.view(N, -1, 1, 1)`
+        # would rebuild the shape via Shape→Gather→Concat at runtime.
+        x = x + g[..., None, None]  # broadcast (N,C,1,1) over H,W
 
         # Trunk
         for block in self.blocks:

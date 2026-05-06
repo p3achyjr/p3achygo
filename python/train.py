@@ -13,8 +13,8 @@ from pathlib import Path
 from loss_coeffs import LossCoeffs
 from enum import Enum
 from weight_snapshot import WeightSnapshotManager
-from train_shim import *
-import train_shim
+from backend_shim import *
+import backend_shim
 
 
 def _softmax(x: np.ndarray, axis: int = -1) -> np.ndarray:
@@ -198,7 +198,7 @@ def train(
     )
 
     assert optimizer is not None, (
-        "train() requires a pre-built optimizer; use train_shim.make_optimizer "
+        "train() requires a pre-built optimizer; use backend_shim.make_optimizer "
         "to construct one (centralized factory)."
     )
 
@@ -207,6 +207,7 @@ def train(
     for _ in range(epochs):
         # train
         for batch_data in train_ds:
+            backend_shim.step_begin()
             if save_path and save_interval and batch_num % save_interval == 0:
                 save_model(model, optimizer, batch_num, save_path)
                 # Run validation on checkpoint save
@@ -306,10 +307,12 @@ def train(
                     )
 
                     # Log policy entropy to detect flat distributions
-                    pi_logits_np = train_shim.to_numpy(result.predictions.pi_logits[0])
+                    pi_logits_np = backend_shim.to_numpy(
+                        result.predictions.pi_logits[0]
+                    )
                     pi_probs = _softmax(pi_logits_np)
                     policy_entropy = -float(np.sum(pi_probs * np.log(pi_probs + 1e-10)))
-                    target_np = train_shim.to_numpy(targets.policy[0])
+                    target_np = backend_shim.to_numpy(targets.policy[0])
                     target_entropy = -float(
                         np.sum(target_np * np.log(target_np + 1e-10))
                     )
@@ -489,8 +492,8 @@ def log_board_position(
 ):
     """Log a sample board position with model predictions."""
     # Take first example from batch
-    planes = train_shim.to_numpy(input_planes[0])  # (19, 19, num_planes)
-    global_state = train_shim.to_numpy(input_global_state[0])
+    planes = backend_shim.to_numpy(input_planes[0])  # (19, 19, num_planes)
+    global_state = backend_shim.to_numpy(input_global_state[0])
 
     # Reconstruct board from planes
     # Planes 0-2: current position (our stones, opponent stones, empty)
@@ -514,61 +517,54 @@ def log_board_position(
         board[opp_stones > 0.5] = BLACK
 
     # Get predictions and ground truth
-    policy_pred = _softmax(train_shim.to_numpy(predictions.pi_logits[0]))
-    outcome_pred = _softmax(train_shim.to_numpy(predictions.game_outcome[0]))
-    score_pred = _softmax(train_shim.to_numpy(predictions.score_logits[0]))
+    policy_pred = _softmax(backend_shim.to_numpy(predictions.pi_logits[0]))
+    outcome_pred = _softmax(backend_shim.to_numpy(predictions.game_outcome[0]))
+    score_pred = _softmax(backend_shim.to_numpy(predictions.score_logits[0]))
 
-    policy_target = train_shim.to_numpy(targets.policy[0])
-    score_target = train_shim.to_numpy(targets.score[0])
+    policy_target = backend_shim.to_numpy(targets.policy[0])
+    score_target = backend_shim.to_numpy(targets.score[0])
 
     # Get top 5 policy moves
     top_indices = np.argsort(policy_pred)[-5:][::-1]
     top_indices_target = np.argsort(policy_target)[-5:][::-1]
 
+    # 0-d numpy arrays (from torch's .numpy()) don't implement __format__ for
+    # f-string `:.4f`, while TF's Tensor.numpy() returns Python scalars that
+    # do. Force Python float for the per-example scalar quantities.
+    def _f(t):
+        return float(backend_shim.to_numpy(t))
+
     # short-term
-    q6_pred, q6 = train_shim.to_numpy(predictions.q6_pred[0]), train_shim.to_numpy(
-        targets.q6[0]
+    q6_pred, q6 = _f(predictions.q6_pred[0]), _f(targets.q6[0])
+    q16_pred, q16 = _f(predictions.q16_pred[0]), _f(targets.q16[0])
+    q50_pred, q50 = _f(predictions.q50_pred[0]), _f(targets.q50[0])
+    q6_err_pred, q6_err = _f(predictions.q6_err_pred[0]), float(np.square(q6 - q6_pred))
+    q16_err_pred, q16_err = _f(predictions.q16_err_pred[0]), float(
+        np.square(q16 - q16_pred)
     )
-    q16_pred, q16 = train_shim.to_numpy(predictions.q16_pred[0]), train_shim.to_numpy(
-        targets.q16[0]
-    )
-    q50_pred, q50 = train_shim.to_numpy(predictions.q50_pred[0]), train_shim.to_numpy(
-        targets.q50[0]
-    )
-    q6_err_pred, q6_err = train_shim.to_numpy(predictions.q6_err_pred[0]), np.square(
-        q6 - q6_pred
-    )
-    q16_err_pred, q16_err = train_shim.to_numpy(predictions.q16_err_pred[0]), np.square(
-        q16 - q16_pred
-    )
-    q50_err_pred, q50_err = train_shim.to_numpy(predictions.q50_err_pred[0]), np.square(
-        q50 - q50_pred
+    q50_err_pred, q50_err = _f(predictions.q50_err_pred[0]), float(
+        np.square(q50 - q50_pred)
     )
 
     # short-term score
-    q6_score_pred, q6_score = (
-        train_shim.to_numpy(predictions.q6_score_pred[0]),
-        train_shim.to_numpy(targets.q6_score[0]),
+    q6_score_pred, q6_score = _f(predictions.q6_score_pred[0]), _f(targets.q6_score[0])
+    q16_score_pred, q16_score = _f(predictions.q16_score_pred[0]), _f(
+        targets.q16_score[0]
     )
-    q16_score_pred, q16_score = (
-        train_shim.to_numpy(predictions.q16_score_pred[0]),
-        train_shim.to_numpy(targets.q16_score[0]),
-    )
-    q50_score_pred, q50_score = (
-        train_shim.to_numpy(predictions.q50_score_pred[0]),
-        train_shim.to_numpy(targets.q50_score[0]),
+    q50_score_pred, q50_score = _f(predictions.q50_score_pred[0]), _f(
+        targets.q50_score[0]
     )
     q6_score_err_pred, q6_score_err = (
-        train_shim.to_numpy(predictions.q6_score_err_pred[0]),
-        np.square(q6_score - q6_score_pred),
+        _f(predictions.q6_score_err_pred[0]),
+        float(np.square(q6_score - q6_score_pred)),
     )
     q16_score_err_pred, q16_score_err = (
-        train_shim.to_numpy(predictions.q16_score_err_pred[0]),
-        np.square(q16_score - q16_score_pred),
+        _f(predictions.q16_score_err_pred[0]),
+        float(np.square(q16_score - q16_score_pred)),
     )
     q50_score_err_pred, q50_score_err = (
-        train_shim.to_numpy(predictions.q50_score_err_pred[0]),
-        np.square(q50_score - q50_score_pred),
+        _f(predictions.q50_score_err_pred[0]),
+        float(np.square(q50_score - q50_score_pred)),
     )
 
     # Convert move indices to coordinates
@@ -587,9 +583,9 @@ def log_board_position(
     print(f"Komi: {komi_actual:.1f} (normalized: {komi:+.3f})")
     print()
     # Ownership (own_pred is from current player perspective; convert to absolute black=positive)
-    own_pred = train_shim.to_numpy(predictions.own_pred[0]).squeeze()  # (19, 19)
+    own_pred = backend_shim.to_numpy(predictions.own_pred[0]).squeeze()  # (19, 19)
     own_pred_abs = own_pred if to_play == BLACK else -own_pred
-    own = train_shim.to_numpy(targets.own[0]).squeeze()
+    own = backend_shim.to_numpy(targets.own[0]).squeeze()
     own = own if to_play == BLACK else -own
 
     def ownership_char(x):
@@ -670,37 +666,37 @@ def log_board_position(
     top_indices_soft_target = np.argsort(policy_soft_target)[-5:][::-1]
 
     # Soft and optimistic predicted policies
-    pi_soft_probs = _softmax(train_shim.to_numpy(predictions.pi_logits_soft[0]))
+    pi_soft_probs = _softmax(backend_shim.to_numpy(predictions.pi_logits_soft[0]))
     pi_optimistic_probs = _softmax(
-        train_shim.to_numpy(predictions.pi_logits_optimistic[0])
+        backend_shim.to_numpy(predictions.pi_logits_optimistic[0])
     )
     top_soft = np.argsort(pi_soft_probs)[-5:][::-1]
     top_optimistic = np.argsort(pi_optimistic_probs)[-5:][::-1]
 
     # Optimistic weight (mirrors v1_loss_terms computation)
     epsilon = 1e-6
-    q6_p = train_shim.to_numpy(predictions.q6_pred[0])
-    q16_p = train_shim.to_numpy(predictions.q16_pred[0])
-    q50_p = train_shim.to_numpy(predictions.q50_pred[0])
-    q6_err_p = train_shim.to_numpy(predictions.q6_err_pred[0])
-    q16_err_p = train_shim.to_numpy(predictions.q16_err_pred[0])
-    q50_err_p = train_shim.to_numpy(predictions.q50_err_pred[0])
-    q6_score_p = train_shim.to_numpy(predictions.q6_score_pred[0])
-    q16_score_p = train_shim.to_numpy(predictions.q16_score_pred[0])
-    q50_score_p = train_shim.to_numpy(predictions.q50_score_pred[0])
-    q6_score_err_p = train_shim.to_numpy(predictions.q6_score_err_pred[0])
-    q16_score_err_p = train_shim.to_numpy(predictions.q16_score_err_pred[0])
-    q50_score_err_p = train_shim.to_numpy(predictions.q50_score_err_pred[0])
-    z6 = (train_shim.to_numpy(targets.q6[0]) - q6_p) / np.sqrt(q6_err_p + epsilon)
-    z16 = (train_shim.to_numpy(targets.q16[0]) - q16_p) / np.sqrt(q16_err_p + epsilon)
-    z50 = (train_shim.to_numpy(targets.q50[0]) - q50_p) / np.sqrt(q50_err_p + epsilon)
-    z6_score = (train_shim.to_numpy(targets.q6_score[0]) - q6_score_p) / np.sqrt(
+    q6_p = backend_shim.to_numpy(predictions.q6_pred[0])
+    q16_p = backend_shim.to_numpy(predictions.q16_pred[0])
+    q50_p = backend_shim.to_numpy(predictions.q50_pred[0])
+    q6_err_p = backend_shim.to_numpy(predictions.q6_err_pred[0])
+    q16_err_p = backend_shim.to_numpy(predictions.q16_err_pred[0])
+    q50_err_p = backend_shim.to_numpy(predictions.q50_err_pred[0])
+    q6_score_p = backend_shim.to_numpy(predictions.q6_score_pred[0])
+    q16_score_p = backend_shim.to_numpy(predictions.q16_score_pred[0])
+    q50_score_p = backend_shim.to_numpy(predictions.q50_score_pred[0])
+    q6_score_err_p = backend_shim.to_numpy(predictions.q6_score_err_pred[0])
+    q16_score_err_p = backend_shim.to_numpy(predictions.q16_score_err_pred[0])
+    q50_score_err_p = backend_shim.to_numpy(predictions.q50_score_err_pred[0])
+    z6 = (backend_shim.to_numpy(targets.q6[0]) - q6_p) / np.sqrt(q6_err_p + epsilon)
+    z16 = (backend_shim.to_numpy(targets.q16[0]) - q16_p) / np.sqrt(q16_err_p + epsilon)
+    z50 = (backend_shim.to_numpy(targets.q50[0]) - q50_p) / np.sqrt(q50_err_p + epsilon)
+    z6_score = (backend_shim.to_numpy(targets.q6_score[0]) - q6_score_p) / np.sqrt(
         q6_score_err_p + epsilon
     )
-    z16_score = (train_shim.to_numpy(targets.q16_score[0]) - q16_score_p) / np.sqrt(
+    z16_score = (backend_shim.to_numpy(targets.q16_score[0]) - q16_score_p) / np.sqrt(
         q16_score_err_p + epsilon
     )
-    z50_score = (train_shim.to_numpy(targets.q50_score[0]) - q50_score_p) / np.sqrt(
+    z50_score = (backend_shim.to_numpy(targets.q50_score[0]) - q50_score_p) / np.sqrt(
         q50_score_err_p + epsilon
     )
 
@@ -711,8 +707,8 @@ def log_board_position(
         return 1 / (1 + np.exp(-x))
 
     z_wd = 4.0 / 7.0
-    z_val = compute_opt_weight(z_wd, z6, z16, z50)
-    z_score = compute_opt_weight(z_wd, z6_score, z16_score, z50_score)
+    z_val = float(compute_opt_weight(z_wd, z6, z16, z50))
+    z_score = float(compute_opt_weight(z_wd, z6_score, z16_score, z50_score))
     z_combined = (z_val + z_score * 0.5) / 1.5
     opt_weight = float(np.clip(sigmoid((z_combined - 1.0) * 3.0), 0.0, 1.0))
 
@@ -738,25 +734,25 @@ def log_board_position(
         )
 
     # Policy aux: top-4 predicted vs target (dist if available, else single move)
-    pi_aux_logits = train_shim.to_numpy(predictions.pi_logits_aux[0])
+    pi_aux_logits = backend_shim.to_numpy(predictions.pi_logits_aux[0])
     pi_aux_probs = np.exp(pi_aux_logits - pi_aux_logits.max())
     pi_aux_probs /= pi_aux_probs.sum()
     top_aux_pred = np.argsort(pi_aux_probs)[-4:][::-1]
     has_aux_dist = (
-        bool(train_shim.to_numpy(targets.has_pi_aux_dist[0]))
+        bool(backend_shim.to_numpy(targets.has_pi_aux_dist[0]))
         if targets.has_pi_aux_dist is not None
         else False
     )
 
     if has_aux_dist:
-        aux_dist = train_shim.to_numpy(targets.policy_aux_dist[0]).astype(np.float32)
+        aux_dist = backend_shim.to_numpy(targets.policy_aux_dist[0]).astype(np.float32)
         aux_dist_sum = aux_dist.sum()
         if aux_dist_sum > 0:
             aux_dist /= aux_dist_sum
         top_aux_tgt = np.argsort(aux_dist)[-4:][::-1]
         tgt_label = "Target (dist)"
     else:
-        target_aux_move = int(train_shim.to_numpy(targets.policy_aux[0]))
+        target_aux_move = int(backend_shim.to_numpy(targets.policy_aux[0]))
         top_aux_tgt = [target_aux_move] + [None] * 3
         aux_dist = None
         tgt_label = "Target"
@@ -778,13 +774,13 @@ def log_board_position(
     # MCTS value distribution: side-by-side if available
     if (
         targets.has_mcts_value_dist is not None
-        and bool(train_shim.to_numpy(targets.has_mcts_value_dist[0]))
+        and bool(backend_shim.to_numpy(targets.has_mcts_value_dist[0]))
         and predictions.mcts_dist_probs is not None
     ):
-        target_counts = train_shim.to_numpy(targets.mcts_value_dist[0]).astype(
+        target_counts = backend_shim.to_numpy(targets.mcts_value_dist[0]).astype(
             np.float64
         )
-        pred_probs = train_shim.to_numpy(predictions.mcts_dist_probs[0]).astype(
+        pred_probs = backend_shim.to_numpy(predictions.mcts_dist_probs[0]).astype(
             np.float64
         )
         print(f"\nMCTS Value Distribution (pred | target):")
@@ -803,9 +799,9 @@ def save_model(
     artifacts within one chunk's training, not release artifacts. The end-of-
     generation save in rl_loop/train.py persists optimizer state separately."""
     del opt  # not bundled in the intermediate snapshot
-    filename = f"model_{batch_num}{train_shim.MODEL_EXT}"
+    filename = f"model_{batch_num}{backend_shim.MODEL_EXT}"
     filepath = Path(save_path) / filename
-    train_shim.save_model(model, str(filepath))
+    backend_shim.save_model(model, str(filepath))
 
 
 def val(
@@ -852,6 +848,7 @@ def val(
     for i, batch_data in enumerate(val_ds):
         if i >= num_batches:
             break
+        backend_shim.step_begin()
 
         (
             input,
@@ -911,15 +908,15 @@ def val(
 
         def compute_accuracy(predictions: ModelPredictions):
             predicted_moves = np.argmax(
-                train_shim.to_numpy(predictions.pi_logits), axis=1
+                backend_shim.to_numpy(predictions.pi_logits), axis=1
             )
-            actual_moves = np.argmax(train_shim.to_numpy(policy), axis=1)
+            actual_moves = np.argmax(backend_shim.to_numpy(policy), axis=1)
             correct_moves = int((predicted_moves == actual_moves).sum())
 
             predicted_outcomes = (
-                np.argmax(train_shim.to_numpy(predictions.game_outcome), axis=1) == 1
+                np.argmax(backend_shim.to_numpy(predictions.game_outcome), axis=1) == 1
             )
-            actual_outcomes = train_shim.to_numpy(score) >= 0  # Actual win
+            actual_outcomes = backend_shim.to_numpy(score) >= 0  # Actual win
             correct_outcomes = int((predicted_outcomes == actual_outcomes).sum())
             return correct_moves, correct_outcomes
 

@@ -4,7 +4,7 @@ import tensorflow as tf
 from typing import NamedTuple, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    # Annotation-only imports break the model→train_shim→backend_tf.train→model
+    # Annotation-only imports break the model→backend_shim→backend_tf.train→model
     # cycle at runtime.
     from model import P3achyGoModel, LossWeights
 

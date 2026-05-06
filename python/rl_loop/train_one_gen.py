@@ -7,11 +7,12 @@ from __future__ import annotations
 import sys
 import gcs_utils as gcs
 from dataset import ChunkDataset
-from train_shim import (
+from backend_shim import (
     configure_gpu,
     load_model,
+    load_with_optimizer,
     save_model,
-    optimizer_state_from_model,
+    compile_for_training,
     LIVE_MODEL_NAME,
     MODEL_EXT,
 )
@@ -90,14 +91,15 @@ def main(_):
 
     swa_model_path, _ = get_model_path(FLAGS.models_dir, FLAGS.gen)
     live_model_path = str(Path(FLAGS.models_dir, LIVE_MODEL_NAME))
-    live_model = load_model(live_model_path)
-    optimizer = optimizer_state_from_model(live_model)
+    live_model, optimizer = load_with_optimizer(live_model_path)
     if optimizer is None:
         logging.info(
             "No optimizer state found in model. "
             "This should only happen for model_0000."
         )
     swa_model = load_model(swa_model_path)
+    # Apply backend-specific training-time transforms (no-op on TF).
+    live_model = compile_for_training(live_model)
     logging.info(f"Using Train Dataset: {FLAGS.chunk_path}")
     logging.info(f"Using Val Dataset: {FLAGS.val_ds_path}")
     logging.info(f"Using Model Checkpoint: {live_model_path}")

@@ -132,19 +132,9 @@ class ConvMuonTorchUnitTest(unittest.TestCase):
         loss.backward()
         opt.apply()  # keras-compatible API
 
-    def test_ns5_orthogonalises(self):
-        """After NS5, singular values of a random matrix should be ~1."""
-        from backend_torch.optimizer import _newtonschulz
-
-        torch.manual_seed(1)
-        g = torch.randn(32, 32)
-        o = _newtonschulz(g, steps=5).float()
-        sv = torch.linalg.svdvals(o)
-        self.assertLess(
-            float((sv - 1).abs().max()),
-            0.5,
-            f"NS5 SVs not near 1: max dev = {float((sv-1).abs().max()):.3f}",
-        )
+    # NS5 orthogonality on tall/wide/extreme-aspect matrices is covered by
+    # `torch_optimizer_rect_test.py::NS5RectangularShapesTest`. The singleton
+    # 32×32 check that used to live here was a strict subset.
 
 
 # ---------------------------------------------------------------------------

@@ -137,13 +137,14 @@ class TransformerAttention(nn.Module):
         self.O = nn.Linear(embed_dim, embed_dim, bias=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (B, S, embed_dim)
-        B = x.size(0)
+        # x: (B, S, embed_dim). Use -1 for the batch dim in every reshape so
+        # torch.onnx emits Reshape with a constant shape tensor instead of
+        # rebuilding it from Shape→Gather→Concat at runtime.
         x = self.rms(x)
 
-        q = self.Q(x).view(B, self.seq_len, self.num_heads, self.head_dim)
-        k = self.K(x).view(B, self.seq_len, self.num_heads, self.head_dim)
-        v = self.V(x).view(B, self.seq_len, self.num_heads, self.head_dim)
+        q = self.Q(x).view(-1, self.seq_len, self.num_heads, self.head_dim)
+        k = self.K(x).view(-1, self.seq_len, self.num_heads, self.head_dim)
+        v = self.V(x).view(-1, self.seq_len, self.num_heads, self.head_dim)
 
         q = self.rope(q)
         k = self.rope(k)
@@ -157,7 +158,7 @@ class TransformerAttention(nn.Module):
         out = F.scaled_dot_product_attention(q, k, v, scale=self.scale)
 
         # (B, H, S, D) → (B, S, H, D) → (B, S, embed_dim)
-        out = out.transpose(1, 2).contiguous().view(B, self.seq_len, self.embed_dim)
+        out = out.transpose(1, 2).contiguous().view(-1, self.seq_len, self.embed_dim)
         return self.O(out)
 
 
@@ -192,12 +193,18 @@ class TransformerResidualBlock(nn.Module):
 
     def forward(self, x: torch.Tensor, training: bool = False) -> torch.Tensor:
         # x: (N, C, H, W) → (N, S, C) for attn/FFN; back to NCHW on exit.
+        # All non-batch dims are baked in at module construction time; using
+        # them directly (instead of x.shape[1:]) keeps the exported Reshape
+        # static and avoids Shape→Gather→Concat dynamic-shape arithmetic.
         del training  # unused; kept for trunk-loop signature parity
-        N, C, H, W = x.shape
-        flat = x.permute(0, 2, 3, 1).reshape(N, H * W, C)
+        flat = x.permute(0, 2, 3, 1).reshape(-1, self.seq_len, self.embed_dim)
         flat = flat + self.transformer_attn(flat)
         flat = flat + self.transformer_ffn(flat)
-        return flat.view(N, H, W, C).permute(0, 3, 1, 2).contiguous()
+        return (
+            flat.view(-1, self.pos_len, self.pos_len, self.embed_dim)
+            .permute(0, 3, 1, 2)
+            .contiguous()
+        )
 
 
 class TransformerBottleneckBlock(nn.Module):

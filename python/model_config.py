@@ -58,6 +58,30 @@ class ModelConfig:
         self.generic_arch = generic_arch
         self.c_l2 = c_l2
 
+    def to_torch_kwargs(
+        self, board_len: int, num_input_planes: int, num_input_features: int
+    ) -> dict:
+        """Translate this config + run-wide constants into the kwargs
+        accepted by `backend_torch.model.P3achyGoModel.__init__`. Used by
+        `rl_loop.model_utils.new_model` on the torch backend so callers
+        don't reach into the `k`-prefixed private attributes."""
+        return dict(
+            board_len=board_len,
+            num_input_planes=num_input_planes,
+            num_input_features=num_input_features,
+            num_blocks=self.kBlocks,
+            num_channels=self.kChannels,
+            num_bottleneck_channels=self.kBottleneckChannels,
+            num_policy_head_channels=self.kPolicyHeadChannels,
+            num_value_head_channels=self.kValueHeadChannels,
+            c_val=self.kCVal,
+            broadcast_interval=self.kBroadcastInterval,
+            trunk_block_type=self.kTrunkBlockType,
+            bottleneck_length=self.kInnerBottleneckLayers,
+            conv_size=self.kConvSize,
+            generic_arch=self.generic_arch,
+        )
+
     @staticmethod
     def tiny():
         return ModelConfig(

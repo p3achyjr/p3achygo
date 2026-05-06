@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any, List
 
-import train_shim
+import backend_shim
 
 
 class WeightSnapshotManager(object):
@@ -19,4 +19,4 @@ class WeightSnapshotManager(object):
         return step in self.ss_steps
 
     def take_snapshot(self, model: Any):
-        self.snapshots.append(train_shim.get_weights(model))
+        self.snapshots.append(backend_shim.get_weights(model))

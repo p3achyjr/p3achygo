@@ -25,7 +25,13 @@ import torch.nn.functional as F
 
 
 def mish(x: torch.Tensor) -> torch.Tensor:
-    return x * torch.tanh(F.softplus(x))
+    # `F.mish` is mathematically `x * tanh(softplus(x))`, but `F.mish` is a
+    # single aten op while the manual form decomposes through `softplus`,
+    # which torch.export lowers to `where(x > 20, x, log1p(exp(x)))` — adding
+    # 2 extra nodes per call (Greater + Where) to the exported ONNX. The
+    # single-op form lowers to a single `Mish` ONNX node (opset ≥18) that
+    # TRT handles with one fused kernel.
+    return F.mish(x)
 
 
 def make_conv(

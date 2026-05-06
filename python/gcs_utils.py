@@ -22,8 +22,11 @@ GOLDEN_CHUNK_RE = re.compile(GOLDEN_CHUNK_PREFIX + r"_([0-9]+)\.tfrecord\.zz")
 GOLDEN_CHUNK_SIZE_FORMAT = GOLDEN_CHUNK_PREFIX + r"_{:04d}.size"
 GOLDEN_CHUNK_SIZE_RE = re.compile(GOLDEN_CHUNK_PREFIX + r"_([0-9]+)\.size")
 MODEL_PREFIX = r"model"
-MODEL_FORMAT = MODEL_PREFIX + r"_{:04d}.keras"
-MODEL_RE = re.compile(MODEL_PREFIX + r"_([0-9]+)\.keras")
+# `MODEL_FORMAT` and `MODEL_RE` moved to `backend_shim` (they're
+# backend-dependent — `.keras` on TF, `.pt` on torch — and gcs_utils
+# is otherwise a generic GCS helper that doesn't need to know about
+# the training framework). Re-exported here for backwards compatibility.
+from backend_shim import MODEL_FORMAT, MODEL_RE  # noqa: E402, F401
 
 # Keep in sync with //cc/shuffler/chunk_info.h
 SP_CHUNK_RE = re.compile(r"gen(\d+)_b(\d+)_g(\d+)_n(\d+)_t(\d+)_(.*)\.tfrecord\.zz")
