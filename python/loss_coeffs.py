@@ -1,6 +1,32 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import NamedTuple
+
+
+class LossWeights(NamedTuple):
+    """Frozen per-loss weights consumed by `train_step` / `val_step` on
+    each backend. Mirror of `LossCoeffs` as an immutable tuple — `train.py`
+    converts a `LossCoeffs` into a `LossWeights` before handing it to the
+    step functions."""
+
+    w_pi: float
+    w_pi_aux: float
+    w_val: float
+    w_outcome: float
+    w_score: float
+    w_own: float
+    w_q6: float
+    w_q16: float
+    w_q50: float
+    w_gamma: float
+    # v1 weights
+    w_q_err: float = 0.0
+    w_q_score: float = 0.0
+    w_q_score_err: float = 0.0
+    w_pi_soft: float = 0.0
+    w_pi_optimistic: float = 0.0
+    w_mcts_dist: float = 0.0
 
 
 @dataclass

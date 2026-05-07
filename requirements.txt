@@ -1,6 +1,7 @@
 google-cloud-storage==2.7.0
 bitstring
 sgfmill
-tensorflow==2.16.2
+tensorflow==2.17.0
 tf2onnx
 onnxruntime
+tfrecord[torch]

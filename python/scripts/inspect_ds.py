@@ -6,7 +6,7 @@ from absl import flags, app
 
 from board import GoBoard
 from constants import *
-from model import P3achyGoModel
+from backend_tf.model import P3achyGoModel
 
 FLAGS = flags.FLAGS
 

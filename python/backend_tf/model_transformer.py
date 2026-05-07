@@ -17,7 +17,7 @@ import numpy as np
 import keras
 
 from constants import BOARD_LEN
-from model_layers_common import *
+from backend_tf.model_layers_common import *
 
 # Base for RoPE frequency computation. 100.0 is appropriate for a 19x19 board
 # (must be > 2 * pos_len to avoid aliasing).

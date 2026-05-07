@@ -5,9 +5,10 @@ import tensorflow as tf
 import numpy as np
 
 import sys
-sys.path.insert(0, '/app/python')
 
-from model import P3achyGoModel
+sys.path.insert(0, "/app/python")
+
+from backend_tf.model import P3achyGoModel
 from model_config import ModelConfig
 from constants import *
 
@@ -42,12 +43,10 @@ class ModelV1Test(unittest.TestCase):
         """Create mock input tensors for testing."""
         batch_size = 2
         board_state = tf.random.uniform(
-            (batch_size, BOARD_LEN, BOARD_LEN, num_planes),
-            dtype=tf.float32
+            (batch_size, BOARD_LEN, BOARD_LEN, num_planes), dtype=tf.float32
         )
         game_state = tf.random.uniform(
-            (batch_size, NUM_INPUT_FEATURES),
-            dtype=tf.float32
+            (batch_size, NUM_INPUT_FEATURES), dtype=tf.float32
         )
         return board_state, game_state
 

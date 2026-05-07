@@ -83,7 +83,9 @@ class ConvPreActivationTest(unittest.TestCase):
 
     def setUp(self):
         import keras
-        from model_layers_common import make_conv_block as keras_make_conv_block
+        from backend_tf.model_layers_common import (
+            make_conv_block as keras_make_conv_block,
+        )
 
         self.in_ch = 16
         self.out_ch = 32

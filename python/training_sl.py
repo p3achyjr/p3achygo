@@ -16,7 +16,7 @@ from backend_shim import configure_gpu
 from absl import app, flags, logging
 from constants import *
 from lr_schedule import ConstantLRSchedule
-from model import P3achyGoModel
+from backend_tf.model import P3achyGoModel
 from model_config import ModelConfig, CONFIG_OPTIONS
 from pathlib import Path
 

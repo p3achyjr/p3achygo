@@ -10,7 +10,7 @@ import numpy as np
 import h5py
 import keras
 
-from model import *
+from backend_tf.model import *
 
 
 class ModelTags:

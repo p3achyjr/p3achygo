@@ -204,7 +204,7 @@ class ConvMuonKerasTorchParityTest(unittest.TestCase):
         dense_l.kernel.assign(w["fc_kernel"])
         dense_l.bias.assign(w["fc_bias"])
 
-        from optimizer import ConvMuon as KConvMuon
+        from backend_tf.optimizer import ConvMuon as KConvMuon
 
         opt = KConvMuon(
             learning_rate=1e-3,

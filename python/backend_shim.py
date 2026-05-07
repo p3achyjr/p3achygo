@@ -44,32 +44,15 @@ Exported symbols:
 
 from __future__ import annotations
 
-import os
 import re
+
+from backend import BACKEND as _backend
+from loss_coeffs import LossWeights  # re-export for backend-agnostic callers
+
 
 # ---------------------------------------------------------------------------
 # Backend selection
 # ---------------------------------------------------------------------------
-
-_p3 = os.environ.get("P3ACHYGO_BACKEND")
-_kb = os.environ.get("KERAS_BACKEND")
-
-
-# Normalize "tf" → "tensorflow" so the two envs can be compared directly.
-def _norm(b):
-    if b is None:
-        return None
-    return "tensorflow" if b in ("tf", "tensorflow") else b
-
-
-_p3n, _kbn = _norm(_p3), _norm(_kb)
-if _p3n and _kbn and _p3n != _kbn:
-    raise RuntimeError(
-        f"P3ACHYGO_BACKEND={_p3!r} disagrees with KERAS_BACKEND={_kb!r}. "
-        "Set them to the same value (or unset one) before importing backend_shim."
-    )
-
-_backend = _p3n or _kbn or "tensorflow"
 
 if _backend == "torch":
     from backend_torch.train import (
@@ -119,7 +102,7 @@ elif _backend == "tensorflow":
         compile_for_training,
         make_optimizer,
     )
-    from optimizer import ConvMuon
+    from backend_tf.optimizer import ConvMuon
 else:
     raise ValueError(
         f"unsupported backend {_backend!r} "
@@ -155,12 +138,14 @@ MODEL_RE = re.compile(_MODEL_PREFIX + r"_([0-9]+)" + re.escape(MODEL_EXT))
 
 if BACKEND == "torch":
     import torch as _torch
+
     _mark_step_begin = getattr(
         _torch.compiler, "cudagraph_mark_step_begin", lambda: None
     )
 
     def step_begin() -> None:
         _mark_step_begin()
+
 else:
 
     def step_begin() -> None:
@@ -213,3 +198,15 @@ def load_with_optimizer(path):
     (rehydrated keras Optimizer on TF, state_dict on torch)."""
     _check_suffix(path)
     return _native_load_with_optimizer(path)
+
+
+# ---------------------------------------------------------------------------
+# P3achyGoModel dispatch — eager. Imported at the bottom so that all
+# symbols needed by the backend's model module (e.g., LossWeights,
+# ModelPredictions) are already defined in this module's namespace.
+# ---------------------------------------------------------------------------
+
+if BACKEND == "torch":
+    from backend_torch.model import P3achyGoModel
+else:
+    from backend_tf.model import P3achyGoModel

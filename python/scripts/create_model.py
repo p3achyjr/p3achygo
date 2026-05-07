@@ -9,7 +9,7 @@ from absl import app, flags, logging
 from pathlib import Path
 
 from constants import *
-from model import P3achyGoModel
+from backend_tf.model import P3achyGoModel
 from model_config import ModelConfig
 from rl_loop.model_utils import new_model
 

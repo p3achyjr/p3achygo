@@ -208,7 +208,7 @@ _BLOCK_TYPES = {
 def migrate(input_path: str, output_path: str) -> None:
     print(f"Loading keras model from {input_path} …")
     import keras
-    from model import P3achyGoModel as KP3achyGoModel
+    from backend_tf.model import P3achyGoModel as KP3achyGoModel
     from backend_torch.model import P3achyGoModel as TP3achyGoModel
 
     km = keras.models.load_model(

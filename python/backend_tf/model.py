@@ -5,38 +5,17 @@ Amalgamation of different layers types from various AlphaZero reproductions.
 """
 
 from __future__ import annotations
-from typing import NamedTuple, Optional
+from typing import Optional
 
 import math
 import keras
 
 from constants import *
 from model_config import ModelConfig
-from model_layers_common import *
-from model_transformer import *
-from backend_shim import *
-
-
-class LossWeights(NamedTuple):
-    """Weights for different loss components."""
-
-    w_pi: float
-    w_pi_aux: float
-    w_val: float
-    w_outcome: float
-    w_score: float
-    w_own: float
-    w_q6: float
-    w_q16: float
-    w_q50: float
-    w_gamma: float
-    # v1 weights
-    w_q_err: float = 0.0
-    w_q_score: float = 0.0
-    w_q_score_err: float = 0.0
-    w_pi_soft: float = 0.0
-    w_pi_optimistic: float = 0.0
-    w_mcts_dist: float = 0.0
+from backend_tf.model_layers_common import *
+from backend_tf.model_transformer import *
+from backend_tf.train import ModelPredictions, GroundTruth
+from loss_coeffs import LossWeights
 
 
 @keras.saving.register_keras_serializable(package="p3achygo")

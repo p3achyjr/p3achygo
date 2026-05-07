@@ -1,6 +1,6 @@
 import tensorflow as tf
 import numpy as np
-from model import P3achyGoModel
+from backend_tf.model import P3achyGoModel
 from model_config import ModelConfig
 
 # Create a simple config (you may need to adjust based on your ModelConfig class)

@@ -18,7 +18,7 @@ import tensorflow as tf
 import keras
 from typing import Optional
 
-from model import P3achyGoModel, ModelPredictions, GroundTruth, LossWeights
+from backend_tf.model import P3achyGoModel, ModelPredictions, GroundTruth, LossWeights
 from train import (
     Mode,
     TrainStepResult,

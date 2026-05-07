@@ -17,9 +17,9 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from constants import *
-from model import P3achyGoModel, GroundTruth, LossWeights
+from backend_tf.model import P3achyGoModel, GroundTruth, LossWeights
 from loss_coeffs import LossCoeffs
-from optimizer import (
+from backend_tf.optimizer import (
     ConvMuon,
 )  # noqa: F401 — needed for model deserialization
 from lr_schedule import ConstantLRSchedule  # noqa: F401

@@ -9,7 +9,7 @@ from dataset import ChunkDataset
 from absl import logging
 from constants import *
 from lr_schedule import ConstantLRSchedule
-from model import P3achyGoModel
+from backend_shim import P3achyGoModel
 from rl_loop.config import RunConfig
 from weight_snapshot import WeightSnapshotManager
 from loss_coeffs import LossCoeffs

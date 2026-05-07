@@ -34,7 +34,7 @@ from absl import app, flags, logging
 from pathlib import Path
 
 from constants import *
-from model import P3achyGoModel
+from backend_tf.model import P3achyGoModel
 
 FLAGS = flags.FLAGS
 

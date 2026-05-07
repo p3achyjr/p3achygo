@@ -5,7 +5,7 @@ import tf2onnx, onnx
 
 from pathlib import Path
 from tensorflow.python.compiler.tensorrt import trt_convert as trt
-from model import P3achyGoModel
+from backend_tf.model import P3achyGoModel
 from constants import *
 from dataset import ChunkDataset
 

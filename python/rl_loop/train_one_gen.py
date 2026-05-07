@@ -21,7 +21,7 @@ import rl_loop.train
 import rl_loop.config
 
 from absl import app, flags, logging
-from model import P3achyGoModel
+from backend_tf.model import P3achyGoModel
 from pathlib import Path
 from rl_loop.constants import SELFPLAY_BATCH_SIZE
 from typing import Tuple

@@ -32,7 +32,7 @@ from backend_torch.model_transformer import (  # noqa: E402
     TransformerResidualBlock as TBlock,
     TransformerBottleneckBlock as TBtl,
 )
-from model_transformer import (  # noqa: E402
+from backend_tf.model_transformer import (  # noqa: E402
     RoPE as KRoPE,
     TransformerAttention as KAttn,
     TransformerFFN as KFFN,

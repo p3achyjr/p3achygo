@@ -6,7 +6,8 @@ from typing import NamedTuple, Optional, TYPE_CHECKING
 from backend_torch.losses import compute_losses as _torch_compute_losses
 
 if TYPE_CHECKING:
-    from model import P3achyGoModel, LossWeights
+    from backend_torch.model import P3achyGoModel
+    from loss_coeffs import LossWeights
 
 
 class ModelPredictions(NamedTuple):

@@ -4,9 +4,8 @@ import tensorflow as tf
 from typing import NamedTuple, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    # Annotation-only imports break the model→backend_shim→backend_tf.train→model
-    # cycle at runtime.
-    from model import P3achyGoModel, LossWeights
+    from backend_tf.model import P3achyGoModel
+    from loss_coeffs import LossWeights
 
 
 class ModelPredictions(NamedTuple):

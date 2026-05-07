@@ -14,9 +14,7 @@ import backend_shim
 from pathlib import Path
 
 if TYPE_CHECKING:
-    # `model.py` is keras-based; loading it on the torch backend would
-    # pull keras into the process. Annotation-only on the active backend.
-    from model import P3achyGoModel
+    from backend_shim import P3achyGoModel
 
 NUM_BATCHES_FULL_CHECKPOINT = 1000
 

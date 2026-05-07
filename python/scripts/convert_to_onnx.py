@@ -14,8 +14,8 @@ from onnx import checker
 from onnxconverter_common.float16 import convert_float_to_float16
 from onnx import TensorProto, helper
 
-from model import P3achyGoModel
-from optimizer import ConvMuon
+from backend_tf.model import P3achyGoModel
+from backend_tf.optimizer import ConvMuon
 from constants import *
 from lr_schedule import ConstantLRSchedule
 from .onnx_matchers import rewrite_rms_normalization

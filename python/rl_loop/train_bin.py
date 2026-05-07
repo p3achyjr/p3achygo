@@ -19,8 +19,8 @@ from absl import app, flags, logging
 from constants import *
 from pathlib import Path
 from rl_loop.constants import SELFPLAY_BATCH_SIZE
-from model import P3achyGoModel
-from optimizer import ConvMuon  # noqa: F401 — registers p3achygo>ConvMuon
+from backend_tf.model import P3achyGoModel
+from backend_tf.optimizer import ConvMuon  # noqa: F401 — registers p3achygo>ConvMuon
 from lr_schedule import (
     ConstantLRSchedule,
 )  # noqa: F401 — registers p3achygo>ConstantLRSchedule

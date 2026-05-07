@@ -21,7 +21,7 @@ from dataset import ChunkDataset
 import train
 from constants import *
 from loss_coeffs import LossCoeffs
-from model import *
+from backend_tf.model import *
 
 CLEARLY_WON_THRESHOLD = 10.0  # score margin (points) to classify as clearly won/lost
 

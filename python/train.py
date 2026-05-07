@@ -8,12 +8,12 @@ from typing import Any, NamedTuple, Optional
 from board import GoBoard
 from collections import defaultdict
 from constants import *
-from model import P3achyGoModel, ModelPredictions, GroundTruth, LossWeights
 from pathlib import Path
 from loss_coeffs import LossCoeffs
 from enum import Enum
 from weight_snapshot import WeightSnapshotManager
 from backend_shim import *
+from backend_shim import P3achyGoModel
 import backend_shim
 
 

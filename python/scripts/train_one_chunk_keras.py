@@ -27,8 +27,8 @@ import keras
 import sys
 
 sys.path.insert(0, "python")
-from model import P3achyGoModel
-from optimizer import ConvMuon  # noqa: F401  (registers serializable)
+from backend_tf.model import P3achyGoModel
+from backend_tf.optimizer import ConvMuon  # noqa: F401  (registers serializable)
 from lr_schedule import ConstantLRSchedule  # noqa: F401
 
 

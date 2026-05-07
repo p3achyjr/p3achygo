@@ -32,7 +32,7 @@ import tensorflow as tf
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from model import P3achyGoModel
+from backend_tf.model import P3achyGoModel
 from dataset import iter_records
 import constants
 

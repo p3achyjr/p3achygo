@@ -12,6 +12,9 @@ from typing import Any, Dict, Optional
 import keras
 import numpy as np
 
+from backend_tf.model import P3achyGoModel
+from backend_tf.optimizer import ConvMuon
+
 
 def save_model(model, path: str, optimizer=None) -> None:
     """Save model to a `.keras` file. If `optimizer` is given, compile() it
@@ -34,10 +37,6 @@ def load_with_optimizer(path: str):
     """Load model + the keras Optimizer that was bundled in via
     `model.compile(optimizer=...)` at save time. Returns
     `(model, optimizer_or_None)`."""
-    # Lazy: model.py imports backend_shim, which imports this module — deferring
-    # the P3achyGoModel import here breaks the cycle.
-    from model import P3achyGoModel
-
     model = keras.models.load_model(
         path,
         custom_objects=P3achyGoModel.custom_objects(),
@@ -56,8 +55,6 @@ def new_model(
     """Build a fresh keras `P3achyGoModel` from a `ModelConfig` + run-wide
     constants, and trigger variable materialization with a dummy forward
     pass so the returned model is ready to save / serialize."""
-    from model import P3achyGoModel
-
     model = P3achyGoModel.create(
         config=config,
         board_len=board_len,
@@ -196,8 +193,6 @@ def make_optimizer(
     Wraps in `keras.mixed_precision.LossScaleOptimizer` when `is_gpu` and
     not already wrapped.
     """
-    from optimizer import ConvMuon  # keras ConvMuon
-
     optimizer = loaded_state
     inner = _inner(optimizer)
     if inner is None:
