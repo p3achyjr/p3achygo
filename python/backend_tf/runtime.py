@@ -12,6 +12,11 @@ def configure_gpu(mixed_precision_policy: str = "mixed_float16"):
     keras.mixed_precision.set_global_policy(mixed_precision_policy)
 
 
+def gpu_count() -> int:
+    """Number of visible GPUs (after CUDA_VISIBLE_DEVICES masking)."""
+    return len(tf.config.list_physical_devices("GPU"))
+
+
 class SummaryWriter:
     """tf.summary-backed scalar writer with the agnostic API."""
 

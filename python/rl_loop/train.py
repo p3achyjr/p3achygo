@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import multiprocessing
 from typing import Any
 import train
 import backend_shim
@@ -83,7 +84,13 @@ def train_one_gen(
     batch_size = config.batch_size
     lr_schedule = ConstantLRSchedule(get_lr(config, model_gen))
 
-    ds = ChunkDataset(chunk_path, batch_size)
+    # `num_workers=0` would block the GPU on single-threaded tfrecord
+    # decompression — 60% of step time on b8c128tfmr / RTX 5090. Empirically
+    # 2 workers wins ~80%, 8 saturates; cap at hw_threads/2 to avoid
+    # over-subscribing small boxes. See profile_workers_sweep.py for the
+    # measurement.
+    num_workers = min(8, max(1, multiprocessing.cpu_count() // 2))
+    ds = ChunkDataset(chunk_path, batch_size, num_workers=num_workers)
     num_batches = len(ds)
 
     logging.info(f"Batch Size: {batch_size}")

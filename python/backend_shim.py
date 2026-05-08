@@ -27,6 +27,8 @@ Exported symbols:
   train_step, val_step           — single forward/backward step
   step_begin                     — per-step CUDA-graph boundary marker (no-op on TF)
   configure_gpu                  — backend-agnostic GPU + mixed-precision setup
+  gpu_count                      — number of visible GPUs
+  export_to_onnx                 — spawn the right ONNX exporter script
   SummaryWriter                  — backend-agnostic TensorBoard scalar writer
   load_model, load_with_optimizer, save_model
                                  — checkpoint I/O (load auto-detects suffix)
@@ -62,7 +64,7 @@ if _backend == "torch":
         train_step,
         val_step,
     )
-    from backend_torch.runtime import configure_gpu, SummaryWriter
+    from backend_torch.runtime import configure_gpu, gpu_count, SummaryWriter
     from backend_torch.model_utils import (
         load_model as _native_load_model,
         load_with_optimizer as _native_load_with_optimizer,
@@ -86,7 +88,7 @@ elif _backend == "tensorflow":
         train_step,
         val_step,
     )
-    from backend_tf.runtime import configure_gpu, SummaryWriter
+    from backend_tf.runtime import configure_gpu, gpu_count, SummaryWriter
     from backend_tf.model_utils import (
         load_model as _native_load_model,
         load_with_optimizer as _native_load_with_optimizer,
@@ -198,6 +200,43 @@ def load_with_optimizer(path):
     (rehydrated keras Optimizer on TF, state_dict on torch)."""
     _check_suffix(path)
     return _native_load_with_optimizer(path)
+
+
+# ---------------------------------------------------------------------------
+# Backend-aware ONNX export. Spawns the right script (torch_to_onnx vs
+# convert_to_onnx) and writes to `<dir>/_onnx/<stem>.onnx` regardless of
+# backend, so the rest of the pipeline (TRT engine builder, sp_loop,
+# eval) sees a single canonical naming.
+# ---------------------------------------------------------------------------
+
+
+def export_to_onnx(model_path: str, fp16: bool = True) -> str:
+    """Export the saved model at `model_path` to ONNX, returning the
+    output path. The output is always `<dir>/_onnx/<stem>.onnx` —
+    matching the keras path's natural output, with the torch script
+    invoked via `--onnx_path` to override its default `_pt` suffix."""
+    from pathlib import Path
+
+    import proc
+
+    model_p = Path(model_path)
+    onnx_path = str(model_p.parent / "_onnx" / (model_p.stem + ".onnx"))
+    fp16_flag = " --fp16" if fp16 else ""
+    if BACKEND == "torch":
+        cmd = (
+            f"python -m python.scripts.torch_to_onnx"
+            f" --model_path={model_path}"
+            f" --onnx_path={onnx_path}"
+            f"{fp16_flag}"
+        )
+    else:
+        cmd = (
+            f"python -m python.scripts.convert_to_onnx"
+            f" --model_path={model_path}"
+            f"{fp16_flag}"
+        )
+    proc.run_proc(cmd)
+    return onnx_path
 
 
 # ---------------------------------------------------------------------------

@@ -32,7 +32,7 @@ flags.DEFINE_string("model_path", "", "Path to the .pt torch checkpoint.")
 flags.DEFINE_string(
     "onnx_path",
     "",
-    "Output ONNX path. Defaults to <model_dir>/_onnx/<stem>_pt.onnx.",
+    "Output ONNX path. Defaults to <model_dir>/_onnx/<stem>.onnx.",
 )
 flags.DEFINE_bool(
     "fp16",
@@ -111,7 +111,7 @@ def main(_):
     onnx_path = (
         Path(FLAGS.onnx_path)
         if FLAGS.onnx_path
-        else model_path.parent / "_onnx" / (model_path.stem + "_pt.onnx")
+        else model_path.parent / "_onnx" / (model_path.stem + ".onnx")
     )
     onnx_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -145,6 +145,7 @@ def main(_):
             },
             opset_version=FLAGS.opset,
             dynamo=True,
+            external_data=False,
         )
     else:
         torch.onnx.export(

@@ -115,12 +115,9 @@ def save_onnx_trt(
     """
     model_path = save(model, local_model_dir, gen)
     logging.info("Converting to ONNX...")
-    cmd = f"python -m python.scripts.convert_to_onnx --model_path={model_path} --fp16"
-    proc.run_proc(cmd)
+    onnx_path = backend_shim.export_to_onnx(model_path, fp16=True)
 
     logging.info("Converting to ONNX-TRT...")
-    model_p = Path(model_path)
-    onnx_path = str(model_p.parent / "_onnx" / (model_p.stem + ".onnx"))
     trt_cmd = (
         f"{trt_convert_path} --onnx_path={onnx_path}"
         + f" --ds_path={calib_ds_path}"
@@ -128,7 +125,7 @@ def save_onnx_trt(
     )
 
     proc.run_proc(trt_cmd)
-    return str(model_p.parent / "_onnx" / (model_p.stem + ".trt"))
+    return str(Path(onnx_path).with_suffix(".trt"))
 
 
 def save(model, local_model_dir: str, gen: int) -> str:

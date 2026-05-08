@@ -112,8 +112,9 @@ def to_numpy(t: torch.Tensor) -> np.ndarray:
 
 def summary(model: torch.nn.Module) -> None:
     """Print a torch-native model summary: parameter count breakdown by
-    top-level child module, plus the total. Mirrors the spirit of keras'
-    `model.summary()` (without the rectangle rendering).
+    top-level child module, plus the total. `nn.ModuleList` children
+    (e.g. the trunk's `blocks`) are unwrapped so per-block sizes are
+    visible. Mirrors the spirit of keras' `model.summary()`.
     """
     inner = unwrap(model)
     total = sum(p.numel() for p in inner.parameters())
@@ -122,6 +123,10 @@ def summary(model: torch.nn.Module) -> None:
     for name, child in inner.named_children():
         n = sum(p.numel() for p in child.parameters())
         print(f"  {name:<24} {type(child).__name__:<24} {n:>12,} params")
+        if isinstance(child, torch.nn.ModuleList):
+            for i, sub in enumerate(child):
+                m = sum(p.numel() for p in sub.parameters())
+                print(f"    [{i:>2}] {type(sub).__name__:<37} {m:>12,} params")
     print(f"  {'total':<49} {total:>12,} params")
     print(f"  {'trainable':<49} {trainable:>12,} params")
 
@@ -135,15 +140,27 @@ def compile_for_training(
       casts compute to fp16 for matmul/conv kernels)
     - optionally convert to channels_last memory format (cuDNN NHWC fast path)
     - wrap in `torch.compile(mode="reduce-overhead")` for CUDA-graph capture
-      of forward + backward
+      of forward + backward.
+
+    Note: `mish` (in `model_layers_common.py`) is decorated with
+    `@torch._dynamo.disable` because Inductor 2.11+cu13 miscompiles its
+    backward under fp16/bf16 autocast and produces NaN grads. With that
+    one op excluded, full Inductor + reduce-overhead works correctly.
+    Override the backend via env var `P3ACHYGO_TORCH_COMPILE_BACKEND` if
+    diagnosing regressions (e.g. "aot_eager", "eager").
 
     Caller must additionally call `backend_shim.step_begin()` once per
     training step so the captured output buffers can be reclaimed between
     iters. (`train.train` and `train.val` already do this.)
     """
+    import os
+
     model = model.to("cuda")
     if channels_last:
         model = model.to(memory_format=torch.channels_last)
+    backend = os.environ.get("P3ACHYGO_TORCH_COMPILE_BACKEND")
+    if backend:
+        return torch.compile(model, backend=backend)
     return torch.compile(model, mode="reduce-overhead")
 
 
@@ -228,6 +245,8 @@ def recompute_bn_statistics(model: torch.nn.Module, ds, num_batches: int = 150) 
                 if i >= num_batches:
                     break
                 input_board, input_global = batch[0], batch[1]
+                if i == 0:
+                    model.to(input_board.device)
                 _ = model(input_board, input_global)
                 if (i + 1) % 20 == 0:
                     print(

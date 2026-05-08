@@ -56,11 +56,29 @@ def _scce_per_example(logits: torch.Tensor, target_idx: torch.Tensor) -> torch.T
     return F.cross_entropy(logits.float(), target_idx.long(), reduction="none")
 
 
+def _align_shapes(pred: torch.Tensor, target: torch.Tensor):
+    # Q-heads emit (N, 1) via `go[:, k:k+1]`; targets are (N,). Without this
+    # alignment, `mse_loss` / `huber_loss` silently broadcast to (N, N) (or
+    # (N, N) twice for q_score_err where the target is itself a broadcasted
+    # square), dividing the loss by N or N² and diluting gradients.
+    if pred.ndim == target.ndim + 1 and pred.shape[-1] == 1:
+        pred = pred.squeeze(-1)
+    elif target.ndim == pred.ndim + 1 and target.shape[-1] == 1:
+        target = target.squeeze(-1)
+    assert pred.shape == target.shape, (
+        f"loss shape mismatch: pred {tuple(pred.shape)} vs target "
+        f"{tuple(target.shape)}"
+    )
+    return pred, target
+
+
 def _mse(target: torch.Tensor, pred: torch.Tensor) -> torch.Tensor:
+    pred, target = _align_shapes(pred, target)
     return F.mse_loss(pred.float(), target.float(), reduction="mean")
 
 
 def _huber(target: torch.Tensor, pred: torch.Tensor) -> torch.Tensor:
+    pred, target = _align_shapes(pred, target)
     return F.huber_loss(pred.float(), target.float(), delta=1.0, reduction="mean")
 
 
@@ -197,50 +215,59 @@ def _v1_loss_terms(predictions, targets):
     """Mirrors `model.v1_loss_terms` (keras version) line-for-line."""
     epsilon = 1e-6
 
-    # Q-error losses (Huber on squared deviation)
-    q6_err_target = (predictions.q6_pred.detach() - targets.q6).square()
-    q16_err_target = (predictions.q16_pred.detach() - targets.q16).square()
-    q50_err_target = (predictions.q50_pred.detach() - targets.q50).square()
+    # Q-heads emit (N, 1) via `go[:, k:k+1]`; targets are (N,). Squeeze
+    # all of them once so every subtraction below stays (N,) instead of
+    # silently broadcasting to (N, N).
+    def _s(t):
+        return (
+            t.squeeze(-1) if t is not None and t.ndim == 2 and t.shape[-1] == 1 else t
+        )
 
-    q6_err_loss = _huber(q6_err_target, predictions.q6_err_pred)
-    q16_err_loss = _huber(q16_err_target, predictions.q16_err_pred)
-    q50_err_loss = _huber(q50_err_target, predictions.q50_err_pred)
+    q6_pred = _s(predictions.q6_pred)
+    q16_pred = _s(predictions.q16_pred)
+    q50_pred = _s(predictions.q50_pred)
+    q6_err_pred = _s(predictions.q6_err_pred)
+    q16_err_pred = _s(predictions.q16_err_pred)
+    q50_err_pred = _s(predictions.q50_err_pred)
+    q6_score_pred = _s(predictions.q6_score_pred)
+    q16_score_pred = _s(predictions.q16_score_pred)
+    q50_score_pred = _s(predictions.q50_score_pred)
+    q6_score_err_pred = _s(predictions.q6_score_err_pred)
+    q16_score_err_pred = _s(predictions.q16_score_err_pred)
+    q50_score_err_pred = _s(predictions.q50_score_err_pred)
+
+    # Q-error losses (Huber on squared deviation)
+    q6_err_target = (q6_pred.detach() - targets.q6).square()
+    q16_err_target = (q16_pred.detach() - targets.q16).square()
+    q50_err_target = (q50_pred.detach() - targets.q50).square()
+
+    q6_err_loss = _huber(q6_err_target, q6_err_pred)
+    q16_err_loss = _huber(q16_err_target, q16_err_pred)
+    q50_err_loss = _huber(q50_err_target, q50_err_pred)
     q_err_loss = (q6_err_loss + q16_err_loss + q50_err_loss) / 3.0
 
     # Q-score losses (only when targets.q6_score is provided)
     q_score_loss = torch.zeros((), dtype=torch.float32, device=q_err_loss.device)
     q_score_err_loss = torch.zeros((), dtype=torch.float32, device=q_err_loss.device)
     if targets.q6_score is not None:
-        q6_score_loss = _huber(
-            targets.q6_score / 10.0, predictions.q6_score_pred / 10.0
-        )
-        q16_score_loss = _huber(
-            targets.q16_score / 10.0, predictions.q16_score_pred / 10.0
-        )
-        q50_score_loss = _huber(
-            targets.q50_score / 10.0, predictions.q50_score_pred / 10.0
-        )
+        q6_score_loss = _huber(targets.q6_score / 10.0, q6_score_pred / 10.0)
+        q16_score_loss = _huber(targets.q16_score / 10.0, q16_score_pred / 10.0)
+        q50_score_loss = _huber(targets.q50_score / 10.0, q50_score_pred / 10.0)
         q_score_loss = ((q6_score_loss + q16_score_loss + q50_score_loss) / 3.0).clamp(
             0.0, 200.0
         )
 
-        q6_score_err_target = (
-            predictions.q6_score_pred.detach() - targets.q6_score
-        ).square()
-        q16_score_err_target = (
-            predictions.q16_score_pred.detach() - targets.q16_score
-        ).square()
-        q50_score_err_target = (
-            predictions.q50_score_pred.detach() - targets.q50_score
-        ).square()
+        q6_score_err_target = (q6_score_pred.detach() - targets.q6_score).square()
+        q16_score_err_target = (q16_score_pred.detach() - targets.q16_score).square()
+        q50_score_err_target = (q50_score_pred.detach() - targets.q50_score).square()
         q6_score_err_loss = _huber(
-            q6_score_err_target / 100.0, predictions.q6_score_err_pred / 100.0
+            q6_score_err_target / 100.0, q6_score_err_pred / 100.0
         )
         q16_score_err_loss = _huber(
-            q16_score_err_target / 100.0, predictions.q16_score_err_pred / 100.0
+            q16_score_err_target / 100.0, q16_score_err_pred / 100.0
         )
         q50_score_err_loss = _huber(
-            q50_score_err_target / 100.0, predictions.q50_score_err_pred / 100.0
+            q50_score_err_target / 100.0, q50_score_err_pred / 100.0
         )
         q_score_err_loss = (
             (q6_score_err_loss + q16_score_err_loss + q50_score_err_loss) / 3.0
@@ -255,14 +282,14 @@ def _v1_loss_terms(predictions, targets):
     ).mean()
 
     # Optimistic-policy loss
-    z_value_q6 = (targets.q6 - predictions.q6_pred.detach()) / (
-        (predictions.q6_err_pred + epsilon).sqrt().detach()
+    z_value_q6 = (targets.q6 - q6_pred.detach()) / (
+        (q6_err_pred + epsilon).sqrt().detach()
     )
-    z_value_q16 = (targets.q16 - predictions.q16_pred.detach()) / (
-        (predictions.q16_err_pred + epsilon).sqrt().detach()
+    z_value_q16 = (targets.q16 - q16_pred.detach()) / (
+        (q16_err_pred + epsilon).sqrt().detach()
     )
-    z_value_q50 = (targets.q50 - predictions.q50_pred.detach()) / (
-        (predictions.q50_err_pred + epsilon).sqrt().detach()
+    z_value_q50 = (targets.q50 - q50_pred.detach()) / (
+        (q50_err_pred + epsilon).sqrt().detach()
     )
     z_weight_decay = 4.0 / 7.0
     c_z6 = z_weight_decay * 3
@@ -270,14 +297,14 @@ def _v1_loss_terms(predictions, targets):
     c_z50 = z_weight_decay * 0.75
     z_value = (c_z6 * z_value_q6 + c_z16 * z_value_q16 + c_z50 * z_value_q50) / 3.0
     if targets.q6_score is not None:
-        z_score_q6 = (targets.q6_score - predictions.q6_score_pred.detach()) / (
-            (predictions.q6_score_err_pred + epsilon).sqrt().detach()
+        z_score_q6 = (targets.q6_score - q6_score_pred.detach()) / (
+            (q6_score_err_pred + epsilon).sqrt().detach()
         )
-        z_score_q16 = (targets.q16_score - predictions.q16_score_pred.detach()) / (
-            (predictions.q16_score_err_pred + epsilon).sqrt().detach()
+        z_score_q16 = (targets.q16_score - q16_score_pred.detach()) / (
+            (q16_score_err_pred + epsilon).sqrt().detach()
         )
-        z_score_q50 = (targets.q50_score - predictions.q50_score_pred.detach()) / (
-            (predictions.q50_score_err_pred + epsilon).sqrt().detach()
+        z_score_q50 = (targets.q50_score - q50_score_pred.detach()) / (
+            (q50_score_err_pred + epsilon).sqrt().detach()
         )
         z_score = (c_z6 * z_score_q6 + c_z16 * z_score_q16 + c_z50 * z_score_q50) / 3.0
         z_combined = (z_value + z_score * 0.5) / 1.5

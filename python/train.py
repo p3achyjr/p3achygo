@@ -23,6 +23,89 @@ def _softmax(x: np.ndarray, axis: int = -1) -> np.ndarray:
     return e / e.sum(axis=axis, keepdims=True)
 
 
+# Names of loss-component fields on TrainStepResult to scan for nan/inf.
+_LOSS_FIELDS = (
+    "total_loss",
+    "policy_loss",
+    "policy_aux_dist_loss",
+    "policy_aux_scalar_loss",
+    "outcome_loss",
+    "q6_loss",
+    "q16_loss",
+    "q50_loss",
+    "score_pdf_loss",
+    "score_cdf_loss",
+    "own_loss",
+    "q_err_loss",
+    "q_score_loss",
+    "q_score_err_loss",
+    "pi_soft_loss",
+    "pi_optimistic_loss",
+    "mcts_dist_loss",
+)
+
+# Track scaler state across calls so we can flag sustained nan/inf grads
+# (scaler halves on each detection — repeated halving = persistent issue).
+_scale_state = {"last_scale": None, "halvings_in_a_row": 0}
+
+
+def _check_finite(batch_num: int, result, optimizer) -> None:
+    """Log unconditionally on any nan/inf signal in this step.
+
+    Catches:
+      - any per-component loss being nan/inf (forward broke)
+      - grad_norm being nan/inf (backward produced non-finite that the
+        scaler could not unscale away)
+      - GradScaler's dynamic scale halved (= scaler detected nan/inf grads
+        and skipped the inner step) — silent failure mode that produced
+        the b8c128tfmr / mish bug. We track halvings-in-a-row so the log
+        line distinguishes a one-off probe-halving from a stuck loop.
+
+    Prints a single line per event; never raises.
+    """
+    bad = []
+    for name in _LOSS_FIELDS:
+        v = getattr(result, name, None)
+        if v is None:
+            continue
+        if hasattr(v, "detach"):
+            v = v.detach()
+        try:
+            f = float(v)
+        except (TypeError, RuntimeError):
+            continue
+        if math.isnan(f) or math.isinf(f):
+            bad.append(f"{name}={f}")
+
+    gn = getattr(result, "grad_norm", None)
+    if gn is not None and (math.isnan(gn) or math.isinf(gn)):
+        bad.append(f"grad_norm={gn}")
+
+    # Scaler-skip detection: when a `torch.amp.GradScaler` step is skipped
+    # because grads are nan/inf, it halves the scale. We notice persistent
+    # halving (> 1 step in a row) — a single halving on step 0 is the
+    # normal scaler probe and not interesting.
+    scaler = getattr(optimizer, "scaler", None)
+    if scaler is not None and hasattr(scaler, "get_scale"):
+        try:
+            cur_scale = float(scaler.get_scale())
+        except Exception:
+            cur_scale = None
+        last = _scale_state["last_scale"]
+        if cur_scale is not None and last is not None and cur_scale < last:
+            _scale_state["halvings_in_a_row"] += 1
+            if _scale_state["halvings_in_a_row"] >= 2:
+                bad.append(
+                    f"scaler_scale={cur_scale} (halved {_scale_state['halvings_in_a_row']}× in a row)"
+                )
+        elif cur_scale is not None and last is not None and cur_scale >= last:
+            _scale_state["halvings_in_a_row"] = 0
+        _scale_state["last_scale"] = cur_scale
+
+    if bad:
+        print(f"[batch {batch_num}] NON-FINITE: " + ", ".join(bad), flush=True)
+
+
 class Mode(Enum):
     SL = 1
     RL = 2
@@ -272,10 +355,7 @@ def train(
                 optimizer,
             )
 
-            if math.isnan(float(result.total_loss)) or math.isinf(
-                float(result.total_loss)
-            ):
-                print(f"[batch {batch_num}] saw inf/nan gradients")
+            _check_finite(batch_num, result, optimizer)
 
             losses_train.update_losses(result)
 

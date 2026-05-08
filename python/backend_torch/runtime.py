@@ -30,6 +30,11 @@ def configure_gpu(mixed_precision_policy: str = "mixed_float16"):
     del mixed_precision_policy
 
 
+def gpu_count() -> int:
+    """Number of visible GPUs (after CUDA_VISIBLE_DEVICES masking)."""
+    return torch.cuda.device_count()
+
+
 class SummaryWriter:
     """torch.utils.tensorboard-backed scalar writer with the agnostic API."""
 

@@ -639,36 +639,37 @@ class P3achyGoModel(nn.Module):
 
         pi_probs = F.softmax(pi_logits, dim=-1)
 
-        # Cast to float32 (matches keras model output)
-        def _f32(t: torch.Tensor) -> torch.Tensor:
-            return t.float()
-
+        # Cast outputs to float32 (matches keras model output). Inlined
+        # rather than using a `_f32` helper because Dynamo specializes the
+        # helper on input dtype on first call → subsequent calls with a
+        # different dtype trigger recompiles, hitting the recompile_limit
+        # after 8 outputs and falling back to eager for that helper.
         return (
-            _f32(pi_logits),
-            _f32(pi_probs),
-            _f32(outcome_logits),
-            _f32(outcome_probs),
-            _f32(own),
-            _f32(score_logits),
-            _f32(score_probs),
-            _f32(gamma),
-            _f32(pi_logits_aux),
-            _f32(q6),
-            _f32(q16),
-            _f32(q50),
-            _f32(q6_err),
-            _f32(q16_err),
-            _f32(q50_err),
-            _f32(q6_sc),
-            _f32(q16_sc),
-            _f32(q50_sc),
-            _f32(q6_sc_err),
-            _f32(q16_sc_err),
-            _f32(q50_sc_err),
-            _f32(pi_logits_soft),
-            _f32(pi_logits_optimistic),
-            _f32(mcts_logits),
-            _f32(mcts_probs),
+            pi_logits.float(),
+            pi_probs.float(),
+            outcome_logits.float(),
+            outcome_probs.float(),
+            own.float(),
+            score_logits.float(),
+            score_probs.float(),
+            gamma.float(),
+            pi_logits_aux.float(),
+            q6.float(),
+            q16.float(),
+            q50.float(),
+            q6_err.float(),
+            q16_err.float(),
+            q50_err.float(),
+            q6_sc.float(),
+            q16_sc.float(),
+            q50_sc.float(),
+            q6_sc_err.float(),
+            q16_sc_err.float(),
+            q50_sc_err.float(),
+            pi_logits_soft.float(),
+            pi_logits_optimistic.float(),
+            mcts_logits.float(),
+            mcts_probs.float(),
         )
 
     def compute_losses(self, predictions, targets, weights):

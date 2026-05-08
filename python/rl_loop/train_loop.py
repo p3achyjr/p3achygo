@@ -8,6 +8,7 @@ indefinitely — avoiding the grappler re-tracing cost on every generation.
 
 from __future__ import annotations
 
+import multiprocessing
 import os
 import subprocess
 import sys
@@ -19,6 +20,7 @@ from backend_shim import (
     load_model,
     load_with_optimizer,
     save_model,
+    summary,
     compile_for_training,
     LIVE_MODEL_NAME,
     MODEL_EXT,
@@ -86,7 +88,8 @@ def _train_loop():
     logging.info(f"Live model: {live_model_path}")
     logging.info(f"SWA model:  {swa_model_path}")
 
-    val_ds = ChunkDataset(FLAGS.val_ds_path, config.batch_size)
+    val_workers = min(8, max(1, multiprocessing.cpu_count() // 2))
+    val_ds = ChunkDataset(FLAGS.val_ds_path, config.batch_size, num_workers=val_workers)
 
     if not Path(FLAGS.batch_num_path).exists():
         with open(FLAGS.batch_num_path, "w") as f:
@@ -113,6 +116,8 @@ def _train_loop():
             "This should only happen for model_0000."
         )
     swa_model = load_model(swa_model_path)
+
+    summary(live_model)
 
     # Apply backend-specific training-time transforms (fp16 + channels_last
     # + torch.compile reduce-overhead for torch; no-op for TF).

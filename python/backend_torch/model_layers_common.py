@@ -24,6 +24,7 @@ import torch.nn.functional as F
 # ---------------------------------------------------------------------------
 
 
+@torch._dynamo.disable
 def mish(x: torch.Tensor) -> torch.Tensor:
     # `F.mish` is mathematically `x * tanh(softplus(x))`, but `F.mish` is a
     # single aten op while the manual form decomposes through `softplus`,
@@ -31,6 +32,13 @@ def mish(x: torch.Tensor) -> torch.Tensor:
     # 2 extra nodes per call (Greater + Where) to the exported ONNX. The
     # single-op form lowers to a single `Mish` ONNX node (opset ≥18) that
     # TRT handles with one fused kernel.
+    #
+    # `@torch._dynamo.disable` forces this op to run in eager mode even when
+    # the surrounding model is `torch.compile`d. Required because Inductor's
+    # lowering of mish backward under fp16/bf16 autocast produces NaN
+    # gradients (verified on torch 2.11+cu13). Without this, every trunk
+    # parameter receives NaN grad on every step and weights never update.
+    # See .claude_scripts/diag_mish_ablation.py for the repro.
     return F.mish(x)
 
 

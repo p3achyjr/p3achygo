@@ -189,7 +189,9 @@ def _flatten_to_2d(g: Tensor) -> Tensor:
     returned as-is.
     """
     if g.ndim == 4:
-        return g.view(g.size(0), -1)
+        # `.reshape` (not `.view`) because channels_last grads have non-
+        # contiguous strides that view rejects.
+        return g.reshape(g.size(0), -1)
     return g
 
 
