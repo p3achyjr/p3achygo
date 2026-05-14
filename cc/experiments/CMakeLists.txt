@@ -99,4 +99,24 @@ if(BUILD_BINARIES)
         m
         dl
     )
+
+    add_executable(var_visit_study
+        var_visit_study.cc
+    )
+    target_link_libraries(var_visit_study PRIVATE
+        core_impl
+        game
+        gumbel
+        node_table
+        nn_interface
+        engine_factory
+        absl::flags
+        absl::flags_parse
+        absl::hash
+        absl::log
+        absl::log_initialize
+        absl::strings
+        m
+        dl
+    )
 endif()

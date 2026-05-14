@@ -64,6 +64,10 @@ struct PlayerSearchConfig {
   int sampling_num_moves = 0;
   float sampling_temperature = 0.0f;
 
+  // When true, discard the search tree after every move and start the next
+  // search from a fresh root.
+  bool disable_tree_reuse = false;
+
   // --- Config-file-only parallel search knobs (no-op for Gumbel) ---
 
   // Number of parallel search worker threads per game.
@@ -214,6 +218,8 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.sampling_temperature = std::stof(val);
     else if (key == "sampling_num_moves")
       cfg.sampling_num_moves = std::stoi(val);
+    else if (key == "disable_tree_reuse")
+      cfg.disable_tree_reuse = internal::ParseBool(val);
     // Parallel search knobs
     else if (key == "num_threads_per_game")
       cfg.num_threads_per_game = std::stoi(val);
@@ -301,6 +307,7 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
   ROW(root_fpu, f);
   ROW(sampling_temperature, f);
   ROW(sampling_num_moves, i_);
+  ROW(disable_tree_reuse, b);
   ROW(num_threads_per_game, i_);
   ROW(time_ms, i_);
   ROW(enable_pondering, b);

@@ -99,6 +99,8 @@ ABSL_FLAG(int, cur_v_cat_var_scale_prior_visits, 10,
           "Prior visits for v_cat upside/downside scaling for cur.");
 ABSL_FLAG(float, cur_root_fpu, 0.1f,
           "Root FPU reduction for cur (0 = no FPU at root).");
+ABSL_FLAG(bool, cur_disable_tree_reuse, false,
+          "Disable tree reuse for cur (start each search from a fresh root).");
 ABSL_FLAG(int, cand_n, kDefaultGumbelN, "N for candidate player");
 ABSL_FLAG(int, cand_k, kDefaultGumbelK, "K for candidate player");
 ABSL_FLAG(float, cand_noise_scaling, 1.0f, "Cand gumbel noise scaling");
@@ -139,6 +141,8 @@ ABSL_FLAG(int, cand_v_cat_var_scale_prior_visits, 10,
           "Prior visits for v_cat upside/downside scaling for cand.");
 ABSL_FLAG(float, cand_root_fpu, 0.1f,
           "Root FPU reduction for cand (0 = no FPU at root).");
+ABSL_FLAG(bool, cand_disable_tree_reuse, false,
+          "Disable tree reuse for cand (start each search from a fresh root).");
 
 float ConfidenceDelta(float z_score, float num_sims, float wr) {
   return z_score * std::sqrt(wr * (1 - wr) / num_sims);
@@ -204,6 +208,8 @@ void ApplyCurCommandLineFlags(eval::PlayerSearchConfig& cfg) {
         absl::GetFlag(FLAGS_cur_v_cat_var_scale_prior_visits);
   if (IsOnCommandLine("cur_root_fpu"))
     cfg.root_fpu = absl::GetFlag(FLAGS_cur_root_fpu);
+  if (IsOnCommandLine("cur_disable_tree_reuse"))
+    cfg.disable_tree_reuse = absl::GetFlag(FLAGS_cur_disable_tree_reuse);
 }
 
 // Same for cand_* flags.
@@ -258,6 +264,8 @@ void ApplyCandCommandLineFlags(eval::PlayerSearchConfig& cfg) {
         absl::GetFlag(FLAGS_cand_v_cat_var_scale_prior_visits);
   if (IsOnCommandLine("cand_root_fpu"))
     cfg.root_fpu = absl::GetFlag(FLAGS_cand_root_fpu);
+  if (IsOnCommandLine("cand_disable_tree_reuse"))
+    cfg.disable_tree_reuse = absl::GetFlag(FLAGS_cand_disable_tree_reuse);
 }
 
 // Builds a PlayerSearchConfig from the cur_* flags (all fields, no file).
@@ -290,6 +298,7 @@ eval::PlayerSearchConfig CurConfigFromFlags() {
   cfg.v_cat_var_scale_prior_visits =
       absl::GetFlag(FLAGS_cur_v_cat_var_scale_prior_visits);
   cfg.root_fpu = absl::GetFlag(FLAGS_cur_root_fpu);
+  cfg.disable_tree_reuse = absl::GetFlag(FLAGS_cur_disable_tree_reuse);
   return cfg;
 }
 
@@ -323,6 +332,7 @@ eval::PlayerSearchConfig CandConfigFromFlags() {
   cfg.v_cat_var_scale_prior_visits =
       absl::GetFlag(FLAGS_cand_v_cat_var_scale_prior_visits);
   cfg.root_fpu = absl::GetFlag(FLAGS_cand_root_fpu);
+  cfg.disable_tree_reuse = absl::GetFlag(FLAGS_cand_disable_tree_reuse);
   return cfg;
 }
 

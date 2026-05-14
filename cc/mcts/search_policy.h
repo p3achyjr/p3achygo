@@ -286,10 +286,12 @@ class PuctScorer final {
           return 1.0f;
         }
         const float prior_weight = static_cast<float>(var_scale_prior_visits_);
-        // return (prior_weight + child_n * std::sqrt(qvars[a] / v_var)) /
-        //        float(prior_weight + child_n);
-        return (prior_weight + child_n * (std::sqrt(qvars[a]) / q_std_mean)) /
-               float(prior_weight + child_n);
+        const float raw_var_factor =
+            (prior_weight + child_n * (std::sqrt(qvars[a]) / q_std_mean)) /
+            float(prior_weight + child_n);
+        const float n_factor =
+            std::min(1.0f, std::sqrt(static_cast<float>(child_n) / 100.0f));
+        return 1.0f + (raw_var_factor - 1.0f) * n_factor;
       };
       const float c_puct_var_scale_factor =
           enable_var_scaling_ ? c_puct_var_child_scale_factor() : 1.0f;

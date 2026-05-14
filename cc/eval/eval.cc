@@ -179,6 +179,12 @@ void PlayEvalGame(size_t seed, int game_id, int total_num_workers,
         color_to_move == BLACK ? node_table_w.get() : node_table_b.get();
     const bool active_uses_search =
         color_to_move == BLACK ? black_uses_search : white_uses_search;
+    const bool player_disable_tree_reuse = color_to_move == BLACK
+                                               ? black_cfg.disable_tree_reuse
+                                               : white_cfg.disable_tree_reuse;
+    const bool opp_disable_tree_reuse = color_to_move == BLACK
+                                            ? white_cfg.disable_tree_reuse
+                                            : black_cfg.disable_tree_reuse;
     const eval::PlayerSearchConfig& active_cfg =
         color_to_move == BLACK ? black_cfg : white_cfg;
     std::optional<BiasCache>& active_bias_cache =
@@ -319,13 +325,13 @@ void PlayEvalGame(size_t seed, int game_id, int total_num_workers,
     // Advance to next roots.
     TreeNode* next_player = player_tree->children[move];
     TreeNode* next_opp = opp_tree->children[move];
-    if (!next_player) {
+    if (!next_player || player_disable_tree_reuse) {
       // After the move, it's the opponent's turn (color_to_move was already
       // flipped)
       next_player = player_table->GetOrCreate(game.board().hash(),
                                               color_to_move, game.IsGameOver());
     }
-    if (!next_opp) {
+    if (!next_opp || opp_disable_tree_reuse) {
       // After the move, it's the opponent's turn (color_to_move was already
       // flipped)
       next_opp = opp_table->GetOrCreate(game.board().hash(), color_to_move,
