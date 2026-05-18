@@ -4,7 +4,7 @@ Single source of truth for backend detection.
 Precedence:
   1. If both P3ACHYGO_BACKEND and KERAS_BACKEND are set and disagree, raise.
   2. P3ACHYGO_BACKEND takes precedence over KERAS_BACKEND.
-  3. Falls back to "tensorflow" if neither is set.
+  3. Falls back to "torch" if neither is set.
 """
 
 import os
@@ -26,4 +26,4 @@ if _p3n and _kbn and _p3n != _kbn:
         "Set them to the same value (or unset one) before importing backend_shim."
     )
 
-BACKEND: str = _p3n or _kbn or "tensorflow"
+BACKEND: str = _p3n or _kbn or "torch"

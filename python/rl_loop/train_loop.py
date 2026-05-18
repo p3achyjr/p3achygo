@@ -62,17 +62,18 @@ def _get_starting_gen(models_dir: str, start_gen: int) -> tuple[str, int]:
     return str(latest), int(gcs.MODEL_RE.fullmatch(latest.name).group(1))
 
 
-def _fetch_chunk(chunk_dir: str, run_id: str, gen: int) -> str:
-    """Download chunk_{gen:04d}.tfrecord.zz from S3 and return the local path."""
+def _fetch_chunk(chunk_dir: str, run_id: str, gen: int) -> tuple[str, bool]:
+    """Download chunk_{gen:04d}.tfrecord.zz from S3 and return (local path, was_downloaded)."""
     chunk_name = gcs.GOLDEN_CHUNK_FORMAT.format(gen)
     local_path = Path(chunk_dir, chunk_name)
     s3_uri = f"s3://{S3_BUCKET}/{run_id}/goldens/{chunk_name}"
     if not local_path.exists():
         logging.info(f"Fetching {s3_uri} -> {local_path}")
         subprocess.run(["s5cmd", "cp", s3_uri, str(local_path)], check=True)
+        return str(local_path), True
     else:
         logging.info(f"Chunk already exists at {local_path}, skipping fetch")
-    return str(local_path)
+        return str(local_path), False
 
 
 def _train_loop():
@@ -130,7 +131,9 @@ def _train_loop():
         config = rl_loop.config.parse(FLAGS.run_id)
         next_gen = model_gen + 1
         source_run_id = FLAGS.source_run_id or FLAGS.run_id
-        chunk_path = _fetch_chunk(FLAGS.chunk_dir, source_run_id, next_gen)
+        chunk_path, chunk_downloaded = _fetch_chunk(
+            FLAGS.chunk_dir, source_run_id, next_gen
+        )
         logging.info(f"Training generation {next_gen} on {chunk_path}")
 
         batch_num, live_model, swa_model, optimizer = rl_loop.train.train_one_gen(
@@ -145,8 +148,9 @@ def _train_loop():
             batch_num=batch_num,
         )
 
-        logging.info(f"Deleting local chunk {chunk_path}")
-        Path(chunk_path).unlink(missing_ok=True)
+        if chunk_downloaded:
+            logging.info(f"Deleting local chunk {chunk_path}")
+            Path(chunk_path).unlink(missing_ok=True)
 
         # Save live model checkpoint, bundling optimizer state.
         save_model(live_model, live_model_path, optimizer=optimizer)

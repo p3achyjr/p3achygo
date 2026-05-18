@@ -60,7 +60,7 @@ struct PlayerSearchConfig {
   bool enable_v_cat_var_scaling = false;
   int v_cat_var_scale_prior_visits = 10;
   float p_opt_weight = 0.0f;
-  float root_fpu = 0.2f;
+  float root_fpu = 0.1f;
   int sampling_num_moves = 0;
   float sampling_temperature = 0.0f;
 
