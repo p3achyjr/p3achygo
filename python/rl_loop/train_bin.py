@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import gcs_utils as gcs
 import sys, time
-import tensorflow as tf
-import transforms
+import keras
+from dataset import ChunkDataset
+from backend_shim import configure_gpu, load_model
 import train
 import rl_loop.model_utils as model_utils
 import rl_loop.train
@@ -18,9 +19,11 @@ from absl import app, flags, logging
 from constants import *
 from pathlib import Path
 from rl_loop.constants import SELFPLAY_BATCH_SIZE
-from model import P3achyGoModel
-from optimizer import ConvMuon  # noqa: F401 — registers p3achygo>ConvMuon
-from lr_schedule import ConstantLRSchedule  # noqa: F401 — registers p3achygo>ConstantLRSchedule
+from backend_tf.model import P3achyGoModel
+from backend_tf.optimizer import ConvMuon  # noqa: F401 — registers p3achygo>ConvMuon
+from lr_schedule import (
+    ConstantLRSchedule,
+)  # noqa: F401 — registers p3achygo>ConstantLRSchedule
 
 sys.stdout.reconfigure(line_buffering=True)  # pytype: disable=attribute-error
 sys.stderr.reconfigure(line_buffering=True)  # pytype: disable=attribute-error
@@ -66,12 +69,8 @@ def main(_):
         logging.error("No --val_ds_path specified.")
         return
 
-    is_gpu = False
-    if tf.config.list_physical_devices("GPU"):
-        tf.keras.mixed_precision.set_global_policy("mixed_float16")
-        is_gpu = True
-    else:
-        logging.warning("No GPU detected.")
+    configure_gpu()
+    is_gpu = True
 
     chunk_dir = Path(FLAGS.local_run_dir, "chunks")
     model_dir = Path(FLAGS.local_run_dir, "models")
@@ -95,13 +94,10 @@ def main(_):
         )
     else:
         model_path = gcs.download_model(FLAGS.run_id, str(model_dir), model_gen)
-        model = tf.keras.models.load_model(model_path)
+        model = load_model(model_path)
 
     model.summary(batch_size=BATCH_SIZE)
-    val_ds = tf.data.TFRecordDataset(FLAGS.val_ds_path, compression_type="ZLIB")
-    val_ds = val_ds.map(transforms.expand, num_parallel_calls=tf.data.AUTOTUNE)
-    val_ds = val_ds.batch(BATCH_SIZE)
-    val_ds = val_ds.prefetch(tf.data.AUTOTUNE)
+    val_ds = ChunkDataset(FLAGS.val_ds_path, BATCH_SIZE)
 
     logging.info(f"Collecting initial validation stats...")
     train.val(model, mode=train.Mode.RL, val_ds=val_ds, val_batch_num=0)

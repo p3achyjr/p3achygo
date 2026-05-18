@@ -32,8 +32,8 @@ import tensorflow as tf
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from model import P3achyGoModel
-import transforms
+from backend_tf.model import P3achyGoModel
+from dataset import iter_records
 import constants
 
 
@@ -347,15 +347,12 @@ def compute_divergence(
     )
 
 
-def load_examples(tfrecord_path: str, num_examples: int) -> tf.data.Dataset:
-    """Load training examples from TFRecord file."""
+def load_examples(tfrecord_path: str, num_examples: int):
+    """Load training examples from TFRecord file. Yields per-record 20-tuples."""
+    import itertools
+
     print(f"Loading examples from {tfrecord_path}")
-
-    ds = tf.data.TFRecordDataset(tfrecord_path, compression_type="ZLIB")
-    ds = ds.map(transforms.expand)
-    ds = ds.take(num_examples)
-
-    return ds
+    return list(itertools.islice(iter_records(tfrecord_path), num_examples))
 
 
 def compare_models(
@@ -363,7 +360,7 @@ def compare_models(
     katago_binary: str,
     katago_model: str,
     katago_config: str,
-    examples: tf.data.Dataset,
+    examples,
     use_analysis_engine: bool = True,
 ) -> List[ExampleComparison]:
     """Compare both models on all examples."""

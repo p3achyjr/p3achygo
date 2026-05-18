@@ -6,23 +6,27 @@ from __future__ import annotations
 
 import sys
 import gcs_utils as gcs
-import tensorflow as tf
-import keras
-import transforms
+from dataset import ChunkDataset
+from backend_shim import (
+    configure_gpu,
+    load_model,
+    load_with_optimizer,
+    save_model,
+    compile_for_training,
+    LIVE_MODEL_NAME,
+    MODEL_EXT,
+)
 import rl_loop.model_utils as model_utils
 import rl_loop.train
 import rl_loop.config
 
 from absl import app, flags, logging
-from model import P3achyGoModel
 from pathlib import Path
 from rl_loop.constants import SELFPLAY_BATCH_SIZE
 from typing import Tuple
-from lr_schedule import ConstantLRSchedule
-from optimizer import ConvMuon  # noqa: F401 — registers p3achygo>ConvMuon
+from lr_schedule import ConstantLRSchedule  # noqa: F401 — registers schedule
 
 BATCH_SIZE = 256
-LIVE_MODEL_NAME = "live_model.keras"
 
 FLAGS = flags.FLAGS
 
@@ -79,36 +83,27 @@ def main(_):
         logging.error("No --trt_convert_path specified.")
         return
 
-    is_gpu = False
-    gpus = tf.config.list_physical_devices("GPU")
-    if gpus:
-        tf.keras.mixed_precision.set_global_policy("mixed_float16")
-        gpus = tf.config.experimental.list_physical_devices("GPU")
-        for gpu in gpus:
-            tf.config.experimental.set_memory_growth(gpu, True)
-        is_gpu = True
-    else:
-        logging.warning("No GPU detected.")
+    configure_gpu()
+    is_gpu = True
 
     config = rl_loop.config.parse(FLAGS.run_id)
 
     swa_model_path, _ = get_model_path(FLAGS.models_dir, FLAGS.gen)
     live_model_path = str(Path(FLAGS.models_dir, LIVE_MODEL_NAME))
-    live_model = keras.models.load_model(live_model_path)
-    optimizer = getattr(live_model, "optimizer", None)
-    if not optimizer:
+    live_model, optimizer = load_with_optimizer(live_model_path)
+    if optimizer is None:
         logging.info(
-            "No optimizer found in model. This should only happen for model_0000."
+            "No optimizer state found in model. "
+            "This should only happen for model_0000."
         )
-    swa_model = keras.models.load_model(swa_model_path)
+    swa_model = load_model(swa_model_path)
+    # Apply backend-specific training-time transforms (no-op on TF).
+    live_model = compile_for_training(live_model)
     logging.info(f"Using Train Dataset: {FLAGS.chunk_path}")
     logging.info(f"Using Val Dataset: {FLAGS.val_ds_path}")
     logging.info(f"Using Model Checkpoint: {live_model_path}")
     logging.info(f"Using SWA Model: {swa_model_path}")
-    val_ds = tf.data.TFRecordDataset(FLAGS.val_ds_path, compression_type="ZLIB")
-    val_ds = val_ds.map(transforms.expand, num_parallel_calls=tf.data.AUTOTUNE)
-    val_ds = val_ds.batch(config.batch_size)
-    val_ds = val_ds.prefetch(tf.data.AUTOTUNE)
+    val_ds = ChunkDataset(FLAGS.val_ds_path, config.batch_size)
 
     with open(FLAGS.batch_num_path, "r") as f:  # assumes file is already created.
         batch_num = int(f.read())
@@ -128,15 +123,14 @@ def main(_):
         batch_num=batch_num,
         chunk_size=FLAGS.chunk_size,
     )
-    live_model.compile(optimizer=optimizer)
-    live_model.save(live_model_path)
+    save_model(live_model, live_model_path, optimizer=optimizer)
 
     # save live checkpoint
     live_model_ckpt_path = str(
-        Path(FLAGS.models_dir, "_live", f"live_{FLAGS.next_gen:04d}.keras")
+        Path(FLAGS.models_dir, "_live", f"live_{FLAGS.next_gen:04d}{MODEL_EXT}")
     )
     Path(FLAGS.models_dir, "_live").mkdir(exist_ok=True)
-    live_model.save(live_model_ckpt_path)
+    save_model(live_model, live_model_ckpt_path, optimizer=optimizer)
     if FLAGS.save_trt:
         model_utils.save_onnx_trt(
             swa_model,

@@ -4,7 +4,7 @@ import tf2onnx, onnx
 import onnxruntime as ort
 import numpy as np
 import collections
-import transforms
+from dataset import ChunkDataset
 from board import GoBoard
 from absl import app, flags, logging
 from pathlib import Path
@@ -14,8 +14,8 @@ from onnx import checker
 from onnxconverter_common.float16 import convert_float_to_float16
 from onnx import TensorProto, helper
 
-from model import P3achyGoModel
-from optimizer import ConvMuon
+from backend_tf.model import P3achyGoModel
+from backend_tf.optimizer import ConvMuon
 from constants import *
 from lr_schedule import ConstantLRSchedule
 from .onnx_matchers import rewrite_rms_normalization
@@ -422,7 +422,10 @@ def main(_):
 
     with tf.device("/cpu:0"):
         tf.keras.mixed_precision.set_global_policy("float32")
-        model = keras.models.load_model(model_path)
+        # `compile=False` skips optimizer rehydration; safe for export and
+        # avoids breaking when the saved optimizer config has fields that the
+        # current keras Muon API doesn't accept.
+        model = keras.models.load_model(model_path, compile=False)
         planes_shape = model.input_planes_shape()
         features_shape = model.input_features_shape()
         model(
@@ -555,12 +558,11 @@ def main(_):
         onnx.save(onnx_model, onnx_path)
 
     if FLAGS.val_ds:
-        val_ds = tf.data.TFRecordDataset(FLAGS.val_ds, compression_type="ZLIB")
-        val_ds = val_ds.map(transforms.expand, num_parallel_calls=tf.data.AUTOTUNE)
-        val_ds = val_ds.batch(48)
+        import itertools
+
+        val_ds = ChunkDataset(FLAGS.val_ds, 48)
         if FLAGS.num_samples != -1:
-            val_ds = val_ds.take(FLAGS.num_samples)
-        val_ds = val_ds.prefetch(tf.data.AUTOTUNE)
+            val_ds = itertools.islice(val_ds, FLAGS.num_samples)
 
         sess = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
         stats_ort, stats_tf = (

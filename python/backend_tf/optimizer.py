@@ -14,13 +14,12 @@ class ConvMuon(keras.optimizers.Muon):
     allows any variable whose effective 2D dims (after flattening) are both > 4
     to use the Muon update path, which includes conv weights.
 
+    Momentum follows the EMA convention used by torch upstream and the
+    Keller-Jordan reference (`m = m*β + g*(1-β)`, with symmetric Nesterov
+    `update = g*(1-β) + m*β`), not Keras stock Muon's plain accumulation
+    (`m = m*β + g`).
+
     Args:
-        scale_weight_decay_by_rms: If True, the Muon weight-decay step is
-            multiplied by the same RMS scale factor applied to the gradient
-            step (sqrt(max(flat_dim, out_dim)) * rms_rate). This makes the
-            per-element grad/WD ratio identical across all body layer shapes,
-            matching KataGo upstream's behavior. Defaults to False to preserve
-            backward compatibility with older checkpoints.
         wd_lr_exponent: If set, scales the Muon weight decay as
             wd × (lr / wd_lr_max)^wd_lr_exponent each step, matching KataGo
             upstream's sublinear WD decay (exponent=0.70). Defaults to None
@@ -33,8 +32,7 @@ class ConvMuon(keras.optimizers.Muon):
     norm scale params (BN γ + RMSNorm scale), norm shift params (BN β),
     body biases, head biases, and attention Q/K/V/O projection kernels
     each receive `factor × weight_decay` instead of going through the
-    AdamW/Muon paths. RMS scaling is not applied to these categories;
-    lr-ratio scaling is.
+    AdamW/Muon paths. lr-ratio scaling (`wd_lr_exponent`) is applied.
     """
 
     _GAMMA_SUFFIXES = ("/gamma", ".gamma", "/scale", ".scale")
@@ -58,13 +56,11 @@ class ConvMuon(keras.optimizers.Muon):
     def __init__(
         self,
         *args,
-        scale_weight_decay_by_rms=False,
         wd_lr_exponent=None,
         wd_lr_max=None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        self.scale_weight_decay_by_rms = scale_weight_decay_by_rms
         self.wd_lr_exponent = wd_lr_exponent
         self.wd_lr_max = wd_lr_max
 
@@ -89,8 +85,18 @@ class ConvMuon(keras.optimizers.Muon):
         return False
 
     def _muon_update_step(self, gradient, variable, lr, m):
-        self.assign_add(m, ops.add(gradient, m * (self.momentum - 1)))
-        g = ops.add(gradient, self.momentum * m) if self.nesterov else m
+        # EMA momentum: m = m*β + g*(1-β)  (matches torch.optim.Muon and
+        # Keller-Jordan reference; differs from Keras stock plain accumulation).
+        one_minus_beta = 1 - self.momentum
+        self.assign_add(m, ops.multiply(ops.subtract(gradient, m), one_minus_beta))
+        # Symmetric Nesterov: update = g*(1-β) + m*β
+        if self.nesterov:
+            g = ops.add(
+                ops.multiply(gradient, one_minus_beta),
+                ops.multiply(m, self.momentum),
+            )
+        else:
+            g = m
 
         original_shape = g.shape
         needs_flatten = len(original_shape) > 2
@@ -114,22 +120,6 @@ class ConvMuon(keras.optimizers.Muon):
             scaled = scaled_2d
 
         self.assign_sub(variable, scaled)
-
-    def _wd_rms_scale(self, variable):
-        """RMS scale factor used by lr_adjust for a given variable's 2D shape.
-
-        Matches the scaling applied to the gradient step in _muon_update_step,
-        using the same [H*W*in, out] flattening convention. Returns 1.0 if
-        rms_rate is None (Moonlight scaling disabled).
-        """
-        if self.rms_rate is None:
-            return 1.0
-        shape = variable.shape
-        out_dim = shape[-1]
-        flat_dim = 1
-        for d in shape[:-1]:
-            flat_dim *= d
-        return float(max(flat_dim, out_dim)) ** 0.5 * self.rms_rate
 
     def _wd_category(self, variable):
         """Classify variable for `_WD_SCALE_FACTORS` lookup.
@@ -167,30 +157,19 @@ class ConvMuon(keras.optimizers.Muon):
             scale_factor = self._WD_SCALE_FACTORS.get(category) if category else None
             if scale_factor is not None and self.weight_decay is not None:
                 wd_value = self.weight_decay * scale_factor
-                rms_scale = 1.0
-                lr_scale_factor = self._lr_scale()
             elif self._should_use_adamw(variable):
                 wd_value = self.adam_weight_decay
-                rms_scale = 1.0
-                lr_scale_factor = self._lr_scale()
             else:
                 wd_value = self.weight_decay
-                rms_scale = (
-                    self._wd_rms_scale(variable)
-                    if self.scale_weight_decay_by_rms
-                    else 1.0
-                )
-                lr_scale_factor = self._lr_scale()
             if wd_value is None:
                 continue
             wd = ops.cast(wd_value, variable.dtype)
             lr = ops.cast(self.learning_rate, variable.dtype)
-            lr_scale_factor = ops.cast(lr_scale_factor, variable.dtype)
-            variable.assign(variable - variable * wd * lr * rms_scale * lr_scale_factor)
+            lr_scale_factor = ops.cast(self._lr_scale(), variable.dtype)
+            variable.assign(variable - variable * wd * lr * lr_scale_factor)
 
     def get_config(self):
         config = super().get_config()
-        config["scale_weight_decay_by_rms"] = self.scale_weight_decay_by_rms
         config["wd_lr_exponent"] = self.wd_lr_exponent
         config["wd_lr_max"] = self.wd_lr_max
         return config

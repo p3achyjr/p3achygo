@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import tensorflow as tf
+import numpy as np
 
 IDENTITY = 0
 ROT90 = 1
@@ -14,68 +14,68 @@ FLIPROT270 = 7
 __SYM_MAX = 8
 
 
-def get_random_symmetry() -> tf.Tensor:
-    return tf.random.uniform((), dtype=tf.int32, minval=0, maxval=__SYM_MAX)
+def get_random_symmetry() -> int:
+    return int(np.random.randint(0, __SYM_MAX))
 
 
-def flip(x: tf.Tensor) -> tf.Tensor:
-    return tf.reverse(x, axis=[1])
+def flip(x: np.ndarray) -> np.ndarray:
+    # Force a contiguous copy. np.flip returns a view with a negative stride;
+    # torch.as_tensor (DataLoader collate) rejects negative-stride arrays.
+    return np.ascontiguousarray(np.flip(x, axis=1))
 
 
-def rotate(x: tf.Tensor, k: int) -> tf.Tensor:
-    return tf.experimental.numpy.rot90(x, k=k, axes=(1, 0))
+def rotate(x: np.ndarray, k: int) -> np.ndarray:
+    return np.ascontiguousarray(np.rot90(x, k=k, axes=(1, 0)))
 
 
-def flip_loc(loc: tf.Tensor, n: int) -> tf.Tensor:
-    assert loc.shape == (2,)
-    return tf.convert_to_tensor([loc[0], n - loc[1] - 1])
+def flip_loc(loc: np.ndarray, n: int) -> np.ndarray:
+    return np.array([loc[0], n - loc[1] - 1], dtype=np.asarray(loc).dtype)
 
 
-def rotate_loc(loc: tf.Tensor, k: int, n: int) -> tf.Tensor:
-    assert loc.shape == (2,)
+def rotate_loc(loc: np.ndarray, k: int, n: int) -> np.ndarray:
+    loc = np.asarray(loc)
     if k == 1:
-        return tf.convert_to_tensor([loc[1], n - loc[0] - 1])
+        return np.array([loc[1], n - loc[0] - 1], dtype=loc.dtype)
     elif k == 2:
-        return tf.convert_to_tensor([n - loc[0] - 1, n - loc[1] - 1])
+        return np.array([n - loc[0] - 1, n - loc[1] - 1], dtype=loc.dtype)
     elif k == 3:
-        return tf.convert_to_tensor([n - loc[1] - 1, loc[0]])
-
+        return np.array([n - loc[1] - 1, loc[0]], dtype=loc.dtype)
     return loc
 
 
-def apply_grid_symmetry(sym: tf.Tensor, grid: tf.Tensor) -> tf.Tensor:
-    if sym == ROT90:
+def apply_grid_symmetry(s, grid: np.ndarray) -> np.ndarray:
+    if s == ROT90:
         return rotate(grid, 1)
-    elif sym == ROT180:
+    elif s == ROT180:
         return rotate(grid, 2)
-    elif sym == ROT270:
+    elif s == ROT270:
         return rotate(grid, 3)
-    elif sym == FLIP:
+    elif s == FLIP:
         return flip(grid)
-    elif sym == FLIPROT90:
+    elif s == FLIPROT90:
         return rotate(flip(grid), 1)
-    elif sym == FLIPROT180:
+    elif s == FLIPROT180:
         return rotate(flip(grid), 2)
-    elif sym == FLIPROT270:
+    elif s == FLIPROT270:
         return rotate(flip(grid), 3)
     else:
         return grid
 
 
-def apply_loc_symmetry(sym: tf.Tensor, loc: tf.Tensor, grid_len: int) -> tf.Tensor:
-    if sym == ROT90:
+def apply_loc_symmetry(s, loc: np.ndarray, grid_len: int) -> np.ndarray:
+    if s == ROT90:
         return rotate_loc(loc, 1, grid_len)
-    elif sym == ROT180:
+    elif s == ROT180:
         return rotate_loc(loc, 2, grid_len)
-    elif sym == ROT270:
+    elif s == ROT270:
         return rotate_loc(loc, 3, grid_len)
-    elif sym == FLIP:
+    elif s == FLIP:
         return flip_loc(loc, grid_len)
-    elif sym == FLIPROT90:
+    elif s == FLIPROT90:
         return rotate_loc(flip_loc(loc, grid_len), 1, grid_len)
-    elif sym == FLIPROT180:
+    elif s == FLIPROT180:
         return rotate_loc(flip_loc(loc, grid_len), 2, grid_len)
-    elif sym == FLIPROT270:
+    elif s == FLIPROT270:
         return rotate_loc(flip_loc(loc, grid_len), 3, grid_len)
     else:
         return loc

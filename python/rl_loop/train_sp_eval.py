@@ -4,6 +4,7 @@ Starts Self-Play, then Trains when a chunk is ready, then runs Eval.
 
 from __future__ import annotations
 
+import backend_shim
 import gcs_utils as gcs
 import math
 import os, sys, time
@@ -11,9 +12,7 @@ import rl_loop.config as config_module
 import rl_loop.sp_loop as sp
 import rl_loop.fs_utils as fs
 import rl_loop.model_utils as model_utils
-import numpy as np
 import proc
-import tensorflow as tf
 
 from absl import app, flags, logging
 from constants import *
@@ -295,37 +294,25 @@ def loop(
         logging.info("No existing model candidate found. Creating initial model...")
         model_gen = 0
         model_path = str(Path(local_model_cands_dir, gcs.MODEL_FORMAT.format(0)))
-        checkpoint_path = str(Path(local_model_cands_dir, "live_model.keras"))
-        with tf.device("/cpu:0"):
-            batch_size = SELFPLAY_BATCH_SIZE
-            model = model_utils.new_model(
-                name=f"p3achygo",
-                model_config=config.model_config,
-                optimizer=config.optimizer,
-            )
-            model(
-                tf.convert_to_tensor(
-                    np.random.random([batch_size] + model.input_planes_shape()),
-                    dtype=tf.float32,
-                ),
-                tf.convert_to_tensor(
-                    np.random.random([batch_size] + model.input_features_shape()),
-                    dtype=tf.float32,
-                ),
-            )
-            model.summary()
-            model.save(checkpoint_path)
-            model.save(model_path)
+        checkpoint_path = str(Path(local_model_cands_dir, backend_shim.LIVE_MODEL_NAME))
+        model = model_utils.new_model(
+            name=f"p3achygo",
+            model_config=config.model_config,
+            optimizer=config.optimizer,
+        )
+        backend_shim.summary(model)
+        backend_shim.save_model(model, checkpoint_path)
+        backend_shim.save_model(model, model_path)
 
-            # convert to TRT.
-            model_utils.save_onnx_trt(
-                model,
-                val_ds_path,
-                local_model_cands_dir,
-                model_gen,
-                batch_size=SELFPLAY_BATCH_SIZE,
-                trt_convert_path=build_trt_engine_path,
-            )
+        # convert to TRT.
+        model_utils.save_onnx_trt(
+            model,
+            val_ds_path,
+            local_model_cands_dir,
+            model_gen,
+            batch_size=SELFPLAY_BATCH_SIZE,
+            trt_convert_path=build_trt_engine_path,
+        )
 
         # upload to GCS.
         fs.upload_model_cand(run_id, local_model_cands_dir, model_gen)
@@ -502,7 +489,7 @@ def main(_):
     if FLAGS.gpu_ids:
         GPU_IDS = [int(x.strip()) for x in FLAGS.gpu_ids.split(",")]
     else:
-        GPU_IDS = list(range(len(tf.config.list_physical_devices("GPU")))) or [0]
+        GPU_IDS = list(range(backend_shim.gpu_count())) or [0]
     logging.info(f"Using GPU pool: {GPU_IDS}")
 
     fs_mode = "local" if FLAGS.local_only else "gcs"

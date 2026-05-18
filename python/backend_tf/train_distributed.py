@@ -18,7 +18,7 @@ import tensorflow as tf
 import keras
 from typing import Optional
 
-from model import P3achyGoModel, ModelPredictions, GroundTruth, LossWeights
+from backend_tf.model import P3achyGoModel, ModelPredictions, GroundTruth, LossWeights
 from train import (
     Mode,
     TrainStepResult,
@@ -260,7 +260,7 @@ def _get_predictions(model, inp_r0, gs_r0):
 
 def train(
     model: P3achyGoModel,
-    train_ds: tf.data.Dataset,
+    train_ds,
     epochs: int,
     momentum: float,
     log_interval: int,

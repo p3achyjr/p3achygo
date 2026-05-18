@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import numpy as np
 import h5py
-import tensorflow as tf
+import keras
 
-from model import *
+from backend_tf.model import *
 
 
 class ModelTags:
@@ -130,9 +130,9 @@ def create_ordered_group(parent_group: h5py.Group, tag: str, order: int):
     return group
 
 
-def fill_conv_layer(conv_layer: tf.keras.layers.Conv2D, group: h5py.Group):
+def fill_conv_layer(conv_layer: keras.layers.Conv2D, group: h5py.Group):
     assert isinstance(
-        conv_layer, tf.keras.layers.Conv2D
+        conv_layer, keras.layers.Conv2D
     ), f"Invalid Layer Type: {type(conv_layer)}"
     # kernels are in (k, k, C, C') format. TRT expects (C', C, k, k).
     kernel = conv_layer.kernel.numpy()
@@ -143,9 +143,9 @@ def fill_conv_layer(conv_layer: tf.keras.layers.Conv2D, group: h5py.Group):
     )
 
 
-def fill_dense_layer(dense_layer: tf.keras.layers.Dense, group: h5py.Group):
+def fill_dense_layer(dense_layer: keras.layers.Dense, group: h5py.Group):
     assert isinstance(
-        dense_layer, tf.keras.layers.Dense
+        dense_layer, keras.layers.Dense
     ), f"Invalid Layer Type: {type(dense_layer)}"
     group.create_dataset(
         DatasetTags.KERNEL, data=dense_layer.kernel.numpy(), dtype=np.float32
@@ -155,9 +155,9 @@ def fill_dense_layer(dense_layer: tf.keras.layers.Dense, group: h5py.Group):
     )
 
 
-def fill_bn_layer(bn_layer: tf.keras.layers.BatchNormalization, group: h5py.Group):
+def fill_bn_layer(bn_layer: keras.layers.BatchNormalization, group: h5py.Group):
     assert isinstance(
-        bn_layer, tf.keras.layers.BatchNormalization
+        bn_layer, keras.layers.BatchNormalization
     ), f"Invalid Layer Type: {type(bn_layer)}"
     group.create_dataset(
         DatasetTags.MOVING_MEAN, data=bn_layer.moving_mean, dtype=np.float32
@@ -185,7 +185,7 @@ def fill_conv_block(conv_block: ConvBlock, group: h5py.Group):
         create_ordered_group(group, LayerTags.BATCH_NORM, order=1),
     )
     fill_act_layer(
-        tf.keras.activations.serialize(conv_block.activation),
+        keras.activations.serialize(conv_block.activation),
         create_ordered_group(group, LayerTags.ACTIVATION, order=2),
     )
 

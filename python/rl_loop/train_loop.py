@@ -8,16 +8,23 @@ indefinitely — avoiding the grappler re-tracing cost on every generation.
 
 from __future__ import annotations
 
+import multiprocessing
 import os
 import subprocess
 import sys
 
-import numpy as np
-
 import gcs_utils as gcs
-import tensorflow as tf
-import keras
-import transforms
+from dataset import ChunkDataset
+from backend_shim import (
+    configure_gpu,
+    load_model,
+    load_with_optimizer,
+    save_model,
+    summary,
+    compile_for_training,
+    LIVE_MODEL_NAME,
+    MODEL_EXT,
+)
 import rl_loop.model_utils as model_utils
 import rl_loop.train
 import rl_loop.config
@@ -25,9 +32,6 @@ import rl_loop.config
 from absl import app, flags, logging
 from pathlib import Path
 from rl_loop.constants import SELFPLAY_BATCH_SIZE
-from optimizer import ConvMuon  # noqa: F401 — registers p3achygo>
-
-LIVE_MODEL_NAME = "live_model.keras"
 
 FLAGS = flags.FLAGS
 
@@ -42,7 +46,6 @@ flags.DEFINE_integer("max_gens", 0, "Number of generations to train (0 = run for
 flags.DEFINE_string(
     "source_run_id", "", "Run ID to fetch golden chunks from (defaults to run_id)."
 )
-flags.DEFINE_string("gpu_ids", "0", "GPUs to use")
 S3_BUCKET = "p3achygo"
 
 
@@ -59,20 +62,21 @@ def _get_starting_gen(models_dir: str, start_gen: int) -> tuple[str, int]:
     return str(latest), int(gcs.MODEL_RE.fullmatch(latest.name).group(1))
 
 
-def _fetch_chunk(chunk_dir: str, run_id: str, gen: int) -> str:
-    """Download chunk_{gen:04d}.tfrecord.zz from S3 and return the local path."""
+def _fetch_chunk(chunk_dir: str, run_id: str, gen: int) -> tuple[str, bool]:
+    """Download chunk_{gen:04d}.tfrecord.zz from S3 and return (local path, was_downloaded)."""
     chunk_name = gcs.GOLDEN_CHUNK_FORMAT.format(gen)
     local_path = Path(chunk_dir, chunk_name)
     s3_uri = f"s3://{S3_BUCKET}/{run_id}/goldens/{chunk_name}"
     if not local_path.exists():
         logging.info(f"Fetching {s3_uri} -> {local_path}")
         subprocess.run(["s5cmd", "cp", s3_uri, str(local_path)], check=True)
+        return str(local_path), True
     else:
         logging.info(f"Chunk already exists at {local_path}, skipping fetch")
-    return str(local_path)
+        return str(local_path), False
 
 
-def _train_loop(strategy):
+def _train_loop():
     config = rl_loop.config.parse(FLAGS.run_id)
 
     Path(FLAGS.models_dir).mkdir(parents=True, exist_ok=True)
@@ -85,10 +89,8 @@ def _train_loop(strategy):
     logging.info(f"Live model: {live_model_path}")
     logging.info(f"SWA model:  {swa_model_path}")
 
-    val_ds = tf.data.TFRecordDataset(FLAGS.val_ds_path, compression_type="ZLIB")
-    val_ds = val_ds.map(transforms.expand, num_parallel_calls=tf.data.AUTOTUNE)
-    val_ds = val_ds.batch(config.batch_size)
-    val_ds = val_ds.prefetch(tf.data.AUTOTUNE)
+    val_workers = min(8, max(1, multiprocessing.cpu_count() // 2))
+    val_ds = ChunkDataset(FLAGS.val_ds_path, config.batch_size, num_workers=val_workers)
 
     if not Path(FLAGS.batch_num_path).exists():
         with open(FLAGS.batch_num_path, "w") as f:
@@ -100,34 +102,27 @@ def _train_loop(strategy):
         logging.info(
             f"No live model found at {live_model_path}. Creating new model from config '{config.model_config}'."
         )
-        with tf.device("/cpu:0"):
-            live_model = model_utils.new_model(
-                "p3achygo", config.model_config, config.optimizer
-            )
-            live_model(
-                tf.convert_to_tensor(
-                    np.random.random([1] + live_model.input_planes_shape()),
-                    dtype=tf.float32,
-                ),
-                tf.convert_to_tensor(
-                    np.random.random([1] + live_model.input_features_shape()),
-                    dtype=tf.float32,
-                ),
-            )
-        live_model.summary()
-        live_model.save(live_model_path)
+        live_model = model_utils.new_model(
+            "p3achygo", config.model_config, config.optimizer
+        )
+        save_model(live_model, live_model_path)
 
     if not Path(swa_model_path).exists():
         swa_model_path = live_model_path
 
-    live_model = keras.models.load_model(live_model_path)
-    optimizer = getattr(live_model, "optimizer", None)
-    if not optimizer:
+    live_model, optimizer = load_with_optimizer(live_model_path)
+    if optimizer is None:
         logging.info(
-            "No optimizer found in live model. "
+            "No optimizer state found in live model. "
             "This should only happen for model_0000."
         )
-    swa_model = keras.models.load_model(swa_model_path)
+    swa_model = load_model(swa_model_path)
+
+    summary(live_model)
+
+    # Apply backend-specific training-time transforms (fp16 + channels_last
+    # + torch.compile reduce-overhead for torch; no-op for TF).
+    live_model = compile_for_training(live_model)
 
     max_gens = FLAGS.max_gens
     gens_trained = 0
@@ -136,7 +131,9 @@ def _train_loop(strategy):
         config = rl_loop.config.parse(FLAGS.run_id)
         next_gen = model_gen + 1
         source_run_id = FLAGS.source_run_id or FLAGS.run_id
-        chunk_path = _fetch_chunk(FLAGS.chunk_dir, source_run_id, next_gen)
+        chunk_path, chunk_downloaded = _fetch_chunk(
+            FLAGS.chunk_dir, source_run_id, next_gen
+        )
         logging.info(f"Training generation {next_gen} on {chunk_path}")
 
         batch_num, live_model, swa_model, optimizer = rl_loop.train.train_one_gen(
@@ -149,20 +146,23 @@ def _train_loop(strategy):
             config=config,
             is_gpu=True,
             batch_num=batch_num,
-            strategy=strategy,
         )
 
-        logging.info(f"Deleting local chunk {chunk_path}")
-        Path(chunk_path).unlink(missing_ok=True)
+        if chunk_downloaded:
+            logging.info(f"Deleting local chunk {chunk_path}")
+            Path(chunk_path).unlink(missing_ok=True)
 
-        # Save live model checkpoint.
-        live_model.compile(optimizer=optimizer)
-        live_model.save(live_model_path)
+        # Save live model checkpoint, bundling optimizer state.
+        save_model(live_model, live_model_path, optimizer=optimizer)
 
         # Save restart checkpoint.
         live_ckpt_dir = Path(FLAGS.models_dir, "_live")
         live_ckpt_dir.mkdir(exist_ok=True)
-        live_model.save(str(live_ckpt_dir / f"live_{next_gen:04d}.keras"))
+        save_model(
+            live_model,
+            str(live_ckpt_dir / f"live_{next_gen:04d}{MODEL_EXT}"),
+            optimizer=optimizer,
+        )
 
         # Save SWA model for selfplay.
         if FLAGS.save_trt:
@@ -202,23 +202,9 @@ def main(_):
         logging.error("No --trt_convert_path specified.")
         return
 
-    gpu_indices = [int(x.strip()) for x in FLAGS.gpu_ids.split(",")]
-    physical_gpus = tf.config.list_physical_devices("GPU")
-    assert physical_gpus, "No GPUs detected."
-    for gpu in physical_gpus:
-        tf.config.experimental.set_memory_growth(gpu, True)
-    policy = "mixed_bfloat16" if len(gpu_indices) > 1 else "mixed_float16"
-    keras.mixed_precision.set_global_policy(policy)
-    device_names = [f"/gpu:{i}" for i in gpu_indices]
+    configure_gpu()
 
-    logging.info(f"Using devices: {device_names}")
-    if len(gpu_indices) > 1:
-        strategy = tf.distribute.MirroredStrategy(devices=device_names)
-        logging.info(f"Replicas in sync: {strategy.num_replicas_in_sync}")
-        with strategy.scope():
-            _train_loop(strategy)
-    else:
-        _train_loop(None)
+    _train_loop()
 
 
 if __name__ == "__main__":

@@ -1,119 +1,151 @@
+"""Framework-agnostic per-example transforms (numpy).
+
+Two entry points:
+  expand(serialized_bytes)      — parse with tfrecord.example_pb2 (lazy import).
+  expand_from_features(feat_map) — caller has already parsed the proto. Use this
+                                   when tfrecord and TF can't coexist in the
+                                   same process; pass `tf.train.Example`'s
+                                   `.features.feature` map directly.
+
+Both paths share `_decode_features` and `_expand_common` for content logic.
+"""
+
 from __future__ import annotations
 
-import functools
+import numpy as np
+
 import symmetry as sym
-import tensorflow as tf
 from constants import *
 
-EX_DESC = {
-    "bsize": tf.io.FixedLenFeature([], tf.string),
-    "board": tf.io.FixedLenFeature([], tf.string),
-    "last_moves": tf.io.FixedLenFeature([], tf.string),
-    "stones_atari": tf.io.FixedLenFeature([], tf.string),
-    "stones_two_liberties": tf.io.FixedLenFeature([], tf.string),
-    "stones_three_liberties": tf.io.FixedLenFeature([], tf.string),
-    "stones_in_ladder": tf.io.FixedLenFeature([], tf.string),
-    "color": tf.io.FixedLenFeature([], tf.string),
-    "komi": tf.io.FixedLenFeature([], tf.float32),
-    "own": tf.io.FixedLenFeature([], tf.string),
-    "pi": tf.io.FixedLenFeature([], tf.string),
-    "pi_aux": tf.io.FixedLenFeature([], tf.string),
-    # Optional fields — absent in older data. Use VarLenFeature so parse
-    # succeeds even when the key is missing.
-    "pi_aux_dist": tf.io.VarLenFeature(tf.string),
-    "mcts_value_dist": tf.io.VarLenFeature(tf.string),
-    "score_margin": tf.io.FixedLenFeature([], tf.float32),
-    "q6": tf.io.FixedLenFeature([], tf.float32),
-    "q16": tf.io.FixedLenFeature([], tf.float32),
-    "q50": tf.io.FixedLenFeature([], tf.float32),
-    "q6_score": tf.io.FixedLenFeature([], tf.float32),
-    "q16_score": tf.io.FixedLenFeature([], tf.float32),
-    "q50_score": tf.io.FixedLenFeature([], tf.float32),
-}
+
+def _bytes_buf(feature):
+    return feature.bytes_list.value[0]
 
 
-def get_black(board: tf.Tensor) -> tf.Tensor:
-    """Return black stones as 2D tensor."""
-    return tf.cast(
-        tf.where(tf.math.equal(board, BLACK), board, tf.zeros_like(board)) / BLACK,
-        dtype=tf.float32,
-    )
+def _decode(feature, dtype):
+    return np.frombuffer(_bytes_buf(feature), dtype=dtype)
 
 
-def get_white(board: tf.Tensor) -> tf.Tensor:
-    """Return white stones as 2D tensor."""
-    return tf.cast(
-        tf.where(tf.math.equal(board, WHITE), board, tf.zeros_like(board)) / WHITE,
-        dtype=tf.float32,
-    )
-
-
-def get_color(board: tf.Tensor, color) -> tf.Tensor:
-    """Return `color` locs as 2D tensor."""
-    return tf.cast(
-        tf.where(tf.math.equal(board, color), board, tf.zeros_like(board)) / color,
-        dtype=tf.float32,
-    )
-
-
-def as_pi_vec(move: tf.Tensor, bsize=BOARD_LEN) -> tf.Tensor:
-    """Broadcast move tuple to 1D one-hot tensor."""
-    non_move = tf.constant(NON_MOVE, dtype=tf.int32)
-    pass_move = tf.constant(PASS_MOVE, dtype=tf.int32)
-    shape = (bsize * bsize + 1,)
-    if tf.reduce_all(move == non_move):
-        return tf.zeros(shape, dtype=tf.float32)
-
-    is_pass = tf.reduce_all(move == pass_move)
-    index = bsize * bsize + 1 if is_pass else move[0] * bsize + move[1]
-    return tf.cast(
-        tf.scatter_nd(indices=[[index]], updates=tf.constant([1.0]), shape=shape),
-        dtype=tf.float32,
-    )
-
-
-def as_one_hot(move: tf.Tensor, bsize=BOARD_LEN) -> tf.Tensor:
-    """Broadcast a move tuple to a one-hot 2D tensor."""
-    non_move = tf.constant(NON_MOVE, dtype=tf.int32)
-    pass_move = tf.constant(PASS_MOVE, dtype=tf.int32)
-    if tf.reduce_all(move == non_move) or tf.reduce_all(move == pass_move):
-        return tf.zeros((bsize, bsize), dtype=tf.float32)
-
-    return tf.cast(
-        tf.scatter_nd(indices=[move], updates=tf.constant([1]), shape=(bsize, bsize)),
-        dtype=tf.float32,
-    )
-
-
-def as_index(move: tf.Tensor, bsize=BOARD_LEN) -> tf.Tensor:
-    return tf.cast(move[0] * bsize + move[1], dtype=tf.int32)
-
-
-def as_loc(mv_index: tf.Tensor, bsize=BOARD_LEN) -> tf.Tensor:
-    # Handle negative indices (NON_MOVE indicator)
+def as_loc(mv_index, bsize=BOARD_LEN) -> np.ndarray:
     if mv_index < 0:
-        return tf.convert_to_tensor([-1, -1], dtype=tf.int32)
-
-    loc = tf.convert_to_tensor([mv_index // bsize, mv_index % bsize])
-    return loc
+        return np.array([-1, -1], dtype=np.int32)
+    return np.array([mv_index // bsize, mv_index % bsize], dtype=np.int32)
 
 
-def apply_loc_symmetry(symmetry: tf.Tensor, loc: tf.Tensor, grid_len: int) -> tf.Tensor:
-    if tf.reduce_all(loc == NON_MOVE) or tf.reduce_all(loc == PASS_MOVE):
-        return loc
-
-    return sym.apply_loc_symmetry(symmetry, loc, grid_len)
+def as_index(move, bsize=BOARD_LEN) -> int:
+    return int(move[0]) * bsize + int(move[1])
 
 
-def is_board_move(mv_index: tf.Tensor) -> tf.Tensor:
+def as_one_hot(move, bsize=BOARD_LEN) -> np.ndarray:
+    arr = np.zeros((bsize, bsize), dtype=np.float32)
+    if np.array_equal(move, NON_MOVE) or np.array_equal(move, PASS_MOVE):
+        return arr
+    arr[int(move[0]), int(move[1])] = 1.0
+    return arr
+
+
+def is_board_move(mv_index) -> bool:
     if mv_index < 0 or mv_index == PASS_MOVE_ENCODING:
         return False
-
     return True
 
 
-def filter_pass(input, komi, score, score_one_hot, policy, own):
-    return policy != 361
+def apply_loc_symmetry(symmetry, loc, grid_len) -> np.ndarray:
+    if np.array_equal(loc, NON_MOVE) or np.array_equal(loc, PASS_MOVE):
+        return loc
+    return sym.apply_loc_symmetry(symmetry, loc, grid_len)
+
+
+def get_color(board: np.ndarray, color: int) -> np.ndarray:
+    return (board == color).astype(np.float32)
+
+
+def _decode_features(features):
+    """Decode an already-parsed proto Features map into a dict of numpy arrays.
+
+    `features` is the `.features.feature` map from either
+    `tfrecord.example_pb2.Example` or `tf.train.Example` — both expose the
+    same `.bytes_list.value[0]` / `.float_list.value[0]` / `key in map` API.
+    Keeping this proto-module-agnostic lets the TF and torch backends use
+    their own parsers without loading the other's protobuf descriptors.
+    """
+    feat = features
+
+    bsize = int(_decode(feat["bsize"], np.uint8)[0])
+
+    board = _decode(feat["board"], np.int8).astype(np.int32).reshape(bsize, bsize)
+    last_moves_idx = _decode(feat["last_moves"], np.int16).astype(np.int32)
+    stones_atari = (
+        _decode(feat["stones_atari"], np.int8).astype(np.int32).reshape(bsize, bsize)
+    )
+    stones_two_lib = (
+        _decode(feat["stones_two_liberties"], np.int8)
+        .astype(np.int32)
+        .reshape(bsize, bsize)
+    )
+    stones_three_lib = (
+        _decode(feat["stones_three_liberties"], np.int8)
+        .astype(np.int32)
+        .reshape(bsize, bsize)
+    )
+    stones_in_ladder = (
+        _decode(feat["stones_in_ladder"], np.int8)
+        .astype(np.int32)
+        .reshape(bsize, bsize)
+    )
+    color = int(_decode(feat["color"], np.int8)[0])
+    own = _decode(feat["own"], np.int8).astype(np.int32).reshape(bsize, bsize)
+    policy = _decode(feat["pi"], np.float32).reshape(bsize * bsize + 1).copy()
+    policy_aux = int(_decode(feat["pi_aux"], np.int16)[0])
+
+    last_moves = np.stack([as_loc(int(idx), bsize) for idx in last_moves_idx], axis=0)
+
+    has_pi_aux_dist = (
+        "pi_aux_dist" in feat and len(feat["pi_aux_dist"].bytes_list.value) > 0
+    )
+    if has_pi_aux_dist:
+        policy_aux_dist = np.frombuffer(
+            feat["pi_aux_dist"].bytes_list.value[0], dtype=np.float32
+        ).copy()
+    else:
+        policy_aux_dist = np.zeros(NUM_MOVES, dtype=np.float32)
+
+    has_mcts_value_dist = (
+        "mcts_value_dist" in feat and len(feat["mcts_value_dist"].bytes_list.value) > 0
+    )
+    if has_mcts_value_dist:
+        # Stored as uint32; decoded as int32 (same bit pattern for values < 2^31).
+        mcts_value_dist = np.frombuffer(
+            feat["mcts_value_dist"].bytes_list.value[0], dtype=np.int32
+        ).copy()
+    else:
+        mcts_value_dist = np.zeros(NUM_V_BUCKETS, dtype=np.int32)
+
+    return {
+        "bsize": bsize,
+        "board": board,
+        "last_moves": last_moves,
+        "stones_atari": stones_atari,
+        "stones_two_liberties": stones_two_lib,
+        "stones_three_liberties": stones_three_lib,
+        "stones_in_ladder": stones_in_ladder,
+        "color": color,
+        "komi": float(feat["komi"].float_list.value[0]),
+        "own": own,
+        "policy": policy,
+        "policy_aux": policy_aux,
+        "policy_aux_dist": policy_aux_dist,
+        "has_pi_aux_dist": has_pi_aux_dist,
+        "mcts_value_dist": mcts_value_dist,
+        "has_mcts_value_dist": has_mcts_value_dist,
+        "score": float(feat["score_margin"].float_list.value[0]),
+        "q6": float(feat["q6"].float_list.value[0]),
+        "q16": float(feat["q16"].float_list.value[0]),
+        "q50": float(feat["q50"].float_list.value[0]),
+        "q6_score": float(feat["q6_score"].float_list.value[0]),
+        "q16_score": float(feat["q16_score"].float_list.value[0]),
+        "q50_score": float(feat["q50_score"].float_list.value[0]),
+    }
 
 
 def _apply_symmetry_to_grids(
@@ -122,52 +154,53 @@ def _apply_symmetry_to_grids(
     board,
     last_moves,
     stones_atari,
-    stones_two_liberties,
-    stones_three_liberties,
+    stones_two_lib,
+    stones_three_lib,
     own,
     policy,
     policy_aux,
     policy_aux_dist,
     stones_in_ladder,
 ):
-    """Apply symmetry transformations to all grid-based tensors."""
     board = sym.apply_grid_symmetry(symmetry, board)
-    last_moves = tf.map_fn(
-        lambda mv: apply_loc_symmetry(symmetry, mv, bsize), last_moves
+    last_moves = np.stack(
+        [apply_loc_symmetry(symmetry, mv, bsize) for mv in last_moves], axis=0
     )
     stones_atari = sym.apply_grid_symmetry(symmetry, stones_atari)
-    stones_two_liberties = sym.apply_grid_symmetry(symmetry, stones_two_liberties)
-    stones_three_liberties = sym.apply_grid_symmetry(symmetry, stones_three_liberties)
+    stones_two_lib = sym.apply_grid_symmetry(symmetry, stones_two_lib)
+    stones_three_lib = sym.apply_grid_symmetry(symmetry, stones_three_lib)
     stones_in_ladder = sym.apply_grid_symmetry(symmetry, stones_in_ladder)
     own = sym.apply_grid_symmetry(symmetry, own)
 
-    board_policy = policy[0 : bsize * bsize]
-    board_policy = tf.reshape(board_policy, shape=(bsize, bsize))
+    board_policy = policy[: bsize * bsize].reshape(bsize, bsize)
     board_policy = sym.apply_grid_symmetry(symmetry, board_policy)
-    board_policy = tf.reshape(board_policy, shape=(bsize * bsize,))
-    policy = tf.concat([board_policy, [policy[bsize * bsize]]], axis=0)
+    policy = np.concatenate(
+        [
+            board_policy.reshape(-1),
+            policy[bsize * bsize : bsize * bsize + 1],
+        ]
+    )
 
-    if is_board_move(tf.cast(policy_aux, tf.int32)):
-        policy_aux = as_loc(policy_aux, bsize=bsize)
-        policy_aux = sym.apply_loc_symmetry(symmetry, policy_aux, bsize)
-        policy_aux = as_index(policy_aux, bsize=bsize)
+    if is_board_move(int(policy_aux)):
+        loc = as_loc(int(policy_aux), bsize=bsize)
+        loc = sym.apply_loc_symmetry(symmetry, loc, bsize)
+        policy_aux = as_index(loc, bsize=bsize)
 
-    # Apply same board-permutation symmetry to the auxiliary policy distribution.
-    # Sentinel (all-zeros) is unchanged under any symmetry.
-    board_policy_aux_dist = policy_aux_dist[0 : bsize * bsize]
-    board_policy_aux_dist = tf.reshape(board_policy_aux_dist, shape=(bsize, bsize))
-    board_policy_aux_dist = sym.apply_grid_symmetry(symmetry, board_policy_aux_dist)
-    board_policy_aux_dist = tf.reshape(board_policy_aux_dist, shape=(bsize * bsize,))
-    policy_aux_dist = tf.concat(
-        [board_policy_aux_dist, [policy_aux_dist[bsize * bsize]]], axis=0
+    board_paux = policy_aux_dist[: bsize * bsize].reshape(bsize, bsize)
+    board_paux = sym.apply_grid_symmetry(symmetry, board_paux)
+    policy_aux_dist = np.concatenate(
+        [
+            board_paux.reshape(-1),
+            policy_aux_dist[bsize * bsize : bsize * bsize + 1],
+        ]
     )
 
     return (
         board,
         last_moves,
         stones_atari,
-        stones_two_liberties,
-        stones_three_liberties,
+        stones_two_lib,
+        stones_three_lib,
         own,
         policy,
         policy_aux,
@@ -182,45 +215,36 @@ def _build_input_planes(
     board,
     last_moves,
     stones_atari,
-    stones_two_liberties,
-    stones_three_liberties,
+    stones_two_lib,
+    stones_three_lib,
     stones_in_ladder,
 ):
-    """Build the first 13 input planes."""
     black_stones = get_color(board, BLACK)
     white_stones = get_color(board, WHITE)
     black_atari = get_color(stones_atari, BLACK)
     white_atari = get_color(stones_atari, WHITE)
-    black_two_liberties = get_color(stones_two_liberties, BLACK)
-    white_two_liberties = get_color(stones_two_liberties, WHITE)
-    black_three_liberties = get_color(stones_three_liberties, BLACK)
-    white_three_liberties = get_color(stones_three_liberties, WHITE)
-    black_in_ladder = get_color(stones_in_ladder, BLACK)
-    white_in_ladder = get_color(stones_in_ladder, WHITE)
+    black_two = get_color(stones_two_lib, BLACK)
+    white_two = get_color(stones_two_lib, WHITE)
+    black_three = get_color(stones_three_lib, BLACK)
+    white_three = get_color(stones_three_lib, WHITE)
+    black_ladder = get_color(stones_in_ladder, BLACK)
+    white_ladder = get_color(stones_in_ladder, WHITE)
 
-    our_stones = tf.where(color == BLACK, black_stones, white_stones)
-    opp_stones = tf.where(color == BLACK, white_stones, black_stones)
-    our_atari = tf.where(color == BLACK, black_atari, white_atari)
-    opp_atari = tf.where(color == BLACK, white_atari, black_atari)
-    our_two_liberties = tf.where(
-        color == BLACK, black_two_liberties, white_two_liberties
-    )
-    opp_two_liberties = tf.where(
-        color == BLACK, white_two_liberties, black_two_liberties
-    )
-    our_three_liberties = tf.where(
-        color == BLACK, black_three_liberties, white_three_liberties
-    )
-    opp_three_liberties = tf.where(
-        color == BLACK, white_three_liberties, black_three_liberties
-    )
-    our_in_ladder = tf.where(color == BLACK, black_in_ladder, white_in_ladder)
-    opp_in_ladder = tf.where(color == BLACK, white_in_ladder, black_in_ladder)
+    if color == BLACK:
+        our_stones, opp_stones = black_stones, white_stones
+        our_atari, opp_atari = black_atari, white_atari
+        our_two, opp_two = black_two, white_two
+        our_three, opp_three = black_three, white_three
+        our_ladder, opp_ladder = black_ladder, white_ladder
+    else:
+        our_stones, opp_stones = white_stones, black_stones
+        our_atari, opp_atari = white_atari, black_atari
+        our_two, opp_two = white_two, black_two
+        our_three, opp_three = white_three, black_three
+        our_ladder, opp_ladder = white_ladder, black_ladder
 
-    # mask last moves on a small percentage of examples to prevent net from
-    # tunnel-visioning on move history.
-    mask_last_moves = tf.random.uniform(()) < 0.05
-    no_move = tf.zeros((bsize, bsize), dtype=tf.float32)
+    mask_last_moves = np.random.uniform() < 0.05
+    no_move = np.zeros((bsize, bsize), dtype=np.float32)
 
     return [
         our_stones,
@@ -232,175 +256,54 @@ def _build_input_planes(
         no_move if mask_last_moves else as_one_hot(last_moves[4], bsize=bsize),
         our_atari,
         opp_atari,
-        our_two_liberties,
-        opp_two_liberties,
-        our_three_liberties,
-        opp_three_liberties,
-        our_in_ladder,
-        opp_in_ladder,
+        our_two,
+        opp_two,
+        our_three,
+        opp_three,
+        our_ladder,
+        opp_ladder,
     ]
 
 
-def _build_score_one_hot(score):
-    """Convert score to one-hot encoding."""
-    score = tf.floor(score)
-    score_index = tf.cast(score + SCORE_RANGE_MIDPOINT, dtype=tf.int32)
+def _build_score_one_hot(score: float) -> np.ndarray:
+    score_index = int(np.floor(score)) + SCORE_RANGE_MIDPOINT
     if score_index < 0:
         score_index = 0
     elif score_index >= SCORE_RANGE:
         score_index = SCORE_RANGE - 1
+    out = np.zeros(SCORE_RANGE, dtype=np.float32)
+    out[score_index] = 1.0
+    return out
 
-    score_index = tf.cast([[score_index]], dtype=tf.int32)
-    return tf.cast(
-        tf.scatter_nd(score_index, [1.0], shape=(SCORE_RANGE,)), dtype=tf.float32
+
+def _build_global_state(color, last_moves, komi) -> np.ndarray:
+    last_move_was_pass = np.array(
+        [1.0 if np.array_equal(mv, PASS_MOVE) else 0.0 for mv in last_moves],
+        dtype=np.float32,
     )
-
-
-def _build_global_state(color, last_moves, komi):
-    """Build global state tensor from color and last moves."""
-    last_move_was_pass = tf.cast(
-        tf.map_fn(lambda mv: 1 if tf.reduce_all(mv == PASS_MOVE) else 0, last_moves),
-        tf.float32,
-    )
-    color_indicator = tf.cast(
-        tf.convert_to_tensor([color == BLACK, color == WHITE]), tf.float32
+    color_indicator = np.array(
+        [1.0 if color == BLACK else 0.0, 1.0 if color == WHITE else 0.0],
+        dtype=np.float32,
     )
     komi_normalized = komi / 15.0
-    komi_normalized = tf.cast(
-        tf.convert_to_tensor([-komi_normalized if color == BLACK else komi_normalized]),
-        tf.float32,
+    if color == BLACK:
+        komi_normalized = -komi_normalized
+    return np.concatenate(
+        [
+            color_indicator,
+            last_move_was_pass,
+            np.array([komi_normalized], dtype=np.float32),
+        ]
     )
-    return tf.concat([color_indicator, last_move_was_pass, komi_normalized], axis=0)
-
-
-def _parse_example(tf_example):
-    """
-    Parse a tfrecord example.
-
-    Returns a dict with parsed and preprocessed tensors.
-    """
-    ex = tf.io.parse_single_example(tf_example, EX_DESC)
-
-    # keep these in sync with cc/recorder/tf_recorder.cc
-    bsize = tf.cast(
-        tf.reshape(tf.io.decode_raw(ex["bsize"], tf.uint8), shape=()), dtype=tf.int32
-    )
-
-    # Parse grid fields
-    board = tf.reshape(tf.io.decode_raw(ex["board"], tf.int8), shape=(bsize * bsize,))
-    last_moves = tf.reshape(tf.io.decode_raw(ex["last_moves"], tf.int16), shape=(5,))
-    stones_atari = tf.reshape(
-        tf.io.decode_raw(ex["stones_atari"], tf.int8), shape=(bsize * bsize,)
-    )
-    stones_two_liberties = tf.reshape(
-        tf.io.decode_raw(ex["stones_two_liberties"], tf.int8), shape=(bsize * bsize,)
-    )
-    stones_three_liberties = tf.reshape(
-        tf.io.decode_raw(ex["stones_three_liberties"], tf.int8), shape=(bsize * bsize,)
-    )
-    stones_in_ladder = tf.reshape(
-        tf.io.decode_raw(ex["stones_in_ladder"], tf.int8), shape=(bsize * bsize,)
-    )
-    color = tf.reshape(tf.io.decode_raw(ex["color"], tf.int8), shape=())
-    own = tf.reshape(tf.io.decode_raw(ex["own"], tf.int8), shape=(bsize * bsize,))
-    policy = tf.reshape(
-        tf.io.decode_raw(ex["pi"], tf.float32), shape=(bsize * bsize + 1,)
-    )
-    policy_aux = tf.reshape(tf.io.decode_raw(ex["pi_aux"], tf.int16), shape=())
-
-    # Optional fields — absent in older data.
-    pi_aux_dist_values = ex["pi_aux_dist"].values  # shape [1] or []
-    has_pi_aux_dist = tf.greater(tf.size(pi_aux_dist_values), 0)
-    policy_aux_dist = tf.cond(
-        has_pi_aux_dist,
-        lambda: tf.reshape(
-            tf.io.decode_raw(pi_aux_dist_values[0], tf.float32), shape=(NUM_MOVES,)
-        ),
-        lambda: tf.zeros(NUM_MOVES, dtype=tf.float32),
-    )
-
-    mcts_value_dist_values = ex["mcts_value_dist"].values  # shape [1] or []
-    has_mcts_value_dist = tf.greater(tf.size(mcts_value_dist_values), 0)
-    # tf.io.decode_raw does not support uint32; decode as int32 (same bit layout,
-    # safe since visit counts never exceed 2^31).
-    mcts_value_dist = tf.cond(
-        has_mcts_value_dist,
-        lambda: tf.reshape(
-            tf.io.decode_raw(mcts_value_dist_values[0], tf.int32),
-            shape=(NUM_V_BUCKETS,),
-        ),
-        lambda: tf.zeros(NUM_V_BUCKETS, dtype=tf.int32),
-    )
-
-    # Parse scalar fields
-    komi = ex["komi"]
-    score = ex["score_margin"]
-    q6 = ex["q6"]
-    q16 = ex["q16"]
-    q50 = ex["q50"]
-    q6_score = ex["q6_score"]
-    q16_score = ex["q16_score"]
-    q50_score = ex["q50_score"]
-
-    # Cast to int32
-    board = tf.cast(board, tf.int32)
-    last_moves = tf.cast(last_moves, tf.int32)
-    stones_atari = tf.cast(stones_atari, tf.int32)
-    stones_two_liberties = tf.cast(stones_two_liberties, tf.int32)
-    stones_three_liberties = tf.cast(stones_three_liberties, tf.int32)
-    stones_in_ladder = tf.cast(stones_in_ladder, tf.int32)
-    own = tf.cast(own, tf.int32)
-    policy_aux = tf.cast(policy_aux, tf.int32)
-
-    # Reshape grids to 2D
-    board = tf.reshape(board, shape=(bsize, bsize))
-    last_moves = tf.map_fn(functools.partial(as_loc, bsize=bsize), last_moves)
-    stones_atari = tf.reshape(stones_atari, shape=(bsize, bsize))
-    stones_two_liberties = tf.reshape(stones_two_liberties, shape=(bsize, bsize))
-    stones_three_liberties = tf.reshape(stones_three_liberties, shape=(bsize, bsize))
-    stones_in_ladder = tf.reshape(stones_in_ladder, shape=(bsize, bsize))
-    own = tf.reshape(own, shape=(bsize, bsize))
-
-    return {
-        "bsize": bsize,
-        "board": board,
-        "last_moves": last_moves,
-        "stones_atari": stones_atari,
-        "stones_two_liberties": stones_two_liberties,
-        "stones_three_liberties": stones_three_liberties,
-        "stones_in_ladder": stones_in_ladder,
-        "color": color,
-        "komi": komi,
-        "own": own,
-        "policy": policy,
-        "policy_aux": policy_aux,
-        "policy_aux_dist": policy_aux_dist,
-        "has_pi_aux_dist": has_pi_aux_dist,
-        "mcts_value_dist": mcts_value_dist,
-        "has_mcts_value_dist": has_mcts_value_dist,
-        "score": score,
-        "q6": q6,
-        "q16": q16,
-        "q50": q50,
-        "q6_score": q6_score,
-        "q16_score": q16_score,
-        "q50_score": q50_score,
-    }
 
 
 def _expand_common(parsed):
-    """
-    Expand parsed tensors.
-
-    Takes parsed tensors and applies symmetry, builds input planes, etc.
-    Returns processed tensors ready for training.
-    """
     bsize = parsed["bsize"]
     board = parsed["board"]
     last_moves = parsed["last_moves"]
     stones_atari = parsed["stones_atari"]
-    stones_two_liberties = parsed["stones_two_liberties"]
-    stones_three_liberties = parsed["stones_three_liberties"]
+    stones_two_lib = parsed["stones_two_liberties"]
+    stones_three_lib = parsed["stones_three_liberties"]
     stones_in_ladder = parsed["stones_in_ladder"]
     color = parsed["color"]
     own = parsed["own"]
@@ -410,24 +313,20 @@ def _expand_common(parsed):
     komi = parsed["komi"]
     score = parsed["score"]
 
-    game_outcome = tf.cond(
-        score > 0,
-        lambda: tf.constant([0.0, 1.0], dtype=tf.float32),  # Win
-        lambda: tf.cond(
-            score < 0,
-            lambda: tf.constant([1.0, 0.0], dtype=tf.float32),  # Loss
-            lambda: tf.constant([0.5, 0.5], dtype=tf.float32),  # Draw
-        ),
-    )
+    if score > 0:
+        game_outcome = np.array([0.0, 1.0], dtype=np.float32)
+    elif score < 0:
+        game_outcome = np.array([1.0, 0.0], dtype=np.float32)
+    else:
+        game_outcome = np.array([0.5, 0.5], dtype=np.float32)
 
-    # apply symmetry.
     symmetry = sym.get_random_symmetry()
     (
         board,
         last_moves,
         stones_atari,
-        stones_two_liberties,
-        stones_three_liberties,
+        stones_two_lib,
+        stones_three_lib,
         own,
         policy,
         policy_aux,
@@ -439,8 +338,8 @@ def _expand_common(parsed):
         board,
         last_moves,
         stones_atari,
-        stones_two_liberties,
-        stones_three_liberties,
+        stones_two_lib,
+        stones_three_lib,
         own,
         policy,
         policy_aux,
@@ -448,29 +347,30 @@ def _expand_common(parsed):
         stones_in_ladder,
     )
 
-    # view ownership from perspective of current player.
-    own = tf.cond(color == BLACK, lambda: own, lambda: -own)
+    if color != BLACK:
+        own = -own
 
-    # build input tensors.
     input_planes = _build_input_planes(
         color,
         bsize,
         board,
         last_moves,
         stones_atari,
-        stones_two_liberties,
-        stones_three_liberties,
+        stones_two_lib,
+        stones_three_lib,
         stones_in_ladder,
     )
 
-    input = tf.convert_to_tensor(input_planes, dtype=tf.float32)
-    input = tf.transpose(input, perm=(1, 2, 0))  # CHW -> HWC
+    # CHW → HWC
+    input_arr = np.transpose(
+        np.stack(input_planes, axis=0).astype(np.float32), (1, 2, 0)
+    )
 
-    score_one_hot = _build_score_one_hot(parsed["score"])
+    score_one_hot = _build_score_one_hot(score)
     input_global_state = _build_global_state(color, last_moves, komi)
 
     return {
-        "input": input,
+        "input": input_arr,
         "input_global_state": input_global_state,
         "color": color,
         "own": own,
@@ -485,30 +385,49 @@ def _expand_common(parsed):
     }
 
 
-def expand(tf_example):
-    """Expands a tfrecord from cc/recorder/tf_recorder.cc"""
-    parsed = _parse_example(tf_example)
+def expand(features):
+    """Primary entry. Takes a parsed proto Features map, returns the 20-tuple.
+
+    Use this from backend dataset code: parse the proto with whichever module
+    your runtime owns (tfrecord.example_pb2 on the torch side, tf.train.Example
+    on the TF side) and pass `example.features.feature` here.
+    """
+    parsed = _decode_features(features)
     expanded = _expand_common(parsed)
 
     return (
         expanded["input"],
         expanded["input_global_state"],
-        expanded["color"],
-        parsed["komi"],
-        parsed["score"],
+        np.int32(expanded["color"]),
+        np.float32(parsed["komi"]),
+        np.float32(parsed["score"]),
         expanded["score_one_hot"],
         expanded["policy"],
-        expanded["policy_aux"],
+        np.int32(expanded["policy_aux"]),
         expanded["policy_aux_dist"],
-        expanded["has_pi_aux_dist"],
+        np.bool_(expanded["has_pi_aux_dist"]),
         expanded["own"],
-        parsed["q6"],
-        parsed["q16"],
-        parsed["q50"],
-        parsed["q6_score"],
-        parsed["q16_score"],
-        parsed["q50_score"],
+        np.float32(parsed["q6"]),
+        np.float32(parsed["q16"]),
+        np.float32(parsed["q50"]),
+        np.float32(parsed["q6_score"]),
+        np.float32(parsed["q16_score"]),
+        np.float32(parsed["q50_score"]),
         expanded["game_outcome"],
         expanded["mcts_value_dist"],
-        expanded["has_mcts_value_dist"],
+        np.bool_(expanded["has_mcts_value_dist"]),
     )
+
+
+def expand_bytes(serialized_bytes):
+    """Convenience: parse with `tfrecord.example_pb2`, then call `expand`.
+
+    Lazy-imports `tfrecord` so this module stays free of TF/tfrecord proto
+    dependencies until the bytes path is actually used. Use this from the
+    torch dataset (which already pulls in tfrecord) and from CLI / tests.
+    """
+    from tfrecord import example_pb2 as _pb  # lazy
+
+    ex = _pb.Example()
+    ex.ParseFromString(serialized_bytes)
+    return expand(ex.features.feature)

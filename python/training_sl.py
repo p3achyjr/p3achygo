@@ -6,29 +6,21 @@ We will train our model on samples generated from professional games.
 
 from __future__ import annotations
 
-import tensorflow as tf
-
-# Enable memory growth to prevent TF from allocating all GPU memory at once
-gpus = tf.config.experimental.list_physical_devices("GPU")
-for gpu in gpus:
-    tf.config.experimental.set_memory_growth(gpu, True)
-
 import sys
-import transforms
+import types
 import train
-import trt_convert
-import keras
+import backend_shim
+from dataset import ChunkDataset
+from backend_shim import configure_gpu
 
 from absl import app, flags, logging
 from constants import *
-from lr_schedule import CyclicLRDecaySchedule, ConstantLRSchedule
-from optimizer import ConvMuon  # noqa: F401 — registers p3achygo>ConvMuon
-from model import P3achyGoModel
+from lr_schedule import ConstantLRSchedule
+from backend_tf.model import P3achyGoModel
 from model_config import ModelConfig, CONFIG_OPTIONS
 from pathlib import Path
 
 from loss_coeffs import LossCoeffs
-from optimizer import ConvMuon
 
 sys.stdout.reconfigure(line_buffering=True)  # pytype: disable=attribute-error
 sys.stderr.reconfigure(line_buffering=True)  # pytype: disable=attribute-error
@@ -94,46 +86,46 @@ def main(_):
     )
     optimizer = None
     if FLAGS.from_checkpoint:
-        model = keras.models.load_model(FLAGS.from_checkpoint)
-        optimizer = model.optimizer
-    if optimizer is None and FLAGS.optimizer == "muon":
-        optimizer = ConvMuon(learning_rate=lr)
+        model, optimizer = backend_shim.load_with_optimizer(FLAGS.from_checkpoint)
 
-    # setup train ds.
-    train_ds = tf.data.Dataset.from_tensor_slices(train_shards)
-    train_ds = train_ds.interleave(
-        lambda x: tf.data.TFRecordDataset(x, compression_type="ZLIB").map(
-            transforms.expand
-        ),
-        cycle_length=64,
-        block_length=16,
-        num_parallel_calls=tf.data.AUTOTUNE,
-    )
-    train_ds = train_ds.shuffle(FLAGS.shuf_buf_size)
-    train_ds = train_ds.batch(batch_size)
-    train_ds = train_ds.prefetch(tf.data.AUTOTUNE)
+    # setup train ds — sequential pass through each shard, front-to-back.
+    class _SequentialShards:
+        def __init__(self, paths, batch_size):
+            self._paths = paths
+            self._batch_size = batch_size
+
+        def __iter__(self):
+            for path in self._paths:
+                yield from ChunkDataset(path, self._batch_size)
+
+    train_ds = _SequentialShards(train_shards, batch_size)
 
     # setup validation dataset
-    val_ds = tf.data.TFRecordDataset(val_shard, compression_type="ZLIB")
-    val_ds = val_ds.map(transforms.expand)
-    val_ds = val_ds.batch(batch_size)
-    lr_schedule = CyclicLRDecaySchedule(lr, lr * 10, ds_len * epochs)
+    val_ds = ChunkDataset(val_shard, batch_size)
     lr_schedule = ConstantLRSchedule(lr)
     print(lr_schedule.info())
-    model.summary()
+    backend_shim.summary(model)
 
-    is_gpu = False
-    if tf.config.list_physical_devices("GPU"):
-        tf.keras.mixed_precision.set_global_policy("mixed_float16")
-        logging.info(
-            "Compute Policy dtype: %s"
-            % tf.keras.mixed_precision.global_policy().compute_dtype
-        )
-        logging.info(
-            "Variable Policy dtype: %s"
-            % tf.keras.mixed_precision.global_policy().variable_dtype
-        )
-        is_gpu = True
+    configure_gpu()
+    is_gpu = True
+
+    # Apply backend-specific training-time transforms (no-op on TF).
+    model = backend_shim.compile_for_training(model)
+
+    # SL uses defaults for everything ConvMuon-related; build a stand-in
+    # config struct that satisfies `backend_shim.make_optimizer`.
+    sl_opt_config = types.SimpleNamespace(
+        optimizer=FLAGS.optimizer,
+        muon_wd=0.1,
+        adam_wd=0.1,
+        adam_lr_ratio=1.0,
+        wd_lr_exponent=None,
+        wd_lr_max=None,
+        global_clipnorm=float("inf"),
+    )
+    optimizer = backend_shim.make_optimizer(
+        model, sl_opt_config, lr_schedule, is_gpu, loaded_state=optimizer
+    )
 
     logging.info(f"Running initial validation...")
     train.val(model, mode=train.Mode.SL, val_ds=val_ds, batch_num=0)
@@ -160,9 +152,10 @@ def main(_):
     logging.info(f"Running final validation...")
     train.val(model, mode=train.Mode.SL, val_ds=val_ds, batch_num=1)
 
-    model_path = str(Path(FLAGS.model_save_path, "p3achygo_sl.keras"))
-    model.compile(optimizer=optimizer)
-    model.save(model_path)
+    model_path = str(
+        Path(FLAGS.model_save_path, f"p3achygo_sl{backend_shim.MODEL_EXT}")
+    )
+    backend_shim.save_model(model, model_path, optimizer=optimizer)
 
 
 if __name__ == "__main__":

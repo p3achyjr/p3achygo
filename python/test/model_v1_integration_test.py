@@ -5,9 +5,10 @@ import tensorflow as tf
 import numpy as np
 
 import sys
-sys.path.insert(0, '/app/python')
 
-from model import P3achyGoModel
+sys.path.insert(0, "/app/python")
+
+from backend_tf.model import P3achyGoModel
 from model_config import ModelConfig
 from constants import *
 
@@ -51,21 +52,24 @@ class ModelV1IntegrationTest(unittest.TestCase):
     def _create_mock_v0_batch(self, batch_size=4):
         """Create mock training batch for v0."""
         board_state = tf.random.uniform(
-            (batch_size, BOARD_LEN, BOARD_LEN, NUM_INPUT_PLANES),
-            dtype=tf.float32
+            (batch_size, BOARD_LEN, BOARD_LEN, NUM_INPUT_PLANES), dtype=tf.float32
         )
         game_state = tf.random.uniform(
-            (batch_size, NUM_INPUT_FEATURES),
-            dtype=tf.float32
+            (batch_size, NUM_INPUT_FEATURES), dtype=tf.float32
         )
 
         # Ground truth labels
-        policy = tf.nn.softmax(tf.random.uniform((batch_size, BOARD_LEN * BOARD_LEN + 1)))
-        policy_aux = tf.random.uniform((batch_size,), minval=0, maxval=361, dtype=tf.int32)
-        score = tf.random.uniform((batch_size,), minval=-50, maxval=50, dtype=tf.float32)
+        policy = tf.nn.softmax(
+            tf.random.uniform((batch_size, BOARD_LEN * BOARD_LEN + 1))
+        )
+        policy_aux = tf.random.uniform(
+            (batch_size,), minval=0, maxval=361, dtype=tf.int32
+        )
+        score = tf.random.uniform(
+            (batch_size,), minval=-50, maxval=50, dtype=tf.float32
+        )
         score_one_hot = tf.one_hot(
-            tf.cast(score + SCORE_RANGE_MIDPOINT, tf.int32),
-            depth=SCORE_RANGE
+            tf.cast(score + SCORE_RANGE_MIDPOINT, tf.int32), depth=SCORE_RANGE
         )
         own = tf.random.uniform((batch_size, BOARD_LEN, BOARD_LEN), minval=-1, maxval=1)
         q6 = tf.random.uniform((batch_size,), minval=-1, maxval=1)
@@ -88,21 +92,24 @@ class ModelV1IntegrationTest(unittest.TestCase):
     def _create_mock_v1_batch(self, batch_size=4):
         """Create mock training batch for v1."""
         board_state = tf.random.uniform(
-            (batch_size, BOARD_LEN, BOARD_LEN, NUM_INPUT_PLANES + 2),
-            dtype=tf.float32
+            (batch_size, BOARD_LEN, BOARD_LEN, NUM_INPUT_PLANES + 2), dtype=tf.float32
         )
         game_state = tf.random.uniform(
-            (batch_size, NUM_INPUT_FEATURES),
-            dtype=tf.float32
+            (batch_size, NUM_INPUT_FEATURES), dtype=tf.float32
         )
 
         # Ground truth labels
-        policy = tf.nn.softmax(tf.random.uniform((batch_size, BOARD_LEN * BOARD_LEN + 1)))
-        policy_aux = tf.random.uniform((batch_size,), minval=0, maxval=361, dtype=tf.int32)
-        score = tf.random.uniform((batch_size,), minval=-50, maxval=50, dtype=tf.float32)
+        policy = tf.nn.softmax(
+            tf.random.uniform((batch_size, BOARD_LEN * BOARD_LEN + 1))
+        )
+        policy_aux = tf.random.uniform(
+            (batch_size,), minval=0, maxval=361, dtype=tf.int32
+        )
+        score = tf.random.uniform(
+            (batch_size,), minval=-50, maxval=50, dtype=tf.float32
+        )
         score_one_hot = tf.one_hot(
-            tf.cast(score + SCORE_RANGE_MIDPOINT, tf.int32),
-            depth=SCORE_RANGE
+            tf.cast(score + SCORE_RANGE_MIDPOINT, tf.int32), depth=SCORE_RANGE
         )
         own = tf.random.uniform((batch_size, BOARD_LEN, BOARD_LEN), minval=-1, maxval=1)
         q6 = tf.random.uniform((batch_size,), minval=-1, maxval=1)
@@ -137,7 +144,8 @@ class ModelV1IntegrationTest(unittest.TestCase):
 
         outputs = model(batch["board_state"], batch["game_state"], training=True)
 
-        loss_result = compute_loss(model,
+        loss_result = compute_loss(
+            model,
             pi_logits=outputs[0],
             pi_logits_aux=outputs[8],
             game_outcome=outputs[2],
@@ -182,7 +190,8 @@ class ModelV1IntegrationTest(unittest.TestCase):
 
         outputs = model(batch["board_state"], batch["game_state"], training=True)
 
-        loss_result = compute_loss(model,
+        loss_result = compute_loss(
+            model,
             pi_logits=outputs[0],
             pi_logits_aux=outputs[8],
             game_outcome=outputs[2],
@@ -251,7 +260,8 @@ class ModelV1IntegrationTest(unittest.TestCase):
         with tf.GradientTape() as tape:
             outputs = model(batch["board_state"], batch["game_state"], training=True)
 
-            loss_result = compute_loss(model,
+            loss_result = compute_loss(
+                model,
                 pi_logits=outputs[0],
                 pi_logits_aux=outputs[8],
                 game_outcome=outputs[2],
@@ -303,7 +313,8 @@ class ModelV1IntegrationTest(unittest.TestCase):
         with tf.GradientTape() as tape:
             outputs = model(batch["board_state"], batch["game_state"], training=True)
 
-            loss_result = compute_loss(model,
+            loss_result = compute_loss(
+                model,
                 pi_logits=outputs[0],
                 pi_logits_aux=outputs[8],
                 game_outcome=outputs[2],
@@ -379,9 +390,12 @@ class ModelV1IntegrationTest(unittest.TestCase):
 
         for step in range(10):
             with tf.GradientTape() as tape:
-                outputs = model(batch["board_state"], batch["game_state"], training=True)
+                outputs = model(
+                    batch["board_state"], batch["game_state"], training=True
+                )
 
-                loss_result = compute_loss(model,
+                loss_result = compute_loss(
+                    model,
                     pi_logits=outputs[0],
                     pi_logits_aux=outputs[8],
                     game_outcome=outputs[2],
@@ -434,9 +448,12 @@ class ModelV1IntegrationTest(unittest.TestCase):
 
         for step in range(10):
             with tf.GradientTape() as tape:
-                outputs = model(batch["board_state"], batch["game_state"], training=True)
+                outputs = model(
+                    batch["board_state"], batch["game_state"], training=True
+                )
 
-                loss_result = compute_loss(model,
+                loss_result = compute_loss(
+                    model,
                     pi_logits=outputs[0],
                     pi_logits_aux=outputs[8],
                     game_outcome=outputs[2],
@@ -508,7 +525,8 @@ class ModelV1IntegrationTest(unittest.TestCase):
         outputs = model(batch["board_state"], batch["game_state"], training=True)
 
         # Call loss without v1-specific parameters
-        loss_result = compute_loss(model,
+        loss_result = compute_loss(
+            model,
             pi_logits=outputs[0],
             pi_logits_aux=outputs[8],
             game_outcome=outputs[2],

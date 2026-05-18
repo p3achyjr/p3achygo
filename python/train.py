@@ -3,302 +3,112 @@ from __future__ import annotations
 import functools
 import math
 import numpy as np
-import tensorflow as tf
-import keras
-from typing import NamedTuple, Optional
+from typing import Any, NamedTuple, Optional
 
 from board import GoBoard
 from collections import defaultdict
 from constants import *
-from model import P3achyGoModel, ModelPredictions, GroundTruth, LossWeights
 from pathlib import Path
 from loss_coeffs import LossCoeffs
 from enum import Enum
 from weight_snapshot import WeightSnapshotManager
+from backend_shim import *
+from backend_shim import P3achyGoModel
+import backend_shim
+
+
+def _softmax(x: np.ndarray, axis: int = -1) -> np.ndarray:
+    """Stable softmax over the last axis by default."""
+    e = np.exp(x - np.max(x, axis=axis, keepdims=True))
+    return e / e.sum(axis=axis, keepdims=True)
+
+
+# Names of loss-component fields on TrainStepResult to scan for nan/inf.
+_LOSS_FIELDS = (
+    "total_loss",
+    "policy_loss",
+    "policy_aux_dist_loss",
+    "policy_aux_scalar_loss",
+    "outcome_loss",
+    "q6_loss",
+    "q16_loss",
+    "q50_loss",
+    "score_pdf_loss",
+    "score_cdf_loss",
+    "own_loss",
+    "q_err_loss",
+    "q_score_loss",
+    "q_score_err_loss",
+    "pi_soft_loss",
+    "pi_optimistic_loss",
+    "mcts_dist_loss",
+)
+
+# Track scaler state across calls so we can flag sustained nan/inf grads
+# (scaler halves on each detection — repeated halving = persistent issue).
+_scale_state = {"last_scale": None, "halvings_in_a_row": 0}
+
+
+def _check_finite(batch_num: int, result, optimizer) -> None:
+    """Log unconditionally on any nan/inf signal in this step.
+
+    Catches:
+      - any per-component loss being nan/inf (forward broke)
+      - grad_norm being nan/inf (backward produced non-finite that the
+        scaler could not unscale away)
+      - GradScaler's dynamic scale halved (= scaler detected nan/inf grads
+        and skipped the inner step) — silent failure mode that produced
+        the b8c128tfmr / mish bug. We track halvings-in-a-row so the log
+        line distinguishes a one-off probe-halving from a stuck loop.
+
+    Prints a single line per event; never raises.
+    """
+    bad = []
+    for name in _LOSS_FIELDS:
+        v = getattr(result, name, None)
+        if v is None:
+            continue
+        if hasattr(v, "detach"):
+            v = v.detach()
+        try:
+            f = float(v)
+        except (TypeError, RuntimeError):
+            continue
+        if math.isnan(f) or math.isinf(f):
+            bad.append(f"{name}={f}")
+
+    gn = getattr(result, "grad_norm", None)
+    if gn is not None and (math.isnan(gn) or math.isinf(gn)):
+        bad.append(f"grad_norm={gn}")
+
+    # Scaler-skip detection: when a `torch.amp.GradScaler` step is skipped
+    # because grads are nan/inf, it halves the scale. We notice persistent
+    # halving (> 1 step in a row) — a single halving on step 0 is the
+    # normal scaler probe and not interesting.
+    scaler = getattr(optimizer, "scaler", None)
+    if scaler is not None and hasattr(scaler, "get_scale"):
+        try:
+            cur_scale = float(scaler.get_scale())
+        except Exception:
+            cur_scale = None
+        last = _scale_state["last_scale"]
+        if cur_scale is not None and last is not None and cur_scale < last:
+            _scale_state["halvings_in_a_row"] += 1
+            if _scale_state["halvings_in_a_row"] >= 2:
+                bad.append(
+                    f"scaler_scale={cur_scale} (halved {_scale_state['halvings_in_a_row']}× in a row)"
+                )
+        elif cur_scale is not None and last is not None and cur_scale >= last:
+            _scale_state["halvings_in_a_row"] = 0
+        _scale_state["last_scale"] = cur_scale
+
+    if bad:
+        print(f"[batch {batch_num}] NON-FINITE: " + ", ".join(bad), flush=True)
 
 
 class Mode(Enum):
     SL = 1
     RL = 2
-
-
-class TrainStepResult(NamedTuple):
-    """Result from a training step."""
-
-    predictions: ModelPredictions
-    total_loss: tf.Tensor
-    policy_loss: tf.Tensor
-    policy_aux_dist_loss: tf.Tensor
-    policy_aux_scalar_loss: tf.Tensor
-    outcome_loss: tf.Tensor
-    q6_loss: tf.Tensor
-    q16_loss: tf.Tensor
-    q50_loss: tf.Tensor
-    score_pdf_loss: tf.Tensor
-    score_cdf_loss: tf.Tensor
-    own_loss: tf.Tensor
-    # v1 only
-    q_err_loss: Optional[tf.Tensor] = None
-    q_score_loss: Optional[tf.Tensor] = None
-    q_score_err_loss: Optional[tf.Tensor] = None
-    pi_soft_loss: Optional[tf.Tensor] = None
-    pi_optimistic_loss: Optional[tf.Tensor] = None
-    mcts_dist_loss: Optional[tf.Tensor] = None
-    grad_norm: float = 0.0
-
-
-@tf.function
-def train_step(
-    input: tf.Tensor,
-    input_global_state: tf.Tensor,
-    targets: GroundTruth,
-    weights: LossWeights,
-    model: P3achyGoModel,
-    optimizer,
-) -> TrainStepResult:
-    """
-    Training step for v1 models (with one-batch-norm).
-
-    Args:
-        input: Board state tensor
-        input_global_state: Global state tensor
-        targets: GroundTruth with labels
-        weights: LossWeights with loss weights
-        model: The model instance
-        optimizer: The optimizer
-
-    Returns:
-        TrainStepResult with predictions and losses
-    """
-    with tf.GradientTape() as g:
-        # Get model outputs (v1: 46 outputs = 23 FVI + 23 BN)
-        model_outputs = model(input, input_global_state, training=True)
-
-        (
-            pi_logits,
-            pi,
-            outcome_logits,
-            outcome_probs,
-            ownership,
-            score_logits,
-            score_probs,
-            gamma,
-            pi_logits_aux,
-            q6_pred,
-            q16_pred,
-            q50_pred,
-            q6_err_pred,
-            q16_err_pred,
-            q50_err_pred,
-            q6_score_pred,
-            q16_score_pred,
-            q50_score_pred,
-            q6_score_err_pred,
-            q16_score_err_pred,
-            q50_score_err_pred,
-            pi_logits_soft,
-            pi_logits_optimistic,
-            mcts_dist_logits,
-            mcts_dist_probs,
-        ) = model_outputs
-
-        predictions = ModelPredictions(
-            pi_logits=pi_logits,
-            pi_logits_aux=pi_logits_aux,
-            game_outcome=outcome_logits,
-            score_logits=score_logits,
-            own_pred=ownership,
-            q6_pred=q6_pred,
-            q16_pred=q16_pred,
-            q50_pred=q50_pred,
-            gamma=gamma,
-            q6_err_pred=q6_err_pred,
-            q16_err_pred=q16_err_pred,
-            q50_err_pred=q50_err_pred,
-            q6_score_pred=q6_score_pred,
-            q16_score_pred=q16_score_pred,
-            q50_score_pred=q50_score_pred,
-            q6_score_err_pred=q6_score_err_pred,
-            q16_score_err_pred=q16_score_err_pred,
-            q50_score_err_pred=q50_score_err_pred,
-            pi_logits_soft=pi_logits_soft,
-            pi_logits_optimistic=pi_logits_optimistic,
-            mcts_dist_logits=mcts_dist_logits,
-            mcts_dist_probs=mcts_dist_probs,
-        )
-
-        # Compute losses for both heads
-        loss_outputs = model.compute_losses(predictions, targets, weights)
-
-        # Unpack loss outputs
-        (
-            loss,
-            policy_loss,
-            policy_aux_dist_loss,
-            policy_aux_scalar_loss,
-            outcome_loss,
-            q6_loss,
-            q16_loss,
-            q50_loss,
-            score_pdf_loss,
-            score_cdf_loss,
-            own_loss,
-            q_err_loss,
-            q_score_loss,
-            q_score_err_loss,
-            pi_soft_loss,
-            pi_optimistic_loss,
-            mcts_dist_loss,
-        ) = loss_outputs
-
-        reg_loss = tf.math.add_n(model.losses)
-        total_loss = loss + reg_loss
-        scaled_loss = optimizer.scale_loss(total_loss)
-
-    gradients = g.gradient(scaled_loss, model.trainable_variables)
-    optimizer.apply_gradients(zip(gradients, model.trainable_variables))
-
-    scale = tf.cast(
-        optimizer.dynamic_scale if optimizer.built else optimizer.initial_scale,
-        tf.float32,
-    )
-    unscaled_gradients = [g / scale for g in gradients]
-
-    return TrainStepResult(
-        predictions=predictions,
-        total_loss=total_loss,
-        policy_loss=policy_loss,
-        policy_aux_dist_loss=policy_aux_dist_loss,
-        policy_aux_scalar_loss=policy_aux_scalar_loss,
-        outcome_loss=outcome_loss,
-        q6_loss=q6_loss,
-        q16_loss=q16_loss,
-        q50_loss=q50_loss,
-        score_pdf_loss=score_pdf_loss,
-        score_cdf_loss=score_cdf_loss,
-        own_loss=own_loss,
-        q_err_loss=q_err_loss,
-        q_score_loss=q_score_loss,
-        q_score_err_loss=q_score_err_loss,
-        pi_soft_loss=pi_soft_loss,
-        pi_optimistic_loss=pi_optimistic_loss,
-        mcts_dist_loss=mcts_dist_loss,
-        grad_norm=tf.linalg.global_norm(unscaled_gradients),
-    )
-
-
-@tf.function
-def val_step(
-    input: tf.Tensor,
-    input_global_state: tf.Tensor,
-    targets: GroundTruth,
-    weights: LossWeights,
-    model: P3achyGoModel,
-) -> TrainStepResult:
-    """Validation step for v1 models (with one-batch-norm)."""
-    # Get model outputs (v1: 46 outputs = 23 FVI + 23 BN)
-    model_outputs = model(input, input_global_state, training=False)
-
-    (
-        pi_logits,
-        pi,
-        outcome_logits,
-        outcome_probs,
-        ownership,
-        score_logits,
-        score_probs,
-        gamma,
-        pi_logits_aux,
-        q6_pred,
-        q16_pred,
-        q50_pred,
-        q6_err_pred,
-        q16_err_pred,
-        q50_err_pred,
-        q6_score_pred,
-        q16_score_pred,
-        q50_score_pred,
-        q6_score_err_pred,
-        q16_score_err_pred,
-        q50_score_err_pred,
-        pi_logits_soft,
-        pi_logits_optimistic,
-        mcts_dist_logits,
-        mcts_dist_probs,
-    ) = model_outputs
-
-    predictions = ModelPredictions(
-        pi_logits=pi_logits,
-        pi_logits_aux=pi_logits_aux,
-        game_outcome=outcome_logits,
-        score_logits=score_logits,
-        own_pred=ownership,
-        q6_pred=q6_pred,
-        q16_pred=q16_pred,
-        q50_pred=q50_pred,
-        gamma=gamma,
-        q6_err_pred=q6_err_pred,
-        q16_err_pred=q16_err_pred,
-        q50_err_pred=q50_err_pred,
-        q6_score_pred=q6_score_pred,
-        q16_score_pred=q16_score_pred,
-        q50_score_pred=q50_score_pred,
-        q6_score_err_pred=q6_score_err_pred,
-        q16_score_err_pred=q16_score_err_pred,
-        q50_score_err_pred=q50_score_err_pred,
-        pi_logits_soft=pi_logits_soft,
-        pi_logits_optimistic=pi_logits_optimistic,
-        mcts_dist_logits=mcts_dist_logits,
-        mcts_dist_probs=mcts_dist_probs,
-    )
-
-    # Compute losses for both heads
-    loss_outputs = model.compute_losses(predictions, targets, weights)
-
-    # Unpack loss outputs
-    (
-        loss,
-        policy_loss,
-        policy_aux_dist_loss,
-        policy_aux_scalar_loss,
-        outcome_loss,
-        q6_loss,
-        q16_loss,
-        q50_loss,
-        score_pdf_loss,
-        score_cdf_loss,
-        own_loss,
-        q_err_loss,
-        q_score_loss,
-        q_score_err_loss,
-        pi_soft_loss,
-        pi_optimistic_loss,
-        mcts_dist_loss,
-    ) = loss_outputs
-
-    reg_loss = tf.math.add_n(model.losses)
-    total_loss = loss + reg_loss
-
-    return TrainStepResult(
-        predictions=predictions,
-        total_loss=total_loss,
-        policy_loss=policy_loss,
-        policy_aux_dist_loss=policy_aux_dist_loss,
-        policy_aux_scalar_loss=policy_aux_scalar_loss,
-        outcome_loss=outcome_loss,
-        q6_loss=q6_loss,
-        q16_loss=q16_loss,
-        q50_loss=q50_loss,
-        score_pdf_loss=score_pdf_loss,
-        score_cdf_loss=score_cdf_loss,
-        own_loss=own_loss,
-        q_err_loss=q_err_loss,
-        q_score_loss=q_score_loss,
-        q_score_err_loss=q_score_err_loss,
-        pi_soft_loss=pi_soft_loss,
-        pi_optimistic_loss=pi_optimistic_loss,
-        mcts_dist_loss=mcts_dist_loss,
-    )
 
 
 class LossTracker:
@@ -315,38 +125,38 @@ class LossTracker:
         result: TrainStepResult,
     ):
 
-        loss = result.total_loss.numpy()
+        loss = float(result.total_loss)
         if math.isnan(loss) or math.isinf(loss):
             return
-        policy_loss = result.policy_loss.numpy()
-        policy_aux_dist_loss = result.policy_aux_dist_loss.numpy()
-        policy_aux_scalar_loss = result.policy_aux_scalar_loss.numpy()
-        outcome_loss = result.outcome_loss.numpy()
-        score_pdf_loss = result.score_pdf_loss.numpy()
-        score_cdf_loss = result.score_cdf_loss.numpy()
-        own_loss = result.own_loss.numpy()
-        q6_loss = result.q6_loss.numpy()
-        q16_loss = result.q16_loss.numpy()
-        q50_loss = result.q50_loss.numpy()
-        q_err_loss = result.q_err_loss.numpy() if result.q_err_loss is not None else 0.0
+        policy_loss = float(result.policy_loss)
+        policy_aux_dist_loss = float(result.policy_aux_dist_loss)
+        policy_aux_scalar_loss = float(result.policy_aux_scalar_loss)
+        outcome_loss = float(result.outcome_loss)
+        score_pdf_loss = float(result.score_pdf_loss)
+        score_cdf_loss = float(result.score_cdf_loss)
+        own_loss = float(result.own_loss)
+        q6_loss = float(result.q6_loss)
+        q16_loss = float(result.q16_loss)
+        q50_loss = float(result.q50_loss)
+        q_err_loss = float(result.q_err_loss) if result.q_err_loss is not None else 0.0
         q_score_loss = (
-            result.q_score_loss.numpy() if result.q_score_loss is not None else 0.0
+            float(result.q_score_loss) if result.q_score_loss is not None else 0.0
         )
         q_score_err_loss = (
-            result.q_score_err_loss.numpy()
+            float(result.q_score_err_loss)
             if result.q_score_err_loss is not None
             else 0.0
         )
         pi_soft_loss = (
-            result.pi_soft_loss.numpy() if result.pi_soft_loss is not None else 0.0
+            float(result.pi_soft_loss) if result.pi_soft_loss is not None else 0.0
         )
         pi_optimistic_loss = (
-            result.pi_optimistic_loss.numpy()
+            float(result.pi_optimistic_loss)
             if result.pi_optimistic_loss is not None
             else 0.0
         )
         mcts_dist_loss = (
-            result.mcts_dist_loss.numpy() if result.mcts_dist_loss is not None else 0.0
+            float(result.mcts_dist_loss) if result.mcts_dist_loss is not None else 0.0
         )
 
         def update_mean_losses(r_m: float, r_c: float, losses: dict):
@@ -427,28 +237,28 @@ class ValMetrics:
 
 def train(
     model: P3achyGoModel,
-    train_ds: tf.data.Dataset,
+    train_ds,
     epochs: int,
     momentum: float,
     log_interval: int,
     mode: Mode,
     coeffs: LossCoeffs,
-    optimizer: Optional[keras.optimizers.Optimizer] = None,
+    optimizer: Optional[Any] = None,
     save_interval=1000,
     save_path="/tmp",
     tensorboard_log_dir="/tmp/logs",
-    lr_schedule: Optional[keras.optimizers.schedules.LearningRateSchedule] = None,
+    lr_schedule: Optional[Any] = None,
     is_gpu=True,
     batch_num=0,
     ss_manager: Optional[WeightSnapshotManager] = None,
-    val_ds: Optional[tf.data.Dataset] = None,
+    val_ds=None,
     num_val_batches: int = 10,
 ):
     """
     Training through single dataset.
     """
     assert is_gpu
-    summary_writer = tf.summary.create_file_writer(tensorboard_log_dir)
+    summary_writer = SummaryWriter(tensorboard_log_dir)
 
     # Create LossWeights NamedTuple from coefficients
     weights = LossWeights(
@@ -470,21 +280,17 @@ def train(
         w_mcts_dist=coeffs.w_mcts_dist,
     )
 
-    if not optimizer:
-        optimizer = keras.optimizers.SGD(
-            learning_rate=lr_schedule,
-            momentum=momentum,
-            global_clipnorm=20.0,  # purely for numerical stability
-            nesterov=True,
-        )
-        if is_gpu:
-            optimizer = keras.mixed_precision.LossScaleOptimizer(optimizer)
+    assert optimizer is not None, (
+        "train() requires a pre-built optimizer; use backend_shim.make_optimizer "
+        "to construct one (centralized factory)."
+    )
 
     losses_train = LossTracker()
     local_batch_num = 0
     for _ in range(epochs):
         # train
         for batch_data in train_ds:
+            backend_shim.step_begin()
             if save_path and save_interval and batch_num % save_interval == 0:
                 save_model(model, optimizer, batch_num, save_path)
                 # Run validation on checkpoint save
@@ -549,10 +355,7 @@ def train(
                 optimizer,
             )
 
-            if math.isnan(result.total_loss.numpy()) or math.isinf(
-                result.total_loss.numpy()
-            ):
-                print(f"[batch {batch_num}] saw inf/nan gradients")
+            _check_finite(batch_num, result, optimizer)
 
             losses_train.update_losses(result)
 
@@ -584,19 +387,19 @@ def train(
                     )
 
                     # Log policy entropy to detect flat distributions
-                    pi_probs = keras.activations.softmax(
+                    pi_logits_np = backend_shim.to_numpy(
                         result.predictions.pi_logits[0]
                     )
-                    policy_entropy = -tf.reduce_sum(
-                        pi_probs * tf.math.log(pi_probs + 1e-10)
-                    )
-                    target_entropy = -tf.reduce_sum(
-                        targets.policy[0] * tf.math.log(targets.policy[0] + 1e-10)
+                    pi_probs = _softmax(pi_logits_np)
+                    policy_entropy = -float(np.sum(pi_probs * np.log(pi_probs + 1e-10)))
+                    target_np = backend_shim.to_numpy(targets.policy[0])
+                    target_entropy = -float(
+                        np.sum(target_np * np.log(target_np + 1e-10))
                     )
                     print(
-                        f"Policy entropy - Predicted: {policy_entropy.numpy():.3f}, "
-                        f"Target: {target_entropy.numpy():.3f} "
-                        f"(max={tf.math.log(362.0).numpy():.3f})"
+                        f"Policy entropy - Predicted: {policy_entropy:.3f}, "
+                        f"Target: {target_entropy:.3f} "
+                        f"(max={math.log(362.0):.3f})"
                     )
 
     if save_path:
@@ -671,7 +474,7 @@ def log_train(
     batch_num: int,
     losses: LossTracker,
     result: TrainStepResult,
-    summary_writer: tf.summary.SummaryWriter,
+    summary_writer: SummaryWriter,
     mode: Mode,
 ):
     mode_str = "sl" if mode == Mode.SL else "rl"
@@ -694,40 +497,32 @@ def log_train(
     pi_optimistic_avg = losses.ema_losses["pi_optimistic"]
     mcts_dist_avg = losses.ema_losses["mcts_dist"]
 
-    loss_cur = result.total_loss.numpy()
-    policy_cur = result.policy_loss.numpy()
-    policy_aux_dist_cur = result.policy_aux_dist_loss.numpy()
-    policy_aux_scalar_cur = result.policy_aux_scalar_loss.numpy()
-    outcome_cur = result.outcome_loss.numpy()
-    score_pdf_cur = result.score_pdf_loss.numpy()
-    score_cdf_cur = result.score_cdf_loss.numpy()
-    own_cur = result.own_loss.numpy()
-    q6_cur = result.q6_loss.numpy()
-    q16_cur = result.q16_loss.numpy()
-    q50_cur = result.q50_loss.numpy()
-    q_err_cur = result.q_err_loss.numpy() if result.q_err_loss is not None else 0.0
-    q_score_cur = (
-        result.q_score_loss.numpy() if result.q_score_loss is not None else 0.0
-    )
+    loss_cur = float(result.total_loss)
+    policy_cur = float(result.policy_loss)
+    policy_aux_dist_cur = float(result.policy_aux_dist_loss)
+    policy_aux_scalar_cur = float(result.policy_aux_scalar_loss)
+    outcome_cur = float(result.outcome_loss)
+    score_pdf_cur = float(result.score_pdf_loss)
+    score_cdf_cur = float(result.score_cdf_loss)
+    own_cur = float(result.own_loss)
+    q6_cur = float(result.q6_loss)
+    q16_cur = float(result.q16_loss)
+    q50_cur = float(result.q50_loss)
+    q_err_cur = float(result.q_err_loss) if result.q_err_loss is not None else 0.0
+    q_score_cur = float(result.q_score_loss) if result.q_score_loss is not None else 0.0
     q_score_err_cur = (
-        result.q_score_err_loss.numpy() if result.q_score_err_loss is not None else 0.0
+        float(result.q_score_err_loss) if result.q_score_err_loss is not None else 0.0
     )
-    pi_soft_cur = (
-        result.pi_soft_loss.numpy() if result.pi_soft_loss is not None else 0.0
-    )
+    pi_soft_cur = float(result.pi_soft_loss) if result.pi_soft_loss is not None else 0.0
     pi_optimistic_cur = (
-        result.pi_optimistic_loss.numpy()
+        float(result.pi_optimistic_loss)
         if result.pi_optimistic_loss is not None
         else 0.0
     )
     mcts_dist_cur = (
-        result.mcts_dist_loss.numpy() if result.mcts_dist_loss is not None else 0.0
+        float(result.mcts_dist_loss) if result.mcts_dist_loss is not None else 0.0
     )
-    grad_norm = (
-        result.grad_norm.numpy()
-        if hasattr(result.grad_norm, "numpy")
-        else result.grad_norm
-    )
+    grad_norm = float(result.grad_norm) if result.grad_norm is not None else 0.0
 
     print(
         f"[batch {batch_num}] {mode_str}: "
@@ -751,37 +546,34 @@ def log_train(
         f"grad_norm = {grad_norm:.4f}"
     )
 
-    with summary_writer.as_default():
-        tf.summary.scalar(f"{mode_str}/loss", loss_avg, step=batch_num)
-        tf.summary.scalar(f"{mode_str}/policy", policy_avg, step=batch_num)
-        tf.summary.scalar(
-            f"{mode_str}/policy_aux_dist", policy_aux_dist_avg, step=batch_num
-        )
-        tf.summary.scalar(
-            f"{mode_str}/policy_aux_scalar", policy_aux_scalar_avg, step=batch_num
-        )
-        tf.summary.scalar(f"{mode_str}/outcome", outcome_avg, step=batch_num)
-        tf.summary.scalar(f"{mode_str}/score_pdf", score_pdf_avg, step=batch_num)
-        tf.summary.scalar(f"{mode_str}/score_cdf", score_cdf_avg, step=batch_num)
-        tf.summary.scalar(f"{mode_str}/own", own_avg, step=batch_num)
-        tf.summary.scalar(f"{mode_str}/q6", q6_avg, step=batch_num)
-        tf.summary.scalar(f"{mode_str}/q16", q16_avg, step=batch_num)
-        tf.summary.scalar(f"{mode_str}/q50", q50_avg, step=batch_num)
-        tf.summary.scalar(f"{mode_str}/mcts_dist", mcts_dist_avg, step=batch_num)
+    summary_writer.scalar(f"{mode_str}/loss", loss_avg, batch_num)
+    summary_writer.scalar(f"{mode_str}/policy", policy_avg, batch_num)
+    summary_writer.scalar(f"{mode_str}/policy_aux_dist", policy_aux_dist_avg, batch_num)
+    summary_writer.scalar(
+        f"{mode_str}/policy_aux_scalar", policy_aux_scalar_avg, batch_num
+    )
+    summary_writer.scalar(f"{mode_str}/outcome", outcome_avg, batch_num)
+    summary_writer.scalar(f"{mode_str}/score_pdf", score_pdf_avg, batch_num)
+    summary_writer.scalar(f"{mode_str}/score_cdf", score_cdf_avg, batch_num)
+    summary_writer.scalar(f"{mode_str}/own", own_avg, batch_num)
+    summary_writer.scalar(f"{mode_str}/q6", q6_avg, batch_num)
+    summary_writer.scalar(f"{mode_str}/q16", q16_avg, batch_num)
+    summary_writer.scalar(f"{mode_str}/q50", q50_avg, batch_num)
+    summary_writer.scalar(f"{mode_str}/mcts_dist", mcts_dist_avg, batch_num)
 
 
 def log_board_position(
     batch_num: int,
-    input_planes: tf.Tensor,
-    input_global_state: tf.Tensor,
+    input_planes,
+    input_global_state,
     predictions: ModelPredictions,
     targets: GroundTruth,
     model: P3achyGoModel,
 ):
     """Log a sample board position with model predictions."""
     # Take first example from batch
-    planes = input_planes[0].numpy()  # (19, 19, num_planes)
-    global_state = input_global_state[0].numpy()
+    planes = backend_shim.to_numpy(input_planes[0])  # (19, 19, num_planes)
+    global_state = backend_shim.to_numpy(input_global_state[0])
 
     # Reconstruct board from planes
     # Planes 0-2: current position (our stones, opponent stones, empty)
@@ -805,53 +597,54 @@ def log_board_position(
         board[opp_stones > 0.5] = BLACK
 
     # Get predictions and ground truth
-    policy_pred = tf.nn.softmax(predictions.pi_logits[0]).numpy()
-    outcome_pred = tf.nn.softmax(predictions.game_outcome[0]).numpy()
-    score_pred = tf.nn.softmax(predictions.score_logits[0]).numpy()
+    policy_pred = _softmax(backend_shim.to_numpy(predictions.pi_logits[0]))
+    outcome_pred = _softmax(backend_shim.to_numpy(predictions.game_outcome[0]))
+    score_pred = _softmax(backend_shim.to_numpy(predictions.score_logits[0]))
 
-    policy_target = targets.policy[0].numpy()
-    score_target = targets.score[0].numpy()
+    policy_target = backend_shim.to_numpy(targets.policy[0])
+    score_target = backend_shim.to_numpy(targets.score[0])
 
     # Get top 5 policy moves
     top_indices = np.argsort(policy_pred)[-5:][::-1]
     top_indices_target = np.argsort(policy_target)[-5:][::-1]
 
+    # 0-d numpy arrays (from torch's .numpy()) don't implement __format__ for
+    # f-string `:.4f`, while TF's Tensor.numpy() returns Python scalars that
+    # do. Force Python float for the per-example scalar quantities.
+    def _f(t):
+        return float(backend_shim.to_numpy(t))
+
     # short-term
-    q6_pred, q6 = predictions.q6_pred[0].numpy(), targets.q6[0].numpy()
-    q16_pred, q16 = predictions.q16_pred[0].numpy(), targets.q16[0].numpy()
-    q50_pred, q50 = predictions.q50_pred[0].numpy(), targets.q50[0].numpy()
-    q6_err_pred, q6_err = predictions.q6_err_pred[0].numpy(), np.square(q6 - q6_pred)
-    q16_err_pred, q16_err = predictions.q16_err_pred[0].numpy(), np.square(
-        q16 - q16_pred
+    q6_pred, q6 = _f(predictions.q6_pred[0]), _f(targets.q6[0])
+    q16_pred, q16 = _f(predictions.q16_pred[0]), _f(targets.q16[0])
+    q50_pred, q50 = _f(predictions.q50_pred[0]), _f(targets.q50[0])
+    q6_err_pred, q6_err = _f(predictions.q6_err_pred[0]), float(np.square(q6 - q6_pred))
+    q16_err_pred, q16_err = _f(predictions.q16_err_pred[0]), float(
+        np.square(q16 - q16_pred)
     )
-    q50_err_pred, q50_err = predictions.q50_err_pred[0].numpy(), np.square(
-        q50 - q50_pred
+    q50_err_pred, q50_err = _f(predictions.q50_err_pred[0]), float(
+        np.square(q50 - q50_pred)
     )
 
     # short-term score
-    q6_score_pred, q6_score = (
-        predictions.q6_score_pred[0].numpy(),
-        targets.q6_score[0].numpy(),
+    q6_score_pred, q6_score = _f(predictions.q6_score_pred[0]), _f(targets.q6_score[0])
+    q16_score_pred, q16_score = _f(predictions.q16_score_pred[0]), _f(
+        targets.q16_score[0]
     )
-    q16_score_pred, q16_score = (
-        predictions.q16_score_pred[0].numpy(),
-        targets.q16_score[0].numpy(),
-    )
-    q50_score_pred, q50_score = (
-        predictions.q50_score_pred[0].numpy(),
-        targets.q50_score[0].numpy(),
+    q50_score_pred, q50_score = _f(predictions.q50_score_pred[0]), _f(
+        targets.q50_score[0]
     )
     q6_score_err_pred, q6_score_err = (
-        predictions.q6_score_err_pred[0].numpy(),
-        np.square(q6_score - q6_score_pred),
+        _f(predictions.q6_score_err_pred[0]),
+        float(np.square(q6_score - q6_score_pred)),
     )
     q16_score_err_pred, q16_score_err = (
-        predictions.q16_score_err_pred[0].numpy(),
-        np.square(q16_score - q16_score_pred),
+        _f(predictions.q16_score_err_pred[0]),
+        float(np.square(q16_score - q16_score_pred)),
     )
     q50_score_err_pred, q50_score_err = (
-        predictions.q50_score_err_pred[0].numpy(),
-        np.square(q50_score - q50_score_pred),
+        _f(predictions.q50_score_err_pred[0]),
+        float(np.square(q50_score - q50_score_pred)),
     )
 
     # Convert move indices to coordinates
@@ -870,9 +663,9 @@ def log_board_position(
     print(f"Komi: {komi_actual:.1f} (normalized: {komi:+.3f})")
     print()
     # Ownership (own_pred is from current player perspective; convert to absolute black=positive)
-    own_pred = predictions.own_pred[0].numpy().squeeze()  # (19, 19)
+    own_pred = backend_shim.to_numpy(predictions.own_pred[0]).squeeze()  # (19, 19)
     own_pred_abs = own_pred if to_play == BLACK else -own_pred
-    own = targets.own[0].numpy().squeeze()
+    own = backend_shim.to_numpy(targets.own[0]).squeeze()
     own = own if to_play == BLACK else -own
 
     def ownership_char(x):
@@ -953,37 +746,37 @@ def log_board_position(
     top_indices_soft_target = np.argsort(policy_soft_target)[-5:][::-1]
 
     # Soft and optimistic predicted policies
-    pi_soft_probs = keras.activations.softmax(predictions.pi_logits_soft[0]).numpy()
-    pi_optimistic_probs = keras.activations.softmax(
-        predictions.pi_logits_optimistic[0]
-    ).numpy()
+    pi_soft_probs = _softmax(backend_shim.to_numpy(predictions.pi_logits_soft[0]))
+    pi_optimistic_probs = _softmax(
+        backend_shim.to_numpy(predictions.pi_logits_optimistic[0])
+    )
     top_soft = np.argsort(pi_soft_probs)[-5:][::-1]
     top_optimistic = np.argsort(pi_optimistic_probs)[-5:][::-1]
 
     # Optimistic weight (mirrors v1_loss_terms computation)
     epsilon = 1e-6
-    q6_p = predictions.q6_pred[0].numpy()
-    q16_p = predictions.q16_pred[0].numpy()
-    q50_p = predictions.q50_pred[0].numpy()
-    q6_err_p = predictions.q6_err_pred[0].numpy()
-    q16_err_p = predictions.q16_err_pred[0].numpy()
-    q50_err_p = predictions.q50_err_pred[0].numpy()
-    q6_score_p = predictions.q6_score_pred[0].numpy()
-    q16_score_p = predictions.q16_score_pred[0].numpy()
-    q50_score_p = predictions.q50_score_pred[0].numpy()
-    q6_score_err_p = predictions.q6_score_err_pred[0].numpy()
-    q16_score_err_p = predictions.q16_score_err_pred[0].numpy()
-    q50_score_err_p = predictions.q50_score_err_pred[0].numpy()
-    z6 = (targets.q6[0].numpy() - q6_p) / np.sqrt(q6_err_p + epsilon)
-    z16 = (targets.q16[0].numpy() - q16_p) / np.sqrt(q16_err_p + epsilon)
-    z50 = (targets.q50[0].numpy() - q50_p) / np.sqrt(q50_err_p + epsilon)
-    z6_score = (targets.q6_score[0].numpy() - q6_score_p) / np.sqrt(
+    q6_p = backend_shim.to_numpy(predictions.q6_pred[0])
+    q16_p = backend_shim.to_numpy(predictions.q16_pred[0])
+    q50_p = backend_shim.to_numpy(predictions.q50_pred[0])
+    q6_err_p = backend_shim.to_numpy(predictions.q6_err_pred[0])
+    q16_err_p = backend_shim.to_numpy(predictions.q16_err_pred[0])
+    q50_err_p = backend_shim.to_numpy(predictions.q50_err_pred[0])
+    q6_score_p = backend_shim.to_numpy(predictions.q6_score_pred[0])
+    q16_score_p = backend_shim.to_numpy(predictions.q16_score_pred[0])
+    q50_score_p = backend_shim.to_numpy(predictions.q50_score_pred[0])
+    q6_score_err_p = backend_shim.to_numpy(predictions.q6_score_err_pred[0])
+    q16_score_err_p = backend_shim.to_numpy(predictions.q16_score_err_pred[0])
+    q50_score_err_p = backend_shim.to_numpy(predictions.q50_score_err_pred[0])
+    z6 = (backend_shim.to_numpy(targets.q6[0]) - q6_p) / np.sqrt(q6_err_p + epsilon)
+    z16 = (backend_shim.to_numpy(targets.q16[0]) - q16_p) / np.sqrt(q16_err_p + epsilon)
+    z50 = (backend_shim.to_numpy(targets.q50[0]) - q50_p) / np.sqrt(q50_err_p + epsilon)
+    z6_score = (backend_shim.to_numpy(targets.q6_score[0]) - q6_score_p) / np.sqrt(
         q6_score_err_p + epsilon
     )
-    z16_score = (targets.q16_score[0].numpy() - q16_score_p) / np.sqrt(
+    z16_score = (backend_shim.to_numpy(targets.q16_score[0]) - q16_score_p) / np.sqrt(
         q16_score_err_p + epsilon
     )
-    z50_score = (targets.q50_score[0].numpy() - q50_score_p) / np.sqrt(
+    z50_score = (backend_shim.to_numpy(targets.q50_score[0]) - q50_score_p) / np.sqrt(
         q50_score_err_p + epsilon
     )
 
@@ -994,8 +787,8 @@ def log_board_position(
         return 1 / (1 + np.exp(-x))
 
     z_wd = 4.0 / 7.0
-    z_val = compute_opt_weight(z_wd, z6, z16, z50)
-    z_score = compute_opt_weight(z_wd, z6_score, z16_score, z50_score)
+    z_val = float(compute_opt_weight(z_wd, z6, z16, z50))
+    z_score = float(compute_opt_weight(z_wd, z6_score, z16_score, z50_score))
     z_combined = (z_val + z_score * 0.5) / 1.5
     opt_weight = float(np.clip(sigmoid((z_combined - 1.0) * 3.0), 0.0, 1.0))
 
@@ -1021,25 +814,25 @@ def log_board_position(
         )
 
     # Policy aux: top-4 predicted vs target (dist if available, else single move)
-    pi_aux_logits = predictions.pi_logits_aux[0].numpy()
+    pi_aux_logits = backend_shim.to_numpy(predictions.pi_logits_aux[0])
     pi_aux_probs = np.exp(pi_aux_logits - pi_aux_logits.max())
     pi_aux_probs /= pi_aux_probs.sum()
     top_aux_pred = np.argsort(pi_aux_probs)[-4:][::-1]
     has_aux_dist = (
-        bool(targets.has_pi_aux_dist[0].numpy())
+        bool(backend_shim.to_numpy(targets.has_pi_aux_dist[0]))
         if targets.has_pi_aux_dist is not None
         else False
     )
 
     if has_aux_dist:
-        aux_dist = targets.policy_aux_dist[0].numpy().astype(np.float32)
+        aux_dist = backend_shim.to_numpy(targets.policy_aux_dist[0]).astype(np.float32)
         aux_dist_sum = aux_dist.sum()
         if aux_dist_sum > 0:
             aux_dist /= aux_dist_sum
         top_aux_tgt = np.argsort(aux_dist)[-4:][::-1]
         tgt_label = "Target (dist)"
     else:
-        target_aux_move = int(targets.policy_aux[0].numpy())
+        target_aux_move = int(backend_shim.to_numpy(targets.policy_aux[0]))
         top_aux_tgt = [target_aux_move] + [None] * 3
         aux_dist = None
         tgt_label = "Target"
@@ -1061,11 +854,15 @@ def log_board_position(
     # MCTS value distribution: side-by-side if available
     if (
         targets.has_mcts_value_dist is not None
-        and bool(targets.has_mcts_value_dist[0].numpy())
+        and bool(backend_shim.to_numpy(targets.has_mcts_value_dist[0]))
         and predictions.mcts_dist_probs is not None
     ):
-        target_counts = targets.mcts_value_dist[0].numpy().astype(np.float64)
-        pred_probs = predictions.mcts_dist_probs[0].numpy().astype(np.float64)
+        target_counts = backend_shim.to_numpy(targets.mcts_value_dist[0]).astype(
+            np.float64
+        )
+        pred_probs = backend_shim.to_numpy(predictions.mcts_dist_probs[0]).astype(
+            np.float64
+        )
         print(f"\nMCTS Value Distribution (pred | target):")
         print(_vcategorical_side_by_side(target_counts, pred_probs), end="")
 
@@ -1074,26 +871,29 @@ def log_board_position(
 
 def save_model(
     model: P3achyGoModel,
-    opt: keras.optimizers.Optimizer,
+    opt: Any,
     batch_num: int,
     save_path: str,
 ):
-    filename = f"model_{batch_num}.keras"
+    """Mid-training checkpoint. Loses optimizer state — these are crash-resume
+    artifacts within one chunk's training, not release artifacts. The end-of-
+    generation save in rl_loop/train.py persists optimizer state separately."""
+    del opt  # not bundled in the intermediate snapshot
+    filename = f"model_{batch_num}{backend_shim.MODEL_EXT}"
     filepath = Path(save_path) / filename
-    model.compile(optimizer=opt)
-    model.save(filepath)
+    backend_shim.save_model(model, str(filepath))
 
 
 def val(
     model: P3achyGoModel,
-    val_ds: tf.data.Dataset,
+    val_ds,
     batch_num: int,
     num_batches=10,
     mode=Mode.SL,
     tensorboard_log_dir="/tmp/logs",
 ):
     """Validation on dataset."""
-    summary_writer = tf.summary.create_file_writer(tensorboard_log_dir)
+    summary_writer = SummaryWriter(tensorboard_log_dir)
 
     if mode == Mode.SL:
         coeffs = LossCoeffs.SLCoeffs()
@@ -1128,6 +928,7 @@ def val(
     for i, batch_data in enumerate(val_ds):
         if i >= num_batches:
             break
+        backend_shim.step_begin()
 
         (
             input,
@@ -1186,17 +987,17 @@ def val(
         num_outcomes = score.shape[0]
 
         def compute_accuracy(predictions: ModelPredictions):
-            predicted_moves = keras.ops.argmax(predictions.pi_logits, axis=1)
-            actual_moves = keras.ops.argmax(policy, axis=1)
-            correct_moves = keras.ops.sum(
-                keras.ops.cast(predicted_moves == actual_moves, "int32")
-            ).numpy()
+            predicted_moves = np.argmax(
+                backend_shim.to_numpy(predictions.pi_logits), axis=1
+            )
+            actual_moves = np.argmax(backend_shim.to_numpy(policy), axis=1)
+            correct_moves = int((predicted_moves == actual_moves).sum())
 
-            predicted_outcomes = keras.ops.argmax(predictions.game_outcome, axis=1) == 1
-            actual_outcomes = score >= 0  # Actual win
-            correct_outcomes = keras.ops.sum(
-                keras.ops.cast(predicted_outcomes == actual_outcomes, "int32")
-            ).numpy()
+            predicted_outcomes = (
+                np.argmax(backend_shim.to_numpy(predictions.game_outcome), axis=1) == 1
+            )
+            actual_outcomes = backend_shim.to_numpy(score) >= 0  # Actual win
+            correct_outcomes = int((predicted_outcomes == actual_outcomes).sum())
             return correct_moves, correct_outcomes
 
         correct_moves, correct_outcomes = compute_accuracy(result.predictions)
@@ -1218,8 +1019,8 @@ def log_val(
     batch_num: int,
     losses: LossTracker,
     metrics: ValMetrics,
-    input_planes: tf.Tensor,
-    input_global_state: tf.Tensor,
+    input_planes,
+    input_global_state,
     predictions: ModelPredictions,
     targets: GroundTruth,
     model: P3achyGoModel,

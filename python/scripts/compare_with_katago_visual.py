@@ -28,8 +28,8 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from model import P3achyGoModel
-import transforms
+from backend_tf.model import P3achyGoModel
+from dataset import iter_records
 import constants
 from board import GoBoard, char_at
 
@@ -81,13 +81,13 @@ def load_p3achy_model(model_path: str) -> tf.keras.Model:
 
 
 def load_examples(tfrecord_path: str, num_examples: int):
-    """Load training examples from TFRecord file."""
+    """Load training examples from TFRecord file. Yields per-record 20-tuples."""
+    import itertools
+
     print(f"Loading examples from {tfrecord_path}")
-    ds = tf.data.TFRecordDataset(tfrecord_path, compression_type="ZLIB")
-    ds = ds.map(transforms.expand)
-    ds = ds.take(num_examples)
+    out = list(itertools.islice(iter_records(tfrecord_path), num_examples))
     print(f"Dataset loaded successfully!")
-    return ds
+    return out
 
 
 def compute_divergence(

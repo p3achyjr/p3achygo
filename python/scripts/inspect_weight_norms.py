@@ -9,7 +9,7 @@ import tensorflow as tf
 from tensorflow import keras
 
 sys.path.insert(0, "python")
-from model import P3achyGoModel
+from backend_tf.model import P3achyGoModel
 
 
 def l2_norm(weights):
