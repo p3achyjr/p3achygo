@@ -220,24 +220,34 @@ int main(int argc, char** argv) {
     sink_names.push_back(
         absl::StrFormat("/tmp/thread%d_%s_log.txt", thread_id, worker_id));
   }
+  const bool disable_sel_mult =
+      absl::GetFlag(FLAGS_sel_mult_scale_factor) == 0 ||
+      absl::GetFlag(FLAGS_sel_mult_base) == 0;
   selfplay::SelMultCalibration calibration =
-      ParseCalibrationFile(absl::GetFlag(FLAGS_sel_mult_calibration_file));
-  LOG(INFO) << "======= SelMult Calibration =======";
-  LOG(INFO) << "  v_outcome_stddev: p50="
-            << calibration.get(calibration.v_outcome_stddev, "p50", 0.090f)
-            << "  p60="
-            << calibration.get(calibration.v_outcome_stddev, "p60", 0.130f)
-            << "  p95="
-            << calibration.get(calibration.v_outcome_stddev, "p95", 0.374f);
-  LOG(INFO) << "  pre_kld: p05="
-            << calibration.get(calibration.pre_kld, "p05", 0.0002f)
-            << "  p20=" << calibration.get(calibration.pre_kld, "p20", 0.019f)
-            << "  p35=" << calibration.get(calibration.pre_kld, "p35", 0.038f)
-            << "  p70=" << calibration.get(calibration.pre_kld, "p70", 0.310f)
-            << "  p95=" << calibration.get(calibration.pre_kld, "p95", 1.166f);
-  LOG(INFO) << "  Sel Mult Base=" << absl::GetFlag(FLAGS_sel_mult_base)
-            << "  Scale=" << absl::GetFlag(FLAGS_sel_mult_scale_factor);
-  LOG(INFO) << "=====================================";
+      disable_sel_mult ? selfplay::SelMultCalibration{}
+                       : ParseCalibrationFile(
+                             absl::GetFlag(FLAGS_sel_mult_calibration_file));
+  if (disable_sel_mult) {
+    LOG(INFO) << "SelMult Scaling Disabled.";
+  } else {
+    LOG(INFO) << "======= SelMult Calibration =======";
+    LOG(INFO) << "  v_outcome_stddev: p50="
+              << calibration.get(calibration.v_outcome_stddev, "p50", 0.090f)
+              << "  p60="
+              << calibration.get(calibration.v_outcome_stddev, "p60", 0.130f)
+              << "  p95="
+              << calibration.get(calibration.v_outcome_stddev, "p95", 0.374f);
+    LOG(INFO) << "  pre_kld: p05="
+              << calibration.get(calibration.pre_kld, "p05", 0.0002f)
+              << "  p20=" << calibration.get(calibration.pre_kld, "p20", 0.019f)
+              << "  p35=" << calibration.get(calibration.pre_kld, "p35", 0.038f)
+              << "  p70=" << calibration.get(calibration.pre_kld, "p70", 0.310f)
+              << "  p95="
+              << calibration.get(calibration.pre_kld, "p95", 1.166f);
+    LOG(INFO) << "  Sel Mult Base=" << absl::GetFlag(FLAGS_sel_mult_base)
+              << "  Scale=" << absl::GetFlag(FLAGS_sel_mult_scale_factor);
+    LOG(INFO) << "=====================================";
+  }
 
   std::vector<std::thread> threads;
   for (int thread_id = 0; thread_id < num_threads; ++thread_id) {

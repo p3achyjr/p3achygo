@@ -1,5 +1,5 @@
 {
-  "num_generations": 390,
+  "num_generations": 500,
   "model_config": "b8c128nbt",
   "games_first_gen": 5000,
   "games_per_gen": 5000,
@@ -7,23 +7,11 @@
   "lr_schedule": [
     [
       0,
-      1e-3
-    ],
-    [
-      40,
-      7e-3
-    ],
-    [
-      75,
-      4e-4
-    ],
-    [
-      100,
-      2e-4
-    ],
-    [
-      165,
       1e-4
+    ],
+    [
+      400,
+      6e-5
     ]
   ],
   "lr_growth_window": 10,
@@ -51,6 +39,9 @@
   "bias_cache_lambda": 0.3,
   "bias_cache_alpha": 0.8,
   "nonroot_var_scale_prior_visits": -1,
-  "muon_wd": 0.02,
-  "adam_wd": 0.01
+  "muon_wd": 0.1,
+  "adam_wd": 0.1,
+  "adam_lr_ratio": 0.5,
+  "wd_auto_scale": true,
+  "wd_lr_max": 1e-4
 }

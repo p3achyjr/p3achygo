@@ -8,6 +8,9 @@ Precedence:
 """
 
 import os
+import logging
+
+log = logging.getLogger(__name__)
 
 
 def _norm(b):
@@ -27,3 +30,5 @@ if _p3n and _kbn and _p3n != _kbn:
     )
 
 BACKEND: str = _p3n or _kbn or "torch"
+
+log.info(f"p3achygo Backend={BACKEND}")
