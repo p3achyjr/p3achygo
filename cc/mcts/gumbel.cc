@@ -614,6 +614,7 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
 
   if (root->state == TreeNodeState::kNew) {
     leaf_evaluator_.EvaluateRoot(probability, game, root, color_to_move);
+    AssignBiasCacheEntry(game, root);
   }
 
   // Freeze visit counts, so we can reconstruct stats later.
