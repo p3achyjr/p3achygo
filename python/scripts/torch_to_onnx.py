@@ -131,10 +131,11 @@ def main(_):
     dummy_features = torch.zeros([_TRACE_BATCH, *features_shape], dtype=torch.float32)
 
     logging.info(f"Exporting → {onnx_path} (dynamo={FLAGS.dynamo})")
+    wrapper = _ExportWrapper(model, compute_dtype).eval()
     if FLAGS.dynamo:
         batch = torch.export.Dim("N", min=1, max=4096)
         torch.onnx.export(
-            _ExportWrapper(model, compute_dtype),
+            wrapper,
             (dummy_board, dummy_features),
             str(onnx_path),
             input_names=["board_state", "game_state"],
@@ -149,7 +150,7 @@ def main(_):
         )
     else:
         torch.onnx.export(
-            _ExportWrapper(model, compute_dtype),
+            wrapper,
             (dummy_board, dummy_features),
             str(onnx_path),
             input_names=["board_state", "game_state"],

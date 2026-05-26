@@ -112,10 +112,10 @@ def eval(
             + f" --num_games={games_per_worker}"
             + f" --cur_n={n} --cur_use_puct=1 --cur_use_lcb=1 --cur_use_bias_cache=true"
             # + f" --cur_var_scale_cpuct=true --cur_var_scale_prior_visits=10"
-            + f" --cur_p_opt_weight=0.5"
+            + f" --cur_p_opt_weight=0.0"
             + f" --cand_n={n} --cand_use_puct=1 --cand_use_lcb=1 --cand_use_bias_cache=true"
             # + f" --cand_var_scale_cpuct=true --cand_var_scale_prior_visits=10"
-            + f" --cand_p_opt_weight=0.5"
+            + f" --cand_p_opt_weight=0.0"
             + f" --id={i}"
         )
         logging.info(f"Running Eval Worker {i} (GPU {gpu_ids[i]}):\n'{cmd}'")

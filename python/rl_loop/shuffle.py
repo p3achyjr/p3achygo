@@ -115,6 +115,7 @@ def loop(bin_path: str, run_id: str, local_run_dir: str):
             + f' --run_continuously={"true" if in_continuous_mode else "false"}'
             + f" --is_local={FLAGS.local_only}"
         )
+        logging.info(f"Running...\n{cmd}")
         shuf_proc = Popen(
             cmd,
             stdin=PIPE,

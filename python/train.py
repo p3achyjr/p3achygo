@@ -612,7 +612,7 @@ def log_board_position(
     # f-string `:.4f`, while TF's Tensor.numpy() returns Python scalars that
     # do. Force Python float for the per-example scalar quantities.
     def _f(t):
-        return float(backend_shim.to_numpy(t))
+        return float(np.asarray(backend_shim.to_numpy(t)).reshape(-1)[0])
 
     # short-term
     q6_pred, q6 = _f(predictions.q6_pred[0]), _f(targets.q6[0])
@@ -755,28 +755,28 @@ def log_board_position(
 
     # Optimistic weight (mirrors v1_loss_terms computation)
     epsilon = 1e-6
-    q6_p = backend_shim.to_numpy(predictions.q6_pred[0])
-    q16_p = backend_shim.to_numpy(predictions.q16_pred[0])
-    q50_p = backend_shim.to_numpy(predictions.q50_pred[0])
-    q6_err_p = backend_shim.to_numpy(predictions.q6_err_pred[0])
-    q16_err_p = backend_shim.to_numpy(predictions.q16_err_pred[0])
-    q50_err_p = backend_shim.to_numpy(predictions.q50_err_pred[0])
-    q6_score_p = backend_shim.to_numpy(predictions.q6_score_pred[0])
-    q16_score_p = backend_shim.to_numpy(predictions.q16_score_pred[0])
-    q50_score_p = backend_shim.to_numpy(predictions.q50_score_pred[0])
-    q6_score_err_p = backend_shim.to_numpy(predictions.q6_score_err_pred[0])
-    q16_score_err_p = backend_shim.to_numpy(predictions.q16_score_err_pred[0])
-    q50_score_err_p = backend_shim.to_numpy(predictions.q50_score_err_pred[0])
-    z6 = (backend_shim.to_numpy(targets.q6[0]) - q6_p) / np.sqrt(q6_err_p + epsilon)
-    z16 = (backend_shim.to_numpy(targets.q16[0]) - q16_p) / np.sqrt(q16_err_p + epsilon)
-    z50 = (backend_shim.to_numpy(targets.q50[0]) - q50_p) / np.sqrt(q50_err_p + epsilon)
-    z6_score = (backend_shim.to_numpy(targets.q6_score[0]) - q6_score_p) / np.sqrt(
+    q6_p = _f(predictions.q6_pred[0])
+    q16_p = _f(predictions.q16_pred[0])
+    q50_p = _f(predictions.q50_pred[0])
+    q6_err_p = _f(predictions.q6_err_pred[0])
+    q16_err_p = _f(predictions.q16_err_pred[0])
+    q50_err_p = _f(predictions.q50_err_pred[0])
+    q6_score_p = _f(predictions.q6_score_pred[0])
+    q16_score_p = _f(predictions.q16_score_pred[0])
+    q50_score_p = _f(predictions.q50_score_pred[0])
+    q6_score_err_p = _f(predictions.q6_score_err_pred[0])
+    q16_score_err_p = _f(predictions.q16_score_err_pred[0])
+    q50_score_err_p = _f(predictions.q50_score_err_pred[0])
+    z6 = (_f(targets.q6[0]) - q6_p) / np.sqrt(q6_err_p + epsilon)
+    z16 = (_f(targets.q16[0]) - q16_p) / np.sqrt(q16_err_p + epsilon)
+    z50 = (_f(targets.q50[0]) - q50_p) / np.sqrt(q50_err_p + epsilon)
+    z6_score = (_f(targets.q6_score[0]) - q6_score_p) / np.sqrt(
         q6_score_err_p + epsilon
     )
-    z16_score = (backend_shim.to_numpy(targets.q16_score[0]) - q16_score_p) / np.sqrt(
+    z16_score = (_f(targets.q16_score[0]) - q16_score_p) / np.sqrt(
         q16_score_err_p + epsilon
     )
-    z50_score = (backend_shim.to_numpy(targets.q50_score[0]) - q50_score_p) / np.sqrt(
+    z50_score = (_f(targets.q50_score[0]) - q50_score_p) / np.sqrt(
         q50_score_err_p + epsilon
     )
 

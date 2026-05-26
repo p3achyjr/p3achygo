@@ -71,5 +71,5 @@ class LossCoeffs:
             0.2,  # short-term score err
             2.5,  # soft policy
             1.0,  # optimistic policy
-            0.125,  # mcts dist
+            0.08,  # mcts dist
         )

@@ -1,5 +1,5 @@
 {
-  "num_generations": 500,
+  "num_generations": 600,
   "model_config": "b8c128nbt",
   "games_first_gen": 5000,
   "games_per_gen": 5000,
@@ -12,6 +12,10 @@
     [
       400,
       6e-5
+    ],
+    [
+      430,
+      5e-5
     ]
   ],
   "lr_growth_window": 10,
