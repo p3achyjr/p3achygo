@@ -441,6 +441,14 @@ class ConvMuon(Optimizer):
         self._base_adam_wd = float(value)
 
     @property
+    def effective_weight_decay(self) -> float:
+        return self._base_muon_wd * self._lr_scale(self.learning_rate)
+
+    @property
+    def effective_adam_weight_decay(self) -> float:
+        return self._base_adam_wd * self._lr_scale(self.learning_rate)
+
+    @property
     def adam_lr_ratio(self) -> float:
         return self._adam_lr_ratio
 

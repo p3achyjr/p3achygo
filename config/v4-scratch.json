@@ -1,5 +1,5 @@
 {
-  "num_generations": 600,
+  "num_generations": 500,
   "model_config": "b8c128nbt",
   "games_first_gen": 5000,
   "games_per_gen": 5000,
@@ -10,22 +10,18 @@
       1e-4
     ],
     [
-      430,
-      5e-5
-    ],
-    [
-      563,
-      2.5e-5
+      400,
+      6e-5
     ]
   ],
   "lr_growth_window": 10,
   "extra_train_gens": 0,
-  "min_train_selected_k": 8,
-  "min_train_selected_n": 64,
+  "min_train_selected_k": 16,
+  "min_train_selected_n": 270,
   "max_train_selected_k": 16,
-  "max_train_selected_n": 400,
-  "min_train_default_k": 4,
-  "min_train_default_n": 16,
+  "max_train_selected_n": 270,
+  "min_train_default_k": 7,
+  "min_train_default_n": 60,
   "max_train_default_k": 7,
   "max_train_default_n": 60,
   "n_growth_window": 150,
@@ -49,3 +45,4 @@
   "wd_auto_scale": true,
   "wd_lr_max": 1e-4
 }
+
