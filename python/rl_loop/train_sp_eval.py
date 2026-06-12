@@ -55,6 +55,11 @@ flags.DEFINE_string(
     "",
     "Comma-separated GPU IDs for self-play and eval (e.g. '1,2,3'). Defaults to all detected GPUs.",
 )
+flags.DEFINE_bool(
+    "auto_promote",
+    False,
+    "If true, skip eval and automatically promote every newly trained model as the new golden.",
+)
 
 
 @dataclass
@@ -151,6 +156,7 @@ def loop(
     val_ds_path: str,
     build_trt_engine_path: str,
     local_run_dir: str,
+    auto_promote: bool = False,
 ):
     """
     Does the following:
@@ -238,6 +244,18 @@ def loop(
                 f"Elo: {eval_result.rel_elo}"
                 + f" Cur: {current_golden_gen}, Cand: {next_model_gen}\n"
             )
+
+    def auto_promote_model(run_id: str, next_model_gen: int):
+        current_golden_gen = fs.get_most_recent_model(run_id)
+        cand_model_path = str(
+            Path(local_model_cands_dir, gcs.MODEL_FORMAT.format(next_model_gen))
+        )
+        logging.info(f"Uploading model candidate {cand_model_path}.")
+        fs.upload_model_cand(run_id, local_model_cands_dir, next_model_gen)
+        logging.info(f"Auto-promoting {cand_model_path} as new golden.")
+        fs.upload_model(run_id, local_models_dir, next_model_gen)
+        with open(eval_history_path, "a") as f:
+            f.write(f"auto-promote Cur: {current_golden_gen}, Cand: {next_model_gen}\n")
 
     def train_from_existing_run(
         run_id,
@@ -415,17 +433,20 @@ def loop(
             train_gpu_id=train_gpu_id,
         )
 
-        # Training done. Use 2 GPUs for eval.
-        logging.info("Training complete. Starting eval.")
-        stop_sp_worker(sp_queues, sp_threads, 0)
-        stop_sp_worker(sp_queues, sp_threads, 1)
-        eval_new_model(
-            run_id,
-            next_model_gen,
-            eval_res_path,
-            config,
-            gpu_ids=[GPU_IDS[0], GPU_IDS[1]] if len(GPU_IDS) > 1 else [GPU_IDS[0]],
-        )
+        # Training done. Promote or eval the new model.
+        logging.info("Training complete. Starting eval/promote.")
+        if auto_promote:
+            auto_promote_model(run_id, next_model_gen)
+        else:
+            stop_sp_worker(sp_queues, sp_threads, 0)
+            stop_sp_worker(sp_queues, sp_threads, 1)
+            eval_new_model(
+                run_id,
+                next_model_gen,
+                eval_res_path,
+                config,
+                gpu_ids=[GPU_IDS[0], GPU_IDS[1]] if len(GPU_IDS) > 1 else [GPU_IDS[0]],
+            )
         stop_sp(sp_queues, sp_threads)
         fs.remove_local_chunk(local_golden_chunk_dir, next_model_gen)
         model_gen = next_model_gen
@@ -466,7 +487,10 @@ def loop(
             chunk_size_path,
             batch_num_path,
         )
-        eval_new_model(run_id, next_model_gen, eval_res_path, config)
+        if auto_promote:
+            auto_promote_model(run_id, next_model_gen)
+        else:
+            eval_new_model(run_id, next_model_gen, eval_res_path, config)
 
         fs.remove_local_chunk(local_golden_chunk_dir, next_model_gen)
 
@@ -514,6 +538,7 @@ def main(_):
         val_ds_path,
         build_trt_engine_path,
         FLAGS.local_run_dir,
+        auto_promote=FLAGS.auto_promote,
     )
 
 
