@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cmath>
 #include <optional>
+#include <vector>
 
 #include "absl/synchronization/mutex.h"
 #include "cc/constants/constants.h"
@@ -19,6 +20,7 @@
 namespace mcts {
 
 struct GlobalSearchState;
+class ForkEventSink;
 using TopActions = std::array<std::pair<int, float>, 4>;
 using PathElem = std::tuple<TreeNode*, game::Loc, TopActions>;
 using SearchPath = absl::InlinedVector<PathElem, 128>;
@@ -120,6 +122,9 @@ class Search final {
     float max_o_ratio = 0.8f;
     Mode mode = Search::Mode::kConcurrent;
     ScoreUtilityParams score_util_params;
+    // Optional; when set, SmartRetryCollisionPolicy records every fork it
+    // takes.
+    ForkEventSink* fork_sink = nullptr;
   };
   struct Result {
     game::Loc move;
@@ -146,6 +151,43 @@ class Search final {
   nn::NNInterface::Slot slot_;
   BiasCache* bias_cache_ = nullptr;
   GlobalSearchState global_search_state_{};
+};
+
+/*
+ * Instrumentation: one record per fork taken by SmartRetryCollisionPolicy.
+ * Lets a caller ask how strongly the network preferred the path that collided,
+ * and what the retry went to instead. Off unless Params::fork_sink is set.
+ */
+struct ForkEvent {
+  const TreeNode* node;  // node forked at; valid until its NodeTable dies.
+  int fork_depth;        // index of the fork point within the colliding path.
+  int path_len;          // length of the colliding path.
+  int action_best;       // action PUCT wanted (and that we are abandoning).
+  int action_chosen;     // action the retry will take instead.
+  float puct_best;
+  float puct_chosen;
+  float p_best;    // network prior on action_best at the fork node.
+  float p_chosen;  // network prior on action_chosen.
+  int n_best;      // child visits at fork time.
+  int n_chosen;
+};
+
+class ForkEventSink final {
+ public:
+  void Record(const ForkEvent& e) {
+    absl::MutexLock l(&mu_);
+    events_.push_back(e);
+  }
+  std::vector<ForkEvent> Drain() {
+    absl::MutexLock l(&mu_);
+    std::vector<ForkEvent> out;
+    out.swap(events_);
+    return out;
+  }
+
+ private:
+  absl::Mutex mu_;
+  std::vector<ForkEvent> events_ ABSL_GUARDED_BY(mu_);
 };
 
 /*
@@ -315,8 +357,9 @@ class RetryCollisionPolicy final {
  */
 class SmartRetryCollisionPolicy final {
  public:
-  SmartRetryCollisionPolicy(const int max_num_retries)
-      : max_num_retries_(max_num_retries) {};
+  SmartRetryCollisionPolicy(const int max_num_retries,
+                            ForkEventSink* fork_sink = nullptr)
+      : max_num_retries_(max_num_retries), fork_sink_(fork_sink) {};
   ~SmartRetryCollisionPolicy() = default;
   inline CollisionResult Handle(const GlobalSearchState& global_search_state,
                                 const SearchPath& search_path) {
@@ -353,6 +396,23 @@ class SmartRetryCollisionPolicy final {
     const auto& [node, move, top_actions] = search_path[min_index];
     // if we retry again from here, the forked move is the best move.
     const auto new_move = game::AsLoc(top_actions[1].first);
+    if (fork_sink_ != nullptr) {
+      const int a_best = top_actions[0].first;
+      const int a_chosen = top_actions[1].first;
+      fork_sink_->Record(ForkEvent{
+          .node = node,
+          .fork_depth = min_index,
+          .path_len = static_cast<int>(search_path.size()),
+          .action_best = a_best,
+          .action_chosen = a_chosen,
+          .puct_best = top_actions[0].second,
+          .puct_chosen = top_actions[1].second,
+          .p_best = node->move_probs[a_best],
+          .p_chosen = node->move_probs[a_chosen],
+          .n_best = node->child_visits[a_best],
+          .n_chosen = node->child_visits[a_chosen],
+      });
+    }
     // keep top_actions[0] as the top action as |p0 - pk| is what we want, not
     // |p_{k - 1} - pk|. We cannot reselect the top move, so this is correct.
     const TopActions new_top_actions = {top_actions[0],
@@ -369,6 +429,7 @@ class SmartRetryCollisionPolicy final {
 
  private:
   const int max_num_retries_;
+  ForkEventSink* fork_sink_ = nullptr;
   int num_retries_ = 0;
 };
 

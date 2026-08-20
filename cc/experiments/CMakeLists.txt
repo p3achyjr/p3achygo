@@ -99,4 +99,42 @@ if(BUILD_BINARIES)
         m
         dl
     )
+    add_executable(parallel_vs_serial_study
+        parallel_vs_serial_study.cc
+    )
+    target_link_libraries(parallel_vs_serial_study PRIVATE
+        core_impl
+        game
+        gumbel
+        node_table
+        nn_interface
+        engine_factory
+        tfrecord
+        tf_example_proto
+        absl::flags
+        absl::flags_parse
+        absl::log
+        absl::log_initialize
+        m
+        dl
+    )
+    add_executable(collision_retry_study
+        collision_retry_study.cc
+    )
+    target_link_libraries(collision_retry_study PRIVATE
+        core_impl
+        game
+        gumbel
+        node_table
+        nn_interface
+        engine_factory
+        tfrecord
+        tf_example_proto
+        absl::flags
+        absl::flags_parse
+        absl::log
+        absl::log_initialize
+        m
+        dl
+    )
 endif()

@@ -21,3 +21,6 @@ build*/
 *.log
 *.txt
 !CMakeLists.txt
+
+# Claude Code scratch notes
+notes/claude/

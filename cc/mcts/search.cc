@@ -825,9 +825,11 @@ Search::Result Search::Run(core::Probability& probability, Game& game,
           RetryCollisionPolicy(params.max_collision_retries), params);
       break;
     case CollisionPolicyKind::kSmartRetry:
-      RunWithDetector(
-          global_search_state, slot_, game, node_table, root, color_to_move,
-          SmartRetryCollisionPolicy(params.max_collision_retries), params);
+      RunWithDetector(global_search_state, slot_, game, node_table, root,
+                      color_to_move,
+                      SmartRetryCollisionPolicy(params.max_collision_retries,
+                                                params.fork_sink),
+                      params);
       break;
   }
   done_promise.set_value();
