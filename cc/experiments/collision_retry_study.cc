@@ -68,6 +68,9 @@ ABSL_FLAG(float, root_fpu, 0.1f, "Root FPU reduction.");
 ABSL_FLAG(int, max_collision_retries, 4, "Retry budget.");
 ABSL_FLAG(uint64_t, seed, 42, "Seed for position sampling.");
 ABSL_FLAG(std::string, csv_path, "", "If non-empty, write per-fork rows here.");
+ABSL_FLAG(std::string, path_csv_path, "",
+          "If non-empty, write one row per (fork, path node) here: the PUCT "
+          "gap profile along each colliding path.");
 
 namespace {
 
@@ -168,6 +171,18 @@ struct ForkRow {
   int final_rank_chosen;  // visit rank of the chosen action (0 = most visited).
 };
 
+// One node of one colliding path.
+struct PathRow {
+  int position;
+  int fork_id;
+  int depth;
+  int path_len;
+  float gap;
+  int node_n;
+  int n_children;
+  bool is_fork;  // this node is the argmin that SmartRetry chose.
+};
+
 // Visit-weighted baseline: what an ordinary decision node looks like.
 struct NodeBaseline {
   double w_p_top = 0;  // prior on the most-visited child.
@@ -244,6 +259,7 @@ int main(int argc, char** argv) {
   const float root_fpu = absl::GetFlag(FLAGS_root_fpu);
   const int max_retries = absl::GetFlag(FLAGS_max_collision_retries);
   const std::string csv_path = absl::GetFlag(FLAGS_csv_path);
+  const std::string path_csv_path = absl::GetFlag(FLAGS_path_csv_path);
 
   NNInterface nn(
       num_threads, /*timeout=*/0, /*cache_size=*/0,
@@ -277,6 +293,7 @@ int main(int argc, char** argv) {
                     absl::GetFlag(FLAGS_seed));
 
   std::vector<ForkRow> rows;
+  std::vector<PathRow> path_rows;
   NodeBaseline baseline;
 
   for (size_t idx = 0; idx < records.size(); ++idx) {
@@ -337,6 +354,19 @@ int main(int argc, char** argv) {
         }
         r.final_n_total = total;
         r.final_rank_chosen = rank;
+      }
+      for (int d = 0; d < e.path_recorded; ++d) {
+        if (e.path_gap[d] < 0) continue;
+        path_rows.push_back(PathRow{
+            .position = static_cast<int>(idx),
+            .fork_id = static_cast<int>(rows.size()),
+            .depth = d,
+            .path_len = e.path_len,
+            .gap = e.path_gap[d],
+            .node_n = e.path_node_n[d],
+            .n_children = e.path_n_children[d],
+            .is_fork = (d == e.fork_depth),
+        });
       }
       rows.push_back(r);
     }
@@ -418,6 +448,41 @@ int main(int argc, char** argv) {
   printf("Retried move left with <=1 visit: %d / %d  (%.1f%%)\n",
          chosen_unvisited_after, valid,
          valid ? 100.f * chosen_unvisited_after / valid : 0.f);
+
+  printf(
+      "\n--- Why does the argmin land at the root? "
+      "PUCT gap by depth over all colliding paths ---\n");
+  printf("%6s %8s %10s %10s %10s %10s %10s\n", "depth", "nodes", "med_gap",
+         "mean_gap", "med_node_n", "med_kids", "pct_argmin");
+  for (int d = 0; d < mcts::kMaxForkPathRecord; ++d) {
+    std::vector<float> g, nn, kids;
+    int argmin = 0;
+    for (const PathRow& pr : path_rows) {
+      if (pr.depth != d) continue;
+      g.push_back(pr.gap);
+      nn.push_back(pr.node_n);
+      kids.push_back(pr.n_children);
+      argmin += pr.is_fork;
+    }
+    if (g.empty()) continue;
+    printf("%6d %8zu %10.4f %10.4f %10.0f %10.0f %9.1f%%\n", d, g.size(),
+           Median(g), Mean(g), Median(nn), Median(kids),
+           100.f * argmin / g.size());
+  }
+
+  if (!path_csv_path.empty()) {
+    FILE* f = fopen(path_csv_path.c_str(), "w");
+    CHECK(f != nullptr) << "Could not open " << path_csv_path;
+    fprintf(f,
+            "position,fork_id,depth,path_len,gap,node_n,n_children,is_fork\n");
+    for (const PathRow& pr : path_rows) {
+      fprintf(f, "%d,%d,%d,%d,%.6f,%d,%d,%d\n", pr.position, pr.fork_id,
+              pr.depth, pr.path_len, pr.gap, pr.node_n, pr.n_children,
+              pr.is_fork ? 1 : 0);
+    }
+    fclose(f);
+    LOG(INFO) << "Wrote " << path_csv_path;
+  }
 
   if (!csv_path.empty()) {
     FILE* f = fopen(csv_path.c_str(), "w");

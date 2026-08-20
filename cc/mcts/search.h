@@ -158,6 +158,9 @@ class Search final {
  * Lets a caller ask how strongly the network preferred the path that collided,
  * and what the retry went to instead. Off unless Params::fork_sink is set.
  */
+// Max path depth for which per-node stats are recorded.
+static constexpr int kMaxForkPathRecord = 8;
+
 struct ForkEvent {
   const TreeNode* node;  // node forked at; valid until its NodeTable dies.
   int fork_depth;        // index of the fork point within the colliding path.
@@ -170,6 +173,14 @@ struct ForkEvent {
   float p_chosen;  // network prior on action_chosen.
   int n_best;      // child visits at fork time.
   int n_chosen;
+
+  // Per-node profile of the whole colliding path, for asking why the argmin
+  // lands where it does. Entries beyond the path (or past
+  // kMaxForkPathRecord) are -1.
+  int path_recorded;  // number of valid entries below.
+  std::array<float, kMaxForkPathRecord> path_gap;       // top1 - top2 PUCT.
+  std::array<int, kMaxForkPathRecord> path_node_n;      // node->n at descent.
+  std::array<int, kMaxForkPathRecord> path_n_children;  // visited children.
 };
 
 class ForkEventSink final {
@@ -399,6 +410,29 @@ class SmartRetryCollisionPolicy final {
     if (fork_sink_ != nullptr) {
       const int a_best = top_actions[0].first;
       const int a_chosen = top_actions[1].first;
+      std::array<float, kMaxForkPathRecord> path_gap;
+      std::array<int, kMaxForkPathRecord> path_node_n;
+      std::array<int, kMaxForkPathRecord> path_n_children;
+      path_gap.fill(-1.0f);
+      path_node_n.fill(-1);
+      path_n_children.fill(-1);
+      int recorded = 0;
+      for (int i = 0;
+           i < static_cast<int>(search_path.size()) && i < kMaxForkPathRecord;
+           ++i) {
+        const auto& [pnode, pmove, ptop] = search_path[i];
+        if (pmove == game::kNoopLoc || ptop[1].first < 0) {
+          continue;  // collision leaf, or no second action to compare against.
+        }
+        path_gap[i] = ptop[0].second - ptop[1].second;
+        path_node_n[i] = pnode->n;
+        int visited = 0;
+        for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+          if (pnode->child_visits[a] > 0) ++visited;
+        }
+        path_n_children[i] = visited;
+        recorded = i + 1;
+      }
       fork_sink_->Record(ForkEvent{
           .node = node,
           .fork_depth = min_index,
@@ -411,6 +445,10 @@ class SmartRetryCollisionPolicy final {
           .p_chosen = node->move_probs[a_chosen],
           .n_best = node->child_visits[a_best],
           .n_chosen = node->child_visits[a_chosen],
+          .path_recorded = recorded,
+          .path_gap = path_gap,
+          .path_node_n = path_node_n,
+          .path_n_children = path_n_children,
       });
     }
     // keep top_actions[0] as the top action as |p0 - pk| is what we want, not
