@@ -134,7 +134,8 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
           path_index < path_prefix.size()
               ? std::make_pair(std::get<1>(path_prefix[path_index]),
                                std::get<2>(path_prefix[path_index]))
-              : descent_policy.Run(global_state, cur_node, game, color_to_move,
+              : descent_policy.Run(global_state, prob, cur_node, game,
+                                   color_to_move,
                                    /*is_root=*/cur_node == root);
       next_move = descent_result.first;
       next_top_actions = descent_result.second;
@@ -673,6 +674,19 @@ void RunWithCollision(GlobalSearchState& global_state, NNInterface::Slot slot,
                     collision_detector, game, node_table, root, color_to_move,
                     params.num_threads, params.puct_params);
       }
+    } else if (params.descent_policy_kind == DescentPolicyKind::kSampled) {
+      SampledDescentPolicy<decltype(qfn), decltype(nfn)> dp(
+          params.puct_params, qfn, nfn, params.descent_temperature);
+      if (params.mode == Search::Mode::kConcurrent) {
+        SpawnSearchTasks(global_state, slot, dp, collision_policy,
+                         collision_detector, game, node_table, root,
+                         color_to_move, params.num_threads,
+                         params.score_util_params, params.puct_params);
+      } else {
+        BatchSearch(global_state, slot, dp, collision_policy,
+                    collision_detector, game, node_table, root, color_to_move,
+                    params.num_threads, params.puct_params);
+      }
     } else {
       DeterministicDescentPolicy<decltype(qfn), decltype(nfn)> dp(
           params.puct_params, qfn, nfn);
@@ -829,6 +843,14 @@ Search::Result Search::Run(core::Probability& probability, Game& game,
                       color_to_move,
                       SmartRetryCollisionPolicy(params.max_collision_retries,
                                                 params.fork_sink),
+                      params);
+      break;
+    case CollisionPolicyKind::kSmartRetryNoRoot:
+      RunWithDetector(global_search_state, slot_, game, node_table, root,
+                      color_to_move,
+                      SmartRetryCollisionPolicy(params.max_collision_retries,
+                                                params.fork_sink,
+                                                /*allow_root_fork=*/false),
                       params);
       break;
   }

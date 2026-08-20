@@ -9,6 +9,7 @@
 #include "absl/synchronization/mutex.h"
 #include "cc/constants/constants.h"
 #include "cc/core/heap.h"
+#include "cc/core/probability.h"
 #include "cc/game/loc.h"
 #include "cc/mcts/bias_cache.h"
 #include "cc/mcts/leaf_evaluator.h"
@@ -28,12 +29,19 @@ using SearchPath = absl::InlinedVector<PathElem, 128>;
 enum class DescentPolicyKind : uint8_t {
   kDeterministic = 0,
   kBuUct = 1,
+  // Preemptive forking: sample among the top actions from a tempered softmax
+  // over their PUCT scores, so threads spread without needing a collision.
+  kSampled = 2,
 };
 
 enum class CollisionPolicyKind : uint8_t {
   kAbort = 0,
   kRetry = 1,
   kSmartRetry = 2,
+  // As kSmartRetry, but aborts instead of forking when the cheapest fork point
+  // is the root. Root forks directly perturb the root visit distribution,
+  // which is the search's output.
+  kSmartRetryNoRoot = 3,
 };
 
 enum class CollisionDetectorKind : uint8_t {
@@ -120,6 +128,9 @@ class Search final {
     float vl_delta = -1.5f;
     int max_collision_retries = 4;
     float max_o_ratio = 0.8f;
+    // Softmax temperature for DescentPolicyKind::kSampled. <= 0 is
+    // deterministic (argmax). Smaller = sharper = closer to deterministic.
+    float descent_temperature = 0.05f;
     Mode mode = Search::Mode::kConcurrent;
     ScoreUtilityParams score_util_params;
     // Optional; when set, SmartRetryCollisionPolicy records every fork it
@@ -233,8 +244,9 @@ class DeterministicDescentPolicy final {
   ~DeterministicDescentPolicy() = default;
 
   inline DescentStep Run(const GlobalSearchState& global_search_state,
-                         const TreeNode* node, const game::Game& game,
-                         game::Color color, bool is_root = false) {
+                         core::Probability& prob, const TreeNode* node,
+                         const game::Game& game, game::Color color,
+                         bool is_root = false) {
     const TopActions top_actions =
         puct_scorer_.TopScores(node, game, color, is_root);
     return {game::AsLoc(top_actions[0].first), top_actions};
@@ -258,8 +270,9 @@ class BuUctDescentPolicy final {
   ~BuUctDescentPolicy() = default;
 
   inline DescentStep Run(const GlobalSearchState& global_search_state,
-                         const TreeNode* node, const game::Game& game,
-                         game::Color color, bool is_root = false) {
+                         core::Probability& prob, const TreeNode* node,
+                         const game::Game& game, game::Color color,
+                         bool is_root = false) {
     PuctScores pucts = puct_scorer_.ComputeScores(node, is_root);
     std::array<std::pair<int, float>, 4> top_scores = {
         {{game::kNoopLoc, -1000},
@@ -324,6 +337,65 @@ class BuUctDescentPolicy final {
 };
 
 /*
+ * Preemptive forking. Instead of always taking the PUCT argmax, samples among
+ * the top actions from softmax(puct / T). Threads then spread on their own
+ * rather than needing a collision to push them apart.
+ *
+ * Uses exp rather than a power transform because PUCT scores are signed (the Q
+ * term spans roughly [-1.5, 1.5]); squaring is not monotone in the score and
+ * would rank -1.0 above +0.5.
+ *
+ * top_actions is returned in unchanged PUCT rank order, so collision policies
+ * that fork on it are unaffected.
+ */
+template <typename QFn, typename NFn>
+class SampledDescentPolicy final {
+ public:
+  SampledDescentPolicy(PuctParams puct_params, const QFn& q_fn, const NFn& n_fn,
+                       const float temperature)
+      : puct_scorer_(puct_params, q_fn, n_fn), temperature_(temperature) {}
+  ~SampledDescentPolicy() = default;
+
+  inline DescentStep Run(const GlobalSearchState& global_search_state,
+                         core::Probability& prob, const TreeNode* node,
+                         const game::Game& game, game::Color color,
+                         bool is_root = false) {
+    const TopActions top_actions =
+        puct_scorer_.TopScores(node, game, color, is_root);
+    if (temperature_ <= 0.0f || top_actions[0].first == game::kNoopLoc) {
+      return {game::AsLoc(top_actions[0].first), top_actions};
+    }
+
+    // Softmax over the valid top actions, shifted by the max for stability.
+    const float s_max = top_actions[0].second;
+    std::array<float, 4> w{};
+    float total = 0.0f;
+    for (int i = 0; i < static_cast<int>(top_actions.size()); ++i) {
+      if (top_actions[i].first < 0) break;
+      w[i] = std::exp((top_actions[i].second - s_max) / temperature_);
+      total += w[i];
+    }
+    if (total <= 0.0f) {
+      return {game::AsLoc(top_actions[0].first), top_actions};
+    }
+
+    float target = prob.Uniform() * total;
+    for (int i = 0; i < static_cast<int>(top_actions.size()); ++i) {
+      if (top_actions[i].first < 0) break;
+      target -= w[i];
+      if (target <= 0.0f) {
+        return {game::AsLoc(top_actions[i].first), top_actions};
+      }
+    }
+    return {game::AsLoc(top_actions[0].first), top_actions};
+  }
+
+ private:
+  const PuctScorer<QFn, NFn> puct_scorer_;
+  const float temperature_;
+};
+
+/*
  * Always aborts collisions.
  */
 class AbortCollisionPolicy final {
@@ -369,8 +441,11 @@ class RetryCollisionPolicy final {
 class SmartRetryCollisionPolicy final {
  public:
   SmartRetryCollisionPolicy(const int max_num_retries,
-                            ForkEventSink* fork_sink = nullptr)
-      : max_num_retries_(max_num_retries), fork_sink_(fork_sink) {};
+                            ForkEventSink* fork_sink = nullptr,
+                            const bool allow_root_fork = true)
+      : max_num_retries_(max_num_retries),
+        fork_sink_(fork_sink),
+        allow_root_fork_(allow_root_fork) {};
   ~SmartRetryCollisionPolicy() = default;
   inline CollisionResult Handle(const GlobalSearchState& global_search_state,
                                 const SearchPath& search_path) {
@@ -400,6 +475,11 @@ class SmartRetryCollisionPolicy final {
 
     if (min_index == -1) {
       // out of paths to retry.
+      return {CollisionResult::Action::kAbort, std::nullopt};
+    }
+    if (min_index == 0 && !allow_root_fork_) {
+      // Cheapest deviation is at the root; forking there would reallocate a
+      // root visit, which is what move selection reads. Drop the visit instead.
       return {CollisionResult::Action::kAbort, std::nullopt};
     }
 
@@ -468,6 +548,7 @@ class SmartRetryCollisionPolicy final {
  private:
   const int max_num_retries_;
   ForkEventSink* fork_sink_ = nullptr;
+  bool allow_root_fork_ = true;
   int num_retries_ = 0;
 };
 

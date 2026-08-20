@@ -78,6 +78,12 @@ ABSL_FLAG(bool, run_control, true,
 ABSL_FLAG(bool, run_abort, true, "Run the abort-collision parallel arm.");
 ABSL_FLAG(bool, run_smart_retry, true,
           "Run the smart_retry-collision parallel arm.");
+ABSL_FLAG(bool, run_sretry_noroot, true,
+          "Run the smart_retry-but-never-fork-at-root parallel arm.");
+ABSL_FLAG(bool, run_sampled, true,
+          "Run the preemptive-forking (sampled descent) parallel arm.");
+ABSL_FLAG(float, descent_temperature, 0.05f,
+          "Softmax temperature for the sampled-descent arm.");
 ABSL_FLAG(bool, run_oracle, true,
           "Run a high-visit serial oracle and score every arm against it.");
 ABSL_FLAG(int, oracle_visits, 10000, "Visit budget for the serial oracle.");
@@ -435,7 +441,10 @@ Search::Params MakeParams(int num_threads, int visits, float root_fpu,
                           mcts::QFnKind q_fn, mcts::NFnKind n_fn,
                           float vl_delta,
                           mcts::CollisionPolicyKind collision_policy,
-                          int max_collision_retries) {
+                          int max_collision_retries,
+                          mcts::DescentPolicyKind descent_policy =
+                              mcts::DescentPolicyKind::kDeterministic,
+                          float descent_temperature = 0.0f) {
   return Search::Params{
       .num_threads = num_threads,
       .total_visit_budget = visits,
@@ -446,11 +455,12 @@ Search::Params MakeParams(int num_threads, int visits, float root_fpu,
                          .build(),
       .q_fn_kind = q_fn,
       .n_fn_kind = n_fn,
-      .descent_policy_kind = mcts::DescentPolicyKind::kDeterministic,
+      .descent_policy_kind = descent_policy,
       .collision_policy_kind = collision_policy,
       .collision_detector_kind = mcts::CollisionDetectorKind::kNoOp,
       .vl_delta = vl_delta,
       .max_collision_retries = max_collision_retries,
+      .descent_temperature = descent_temperature,
       .mode = Search::Mode::kConcurrent,
   };
 }
@@ -524,11 +534,15 @@ int main(int argc, char** argv) {
   const Search::Params serial_params = MakeParams(
       1, visits, root_fpu, mcts::QFnKind::kIdentity, mcts::NFnKind::kIdentity,
       vl_delta, mcts::CollisionPolicyKind::kAbort, max_retries);
-  const auto parallel_params = [&](mcts::CollisionPolicyKind cp) {
-    return MakeParams(num_threads, visits, root_fpu,
-                      mcts::QFnKind::kVirtualLossSoft,
-                      mcts::NFnKind::kVirtualVisit, vl_delta, cp, max_retries);
+  const auto parallel_params = [&](mcts::CollisionPolicyKind cp,
+                                   mcts::DescentPolicyKind dp =
+                                       mcts::DescentPolicyKind::kDeterministic,
+                                   float temp = 0.0f) {
+    return MakeParams(
+        num_threads, visits, root_fpu, mcts::QFnKind::kVirtualLossSoft,
+        mcts::NFnKind::kVirtualVisit, vl_delta, cp, max_retries, dp, temp);
   };
+  const float descent_temp = absl::GetFlag(FLAGS_descent_temperature);
 
   // Arm 0 is the reference.
   std::vector<Arm> arms;
@@ -544,6 +558,18 @@ int main(int argc, char** argv) {
     arms.push_back({"par_sretry", &nn_parallel,
                     parallel_params(mcts::CollisionPolicyKind::kSmartRetry),
                     0});
+  }
+  if (absl::GetFlag(FLAGS_run_sretry_noroot)) {
+    arms.push_back(
+        {"par_sr_noroot", &nn_parallel,
+         parallel_params(mcts::CollisionPolicyKind::kSmartRetryNoRoot), 0});
+  }
+  if (absl::GetFlag(FLAGS_run_sampled)) {
+    arms.push_back(
+        {"par_sampled", &nn_parallel,
+         parallel_params(mcts::CollisionPolicyKind::kAbort,
+                         mcts::DescentPolicyKind::kSampled, descent_temp),
+         0});
   }
   // Oracle goes last so arm indices of the others are unaffected.
   const int oracle_idx = run_oracle ? static_cast<int>(arms.size()) : -1;
@@ -675,6 +701,13 @@ int main(int argc, char** argv) {
       "par_sretry:           as par_abort but collision=smart_retry,"
       " max_retries=%d\n",
       max_retries);
+  printf(
+      "par_sr_noroot:        as par_sretry but aborts when the cheapest fork"
+      " point is the root\n");
+  printf(
+      "par_sampled:          as par_abort but descent=sampled softmax,"
+      " temperature=%.3f\n",
+      descent_temp);
   printf("All arms:             root_fpu=%.2f, noop collision detector\n",
          root_fpu);
   printf("serial arm:           realized root visits %.1f, %.0fms/position\n",
