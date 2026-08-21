@@ -71,11 +71,23 @@ mcts::Search::Params MakeSearchParams(const eval::PlayerSearchConfig& cfg) {
                                 : mcts::NFnKind::kVirtualVisit;
 
   // Collision policy.
+  // Descent policy.
+  mcts::DescentPolicyKind descent_policy;
+  if (cfg.descent_policy == "bu_uct") {
+    descent_policy = mcts::DescentPolicyKind::kBuUct;
+  } else if (cfg.descent_policy == "sampled") {
+    descent_policy = mcts::DescentPolicyKind::kSampled;
+  } else {
+    descent_policy = mcts::DescentPolicyKind::kDeterministic;
+  }
+
   mcts::CollisionPolicyKind collision_policy;
   if (cfg.collision_policy == "retry") {
     collision_policy = mcts::CollisionPolicyKind::kRetry;
   } else if (cfg.collision_policy == "smart_retry") {
     collision_policy = mcts::CollisionPolicyKind::kSmartRetry;
+  } else if (cfg.collision_policy == "smart_retry_no_root") {
+    collision_policy = mcts::CollisionPolicyKind::kSmartRetryNoRoot;
   } else {
     collision_policy = mcts::CollisionPolicyKind::kAbort;
   }
@@ -120,14 +132,13 @@ mcts::Search::Params MakeSearchParams(const eval::PlayerSearchConfig& cfg) {
               .build(),
       .q_fn_kind = q_fn_kind,
       .n_fn_kind = n_fn_kind,
-      .descent_policy_kind = (cfg.descent_policy == "bu_uct")
-                                 ? mcts::DescentPolicyKind::kBuUct
-                                 : mcts::DescentPolicyKind::kDeterministic,
+      .descent_policy_kind = descent_policy,
       .collision_policy_kind = collision_policy,
       .collision_detector_kind = collision_detector,
       .vl_delta = cfg.vl_delta,
       .max_collision_retries = cfg.max_collision_retries,
       .max_o_ratio = cfg.max_o_ratio,
+      .descent_temperature = cfg.descent_temperature,
       .mode = mode,
       .score_util_params = MakeScoreUtilityParams(cfg),
   };

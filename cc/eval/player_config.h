@@ -85,7 +85,8 @@ struct PlayerSearchConfig {
   // N function: "identity" | "virtual_visit"
   std::string n_fn = "virtual_visit";
 
-  // Collision policy: "abort" | "retry" | "smart_retry"
+  // Collision policy: "abort" | "retry" | "smart_retry" |
+  // "smart_retry_no_root"
   std::string collision_policy = "abort";
 
   // Collision detector: "noop" | "n_in_flight" | "level_saturation" | "product"
@@ -102,8 +103,11 @@ struct PlayerSearchConfig {
   // Search mode: "concurrent" | "batch"
   std::string search_mode = "concurrent";
 
-  // Descent policy: "deterministic" | "bu_uct"
+  // Descent policy: "deterministic" | "bu_uct" | "sampled"
   std::string descent_policy = "deterministic";
+
+  // Softmax temperature for the "sampled" descent policy.
+  float descent_temperature = 0.05f;
 
   // BuUct descent: maximum allowed ratio of in-flight visits to total visits.
   float max_o_ratio = 1.0f;
@@ -240,6 +244,8 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.search_mode = val;
     else if (key == "descent_policy")
       cfg.descent_policy = val;
+    else if (key == "descent_temperature")
+      cfg.descent_temperature = std::stof(val);
     else if (key == "max_o_ratio")
       cfg.max_o_ratio = std::stof(val);
     // Unknown keys are silently ignored.
@@ -313,6 +319,7 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
   ROW(max_collision_retries, i_);
   ROW(search_mode, s);
   ROW(descent_policy, s);
+  ROW(descent_temperature, f);
   ROW(max_o_ratio, f);
 #undef ROW
 
