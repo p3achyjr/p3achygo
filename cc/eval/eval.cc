@@ -216,8 +216,17 @@ void PlayEvalGame(size_t seed, int game_id, int total_num_workers,
                      : Search(white_nn->MakeSlot(
                                   game_id * white_cfg.num_threads_per_game),
                               bias_cache_w ? &*bias_cache_w : nullptr);
+      Search::Params search_params = MakeSearchParams(active_cfg);
+      // Opening diversity: sample from the root visit distribution for the
+      // first `sampling_num_moves` plies so games are not near-duplicates.
+      if (game.num_moves() < active_cfg.sampling_num_moves &&
+          active_cfg.sampling_temperature > 0.0f) {
+        search_params.puct_params.kind =
+            mcts::PuctRootSelectionPolicy::kVisitCountSample;
+        search_params.puct_params.tau = active_cfg.sampling_temperature;
+      }
       Search::Result res = s.Run(probability, game, player_table, player_tree,
-                                 color_to_move, MakeSearchParams(active_cfg));
+                                 color_to_move, search_params);
       move = res.move;
       num_aborted = res.num_aborted;
       num_collisions = res.num_collisions;
@@ -230,15 +239,26 @@ void PlayEvalGame(size_t seed, int game_id, int total_num_workers,
               : GumbelEvaluator(white_nn, game_id,
                                 MakeScoreUtilityParams(white_cfg),
                                 bias_cache_w ? &*bias_cache_w : nullptr);
+      // Opening diversity: sample from the root visit distribution for the
+      // first `sampling_num_moves` plies so games are not near-duplicates.
+      const bool sample_opening =
+          game.num_moves() < active_cfg.sampling_num_moves &&
+          active_cfg.sampling_temperature > 0.0f;
       GumbelResult gumbel_res =
           active_cfg.use_puct
               ? gumbel.SearchRootPuct(
                     probability, game, player_table, player_tree, color_to_move,
                     active_cfg.n,
                     PuctParams::Builder()
-                        .set_kind(active_cfg.use_lcb
-                                      ? PuctRootSelectionPolicy::kLcb
-                                      : PuctRootSelectionPolicy::kVisitCount)
+                        .set_tau(sample_opening
+                                     ? active_cfg.sampling_temperature
+                                     : 1.0f)
+                        .set_kind(
+                            sample_opening
+                                ? PuctRootSelectionPolicy::kVisitCountSample
+                            : active_cfg.use_lcb
+                                ? PuctRootSelectionPolicy::kLcb
+                                : PuctRootSelectionPolicy::kVisitCount)
                         .set_c_puct(active_cfg.c_puct)
                         .set_c_puct_v_2(active_cfg.c_puct_v_2)
                         .set_use_puct_v(active_cfg.use_puct_v)

@@ -754,6 +754,35 @@ void RunWithDetector(GlobalSearchState& global_state, NNInterface::Slot slot,
   }
 }
 
+// Samples a root move from the visit distribution, tempered by 1/tau. Only
+// legal moves with visits are eligible. Returns kNoopLoc if no eligible move
+// exists, so callers can fall back to their normal selection rule.
+game::Loc SampleRootMoveByVisits(const TreeNode* root, const Game& game,
+                                 Color color, float tau,
+                                 core::Probability& probability) {
+  std::array<double, constants::kMaxMovesPerPosition> w{};
+  double total = 0.0;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    const int n = root->child_visits[a];
+    if (n <= 0 || !game.IsValidMove(game::AsLoc(a), color)) continue;
+    const double x = std::pow(static_cast<double>(n), 1.0 / tau);
+    if (!std::isfinite(x) || x <= 0.0) continue;
+    w[a] = x;
+    total += x;
+  }
+  if (!std::isfinite(total) || total <= 0.0) return game::kNoopLoc;
+
+  double target = probability.Uniform() * total;
+  int last = -1;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    if (w[a] <= 0.0) continue;
+    last = a;
+    target -= w[a];
+    if (target <= 0.0) return game::AsLoc(a);
+  }
+  return last >= 0 ? game::AsLoc(last) : game::kNoopLoc;
+}
+
 }  // namespace
 
 Search::Search(NNInterface::Slot slot) : Search(slot, nullptr) {}
@@ -860,7 +889,18 @@ Search::Result Search::Run(core::Probability& probability, Game& game,
   const auto time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                            search_end - search_begin)
                            .count();
-  const auto best_move = best_lcb_move(root);
+  // Root selection. NOTE: kVisitCount and kLcb are not distinguished here --
+  // both fall through to LCB, which is pre-existing behavior. Only the
+  // sampling policy is honored, so opening diversity can be driven from config.
+  const auto best_move = [&]() -> game::Loc {
+    if (params.puct_params.kind == PuctRootSelectionPolicy::kVisitCountSample &&
+        params.puct_params.tau > 0.0f) {
+      const game::Loc sampled = SampleRootMoveByVisits(
+          root, game, color_to_move, params.puct_params.tau, probability);
+      if (sampled != game::kNoopLoc) return sampled;
+    }
+    return best_lcb_move(root);
+  }();
   const auto visit_count =
       global_search_state.total_num_visits.load(std::memory_order_relaxed);
   const auto abort_count =

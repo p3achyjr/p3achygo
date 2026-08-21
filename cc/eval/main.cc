@@ -97,6 +97,11 @@ ABSL_FLAG(bool, cur_enable_v_cat_var_scaling, false,
           "Whether to scale c_puct by upside/downside variance ratio for cur.");
 ABSL_FLAG(int, cur_v_cat_var_scale_prior_visits, 10,
           "Prior visits for v_cat upside/downside scaling for cur.");
+ABSL_FLAG(int, cur_sampling_num_moves, 0,
+          "Number of opening plies for cur to sample from the root visit "
+          "distribution instead of picking the best move. 0 = disabled.");
+ABSL_FLAG(float, cur_sampling_temperature, 0.0f,
+          "Temperature for cur opening sampling. Higher = more diverse.");
 ABSL_FLAG(float, cur_root_fpu, 0.1f,
           "Root FPU reduction for cur (0 = no FPU at root).");
 ABSL_FLAG(int, cand_n, kDefaultGumbelN, "N for candidate player");
@@ -137,6 +142,11 @@ ABSL_FLAG(
     "Whether to scale c_puct by upside/downside variance ratio for cand.");
 ABSL_FLAG(int, cand_v_cat_var_scale_prior_visits, 10,
           "Prior visits for v_cat upside/downside scaling for cand.");
+ABSL_FLAG(int, cand_sampling_num_moves, 0,
+          "Number of opening plies for cand to sample from the root visit "
+          "distribution instead of picking the best move. 0 = disabled.");
+ABSL_FLAG(float, cand_sampling_temperature, 0.0f,
+          "Temperature for cand opening sampling. Higher = more diverse.");
 ABSL_FLAG(float, cand_root_fpu, 0.1f,
           "Root FPU reduction for cand (0 = no FPU at root).");
 
@@ -204,6 +214,10 @@ void ApplyCurCommandLineFlags(eval::PlayerSearchConfig& cfg) {
         absl::GetFlag(FLAGS_cur_v_cat_var_scale_prior_visits);
   if (IsOnCommandLine("cur_root_fpu"))
     cfg.root_fpu = absl::GetFlag(FLAGS_cur_root_fpu);
+  if (IsOnCommandLine("cur_sampling_num_moves"))
+    cfg.sampling_num_moves = absl::GetFlag(FLAGS_cur_sampling_num_moves);
+  if (IsOnCommandLine("cur_sampling_temperature"))
+    cfg.sampling_temperature = absl::GetFlag(FLAGS_cur_sampling_temperature);
 }
 
 // Same for cand_* flags.
@@ -258,6 +272,10 @@ void ApplyCandCommandLineFlags(eval::PlayerSearchConfig& cfg) {
         absl::GetFlag(FLAGS_cand_v_cat_var_scale_prior_visits);
   if (IsOnCommandLine("cand_root_fpu"))
     cfg.root_fpu = absl::GetFlag(FLAGS_cand_root_fpu);
+  if (IsOnCommandLine("cand_sampling_num_moves"))
+    cfg.sampling_num_moves = absl::GetFlag(FLAGS_cand_sampling_num_moves);
+  if (IsOnCommandLine("cand_sampling_temperature"))
+    cfg.sampling_temperature = absl::GetFlag(FLAGS_cand_sampling_temperature);
 }
 
 // Builds a PlayerSearchConfig from the cur_* flags (all fields, no file).
@@ -290,6 +308,8 @@ eval::PlayerSearchConfig CurConfigFromFlags() {
   cfg.v_cat_var_scale_prior_visits =
       absl::GetFlag(FLAGS_cur_v_cat_var_scale_prior_visits);
   cfg.root_fpu = absl::GetFlag(FLAGS_cur_root_fpu);
+  cfg.sampling_num_moves = absl::GetFlag(FLAGS_cur_sampling_num_moves);
+  cfg.sampling_temperature = absl::GetFlag(FLAGS_cur_sampling_temperature);
   return cfg;
 }
 
@@ -323,6 +343,8 @@ eval::PlayerSearchConfig CandConfigFromFlags() {
   cfg.v_cat_var_scale_prior_visits =
       absl::GetFlag(FLAGS_cand_v_cat_var_scale_prior_visits);
   cfg.root_fpu = absl::GetFlag(FLAGS_cand_root_fpu);
+  cfg.sampling_num_moves = absl::GetFlag(FLAGS_cand_sampling_num_moves);
+  cfg.sampling_temperature = absl::GetFlag(FLAGS_cand_sampling_temperature);
   return cfg;
 }
 
