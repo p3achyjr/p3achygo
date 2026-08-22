@@ -12,6 +12,9 @@ import multiprocessing
 import os
 import subprocess
 import sys
+import time
+
+from concurrent.futures import ThreadPoolExecutor
 
 import gcs_utils as gcs
 from dataset import ChunkDataset
@@ -46,7 +49,9 @@ flags.DEFINE_integer("max_gens", 0, "Number of generations to train (0 = run for
 flags.DEFINE_string(
     "source_run_id", "", "Run ID to fetch golden chunks from (defaults to run_id)."
 )
-S3_BUCKET = "p3achygo"
+RCLONE_REMOTE = "r2"
+R2_BUCKET = "p3achygo"
+POLL_INTERVAL_S = 60
 
 
 def _get_starting_gen(models_dir: str, start_gen: int) -> tuple[str, int]:
@@ -62,18 +67,39 @@ def _get_starting_gen(models_dir: str, start_gen: int) -> tuple[str, int]:
     return str(latest), int(gcs.MODEL_RE.fullmatch(latest.name).group(1))
 
 
+def _chunk_published(run_id: str, chunk_name: str) -> bool:
+    """True if the chunk object exists in remote storage (R2, via rclone)."""
+    remote_dir = f"{RCLONE_REMOTE}:{R2_BUCKET}/{run_id}/goldens/"
+    result = subprocess.run(
+        ["rclone", "lsf", remote_dir, "--include", chunk_name],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    return chunk_name in result.stdout.split()
+
+
 def _fetch_chunk(chunk_dir: str, run_id: str, gen: int) -> tuple[str, bool]:
-    """Download chunk_{gen:04d}.tfrecord.zz from S3 and return (local path, was_downloaded)."""
+    """Download chunk_{gen:04d}.tfrecord.zz from R2 and return (local path, was_downloaded).
+
+    Blocks (polling every POLL_INTERVAL_S) until the chunk is published, so the
+    loop can prefetch a generation ahead without crashing on a not-yet-produced
+    chunk.
+    """
     chunk_name = gcs.GOLDEN_CHUNK_FORMAT.format(gen)
     local_path = Path(chunk_dir, chunk_name)
-    s3_uri = f"s3://{S3_BUCKET}/{run_id}/goldens/{chunk_name}"
-    if not local_path.exists():
-        logging.info(f"Fetching {s3_uri} -> {local_path}")
-        subprocess.run(["s5cmd", "cp", s3_uri, str(local_path)], check=True)
-        return str(local_path), True
-    else:
+    remote_uri = f"{RCLONE_REMOTE}:{R2_BUCKET}/{run_id}/goldens/{chunk_name}"
+    if local_path.exists():
         logging.info(f"Chunk already exists at {local_path}, skipping fetch")
         return str(local_path), False
+    while not _chunk_published(run_id, chunk_name):
+        logging.info(
+            f"Chunk {remote_uri} not published yet; waiting {POLL_INTERVAL_S}s"
+        )
+        time.sleep(POLL_INTERVAL_S)
+    logging.info(f"Fetching {remote_uri} -> {local_path}")
+    subprocess.run(["rclone", "copyto", remote_uri, str(local_path)], check=True)
+    return str(local_path), True
 
 
 def _train_loop():
@@ -126,14 +152,26 @@ def _train_loop():
 
     max_gens = FLAGS.max_gens
     gens_trained = 0
+    source_run_id = FLAGS.source_run_id or FLAGS.run_id
+
+    # Prefetch the next chunk in a background thread so its download overlaps
+    # with training the current generation. `rclone` runs as a subprocess, so a
+    # single worker (which releases the GIL during the download) is enough.
+    fetch_executor = ThreadPoolExecutor(max_workers=1)
+    pending_fetch = fetch_executor.submit(
+        _fetch_chunk, FLAGS.chunk_dir, source_run_id, model_gen + 1
+    )
 
     while max_gens == 0 or gens_trained < max_gens:
         config = rl_loop.config.parse(FLAGS.run_id)
         next_gen = model_gen + 1
-        source_run_id = FLAGS.source_run_id or FLAGS.run_id
-        chunk_path, chunk_downloaded = _fetch_chunk(
-            FLAGS.chunk_dir, source_run_id, next_gen
-        )
+        # Block only if the prefetch hasn't finished yet.
+        chunk_path, chunk_downloaded = pending_fetch.result()
+        # Kick off the following generation's download before we start training.
+        if max_gens == 0 or gens_trained + 1 < max_gens:
+            pending_fetch = fetch_executor.submit(
+                _fetch_chunk, FLAGS.chunk_dir, source_run_id, next_gen + 1
+            )
         logging.info(f"Training generation {next_gen} on {chunk_path}")
 
         batch_num, live_model, swa_model, optimizer = rl_loop.train.train_one_gen(

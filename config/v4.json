@@ -20,6 +20,10 @@
     [
       600,
       1e-5
+    ],
+    [
+      630,
+      1.5e-5
     ]
   ],
   "lr_growth_window": 10,
@@ -51,5 +55,6 @@
   "adam_wd": 0.1,
   "adam_lr_ratio": 0.5,
   "wd_auto_scale": true,
-  "wd_lr_max": 1e-4
+  "wd_lr_max": 1e-4,
+  "wd_lr_exponent": 0.3
 }

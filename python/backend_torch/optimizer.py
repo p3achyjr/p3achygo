@@ -55,6 +55,7 @@ _WD_SCALE = {
     "body_bias": 1e-2,
     "head_bias": 1e-2,
     "qkvo": 0.5,
+    "rope_theta": 0.0,
 }
 
 
@@ -151,6 +152,8 @@ def _wd_category(name: str, is_bn: bool) -> Optional[str]:
         return "gamma"
     if n.endswith(".beta"):
         return "beta"
+    if n.endswith(".log_theta"):
+        return "rope_theta"  # learnable RoPE θ — no weight decay (scale 0.0)
     if n.endswith(".bias"):
         return "head_bias" if ("policy_head" in n or "value_head" in n) else "body_bias"
     # qkvo: match either keras-style ".query.kernel" etc., or the torch-native
@@ -655,12 +658,14 @@ class ConvMuon(Optimizer):
             return
         grads = [p.grad for p in params]
 
-        # Lazy state init.
+        # Lazy state init. Init per-param (not gated on params[0]) so a resumed
+        # group that gained new params — e.g. learnable RoPE θ spliced into an
+        # existing checkpoint — initializes only the newcomers; they inherit the
+        # group's shared step counter so bias correction stays consistent.
         ms, vs = [], []
-        # All adamw params in one group share a single step counter.
-        if "step" not in self.state[params[0]]:
-            for p in params:
-                self.state[p]["step"] = 0
+        for p in params:
+            if "step" not in self.state[p]:
+                self.state[p]["step"] = self.state[params[0]].get("step", 0)
                 self.state[p]["m"] = torch.zeros_like(p)
                 self.state[p]["v"] = torch.zeros_like(p)
         for p in params:
@@ -773,6 +778,73 @@ class TorchLossScaleOptimizer:
 _MUON_EXCLUDE_LAYERS_TORCH = [r".*policy_head.*", r".*value_head.*"]
 
 
+def _remap_resume_state_for_added_params(inner, saved_inner, model):
+    """Map a pre-learnable-θ optimizer state onto the current param set.
+
+    Adding per-block `log_theta` grows the adamw group, so the saved positional
+    optimizer state no longer lines up. Reconstruct the *old* param ordering
+    (current params minus `*.log_theta`, same partition build that produced the
+    saved order), match saved per-param state by identity, and leave the new
+    `log_theta` params with lazily-initialized (empty) state. Existing weights
+    keep their exact Adam m/v + Muon momentum buffers.
+
+    Returns an inner-format state dict (`{"state", "param_groups"}`) in the
+    current optimizer's index space.
+    """
+    new_params = [p for g in inner.param_groups for p in g["params"]]
+    old_named = [
+        (n, p) for n, p in model.named_parameters() if not n.endswith(".log_theta")
+    ]
+    old_groups, _ = build_convmuon_param_groups(
+        old_named, exclude_layers=_MUON_EXCLUDE_LAYERS_TORCH
+    )
+    old_params = [p for g in old_groups for p in g["params"]]
+    saved_count = sum(len(g["params"]) for g in saved_inner["param_groups"])
+    if len(old_params) != saved_count:
+        raise ValueError(
+            f"optimizer resume: reconstructed old param count {len(old_params)} "
+            f"!= saved count {saved_count}; cannot safely remap."
+        )
+
+    saved_state = saved_inner["state"]
+    by_id = {id(old_params[i]): saved_state[i] for i in saved_state}
+    new_state = {j: by_id[id(p)] for j, p in enumerate(new_params) if id(p) in by_id}
+    # Use the fresh optimizer's param_groups for the (new) index space; the
+    # config-driven hyperparams are re-applied after load anyway.
+    template = inner.state_dict()
+    return {"state": new_state, "param_groups": template["param_groups"]}
+
+
+def _maybe_remap_resume_state(inner, loaded_state, model):
+    """No-op unless the saved optimizer state predates the per-block `log_theta`
+    params; in that case remap it onto the current param set, preserving wrapper
+    (`{"inner","scaler"}`) format when present."""
+    wrapper = (
+        isinstance(loaded_state, dict)
+        and "inner" in loaded_state
+        and "scaler" in loaded_state
+    )
+    saved_inner = loaded_state["inner"] if wrapper else loaded_state
+    if "param_groups" not in saved_inner:
+        return loaded_state  # nothing we recognize to remap
+
+    new_total = sum(len(g["params"]) for g in inner.param_groups)
+    saved_total = sum(len(g["params"]) for g in saved_inner["param_groups"])
+    if saved_total == new_total:
+        return loaded_state  # already current-format
+
+    num_added = sum(1 for n, _ in model.named_parameters() if n.endswith(".log_theta"))
+    if saved_total != new_total - num_added:
+        raise ValueError(
+            f"optimizer resume: saved {saved_total} params vs current {new_total} "
+            f"(expected delta {num_added} log_theta) — refusing to remap."
+        )
+    remapped = _remap_resume_state_for_added_params(inner, saved_inner, model)
+    if wrapper:
+        return {"inner": remapped, "scaler": loaded_state["scaler"]}
+    return remapped
+
+
 def make_optimizer(model, config, lr_schedule, is_gpu, *, loaded_state=None):
     """Build (when `loaded_state is None`) or rehydrate the torch optimizer.
 
@@ -826,6 +898,8 @@ def make_optimizer(model, config, lr_schedule, is_gpu, *, loaded_state=None):
     if is_gpu and not isinstance(optimizer, TorchLossScaleOptimizer):
         optimizer = TorchLossScaleOptimizer(optimizer)
     if is_state_dict:
+        inner_for_remap = getattr(optimizer, "inner_optimizer", optimizer)
+        loaded_state = _maybe_remap_resume_state(inner_for_remap, loaded_state, model)
         optimizer.load_state_dict(loaded_state)
 
     # Hot-reload config-driven fields. Always run — same code path whether we
