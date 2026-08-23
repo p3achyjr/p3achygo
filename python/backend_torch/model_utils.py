@@ -131,6 +131,14 @@ def summary(model: torch.nn.Module) -> None:
     print(f"  {'trainable':<49} {trainable:>12,} params")
 
 
+def _kill_compile_workers(_ac) -> None:
+    for pool in list(_ac._pool_set):
+        try:
+            pool.process.kill()
+        except Exception:
+            pass
+
+
 def compile_for_training(
     model: torch.nn.Module, *, channels_last: bool = True
 ) -> torch.nn.Module:
@@ -153,15 +161,30 @@ def compile_for_training(
     training step so the captured output buffers can be reclaimed between
     iters. (`train.train` and `train.val` already do this.)
     """
+    import atexit
     import os
 
     model = model.to("cuda")
     if channels_last:
         model = model.to(memory_format=torch.channels_last)
     backend = os.environ.get("P3ACHYGO_TORCH_COMPILE_BACKEND")
-    if backend:
-        return torch.compile(model, backend=backend)
-    return torch.compile(model, mode="reduce-overhead")
+    compiled = (
+        torch.compile(model, backend=backend)
+        if backend
+        else torch.compile(model, mode="reduce-overhead")
+    )
+
+    # Replace the slow 300-second atexit shutdown with an immediate kill so
+    # the process exits promptly when training ends.
+    try:
+        import torch._inductor.async_compile as _ac
+
+        atexit.unregister(_ac.shutdown_compile_workers)
+        atexit.register(_kill_compile_workers, _ac)
+    except Exception:
+        pass
+
+    return compiled
 
 
 def get_weights(model: torch.nn.Module) -> Dict[str, torch.Tensor]:

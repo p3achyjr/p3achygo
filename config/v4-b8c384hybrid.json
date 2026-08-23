@@ -1,0 +1,107 @@
+{
+  "from_existing_run": "v4",
+  "num_generations": 390,
+  "model_config": {
+    "trunk": [
+      [
+        "nbt",
+        {
+          "output_channels": 384,
+          "bottleneck_channels": 192,
+          "conv_size": 3
+        }
+      ],
+      [
+        "nbt",
+        {
+          "output_channels": 384,
+          "bottleneck_channels": 192,
+          "conv_size": 3
+        }
+      ],
+      [
+        "broadcast",
+        {
+          "output_channels": 384
+        }
+      ],
+      [
+        "nbt",
+        {
+          "output_channels": 384,
+          "bottleneck_channels": 192,
+          "conv_size": 3
+        }
+      ],
+      [
+        "nbt",
+        {
+          "output_channels": 384,
+          "bottleneck_channels": 192,
+          "conv_size": 3
+        }
+      ],
+      [
+        "nbt",
+        {
+          "output_channels": 384,
+          "bottleneck_channels": 192,
+          "conv_size": 3
+        }
+      ],
+      [
+        "transformer_btl",
+        {
+          "output_dim": 384,
+          "embed_dim": 192,
+          "num_heads": 6
+        }
+      ],
+      [
+        "transformer_btl",
+        {
+          "output_dim": 384,
+          "embed_dim": 192,
+          "num_heads": 6
+        }
+      ],
+      [
+        "transformer_btl",
+        {
+          "output_dim": 384,
+          "embed_dim": 192,
+          "num_heads": 6
+        }
+      ],
+      [
+        "transformer_btl",
+        {
+          "output_dim": 384,
+          "embed_dim": 192,
+          "num_heads": 6
+        }
+      ]
+    ],
+    "policy_head_channels": 48,
+    "value_head_channels": 48,
+    "c_val": 128
+  },
+  "games_first_gen": 5000,
+  "games_per_gen": 5000,
+  "batch_size": 256,
+  "lr_schedule": [
+    [
+      0,
+      1e-4
+    ]
+  ],
+  "start_gen": 15,
+  "lr_growth_window": 5,
+  "lr_transition_window": 10,
+  "optimizer": "muon",
+  "muon_wd": 0.1,
+  "adam_wd": 0.1,
+  "adam_lr_ratio": 0.5,
+  "wd_auto_scale": true,
+  "wd_lr_max": 1e-4
+}

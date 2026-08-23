@@ -349,6 +349,10 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     // Number of consecutive moves at which we are beneath kDownBadThreshold.
     int num_consecutive_down_bad_moves = 0;
 
+    // Post-search root_q_outcome from the previous move, used to compute
+    // down_bad_coeff without relying on an uninitialized root_node.
+    float prev_root_q_outcome = 0.0f;
+
     // Whether to log full MCTS search trees.
     bool const log_mcts_trees = probability.Uniform() < kLogFullTreeProb;
 
@@ -442,12 +446,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
 
       // How down bad our root q is, from [0, 1]. 0 is max, 1 is min (i.e.)
       // down_bad_coeff(-1) = 0, down_bad_coeff(|q| < .9) = 0.
-      float const down_bad_coeff = [&root_node]() {
-        if (!root_node) {
-          return 1.0f;
-        }
-
-        float root_v = VOutcome(root_node);
+      float const down_bad_coeff = [prev_root_q_outcome]() {
+        float root_v = prev_root_q_outcome;
         if (root_v > kDownBadThreshold && root_v < -kDownBadThreshold) {
           // We are not down bad.
           return 1.0f;
@@ -697,6 +697,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       } else {
         num_consecutive_down_bad_moves = 0;
       }
+      prev_root_q_outcome = root_q_outcome;
 
       // Fork before playing the move (ForkManager sees the pre-move board).
       fork_manager.MaybeFork(

@@ -149,6 +149,14 @@ class ConvMuon(keras.optimizers.Muon):
         else:
             return 1.0
 
+    @property
+    def effective_weight_decay(self):
+        return float(self.weight_decay) * float(self._lr_scale())
+
+    @property
+    def effective_adam_weight_decay(self):
+        return float(self.adam_weight_decay) * float(self._lr_scale())
+
     def _apply_weight_decay(self, variables):
         for variable in variables:
             if not self._use_weight_decay(variable):

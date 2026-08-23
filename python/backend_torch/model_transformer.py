@@ -29,19 +29,25 @@ import torch.nn.functional as F
 ROPE_THETA = 100.0
 
 
-def spiral_rope_cos_sin_table(
-    num_rotations: int, embed_dim: int, grid_len: int
+def spiral_rope_structure(
+    num_rotations: int, head_dim: int, grid_len: int
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Same construction as keras side. Numpy in / numpy out — pure math."""
-    assert embed_dim % (num_rotations * 2) == 0
-    assert embed_dim % 4 == 0
-    elems_per_rotation = embed_dim // num_rotations
-    seq_len = grid_len * grid_len
+    """θ-independent structure of the spiral RoPE table.
 
-    t = np.arange(embed_dim // 4)
-    thetas = ROPE_THETA ** (-t / (embed_dim // 4))
-    theta_table = np.zeros((embed_dim,))
-    for i in range(embed_dim):
+    The table is `cos/sin(theta_table * angle_projs)`, where
+    `theta_table[i] = (θ ** (-t/(head_dim//4)))[theta_idx[i]]`. Only `theta_idx`
+    (an integer gather map into the geometric `thetas` series) and `angle_projs`
+    (board geometry) are independent of θ's value; θ itself becomes a learnable
+    parameter in `RoPE`. Returns `(theta_idx, angle_projs)`. Numpy in/out.
+    """
+    assert head_dim % (num_rotations * 2) == 0
+    assert head_dim % 4 == 0
+    elems_per_rotation = head_dim // num_rotations
+    seq_len = grid_len * grid_len
+    num_thetas = head_dim // 4
+
+    theta_idx = np.zeros((head_dim,), dtype=np.int64)
+    for i in range(head_dim):
         K = num_rotations
         k = i // elems_per_rotation
         k_norm = k % (K // 2)
@@ -50,8 +56,7 @@ def spiral_rope_cos_sin_table(
         rot_offset = rot_elem_offset // 2
         theta_offset_base = (rot_offset // 2) * K
         theta_offset = theta_offset_base + (rot_offset % 2)
-        theta_idx = min(len(thetas) - 1, theta_base + theta_offset)
-        theta_table[i] = thetas[theta_idx]
+        theta_idx[i] = min(num_thetas - 1, theta_base + theta_offset)
 
     angles = np.arange(num_rotations) * (np.pi / num_rotations)
     x_coords = np.arange(grid_len)
@@ -60,22 +65,30 @@ def spiral_rope_cos_sin_table(
     x_flat = x_grid.flatten()
     y_flat = y_grid.flatten()
 
-    angle_projs = np.zeros((seq_len, embed_dim))
-    for d in range(embed_dim):
+    angle_projs = np.zeros((seq_len, head_dim))
+    for d in range(head_dim):
         angle_idx = d // elems_per_rotation
         angle = angles[angle_idx]
         angle_projs[:, d] = x_flat * np.cos(angle) + y_flat * np.sin(angle)
 
-    rot_table = theta_table * angle_projs
-    return np.cos(rot_table), np.sin(rot_table)
+    return theta_idx, angle_projs
 
 
 class RoPE(nn.Module):
     """Apply spiral RoPE to (B, S, num_heads, head_dim) input.
 
-    Buffers (`_rope_cos`, `_rope_sin`, `_pair_swap_indices`, `_sign_cos`)
-    are registered as fp32 and cast to the input dtype at call time —
-    matches keras impl which also casts per-call.
+    `theta` (the geometric base of the RoPE frequencies) is a learnable
+    parameter — independent per block since each attention layer owns its own
+    `RoPE`. It is stored as `log_theta` to keep it positive (the table uses
+    `θ ** (-t/...)`). The cos/sin table is recomputed from it each forward; all
+    other tables (`_theta_idx`, `_angle_projs`, `_freq_exponent`,
+    `_pair_swap_indices`, `_sign_cos`) are θ-independent and registered as
+    non-persistent buffers (deterministic from config, so not checkpointed).
+
+    Backward compat: pre-learnable-θ checkpoints baked `_rope_cos`/`_rope_sin`
+    (and the swap/sign tables) as persistent buffers and had no `log_theta`.
+    `_load_from_state_dict` drops those stale keys and seeds `log_theta` with the
+    old fixed value, so such checkpoints load identically and then adapt.
     """
 
     def __init__(self, pos_len: int, head_dim: int, num_rotations: int):
@@ -85,28 +98,79 @@ class RoPE(nn.Module):
         self.head_dim = head_dim
         self.num_rotations = num_rotations
 
-        cos, sin = spiral_rope_cos_sin_table(num_rotations, head_dim, pos_len)
-        self.register_buffer("_rope_cos", torch.tensor(cos, dtype=torch.float32))
-        self.register_buffer("_rope_sin", torch.tensor(sin, dtype=torch.float32))
+        self.log_theta = nn.Parameter(
+            torch.tensor(math.log(ROPE_THETA), dtype=torch.float32)
+        )
+
+        theta_idx, angle_projs = spiral_rope_structure(num_rotations, head_dim, pos_len)
+        self.register_buffer(
+            "_theta_idx", torch.tensor(theta_idx, dtype=torch.long), persistent=False
+        )
+        self.register_buffer(
+            "_angle_projs",
+            torch.tensor(angle_projs, dtype=torch.float32),
+            persistent=False,
+        )
+        # thetas = exp(log_theta * _freq_exponent) = θ ** (-t/(head_dim//4)).
+        freq_exponent = -torch.arange(head_dim // 4, dtype=torch.float32) / (
+            head_dim // 4
+        )
+        self.register_buffer("_freq_exponent", freq_exponent, persistent=False)
 
         # Pair swap: (x0, x1, x2, x3, ...) → (x1, x0, x3, x2, ...)
         pair_swap = torch.empty(head_dim, dtype=torch.long)
         for i in range(head_dim // 2):
             pair_swap[2 * i] = 2 * i + 1
             pair_swap[2 * i + 1] = 2 * i
-        self.register_buffer("_pair_swap_indices", pair_swap)
+        self.register_buffer("_pair_swap_indices", pair_swap, persistent=False)
 
         # Sign pattern for cos: +1 on even indices, -1 on odd indices.
         sign_cos = torch.ones(head_dim, dtype=torch.float32)
         for i in range(head_dim // 2):
             sign_cos[2 * i + 1] = -1.0
-        self.register_buffer("_sign_cos", sign_cos)
+        self.register_buffer("_sign_cos", sign_cos, persistent=False)
+
+    def _cos_sin(self) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Recompute the (seq_len, head_dim) cos/sin tables from `log_theta`."""
+        thetas = torch.exp(self.log_theta * self._freq_exponent)  # (head_dim//4,)
+        theta_table = thetas[self._theta_idx]  # (head_dim,)
+        rot = theta_table * self._angle_projs  # (seq_len, head_dim)
+        return torch.cos(rot), torch.sin(rot)
+
+    def _load_from_state_dict(
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ):
+        # Pre-learnable-θ checkpoints baked these as persistent buffers (now
+        # recomputed / non-persistent) and lacked `log_theta`. Drop the stale
+        # keys so strict load passes, and seed `log_theta` (defaults to the old
+        # fixed θ) when absent so the block loads identically and then adapts.
+        for legacy in ("_rope_cos", "_rope_sin", "_pair_swap_indices", "_sign_cos"):
+            state_dict.pop(prefix + legacy, None)
+        if prefix + "log_theta" not in state_dict:
+            state_dict[prefix + "log_theta"] = self.log_theta.detach().clone()
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: (B, S, num_heads, head_dim)
         dtype = x.dtype
-        cos = self._rope_cos.to(dtype).view(1, self.seq_len, 1, self.head_dim)
-        sin = self._rope_sin.to(dtype).view(1, self.seq_len, 1, self.head_dim)
+        cos, sin = self._cos_sin()
+        cos = cos.to(dtype).view(1, self.seq_len, 1, self.head_dim)
+        sin = sin.to(dtype).view(1, self.seq_len, 1, self.head_dim)
         sign_cos = self._sign_cos.to(dtype)
 
         # Swap pairs along last axis via gather.

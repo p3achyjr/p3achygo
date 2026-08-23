@@ -1,3 +1,3 @@
 '''Constants for RL loop.'''
 
-SELFPLAY_BATCH_SIZE = 128
+SELFPLAY_BATCH_SIZE = 96

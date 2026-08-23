@@ -73,8 +73,9 @@ def _close(label, k_out, t_out, atol):
 
 
 class RoPETest(unittest.TestCase):
-    """RoPE has no trainable params — cos/sin/sign tables are deterministic
-    from the config. So if both versions have matching tables, outputs match."""
+    """Torch RoPE θ is now a learnable param (`log_theta`), but at init it
+    equals keras' fixed θ, so the recomputed cos/sin tables still match. The
+    sign/swap tables remain deterministic from the config."""
 
     def test_rope_tables_match(self):
         pos_len = 19
@@ -84,9 +85,11 @@ class RoPETest(unittest.TestCase):
         kr = KRoPE(pos_len=pos_len, head_dim=head_dim, num_rotations=num_rotations)
         tr = TRoPE(pos_len=pos_len, head_dim=head_dim, num_rotations=num_rotations)
 
-        # Compare buffers (keras stores as numpy attrs; torch as tensor buffers)
-        np.testing.assert_allclose(kr._rope_cos, tr._rope_cos.numpy(), atol=0)
-        np.testing.assert_allclose(kr._rope_sin, tr._rope_sin.numpy(), atol=0)
+        # Torch table is recomputed from log_theta (fp32) vs keras' fp64 numpy;
+        # compare with an fp32-level tolerance rather than exact.
+        t_cos, t_sin = tr._cos_sin()
+        np.testing.assert_allclose(kr._rope_cos, t_cos.detach().numpy(), atol=1e-6)
+        np.testing.assert_allclose(kr._rope_sin, t_sin.detach().numpy(), atol=1e-6)
         np.testing.assert_allclose(kr._sign_cos, tr._sign_cos.numpy(), atol=0)
         np.testing.assert_array_equal(
             kr._pair_swap_indices, tr._pair_swap_indices.numpy()

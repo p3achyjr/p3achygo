@@ -262,8 +262,13 @@ GumbelResult GumbelEvaluator::Sample(core::Probability& probability,
   }
 
   Loc raw_nn_move = game::AsLoc(Argmax(root->move_logits));
+  std::array<float, constants::kMaxMovesPerPosition> masked_probs;
+  for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
+    masked_probs[i] =
+        game.IsValidMove(i, color_to_move) ? root->move_probs[i] : 0.0f;
+  }
   Loc mcts_move = game::AsLoc(
-      SampleFromPolicy(root->move_probs, tau, probability, game.board()));
+      SampleFromPolicy(masked_probs, tau, probability, game.board()));
 
   return GumbelResult{raw_nn_move,        mcts_move, root->move_probs,
                       /*child_stats=*/{}, /*kld=*/0, /*visits=*/0};
