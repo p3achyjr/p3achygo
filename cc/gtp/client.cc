@@ -197,7 +197,56 @@ void Client::GenmoveAnalyze(game::Color color, int centiseconds) {
   mu_.Unlock();
 }
 
+namespace {
+
+// Commands after which pondering should resume. This is exactly the set of
+// handlers that used to carry their own PonderPause, whose destructor restarted
+// pondering -- behavior is preserved, the responsibility just moved here.
+//
+// `play` and `play_dbg` are deliberately absent: they stopped pondering without
+// restarting it before, and still do.
+bool ShouldResumePonderingAfter(GTPCode code) {
+  switch (code) {
+    case GTPCode::kClearBoard:
+    case GTPCode::kKomi:
+    case GTPCode::kGenMove:
+    case GTPCode::kUndo:
+    case GTPCode::kCgosGenmoveAnalyze:
+    case GTPCode::kGenMoveDbg:
+    case GTPCode::kLoadSgf:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Pauses pondering for the duration of a command, and resumes it afterwards for
+// the commands above. Pausing unconditionally is the point: a newly added
+// command is safe by default rather than safe only if its author remembered.
+//
+// Analysis commands never resume here, and do not need to: InputLoop calls
+// StopAnalysis() before queueing each command, so analysis is never live while
+// HandleCommand runs.
+class [[nodiscard]] ScopedPonderPause {
+ public:
+  ScopedPonderPause(Service* s, GTPCode code) : s_(s), code_(code) {
+    s_->PausePondering();
+  }
+  ~ScopedPonderPause() {
+    if (ShouldResumePonderingAfter(code_)) s_->EnsurePondering();
+  }
+  ScopedPonderPause(const ScopedPonderPause&) = delete;
+  ScopedPonderPause& operator=(const ScopedPonderPause&) = delete;
+
+ private:
+  Service* s_;
+  GTPCode code_;
+};
+
+}  // namespace
+
 void Client::HandleCommand(Command cmd) {
+  ScopedPonderPause ponder_pause(service_.get(), cmd.code);
   switch (cmd.code) {
     case GTPCode::kProtocolVersion:
       AddResponse(service_->GtpProtocolVersion(cmd.id));

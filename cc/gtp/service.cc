@@ -138,19 +138,14 @@ class ServiceImpl final : public Service {
   void StopPondering();
   void StartPondering();
   void Ponder(std::stop_token token);
+  bool IsPondering() const { return ponder_thread_.joinable(); }
+
+ public:
+  void PausePondering() override;
+  void EnsurePondering() override;
+
+ private:
   inline TreeNode* current_root() const { return current_root_; }
-
-  // RAII guard: stops pondering on construction, restarts on destruction.
-  // Must not be created as a temporary (use [[nodiscard]] to catch this).
-  struct [[nodiscard]] PonderPause {
-    explicit PonderPause(ServiceImpl& s) : s_(s) { s_.StopPondering(); }
-    ~PonderPause() { s_.StartPondering(); }
-    PonderPause(const PonderPause&) = delete;
-    PonderPause& operator=(const PonderPause&) = delete;
-
-   private:
-    ServiceImpl& s_;
-  };
 
   const eval::PlayerSearchConfig cfg_;
   TimeControl time_control_;
@@ -237,13 +232,11 @@ Response<> ServiceImpl::GtpBoardSize(std::optional<int> id, int board_size) {
 }
 
 Response<> ServiceImpl::GtpClearBoard(std::optional<int> id) {
-  PonderPause pause(*this);
   ClearBoard();
   return MakeResponse(id);
 }
 
 Response<> ServiceImpl::GtpKomi(std::optional<int> id, float komi) {
-  PonderPause pause(*this);
   komi_ = komi;
   game_->SetKomi(komi);
   return MakeResponse(id);
@@ -256,13 +249,11 @@ Response<> ServiceImpl::GtpPlay(std::optional<int> id, Move move) {
   if (verbose_) {
     std::cerr << "Playing " << move << "\n";
   }
-  StopPondering();
   MakeMove(move.color, move.loc);
   return MakeResponse(id);
 }
 
 Response<Loc> ServiceImpl::GtpGenMove(std::optional<int> id, Color color) {
-  PonderPause pause(*this);
   const auto mcts_move = GenMoveCommon(color);
   if (V(current_root()) < -0.96f && game_->num_moves() > 50) {
     return MakeResponse(id, kNoopLoc);
@@ -292,7 +283,6 @@ Response<> ServiceImpl::GtpUndo(std::optional<int> id) {
   if (game_->num_moves() == 0) {
     return MakeErrorResponse(id, "Nothing to undo.");
   }
-  PonderPause pause(*this);
 
   // Replay from beginning, excluding last move.
   std::unique_ptr<Game> new_game = std::make_unique<Game>(false);
@@ -364,7 +354,6 @@ game::Loc ServiceImpl::GtpGenMoveAnalyze(game::Color color) {
 
 game::Loc ServiceImpl::GtpCgosGenmoveAnalyze(game::Color color,
                                              std::string* analysis_json) {
-  PonderPause pause(*this);
   const auto mcts_move = GenMoveCommon(color);
   if (V(current_root()) < -0.96f && game_->num_moves() > 50) {
     return kNoopLoc;
@@ -392,8 +381,6 @@ Response<std::string> ServiceImpl::GtpPlayDbg(std::optional<int> id,
   if (!game_->IsValidMove(move.loc, move.color)) {
     return MakeErrorResponse<std::string>(id, "illegal move");
   }
-  StopPondering();
-
   std::string dbg_str;
   dbg_str += "---- Move Num " + std::to_string(game_->num_moves()) + " ----\n";
   dbg_str += "\nTree Stats:\n  N: " +
@@ -474,7 +461,6 @@ std::string ServiceImpl::BuildExplainComment() {
 
 Response<std::string> ServiceImpl::GtpGenMoveDbg(std::optional<int> id,
                                                  game::Color color) {
-  PonderPause pause(*this);
   const auto mcts_move = GenMoveCommon(color);
   std::string dbg_str = last_explain_comment_;
 
@@ -514,7 +500,6 @@ Response<> ServiceImpl::GtpLoadSgf(std::optional<int> id,
 
   GameInfo game_info = ExtractGameInfo(sgf_root->get());
 
-  PonderPause pause(*this);
   ClearBoard();
   for (const auto& mv : game_info.main_variation) {
     MakeMove(mv.color, mv.loc);
@@ -754,6 +739,14 @@ void ServiceImpl::ClearBoard() {
   current_root_ = node_table_->GetOrCreate(game_->board().hash(), BLACK, false);
   node_table_->Reap(current_root_);
   if (bias_cache_) bias_cache_->PruneUnused();
+}
+
+void ServiceImpl::PausePondering() {
+  if (IsPondering()) StopPondering();
+}
+
+void ServiceImpl::EnsurePondering() {
+  if (!IsPondering()) StartPondering();
 }
 
 void ServiceImpl::StopPondering() {
