@@ -153,6 +153,7 @@ std::pair<int, TimeControl::Metadata> TimeControl::ComputeMoveTimeMs(
   // opponent declines to resign and drags the game out hundreds of plies -- the
   // engine used to burn its whole clock while up 40+ points and lose on time.
   // 1.0 at <=80% winrate, quadratic down to 0.0 at >=95%.
+  float pre_search_winrate = -1.0f;
   const auto winning_attenuator = [&]() {
     constexpr float kLo = 0.80f;
     constexpr float kHi = 0.95f;
@@ -162,6 +163,7 @@ std::pair<int, TimeControl::Metadata> TimeControl::ComputeMoveTimeMs(
     // v_outcome is the pure game outcome in [-1, 1]. root->v is utility
     // (outcome + score utility) and can exceed 1, so it is not a winrate.
     const float winrate = (root->v_outcome + 1.0f) / 2.0f;
+    pre_search_winrate = winrate;
     const float t = std::clamp((winrate - kLo) / (kHi - kLo), 0.0f, 1.0f);
     return 1.0f - t * t;
   }();
@@ -190,7 +192,7 @@ std::pair<int, TimeControl::Metadata> TimeControl::ComputeMoveTimeMs(
   return {std::max(static_cast<int>(ms), 1),
           Metadata{base_ms, appx_moves_left_from_move_num,
                    appx_moves_left_from_q, obvious_move_factor, stddev_factor,
-                   middlegame_factor, winning_attenuator}};
+                   middlegame_factor, winning_attenuator, pre_search_winrate}};
 }
 
 }  // namespace gtp

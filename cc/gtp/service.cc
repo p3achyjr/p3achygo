@@ -637,6 +637,8 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
                   << "  stddev_factor=" << time_metadata.stddev_factor
                   << "  middlegame_factor=" << time_metadata.middlegame_factor
                   << "  winning_attenuator=" << time_metadata.winning_attenuator
+                  << "  pre_search_wr=" << time_metadata.pre_search_winrate
+                  << "  root_n=" << (current_root() ? current_root()->n : -1)
                   << "\n";
       }
     }

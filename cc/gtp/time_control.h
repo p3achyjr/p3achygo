@@ -29,6 +29,9 @@ class TimeControl {
     float stddev_factor;
     float middlegame_factor;
     float winning_attenuator;
+    // What the attenuator actually saw pre-search. -1 means the root was null
+    // or unevaluated, in which case the attenuator is skipped.
+    float pre_search_winrate;
   };
   TimeControl(uint32_t flags) : flags_(flags) {}
 
