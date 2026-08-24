@@ -19,6 +19,7 @@ class TimeControl {
     kObviousMoveFactor = 1 << 1,
     kStddevFactor = 1 << 2,
     kMiddleGameFactor = 1 << 3,
+    kWinningAttenuator = 1 << 4,
   };
   struct Metadata {
     float base_ms;
@@ -27,6 +28,7 @@ class TimeControl {
     float obv_move_factor;
     float stddev_factor;
     float middlegame_factor;
+    float winning_attenuator;
   };
   TimeControl(uint32_t flags) : flags_(flags) {}
 

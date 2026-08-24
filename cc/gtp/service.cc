@@ -636,6 +636,7 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
                   << "  obv_move_factor=" << time_metadata.obv_move_factor
                   << "  stddev_factor=" << time_metadata.stddev_factor
                   << "  middlegame_factor=" << time_metadata.middlegame_factor
+                  << "  winning_attenuator=" << time_metadata.winning_attenuator
                   << "\n";
       }
     }

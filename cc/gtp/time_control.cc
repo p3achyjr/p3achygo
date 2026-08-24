@@ -57,9 +57,14 @@ std::pair<int, TimeControl::Metadata> TimeControl::ComputeMoveTimeMs(
     return {std::max(0, byoyomi_time_left_secs_ * 1000 - 1000), {}};
   }
 
-  constexpr int kGameLengthUpperBound = 400;
+  constexpr int kGameLengthUpperBound = 450;
+  // Never let this go non-positive. It is blended into the estimate below at
+  // 0.25 weight, so a negative value *lowers* the estimate and therefore
+  // *raises* time per move -- backwards, and precisely in the deep endgame
+  // where the clock is tightest. It also divides base_ms.
+  constexpr int kMinPliesLeft = 20;  // 10 of our moves; matches the floor below
   const auto appx_moves_left_from_move_num = [&]() {
-    return kGameLengthUpperBound - game.num_moves();
+    return std::max(kGameLengthUpperBound - game.num_moves(), kMinPliesLeft);
   }();
   const auto appx_moves_left_from_q = [&]() {
     if (root == nullptr || root->state == mcts::TreeNodeState::kNew) {
@@ -131,7 +136,7 @@ std::pair<int, TimeControl::Metadata> TimeControl::ComputeMoveTimeMs(
     constexpr float kSigma = 50.0f;
     constexpr float kAmp = 0.2f;
     constexpr float kRampStart = 150.0f;
-    constexpr float kRampEnd = 399.0f;  // kGameLengthUpperBound - 1
+    constexpr float kRampEnd = kGameLengthUpperBound - 1.0f;
     constexpr float kFloor = 0.8f;
     const float n = static_cast<float>(game.num_moves());
     const float d = (n - kPeakN) / kSigma;
@@ -141,6 +146,24 @@ std::pair<int, TimeControl::Metadata> TimeControl::ComputeMoveTimeMs(
                              : 1.0f - (1.0f - kFloor) * (n - kRampStart) /
                                           (kRampEnd - kRampStart);
     return linear + bump;
+  }();
+
+  // Winning attenuator: once the game is decided, stop spending on it and lean
+  // on the ponder tree instead. Guards the adversarial case where a losing
+  // opponent declines to resign and drags the game out hundreds of plies -- the
+  // engine used to burn its whole clock while up 40+ points and lose on time.
+  // 1.0 at <=80% winrate, quadratic down to 0.0 at >=95%.
+  const auto winning_attenuator = [&]() {
+    constexpr float kLo = 0.80f;
+    constexpr float kHi = 0.95f;
+    if (root == nullptr || root->state == mcts::TreeNodeState::kNew) {
+      return 1.0f;
+    }
+    // v_outcome is the pure game outcome in [-1, 1]. root->v is utility
+    // (outcome + score utility) and can exceed 1, so it is not a winrate.
+    const float winrate = (root->v_outcome + 1.0f) / 2.0f;
+    const float t = std::clamp((winrate - kLo) / (kHi - kLo), 0.0f, 1.0f);
+    return 1.0f - t * t;
   }();
 
   // Main time: divide remaining time evenly over estimated remaining moves,
@@ -160,10 +183,14 @@ std::pair<int, TimeControl::Metadata> TimeControl::ComputeMoveTimeMs(
   if (flags_ & kObviousMoveFactor) ms *= obvious_move_factor;
   if (flags_ & kStddevFactor) ms *= stddev_factor;
   if (flags_ & kMiddleGameFactor) ms *= middlegame_factor;
-  return {
-      std::max(static_cast<int>(ms), 1),
-      Metadata{base_ms, appx_moves_left_from_move_num, appx_moves_left_from_q,
-               obvious_move_factor, stddev_factor, middlegame_factor}};
+  if (flags_ & kWinningAttenuator) ms *= winning_attenuator;
+  // The floor is load-bearing: GenMoveCommon passes this straight to
+  // Search::Params::total_visit_time_ms, and Run() treats <= 0 as "no timer",
+  // falling back to a 1<<20 visit budget. A literal 0 would search forever.
+  return {std::max(static_cast<int>(ms), 1),
+          Metadata{base_ms, appx_moves_left_from_move_num,
+                   appx_moves_left_from_q, obvious_move_factor, stddev_factor,
+                   middlegame_factor, winning_attenuator}};
 }
 
 }  // namespace gtp
