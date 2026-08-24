@@ -746,7 +746,11 @@ void ServiceImpl::PausePondering() {
 }
 
 void ServiceImpl::EnsurePondering() {
-  if (!IsPondering()) StartPondering();
+  if (IsPondering()) return;
+  // Nothing to think about once the game is finished. Search::Run() would
+  // return immediately anyway; this just avoids spawning a thread per command.
+  if (game_->IsGameOver()) return;
+  StartPondering();
 }
 
 void ServiceImpl::StopPondering() {
