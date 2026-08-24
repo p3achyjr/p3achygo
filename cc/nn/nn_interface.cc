@@ -284,11 +284,22 @@ void NNInterface::InferLoop() {
 }
 
 void NNInterface::Infer() {
+  // Owns the mu_ hold for the rest of this function: resets the signal count
+  // and *then* releases the lock. The reset must land inside the same
+  // uninterrupted hold as the ShouldInfer() predicate check -- otherwise a
+  // worker's ++num_signaled_search_tasks_ (taken under mu_) can slip between
+  // the check and the reset and be lost. Only one signal is sent per search
+  // round, so a lost one strands every worker waiting on inference, and the
+  // GTP client passes an effectively infinite timeout, making that permanent.
   struct RAIIFlagReset {
     NNInterface* self = nullptr;
+    absl::Mutex* mu = nullptr;
     RAIIFlagReset() = delete;
-    explicit RAIIFlagReset(NNInterface* self) : self(self) {};
-    ~RAIIFlagReset() { self->num_signaled_search_tasks_ = 0; }
+    RAIIFlagReset(NNInterface* self, absl::Mutex* mu) : self(self), mu(mu) {};
+    ~RAIIFlagReset() {
+      self->num_signaled_search_tasks_ = 0;
+      mu->Unlock();
+    }
   };
   // Always use a timeout (both kAuto and kExplicit).
   //
@@ -319,9 +330,8 @@ void NNInterface::Infer() {
     mu_.LockWhen(absl::Condition(this, &NNInterface::ShouldInfer));
   }
 
-  RAIIFlagReset r(this);
+  RAIIFlagReset r(this, &mu_);
   if (num_registered_threads_ == 0) {
-    mu_.Unlock();
     return;
   }
 
@@ -330,7 +340,6 @@ void NNInterface::Infer() {
   // calls GetBatch(). Apply to both kAuto and kExplicit.
   for (const ThreadInfo& thread : thread_info_) {
     if (thread.res_ready.load(std::memory_order_acquire)) {
-      mu_.Unlock();
       return;
     }
   }
@@ -346,7 +355,6 @@ void NNInterface::Infer() {
     }
   }
   if (!any_loaded) {
-    mu_.Unlock();
     return;
   }
 
@@ -374,7 +382,6 @@ void NNInterface::Infer() {
   // (unlock below triggers Await re-evaluation); GenCounterWaker bumps the
   // generation counter and calls notify_all() — one FUTEX_WAKE for all.
   waker_->NotifyAll();
-  mu_.Unlock();
 }
 
 bool NNInterface::ShouldInfer() const {
