@@ -491,11 +491,12 @@ Board::Board(int handicap, float komi)
   seen_states_.insert(hash_);
 }
 
-Board::Board(bool prohibit_pass_alive, float komi)
+Board::Board(bool prohibit_pass_alive, float komi, Scoring scoring)
     : zobrist_(Zobrist::get()),
       board_(),
       move_count_(0),
       prohibit_pass_alive_(prohibit_pass_alive),
+      scoring_(scoring),
       consecutive_passes_(0),
       passes_(0),
       komi_(komi),
@@ -914,8 +915,65 @@ bool Board::IsSelfCapture(Loc loc, Color color) const {
   return group_tracker_.LibertiesAt(loc) == 0;
 }
 
+// Tromp-Taylor: no death judgment whatsoever. Every stone on the board scores
+// for its own color. An empty region scores for a color iff that color is the
+// only one bordering it. This is what CGOS actually scores, so it is what the
+// engine should optimize when playing there.
+std::pair<float, std::array<Color, BOARD_LEN * BOARD_LEN>>
+Board::TrompTaylorScoreAndOwnership(Color color) const {
+  bool counted[BOARD_LEN][BOARD_LEN]{};
+  std::array<Color, BOARD_LEN * BOARD_LEN> ownership{};
+  int score = 0;
+  for (auto i = 0; i < BOARD_LEN; ++i) {
+    for (auto j = 0; j < BOARD_LEN; ++j) {
+      if (counted[i][j]) continue;
+      const Color here = static_cast<Color>(at(i, j));
+      if (here != EMPTY) {
+        counted[i][j] = true;
+        if (here == color) {
+          ++score;
+          ownership[i * BOARD_LEN + j] = color;
+        }
+        continue;
+      }
+
+      // Flood the empty region and record which colors border it.
+      LocVisitor visitor(Loc{i, j});
+      LocVec region;
+      bool borders_self = false, borders_opp = false;
+      while (!visitor.Done()) {
+        Loc loc = visitor.Next();
+        const Color at_loc = static_cast<Color>(AtLoc(loc));
+        if (at_loc == color) {
+          borders_self = true;
+          continue;
+        }
+        if (at_loc == OppositeColor(color)) {
+          borders_opp = true;
+          continue;
+        }
+        region.emplace_back(loc);
+        counted[loc.i][loc.j] = true;
+        for (const auto& nloc : Adjacent(loc)) visitor.Visit(nloc);
+      }
+
+      if (borders_self && !borders_opp) {
+        score += static_cast<int>(region.size());
+        for (const auto& loc : region) {
+          ownership[loc.i * BOARD_LEN + loc.j] = color;
+        }
+      }
+    }
+  }
+  return std::make_pair(
+      static_cast<float>(score) + (color == WHITE ? komi_ : 0), ownership);
+}
+
 std::pair<float, std::array<Color, BOARD_LEN * BOARD_LEN>>
 Board::ScoreAndOwnership(Color color) const {
+  if (scoring_ == Scoring::kTrompTaylor) {
+    return TrompTaylorScoreAndOwnership(color);
+  }
   bool counted[BOARD_LEN][BOARD_LEN]{};
   std::array<Color, BOARD_LEN * BOARD_LEN> ownership{};
   int score = 0;

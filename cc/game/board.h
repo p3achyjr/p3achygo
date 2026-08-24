@@ -280,10 +280,20 @@ class GroupTracker final {
  */
 class Board final {
  public:
+  // How to score a finished position.
+  //   kDefault      - Benson dead-stone removal: a stone is not counted if it
+  //                   sits in the opponent's pass-alive region, and such stones
+  //                   inside your own region count as your points.
+  //   kTrompTaylor  - no death judgment. Every stone on the board counts for
+  //                   its color; an empty region counts for a color iff only
+  //                   that color borders it. Matches what CGOS actually scores.
+  enum class Scoring : uint8_t { kDefault = 0, kTrompTaylor = 1 };
+
   using BoardData = std::array<Color, BOARD_LEN * BOARD_LEN>;
   Board(float komi = 7.5);
   Board(int handicap, float komi);
-  Board(bool prohibit_pass_alive, float komi = 7.5);
+  Board(bool prohibit_pass_alive, float komi = 7.5,
+        Scoring scoring = Scoring::kDefault);
   ~Board() = default;
 
   Board& operator=(const Board& other) {
@@ -347,6 +357,8 @@ class Board final {
 
   bool IsSelfCapture(Loc loc, Color color) const;
 
+  std::pair<float, std::array<Color, BOARD_LEN * BOARD_LEN>>
+  TrompTaylorScoreAndOwnership(Color color) const;
   std::pair<float, std::array<Color, BOARD_LEN * BOARD_LEN>> ScoreAndOwnership(
       Color color) const;
 
@@ -361,6 +373,8 @@ class Board final {
   BoardData board_;
   int move_count_;
   const bool prohibit_pass_alive_;
+  // Configuration, not board state: deliberately excluded from operator==.
+  Scoring scoring_ = Scoring::kDefault;
   int consecutive_passes_;
   int passes_;
   float komi_;

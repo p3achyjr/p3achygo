@@ -174,7 +174,7 @@ ServiceImpl::ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
       time_control_(cfg.time_control_flags),
       verbose_(verbose),
       nn_interface_(std::move(nn_interface)),
-      game_(std::make_unique<Game>(false)),
+      game_(std::make_unique<Game>(false, game::Board::Scoring::kTrompTaylor)),
       node_table_(
           cfg.use_mcgs
               ? std::unique_ptr<NodeTable>(std::make_unique<McgsNodeTable>())
@@ -285,7 +285,8 @@ Response<> ServiceImpl::GtpUndo(std::optional<int> id) {
   }
 
   // Replay from beginning, excluding last move.
-  std::unique_ptr<Game> new_game = std::make_unique<Game>(false);
+  std::unique_ptr<Game> new_game =
+      std::make_unique<Game>(false, game::Board::Scoring::kTrompTaylor);
   new_game->SetKomi(komi_);
   for (int move_num = 0; move_num < game_->num_moves() - 1; ++move_num) {
     Move move = game_->move(move_num);
@@ -732,7 +733,7 @@ void ServiceImpl::MakeMove(Color color, Loc loc) {
 }
 
 void ServiceImpl::ClearBoard() {
-  game_ = std::make_unique<Game>(false);
+  game_ = std::make_unique<Game>(false, game::Board::Scoring::kTrompTaylor);
   game_->SetKomi(komi_);
   node_table_ =
       cfg_.use_mcgs

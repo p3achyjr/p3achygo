@@ -99,4 +99,20 @@ if(BUILD_BINARIES)
         m
         dl
     )
+    add_executable(scoring_compare scoring_compare.cc)
+    target_link_libraries(scoring_compare PRIVATE
+        core_impl
+        game
+        gumbel
+        node_table
+        nn_interface
+        engine_factory
+        sgf
+        absl::flags
+        absl::flags_parse
+        absl::log
+        absl::log_initialize
+        m
+        dl
+    )
 endif()
