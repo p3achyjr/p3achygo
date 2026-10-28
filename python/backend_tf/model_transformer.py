@@ -400,6 +400,7 @@ class TransformerBottleneckBlock(keras.layers.Layer):
         num_heads: int,
         pos_len: int = BOARD_LEN,
         num_blocks: int = 2,
+        proj_conv_size: int = 1,
         **kwargs,
     ):
         assert embed_dim % num_heads == 0
@@ -410,9 +411,12 @@ class TransformerBottleneckBlock(keras.layers.Layer):
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.num_blocks = num_blocks
+        self.proj_conv_size = proj_conv_size
         # layers
         self.conv_down = make_conv_block(
-            output_channels=embed_dim, conv_size=3, name="transformer_btl_conv_down"
+            output_channels=embed_dim,
+            conv_size=proj_conv_size,
+            name="transformer_btl_conv_down",
         )
         self.blocks = [
             TransformerResidualBlock(
@@ -421,7 +425,9 @@ class TransformerBottleneckBlock(keras.layers.Layer):
             for i in range(num_blocks)
         ]
         self.conv_up = make_conv_block(
-            output_channels=output_dim, conv_size=3, name="transformer_btl_conv_up"
+            output_channels=output_dim,
+            conv_size=proj_conv_size,
+            name="transformer_btl_conv_up",
         )
 
     def call(self, x, training=False):
@@ -443,6 +449,7 @@ class TransformerBottleneckBlock(keras.layers.Layer):
                 "embed_dim": self.embed_dim,
                 "output_dim": self.output_dim,
                 "num_blocks": self.num_blocks,
+                "proj_conv_size": self.proj_conv_size,
             }
         )
         return config

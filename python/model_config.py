@@ -17,6 +17,30 @@ B14_D96_N3_TRANSFORMER = {
     "trunk": 14 * [["transformer", {"embed_dim": 96, "num_heads": 3}]]
 }
 
+# Kernel size of the down/up projection convs in `transformer_btl` blocks.
+# Checkpoints saved before the `proj_conv_size` key existed always used 3x3.
+BTL_PROJ_CONV_SIZE_DEFAULT = 1
+BTL_PROJ_CONV_SIZE_LEGACY = 3
+
+
+def with_btl_proj_conv_size(generic_arch: dict | None, conv_size: int):
+    """Returns a copy of `generic_arch` in which every `transformer_btl` entry
+    without a `proj_conv_size` gets `conv_size`.
+
+    Build paths pass `BTL_PROJ_CONV_SIZE_DEFAULT` so the value is recorded
+    explicitly in every new checkpoint; load paths pass
+    `BTL_PROJ_CONV_SIZE_LEGACY` so checkpoints that predate the key keep 3x3.
+    """
+    if generic_arch is None:
+        return None
+    trunk = []
+    for block_type, cfg in generic_arch.get("trunk", []):
+        cfg = dict(cfg)
+        if block_type == "transformer_btl":
+            cfg.setdefault("proj_conv_size", conv_size)
+        trunk.append([block_type, cfg])
+    return {**generic_arch, "trunk": trunk}
+
 
 class ModelConfig:
     """

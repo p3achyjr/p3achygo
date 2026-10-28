@@ -286,6 +286,7 @@ class TransformerBottleneckBlock(nn.Module):
         num_heads: int,
         pos_len: int,
         num_blocks: int = 2,
+        proj_conv_size: int = 1,
     ):
         super().__init__()
         # Lazy import to avoid circular: model_layers_common imports torch.nn.
@@ -297,14 +298,18 @@ class TransformerBottleneckBlock(nn.Module):
         self.num_heads = num_heads
         self.num_blocks = num_blocks
 
-        self.conv_down = make_conv_block(input_channels, embed_dim, kernel_size=3)
+        self.conv_down = make_conv_block(
+            input_channels, embed_dim, kernel_size=proj_conv_size
+        )
         self.blocks = nn.ModuleList(
             [
                 TransformerResidualBlock(embed_dim, num_heads, pos_len)
                 for _ in range(num_blocks)
             ]
         )
-        self.conv_up = make_conv_block(embed_dim, output_dim, kernel_size=3)
+        self.conv_up = make_conv_block(
+            embed_dim, output_dim, kernel_size=proj_conv_size
+        )
 
     def forward(self, x: torch.Tensor, training: bool = False) -> torch.Tensor:
         del training

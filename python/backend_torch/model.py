@@ -25,6 +25,7 @@ from backend_torch.model_layers_common import (
     make_dense,
     mish,
 )
+from model_config import BTL_PROJ_CONV_SIZE_DEFAULT, with_btl_proj_conv_size
 
 # ---------------------------------------------------------------------------
 # Global pooling helpers
@@ -245,8 +246,11 @@ def _build_trunk_from_generic_arch(
             out_dim = cfg.get("output_dim", trunk_ch or ed)
             n_inner = cfg.get("num_blocks", 2)
             in_ch = trunk_ch or out_dim
+            ks = cfg.get("proj_conv_size", BTL_PROJ_CONV_SIZE_DEFAULT)
             blocks.append(
-                TransformerBottleneckBlock(in_ch, out_dim, ed, nh, board_len, n_inner)
+                TransformerBottleneckBlock(
+                    in_ch, out_dim, ed, nh, board_len, n_inner, proj_conv_size=ks
+                )
             )
             trunk_ch = out_dim
             continue
@@ -507,6 +511,9 @@ class P3achyGoModel(nn.Module):
         name: str = "p3achygo",
     ):
         super().__init__()
+        # Record the projection kernel explicitly so saved checkpoints don't
+        # depend on the default.
+        generic_arch = with_btl_proj_conv_size(generic_arch, BTL_PROJ_CONV_SIZE_DEFAULT)
         self._config = dict(
             board_len=board_len,
             num_input_planes=num_input_planes,
