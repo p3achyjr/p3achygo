@@ -42,6 +42,30 @@ struct PuctParams {
   bool enable_v_cat_var_scaling = false;
   int v_cat_var_scale_prior_visits = 10;
 
+  // Additive standard-error exploration term: S(a) = Q(a) + x * SE(a) + U(a).
+  //   se_bonus_x <= 0 disables it.
+  //   se_use_jitter = false: SE^2 = v_var(a) / N(a)        (leaf spread)
+  //   se_use_jitter = true:  SE^2 = N(a) * dq2_ewma(a)     (Q instability)
+  //   se_min_n: children below this visit count get no SE term.
+  //   se_cap > 0 clamps the term (guards the 1/gap^2 near-tie sink).
+  float se_bonus_x = 0.0f;
+  bool se_use_jitter = false;
+  int se_min_n = 3;
+  float se_cap = 0.0f;
+
+  // N-aware parent-level variance scaling (KataGo-style, applied uniformly
+  // to all children of a node):
+  //   factor = 1 + lambda * (s_hat / s_ref(n) - 1)
+  //   s_hat^2 = (k * s_ref(n)^2 + n * v_var(parent)) / (k + n)
+  // s_ref is a per-floor(log2(n))-bin reference stddev; entries <= 0 fall
+  // back to s_ref_default. With all bins at 0.4 this is KataGo's fixed prior.
+  static constexpr int kSRefBins = 24;
+  bool enable_parent_var_scaling = false;
+  float parent_var_lambda = 0.85f;
+  float parent_var_prior_visits = 2.0f;
+  float s_ref_default = 0.4f;
+  std::array<float, kSRefBins> s_ref{};
+
   // Forward-declared; defined below once PuctParams is complete.
   class Builder;
 };
@@ -105,6 +129,42 @@ class PuctParams::Builder {
     p_.v_cat_var_scale_prior_visits = v;
     return *this;
   }
+  Builder& set_se_bonus_x(float v) {
+    p_.se_bonus_x = v;
+    return *this;
+  }
+  Builder& set_se_use_jitter(bool v) {
+    p_.se_use_jitter = v;
+    return *this;
+  }
+  Builder& set_se_min_n(int v) {
+    p_.se_min_n = v;
+    return *this;
+  }
+  Builder& set_se_cap(float v) {
+    p_.se_cap = v;
+    return *this;
+  }
+  Builder& set_enable_parent_var_scaling(bool v) {
+    p_.enable_parent_var_scaling = v;
+    return *this;
+  }
+  Builder& set_parent_var_lambda(float v) {
+    p_.parent_var_lambda = v;
+    return *this;
+  }
+  Builder& set_parent_var_prior_visits(float v) {
+    p_.parent_var_prior_visits = v;
+    return *this;
+  }
+  Builder& set_s_ref_default(float v) {
+    p_.s_ref_default = v;
+    return *this;
+  }
+  Builder& set_s_ref(const std::array<float, PuctParams::kSRefBins>& v) {
+    p_.s_ref = v;
+    return *this;
+  }
   PuctParams build() const { return p_; }
 
  private:
@@ -157,6 +217,15 @@ class PuctScorer final {
         p_opt_weight_(params.p_opt_weight),
         root_fpu_(params.root_fpu),
         enable_v_cat_var_scaling_(params.enable_v_cat_var_scaling),
+        se_bonus_x_(params.se_bonus_x),
+        se_use_jitter_(params.se_use_jitter),
+        se_min_n_(params.se_min_n),
+        se_cap_(params.se_cap),
+        enable_parent_var_scaling_(params.enable_parent_var_scaling),
+        parent_var_lambda_(params.parent_var_lambda),
+        parent_var_prior_visits_(params.parent_var_prior_visits),
+        s_ref_default_(params.s_ref_default),
+        s_ref_(params.s_ref),
         q_fn_(q_fn),
         n_fn_(n_fn) {};
 
@@ -198,6 +267,7 @@ class PuctScorer final {
     std::array<float, constants::kMaxMovesPerPosition> qs;
     std::array<int, constants::kMaxMovesPerPosition> child_visits_in_flight;
     std::array<float, constants::kMaxMovesPerPosition> qvars;
+    std::array<float, constants::kMaxMovesPerPosition> dq2s{};
     std::array<double, constants::kMaxMovesPerPosition> q_m3s;
     std::array<std::pair<float, float>, constants::kMaxMovesPerPosition>
         q_up_down_stds{};
@@ -216,6 +286,7 @@ class PuctScorer final {
 
       if (child_visits[a] > 0) {
         qs[a] = -child->v;
+        dq2s[a] = child->dq2_ewma;
       }
 
       if (child_visits[a] >= 3) {
@@ -249,8 +320,25 @@ class PuctScorer final {
     const float fpu = is_root ? root_fpu_ : kDefaultFPU;
     const float v_fpu = v - fpu * std::sqrt(p_explored);
 
+    // N-aware parent-level variance scaling (see PuctParams). One factor per
+    // node, shared by all children, so it cannot create sibling asymmetry.
+    const float c_puct_parent_factor = [&]() -> float {
+      if (!enable_parent_var_scaling_ || n < 1) {
+        return 1.0f;
+      }
+      int bin = 0;
+      for (int m = n; m > 1 && bin < PuctParams::kSRefBins - 1; m >>= 1) {
+        ++bin;
+      }
+      const float s_ref = s_ref_[bin] > 0.0f ? s_ref_[bin] : s_ref_default_;
+      const float k = parent_var_prior_visits_;
+      const float var_hat = (k * s_ref * s_ref + n * v_var) / (k + n);
+      return 1.0f + parent_var_lambda_ * (std::sqrt(var_hat) / s_ref - 1.0f);
+    }();
+
     // Scale c_puct.
-    const float c_puct = ScaleCPuct(c_puct_, c_puct_visit_scaling_, n);
+    const float c_puct =
+        ScaleCPuct(c_puct_, c_puct_visit_scaling_, n) * c_puct_parent_factor;
     const float c_puct_v_2 = ScaleCPuct(c_puct_v_2_, c_puct_visit_scaling_, n);
 
     // Finally, compute PUCT values.
@@ -361,7 +449,28 @@ class PuctScorer final {
                            : compute_puct_explore_term();
       };
       const float puct_explore_term = compute_explore_term();
-      pucts[a] = {a, puct_explore_term + canonical_q + m3_bonus};
+
+      // Additive standard-error term (see PuctParams::se_bonus_x).
+      const float se_bonus = [&]() -> float {
+        if (se_bonus_x_ <= 0.0f) {
+          return 0.0f;
+        }
+        // qvars is only populated from 3 visits; dq2 is meaningful from 2.
+        const int min_n = std::max(se_min_n_, se_use_jitter_ ? 2 : 3);
+        const int child_n = child_visits[a];
+        if (child_n < min_n) {
+          return 0.0f;
+        }
+        const float se2 =
+            se_use_jitter_ ? child_n * dq2s[a] : qvars[a] / child_n;
+        float bonus = se_bonus_x_ * std::sqrt(std::max(se2, 0.0f));
+        if (se_cap_ > 0.0f) {
+          bonus = std::min(bonus, se_cap_);
+        }
+        return bonus;
+      }();
+
+      pucts[a] = {a, puct_explore_term + canonical_q + m3_bonus + se_bonus};
     }
     return pucts;
   }
@@ -430,6 +539,15 @@ class PuctScorer final {
   const float p_opt_weight_;
   const float root_fpu_;
   const bool enable_v_cat_var_scaling_;
+  const float se_bonus_x_;
+  const bool se_use_jitter_;
+  const int se_min_n_;
+  const float se_cap_;
+  const bool enable_parent_var_scaling_;
+  const float parent_var_lambda_;
+  const float parent_var_prior_visits_;
+  const float s_ref_default_;
+  const std::array<float, PuctParams::kSRefBins> s_ref_;
   QFn q_fn_;
   NFn n_fn_;
 };

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -63,6 +64,22 @@ struct PlayerSearchConfig {
   float root_fpu = 0.1f;
   int sampling_num_moves = 0;
   float sampling_temperature = 0.0f;
+
+  // --- Variance-aware PUCT knobs (see mcts::PuctParams) ---
+  float se_bonus_x = 0.0f;
+  bool se_use_jitter = false;
+  int se_min_n = 3;
+  float se_cap = 0.0f;
+  bool enable_parent_var_scaling = false;
+  float parent_var_lambda = 0.85f;
+  float parent_var_prior_visits = 2.0f;
+  float s_ref_default = 0.4f;
+  // Loaded from `s_ref_path`: whitespace-separated stddev per floor(log2 n)
+  // bin. Missing bins stay 0 and fall back to s_ref_default.
+  std::array<float, mcts::PuctParams::kSRefBins> s_ref{};
+
+  // Keep the search tree between moves. false = fresh node table every move.
+  bool tree_reuse = true;
 
   // --- Config-file-only parallel search knobs (no-op for Gumbel) ---
 
@@ -214,6 +231,34 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.sampling_temperature = std::stof(val);
     else if (key == "sampling_num_moves")
       cfg.sampling_num_moves = std::stoi(val);
+    // Variance-aware PUCT knobs
+    else if (key == "se_bonus_x")
+      cfg.se_bonus_x = std::stof(val);
+    else if (key == "se_use_jitter")
+      cfg.se_use_jitter = internal::ParseBool(val);
+    else if (key == "se_min_n")
+      cfg.se_min_n = std::stoi(val);
+    else if (key == "se_cap")
+      cfg.se_cap = std::stof(val);
+    else if (key == "enable_parent_var_scaling")
+      cfg.enable_parent_var_scaling = internal::ParseBool(val);
+    else if (key == "parent_var_lambda")
+      cfg.parent_var_lambda = std::stof(val);
+    else if (key == "parent_var_prior_visits")
+      cfg.parent_var_prior_visits = std::stof(val);
+    else if (key == "s_ref_default")
+      cfg.s_ref_default = std::stof(val);
+    else if (key == "s_ref_path") {
+      std::ifstream sf(val);
+      if (!sf.is_open()) {
+        throw std::runtime_error("Could not open s_ref_path: " + val);
+      }
+      float s;
+      for (int i = 0; i < mcts::PuctParams::kSRefBins && (sf >> s); ++i) {
+        cfg.s_ref[i] = s;
+      }
+    } else if (key == "tree_reuse")
+      cfg.tree_reuse = internal::ParseBool(val);
     // Parallel search knobs
     else if (key == "num_threads_per_game")
       cfg.num_threads_per_game = std::stoi(val);

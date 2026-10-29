@@ -249,6 +249,17 @@ void PlayEvalGame(size_t seed, int game_id, int total_num_workers,
                         .set_m3_prior_visits(active_cfg.m3_prior_visits)
                         .set_p_opt_weight(active_cfg.p_opt_weight)
                         .set_root_fpu(active_cfg.root_fpu)
+                        .set_se_bonus_x(active_cfg.se_bonus_x)
+                        .set_se_use_jitter(active_cfg.se_use_jitter)
+                        .set_se_min_n(active_cfg.se_min_n)
+                        .set_se_cap(active_cfg.se_cap)
+                        .set_enable_parent_var_scaling(
+                            active_cfg.enable_parent_var_scaling)
+                        .set_parent_var_lambda(active_cfg.parent_var_lambda)
+                        .set_parent_var_prior_visits(
+                            active_cfg.parent_var_prior_visits)
+                        .set_s_ref_default(active_cfg.s_ref_default)
+                        .set_s_ref(active_cfg.s_ref)
                         .build())
               : gumbel.SearchRoot(
                     probability, game, player_table, player_tree, color_to_move,
@@ -316,9 +327,28 @@ void PlayEvalGame(size_t seed, int game_id, int total_num_workers,
     game.PlayMove(move, color_to_move);
     color_to_move = OppositeColor(color_to_move);
 
-    // Advance to next roots.
-    TreeNode* next_player = player_tree->children[move];
-    TreeNode* next_opp = opp_tree->children[move];
+    // Advance to next roots. A player with tree_reuse=false gets a brand new
+    // node table every move, so nothing from this search survives.
+    const Color mover = OppositeColor(color_to_move);
+    const auto fresh_table = [&](Color c) -> NodeTable* {
+      std::unique_ptr<NodeTable>& slot =
+          c == BLACK ? node_table_b : node_table_w;
+      if ((c == BLACK ? black_cfg : white_cfg).use_mcgs) {
+        slot = std::make_unique<McgsNodeTable>();
+      } else {
+        slot = std::make_unique<MctsNodeTable>();
+      }
+      return slot.get();
+    };
+    const bool player_reuse =
+        (mover == BLACK ? black_cfg : white_cfg).tree_reuse;
+    const bool opp_reuse =
+        (color_to_move == BLACK ? black_cfg : white_cfg).tree_reuse;
+    TreeNode* next_player =
+        player_reuse ? player_tree->children[move].load() : nullptr;
+    TreeNode* next_opp = opp_reuse ? opp_tree->children[move].load() : nullptr;
+    if (!player_reuse) player_table = fresh_table(mover);
+    if (!opp_reuse) opp_table = fresh_table(color_to_move);
     if (!next_player) {
       // After the move, it's the opponent's turn (color_to_move was already
       // flipped)
@@ -335,8 +365,8 @@ void PlayEvalGame(size_t seed, int game_id, int total_num_workers,
     // Reap tree.
     int num_nodes_reaped = 0, reap_time_us = 0;
     auto reap_begin = std::chrono::steady_clock::now();
-    num_nodes_reaped += player_table->Reap(next_player);
-    num_nodes_reaped += opp_table->Reap(next_opp);
+    if (player_reuse) num_nodes_reaped += player_table->Reap(next_player);
+    if (opp_reuse) num_nodes_reaped += opp_table->Reap(next_opp);
     auto reap_end = std::chrono::steady_clock::now();
     reap_time_us = std::chrono::duration_cast<std::chrono::microseconds>(
                        reap_end - reap_begin)

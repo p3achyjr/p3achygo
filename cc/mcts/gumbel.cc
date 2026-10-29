@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <vector>
@@ -170,6 +171,61 @@ std::array<float, constants::kMaxMovesPerPosition> ComputeRootImprovedPolicy(
   }
 
   return core::SoftmaxV(logits_improved);
+}
+
+// SE-scaled variant: logit[a] += coef * completedQ(a), with completedQ in raw
+// Q units (no range normalization; the softmax removes any offset). `coef` is
+// SeSigmaCoefficient() below.
+std::array<float, constants::kMaxMovesPerPosition> ComputeRootImprovedPolicySe(
+    TreeNode* node,
+    const std::array<float, constants::kMaxMovesPerPosition> masked_logits,
+    const absl::InlinedVector<int, 16>& visited_actions, float coef) {
+  const float v_mix = VMixed(node);
+  alignas(MM_ALIGN) std::array<float, constants::kMaxMovesPerPosition>
+      logits_improved;
+  for (int action = 0; action < constants::kMaxMovesPerPosition; ++action) {
+    const float q = core::InlinedVecContains(visited_actions, action)
+                        ? Q(node, action)
+                        : v_mix;
+    logits_improved[action] = masked_logits[action] + coef * q;
+  }
+
+  return core::SoftmaxV(logits_improved);
+}
+
+// Visit-weighted RMS of child stddev over the root's visited children. Used
+// as sigma_q when the caller does not supply a constant. Falls back to
+// `fallback` when no child has enough visits for a variance estimate.
+float RootChildStddev(const TreeNode* root, float fallback) {
+  double var_sum = 0.0;
+  double n_sum = 0.0;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    const int n_a = root->child_visits[a];
+    const TreeNode* child = root->child(a);
+    if (child == nullptr || n_a < 3) continue;
+    var_sum += n_a * child->v_var;
+    n_sum += n_a;
+  }
+  if (n_sum <= 0.0 || var_sum <= 0.0) return fallback;
+  return static_cast<float>(std::sqrt(var_sum / n_sum));
+}
+
+// coef = c_visit + c * sqrt(N_eff) / sigma_q, where N_eff is the minimum
+// visit count over `candidates` (the actions whose Q values are being
+// compared). Shared across actions so sigma stays one monotone function of q.
+template <typename Candidates>
+float SeSigmaCoefficient(const TreeNode* root, const Candidates& candidates,
+                         const GumbelSearchParams& params) {
+  int n_eff = std::numeric_limits<int>::max();
+  for (const int a : candidates) {
+    n_eff = std::min(n_eff, static_cast<int>(NAction(root, a)));
+  }
+  if (n_eff == std::numeric_limits<int>::max()) n_eff = 0;
+  const float sigma_q = params.sigma_se_sigma_q > 0.0f
+                            ? params.sigma_se_sigma_q
+                            : RootChildStddev(root, /*fallback=*/0.4f);
+  return params.sigma_se_c_visit +
+         params.sigma_se_c * std::sqrt(static_cast<float>(n_eff)) / sigma_q;
 }
 
 // Compute completedQ = {q(a) if N(a) > 0, v_mixed otherwise }.
@@ -372,7 +428,21 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
     return bot_ucb <= top_lcb;
   };
 
-  const auto update_qtransform = [&gmove_info, &root](int k) {
+  const bool se_halving =
+      params.sigma_mode == GumbelSearchParams::SigmaMode::kSe &&
+      params.sigma_se_halving;
+  const auto update_qtransform = [&gmove_info, &root, &params,
+                                  se_halving](int k) {
+    float se_coef = 0.0f;
+    if (se_halving) {
+      absl::InlinedVector<int, 16> live;
+      for (auto i = 0; i < k; ++i) {
+        if (gmove_info[i].move_encoding != game::kInvalidMoveEncoding) {
+          live.push_back(gmove_info[i].move_encoding);
+        }
+      }
+      se_coef = SeSigmaCoefficient(root, live, params);
+    }
     for (auto i = 0; i < k; ++i) {
       auto& move_info = gmove_info[i];
       if (move_info.move_encoding == game::kInvalidMoveEncoding) {
@@ -381,7 +451,8 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
 
       TreeNode* child = root->children[move_info.move_encoding].load(
           std::memory_order_relaxed);
-      move_info.qtransform = QTransform(-V(child), MaxN(root));
+      move_info.qtransform =
+          se_halving ? se_coef * -V(child) : QTransform(-V(child), MaxN(root));
     }
   };
 
@@ -505,12 +576,23 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
   AdvanceState(root);
 
   // Get improved policy from completed-Q values.
-  // max_n = 2 * ln(theoretical winner visits) controls Q weight.
+  // kProd: max_n = 2 * ln(theoretical winner visits) controls Q weight.
+  // kSe:   coef = c_visit + c * sqrt(min N over top-k) / sigma_q.
   const float visit_advantage =
       2 * std::log(static_cast<float>(theoretical_winner_visits + 1));
-  std::array<float, constants::kMaxMovesPerPosition> pi_improved =
-      ComputeRootImprovedPolicy(root, masked_logits, top_k_actions,
-                                visit_advantage);
+  std::array<float, constants::kMaxMovesPerPosition> pi_improved;
+  if (params.sigma_mode == GumbelSearchParams::SigmaMode::kSe) {
+    const std::array<int, 1> winner = {gmove_info[0].move_encoding};
+    const float se_coef =
+        params.sigma_se_n_eff == GumbelSearchParams::SigmaSeNEff::kWinner
+            ? SeSigmaCoefficient(root, winner, params)
+            : SeSigmaCoefficient(root, top_k_actions, params);
+    pi_improved = ComputeRootImprovedPolicySe(root, masked_logits,
+                                              top_k_actions, se_coef);
+  } else {
+    pi_improved = ComputeRootImprovedPolicy(root, masked_logits, top_k_actions,
+                                            visit_advantage);
+  }
 
   Loc raw_nn_move = game::AsLoc(Argmax(root->move_logits));
   Loc mcts_move = tau > 0.0f ? game::AsLoc(SampleFromPolicy(
@@ -841,6 +923,9 @@ void GumbelEvaluator::SingleBackup(TreeNode* node, game::Loc action,
     if (child_n > node->max_child_n) {
       node->max_child_n = child_n;
     }
+    // Idempotent path: RecomputeNodeStats maintains dq2_ewma itself.
+    const float dv = node->v - v_old;
+    node->dq2_ewma += kDq2EwmaAlpha * (dv * dv - node->dq2_ewma);
   }
 
   UpdateVCategorial(node, leaf_q_outcome);

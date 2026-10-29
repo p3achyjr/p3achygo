@@ -36,6 +36,15 @@ mcts::PuctParams MakePuctParams(const eval::PlayerSearchConfig& cfg) {
       .set_p_opt_weight(cfg.p_opt_weight)
       .set_enable_v_cat_var_scaling(cfg.enable_v_cat_var_scaling)
       .set_v_cat_var_scale_prior_visits(cfg.v_cat_var_scale_prior_visits)
+      .set_se_bonus_x(cfg.se_bonus_x)
+      .set_se_use_jitter(cfg.se_use_jitter)
+      .set_se_min_n(cfg.se_min_n)
+      .set_se_cap(cfg.se_cap)
+      .set_enable_parent_var_scaling(cfg.enable_parent_var_scaling)
+      .set_parent_var_lambda(cfg.parent_var_lambda)
+      .set_parent_var_prior_visits(cfg.parent_var_prior_visits)
+      .set_s_ref_default(cfg.s_ref_default)
+      .set_s_ref(cfg.s_ref)
       .build();
 }
 
@@ -117,6 +126,15 @@ mcts::Search::Params MakeSearchParams(const eval::PlayerSearchConfig& cfg) {
               .set_enable_v_cat_var_scaling(cfg.enable_v_cat_var_scaling)
               .set_v_cat_var_scale_prior_visits(
                   cfg.v_cat_var_scale_prior_visits)
+              .set_se_bonus_x(cfg.se_bonus_x)
+              .set_se_use_jitter(cfg.se_use_jitter)
+              .set_se_min_n(cfg.se_min_n)
+              .set_se_cap(cfg.se_cap)
+              .set_enable_parent_var_scaling(cfg.enable_parent_var_scaling)
+              .set_parent_var_lambda(cfg.parent_var_lambda)
+              .set_parent_var_prior_visits(cfg.parent_var_prior_visits)
+              .set_s_ref_default(cfg.s_ref_default)
+              .set_s_ref(cfg.s_ref)
               .build(),
       .q_fn_kind = q_fn_kind,
       .n_fn_kind = n_fn_kind,
