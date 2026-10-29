@@ -52,6 +52,31 @@ struct GumbelSearchParams {
   // Prior visits for nonroot var-scaling PUCT. -1 disables var scaling.
   int nonroot_var_scale_prior_visits = 10;
 
+  // Sigma (Q transform) used for the root improved policy and, optionally,
+  // the sequential-halving comparisons.
+  //   kProd: current behavior. Halving uses (50 + MaxN(root)) * q; the target
+  //          uses (50 + 2 ln(N_win + 1)) * q_norm(q).
+  //   kSe:   sigma(q) = (c_visit + c * sqrt(N_eff) / sigma_q) * q in raw-Q
+  //          units, N_eff = min visits over the live candidate set. The logit
+  //          gap between two actions is then their Q gap in standard-error
+  //          units (times c). See notes/claude/variance-aware-selection.md.
+  enum class SigmaMode : uint8_t { kProd = 0, kSe = 1 };
+  SigmaMode sigma_mode = SigmaMode::kProd;
+  // kSe only: also use the SE sigma inside sequential halving. Otherwise
+  // halving keeps the kProd form and only the target changes.
+  bool sigma_se_halving = false;
+  float sigma_se_c = 1.2f;
+  // Per-visit stddev of backed-up values. <= 0 derives it from the root's
+  // visited children (visit-weighted RMS of child stddev).
+  float sigma_se_sigma_q = 0.4f;
+  // Floor on the coefficient, raw-Q units (the paper's c_visit role).
+  float sigma_se_c_visit = 0.0f;
+  // kSe only: which N_eff the final target uses. kMinTopK = min visits over
+  // all top-k candidates (very small after halving). kWinner = visits of the
+  // selected move, the analogue of prod's theoretical_winner_visits.
+  enum class SigmaSeNEff : uint8_t { kMinTopK = 0, kWinner = 1 };
+  SigmaSeNEff sigma_se_n_eff = SigmaSeNEff::kMinTopK;
+
   // Forward-declared; defined below once GumbelSearchParams is complete.
   class Builder;
 };
@@ -89,6 +114,30 @@ class GumbelSearchParams::Builder {
   }
   Builder& set_nonroot_var_scale_prior_visits(int v) {
     p_.nonroot_var_scale_prior_visits = v;
+    return *this;
+  }
+  Builder& set_sigma_mode(GumbelSearchParams::SigmaMode v) {
+    p_.sigma_mode = v;
+    return *this;
+  }
+  Builder& set_sigma_se_halving(bool v) {
+    p_.sigma_se_halving = v;
+    return *this;
+  }
+  Builder& set_sigma_se_c(float v) {
+    p_.sigma_se_c = v;
+    return *this;
+  }
+  Builder& set_sigma_se_sigma_q(float v) {
+    p_.sigma_se_sigma_q = v;
+    return *this;
+  }
+  Builder& set_sigma_se_c_visit(float v) {
+    p_.sigma_se_c_visit = v;
+    return *this;
+  }
+  Builder& set_sigma_se_n_eff(GumbelSearchParams::SigmaSeNEff v) {
+    p_.sigma_se_n_eff = v;
     return *this;
   }
   GumbelSearchParams build() const { return p_; }

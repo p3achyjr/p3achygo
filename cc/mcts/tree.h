@@ -12,6 +12,9 @@
 
 namespace mcts {
 
+// Rate of the per-node EWMA of squared value updates (TreeNode::dq2_ewma).
+static constexpr float kDq2EwmaAlpha = 1.0f / 16.0f;
+
 enum class TreeNodeState {
   kNew = 0,          // new node. No evaluation has been performed.
   kPending = 1,      // Some thread has claimed evaluation of this node.
@@ -44,6 +47,11 @@ struct TreeNode final {
   float v = 0;
   float v_var = 0;
   double v_m3 = 0;  // non-standardized skewness (3rd moment)
+  // EWMA of (v_new - v_old)^2 over backups (rate kDq2EwmaAlpha). Under iid
+  // noise with per-visit variance s^2, E[(dv)^2] ~= s^2 / n^2, so
+  // n * dq2_ewma estimates the squared standard error of v; it spikes while v
+  // is still drifting.
+  float dq2_ewma = 0;
 
   std::array<float, kNumVBuckets> v_categorical_prior{};
   std::array<uint32_t, kNumVBuckets> v_categorical{};
@@ -178,6 +186,7 @@ inline void AdvanceState(TreeNode* node) {
 }
 
 inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f) {
+  const float v_old = node->v;
   const float adj_init_util_est = node->init_util_est - obs_bias;
   float w = adj_init_util_est, w_outcome = node->init_outcome_est,
         total_score = node->init_score_est, w_err = node->init_err_est;
@@ -238,6 +247,10 @@ inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f) {
   node->v_outcome = v_outcome;
   node->score = score;
   node->max_child_n = max_child_n;
+  {
+    const float dv = v - v_old;
+    node->dq2_ewma += kDq2EwmaAlpha * (dv * dv - node->dq2_ewma);
+  }
   node->v_var = m2 / node->n;
   node->v_outcome_var = m2_outcome / node->n;
   node->v_m3 = m3 / node->n;
