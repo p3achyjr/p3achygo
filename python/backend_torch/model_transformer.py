@@ -91,16 +91,22 @@ class RoPE(nn.Module):
     old fixed value, so such checkpoints load identically and then adapt.
     """
 
-    def __init__(self, pos_len: int, head_dim: int, num_rotations: int):
+    def __init__(
+        self, pos_len: int, head_dim: int, num_rotations: int, learnable: bool = True
+    ):
         super().__init__()
         self.seq_len = pos_len * pos_len
         self.pos_len = pos_len
         self.head_dim = head_dim
         self.num_rotations = num_rotations
 
-        self.log_theta = nn.Parameter(
-            torch.tensor(math.log(ROPE_THETA), dtype=torch.float32)
-        )
+        log_theta = torch.tensor(math.log(ROPE_THETA), dtype=torch.float32)
+        if learnable:
+            self.log_theta = nn.Parameter(log_theta)
+        else:
+            # Fixed θ: a persistent buffer, so it is checkpointed like the
+            # learnable form but never reaches the optimizer.
+            self.register_buffer("log_theta", log_theta, persistent=True)
 
         theta_idx, angle_projs = spiral_rope_structure(num_rotations, head_dim, pos_len)
         self.register_buffer(
@@ -183,7 +189,9 @@ class RoPE(nn.Module):
 class TransformerAttention(nn.Module):
     """RMSNorm → Q/K/V → RoPE → SDPA → O. Input/output: (B, S, embed_dim)."""
 
-    def __init__(self, embed_dim: int, num_heads: int, pos_len: int):
+    def __init__(
+        self, embed_dim: int, num_heads: int, pos_len: int, rope_learnable: bool = True
+    ):
         super().__init__()
         assert embed_dim % num_heads == 0
         self.pos_len = pos_len
@@ -194,7 +202,12 @@ class TransformerAttention(nn.Module):
         self.scale = 1.0 / math.sqrt(self.head_dim)
 
         self.rms = nn.RMSNorm(embed_dim)
-        self.rope = RoPE(pos_len=pos_len, head_dim=self.head_dim, num_rotations=4)
+        self.rope = RoPE(
+            pos_len=pos_len,
+            head_dim=self.head_dim,
+            num_rotations=4,
+            learnable=rope_learnable,
+        )
         self.Q = nn.Linear(embed_dim, embed_dim, bias=False)
         self.K = nn.Linear(embed_dim, embed_dim, bias=False)
         self.V = nn.Linear(embed_dim, embed_dim, bias=False)
@@ -247,12 +260,16 @@ class TransformerFFN(nn.Module):
 class TransformerResidualBlock(nn.Module):
     """NCHW in / NCHW out. Two pre-norm residual connections (attn, ffn)."""
 
-    def __init__(self, embed_dim: int, num_heads: int, pos_len: int):
+    def __init__(
+        self, embed_dim: int, num_heads: int, pos_len: int, rope_learnable: bool = True
+    ):
         super().__init__()
         self.pos_len = pos_len
         self.seq_len = pos_len * pos_len
         self.embed_dim = embed_dim
-        self.transformer_attn = TransformerAttention(embed_dim, num_heads, pos_len)
+        self.transformer_attn = TransformerAttention(
+            embed_dim, num_heads, pos_len, rope_learnable=rope_learnable
+        )
         self.transformer_ffn = TransformerFFN(embed_dim, num_heads, pos_len)
 
     def forward(self, x: torch.Tensor, training: bool = False) -> torch.Tensor:
@@ -287,6 +304,7 @@ class TransformerBottleneckBlock(nn.Module):
         pos_len: int,
         num_blocks: int = 2,
         proj_conv_size: int = 1,
+        rope_learnable: bool = True,
     ):
         super().__init__()
         # Lazy import to avoid circular: model_layers_common imports torch.nn.
@@ -303,7 +321,9 @@ class TransformerBottleneckBlock(nn.Module):
         )
         self.blocks = nn.ModuleList(
             [
-                TransformerResidualBlock(embed_dim, num_heads, pos_len)
+                TransformerResidualBlock(
+                    embed_dim, num_heads, pos_len, rope_learnable=rope_learnable
+                )
                 for _ in range(num_blocks)
             ]
         )

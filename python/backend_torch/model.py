@@ -237,7 +237,10 @@ def _build_trunk_from_generic_arch(
         if block_type == "transformer":
             ed = cfg["embed_dim"]
             nh = cfg["num_heads"]
-            blocks.append(TransformerResidualBlock(ed, nh, board_len))
+            rl = cfg.get("rope_learnable", True)
+            blocks.append(
+                TransformerResidualBlock(ed, nh, board_len, rope_learnable=rl)
+            )
             trunk_ch = ed
             continue
         if block_type == "transformer_btl":
@@ -247,9 +250,17 @@ def _build_trunk_from_generic_arch(
             n_inner = cfg.get("num_blocks", 2)
             in_ch = trunk_ch or out_dim
             ks = cfg.get("proj_conv_size", BTL_PROJ_CONV_SIZE_DEFAULT)
+            rl = cfg.get("rope_learnable", True)
             blocks.append(
                 TransformerBottleneckBlock(
-                    in_ch, out_dim, ed, nh, board_len, n_inner, proj_conv_size=ks
+                    in_ch,
+                    out_dim,
+                    ed,
+                    nh,
+                    board_len,
+                    n_inner,
+                    proj_conv_size=ks,
+                    rope_learnable=rl,
                 )
             )
             trunk_ch = out_dim
