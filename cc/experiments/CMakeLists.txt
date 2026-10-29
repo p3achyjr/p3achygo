@@ -115,4 +115,23 @@ if(BUILD_BINARIES)
         m
         dl
     )
+    foreach(study sigma_regret_study node_var_dump)
+        add_executable(${study} ${study}.cc)
+        target_link_libraries(${study} PRIVATE
+            core_impl
+            game
+            gumbel
+            node_table
+            nn_interface
+            engine_factory
+            tfrecord
+            tf_example_proto
+            absl::flags
+            absl::flags_parse
+            absl::log
+            absl::log_initialize
+            m
+            dl
+        )
+    endforeach()
 endif()
