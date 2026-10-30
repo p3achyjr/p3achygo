@@ -76,6 +76,10 @@ struct GumbelSearchParams {
   // selected move, the analogue of prod's theoretical_winner_visits.
   enum class SigmaSeNEff : uint8_t { kMinTopK = 0, kWinner = 1 };
   SigmaSeNEff sigma_se_n_eff = SigmaSeNEff::kMinTopK;
+  // Shrink each visited child's Q toward v_mix before sigma in the root
+  // target: q_hat = (n*Q + k*v_mix) / (n + k). 0 disables. Selection is
+  // unaffected.
+  float completed_q_shrink_k = 0.0f;
 
   // Forward-declared; defined below once GumbelSearchParams is complete.
   class Builder;
@@ -138,6 +142,10 @@ class GumbelSearchParams::Builder {
   }
   Builder& set_sigma_se_n_eff(GumbelSearchParams::SigmaSeNEff v) {
     p_.sigma_se_n_eff = v;
+    return *this;
+  }
+  Builder& set_completed_q_shrink_k(float v) {
+    p_.completed_q_shrink_k = v;
     return *this;
   }
   GumbelSearchParams build() const { return p_; }
@@ -204,8 +212,9 @@ class GumbelEvaluator final {
 
   // Single Backward Step.
   void SingleBackup(TreeNode* node, game::Loc action, bool is_leaf,
-                    float leaf_q, float leaf_q_outcome, float leaf_score,
-                    const PuctParams puct_params, bool is_idempotent = false);
+                    float leaf_weight, float leaf_q, float leaf_q_outcome,
+                    float leaf_score, const PuctParams puct_params,
+                    bool is_idempotent = false);
 
   // Assigns bias_cache_entry to node based on the current game position.
   void AssignBiasCacheEntry(const game::Game& game, TreeNode* node);
@@ -220,7 +229,7 @@ float ComputeKLD(
     const std::array<float, constants::kMaxMovesPerPosition>& prior);
 
 std::array<float, constants::kMaxMovesPerPosition> ComputeImprovedPolicy(
-    const TreeNode* node, const int n);
+    const TreeNode* node, const int n, const float shrink_k = 0.0f);
 
 }  // namespace mcts
 

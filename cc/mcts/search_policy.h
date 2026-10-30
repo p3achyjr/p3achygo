@@ -60,6 +60,11 @@ struct PuctParams {
   // s_ref is a per-floor(log2(n))-bin reference stddev; entries <= 0 fall
   // back to s_ref_default. With all bins at 0.4 this is KataGo's fixed prior.
   static constexpr int kSRefBins = 24;
+  // Uncertainty-weighted backups (KataGo useUncertainty): each leaf value is
+  // weighted by coeff / (err + coeff / max_weight), err = NN short-term error
+  // estimate (init_err_est). 0 disables.
+  float uncertainty_weight_coeff = 0.0f;
+  float uncertainty_max_weight = 8.0f;
   bool enable_parent_var_scaling = false;
   float parent_var_lambda = 0.85f;
   float parent_var_prior_visits = 2.0f;
@@ -147,6 +152,14 @@ class PuctParams::Builder {
   }
   Builder& set_enable_parent_var_scaling(bool v) {
     p_.enable_parent_var_scaling = v;
+    return *this;
+  }
+  Builder& set_uncertainty_weight_coeff(float v) {
+    p_.uncertainty_weight_coeff = v;
+    return *this;
+  }
+  Builder& set_uncertainty_max_weight(float v) {
+    p_.uncertainty_max_weight = v;
     return *this;
   }
   Builder& set_parent_var_lambda(float v) {

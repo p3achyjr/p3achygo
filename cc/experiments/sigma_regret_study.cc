@@ -107,25 +107,25 @@ struct Arm {
   bool halving;
   float c_visit;
   GumbelSearchParams::SigmaSeNEff n_eff;
+  float shrink_k;  // completed-Q shrinkage toward v_mix (0 = off)
 };
 
-// t = target only, b = target + halving; m0/m10 = N_eff min over top-k with
-// c_visit floor 0/10; w = N_eff = winner visits (floor 0).
+// prod = production sigma; _sK = visited-child Q shrunk toward v_mix with K
+// pseudo-visits before sigma (target only); se_t_w = SE sigma, target only,
+// N_eff = winner visits. Selection is identical across all target-only arms.
 static const Arm kArms[] = {
     {"prod", GumbelSearchParams::SigmaMode::kProd, false, 0.0f,
-     GumbelSearchParams::SigmaSeNEff::kMinTopK},
-    {"se_t_m0", GumbelSearchParams::SigmaMode::kSe, false, 0.0f,
-     GumbelSearchParams::SigmaSeNEff::kMinTopK},
-    {"se_t_m10", GumbelSearchParams::SigmaMode::kSe, false, 10.0f,
-     GumbelSearchParams::SigmaSeNEff::kMinTopK},
+     GumbelSearchParams::SigmaSeNEff::kMinTopK, 0.0f},
+    {"prod_s1", GumbelSearchParams::SigmaMode::kProd, false, 0.0f,
+     GumbelSearchParams::SigmaSeNEff::kMinTopK, 1.0f},
+    {"prod_s2", GumbelSearchParams::SigmaMode::kProd, false, 0.0f,
+     GumbelSearchParams::SigmaSeNEff::kMinTopK, 2.0f},
+    {"prod_s4", GumbelSearchParams::SigmaMode::kProd, false, 0.0f,
+     GumbelSearchParams::SigmaSeNEff::kMinTopK, 4.0f},
     {"se_t_w", GumbelSearchParams::SigmaMode::kSe, false, 0.0f,
-     GumbelSearchParams::SigmaSeNEff::kWinner},
-    {"se_b_m0", GumbelSearchParams::SigmaMode::kSe, true, 0.0f,
-     GumbelSearchParams::SigmaSeNEff::kMinTopK},
-    {"se_b_m10", GumbelSearchParams::SigmaMode::kSe, true, 10.0f,
-     GumbelSearchParams::SigmaSeNEff::kMinTopK},
-    {"se_b_w", GumbelSearchParams::SigmaMode::kSe, true, 0.0f,
-     GumbelSearchParams::SigmaSeNEff::kWinner},
+     GumbelSearchParams::SigmaSeNEff::kWinner, 0.0f},
+    {"se_t_w_s2", GumbelSearchParams::SigmaMode::kSe, false, 0.0f,
+     GumbelSearchParams::SigmaSeNEff::kWinner, 2.0f},
 };
 static constexpr int kNumArms = static_cast<int>(sizeof(kArms) / sizeof(Arm));
 
@@ -256,6 +256,7 @@ ArmResult RunArm(GumbelEvaluator& evaluator, Game& game, Color color_to_move,
                     .set_sigma_se_sigma_q(absl::GetFlag(FLAGS_se_sigma_q))
                     .set_sigma_se_c_visit(arm.c_visit)
                     .set_sigma_se_n_eff(arm.n_eff)
+                    .set_completed_q_shrink_k(arm.shrink_k)
                     .build();
   auto result = evaluator.SearchRoot(gumbel_prob, game, node_table.get(), root,
                                      color_to_move, params);

@@ -10,6 +10,7 @@ BRANCH="${1:-p3achyjr/variance-aware-exp}"
 MAIN=/root/p3achygo
 WT=/root/p3achygo-exp
 DATA=/root/p3achygo-data
+export LD_LIBRARY_PATH=/opt/trt-10.14/root/usr/lib/x86_64-linux-gnu:/opt/tensorrt/lib:${LD_LIBRARY_PATH:-}  # TRT builder resource libs are dlopen-ed via LD_LIBRARY_PATH
 ONNX="$DATA/v4-models/main/_onnx/model_0631.onnx"
 VAL="$DATA/v4/val.tfrecord.zz"
 
@@ -27,8 +28,8 @@ git log --oneline -1
 
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DUSE_CUDA=ON -DUSE_TENSORRT=ON \
   -DBUILD_TESTS=OFF > build/cmake_configure.log 2>&1 || { tail -30 build/cmake_configure.log; exit 1; }
-cmake --build build -j64 --target eval sigma_regret_study node_var_dump \
-  build_and_run_trt_engine 2>&1 | grep -E "error|Error|Built target (eval|sigma|node|build_and)" || true
+cmake --build build -j64 --target eval_main sigma_regret_study node_var_dump \
+  build_and_run_trt_engine 2>&1 | grep -E "error|Error|Built target (eval_main|sigma|node|build_and)" || true
 ls -la build/eval build/sigma_regret_study build/node_var_dump build/build_and_run_trt_engine
 
 for bs in 1 200; do

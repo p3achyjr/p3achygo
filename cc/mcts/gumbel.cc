@@ -87,6 +87,13 @@ float VMixed(const TreeNode* node) {
   return interpolated_q / (1 + SumChildrenN(node));
 }
 
+// Visited-child Q shrunk toward v_mix with k pseudo-visits. k <= 0 is plain Q.
+inline float ShrunkQ(const TreeNode* node, int action, float v_mix, float k) {
+  if (k <= 0.0f) return Q(node, action);
+  const float n = NAction(node, action);
+  return (n * Q(node, action) + k * v_mix) / (n + k);
+}
+
 int Argmax(const std::array<float, constants::kMaxMovesPerPosition>& arr) {
   int arg_max = 0;
   float max_val = -FLT_MAX;
@@ -155,16 +162,18 @@ int SampleFromPolicy(
 std::array<float, constants::kMaxMovesPerPosition> ComputeRootImprovedPolicy(
     TreeNode* node,
     const std::array<float, constants::kMaxMovesPerPosition> masked_logits,
-    const absl::InlinedVector<int, 16>& visited_actions, float max_n) {
+    const absl::InlinedVector<int, 16>& visited_actions, float max_n,
+    float shrink_k) {
   constexpr float kQRange = 2.2f;
   const auto q_norm = [](float q) { return (q + 1.1f) / kQRange; };
 
-  float v_mix = q_norm(VMixed(node));
+  const float v_mix_raw = VMixed(node);
+  float v_mix = q_norm(v_mix_raw);
   alignas(MM_ALIGN) std::array<float, constants::kMaxMovesPerPosition>
       logits_improved;
   for (int action = 0; action < constants::kMaxMovesPerPosition; ++action) {
     float q = core::InlinedVecContains(visited_actions, action)
-                  ? q_norm(Q(node, action))
+                  ? q_norm(ShrunkQ(node, action, v_mix_raw, shrink_k))
                   : v_mix;
     logits_improved[action] =
         masked_logits[action] + (kVisit + max_n) * kValueScale * q;
@@ -179,13 +188,14 @@ std::array<float, constants::kMaxMovesPerPosition> ComputeRootImprovedPolicy(
 std::array<float, constants::kMaxMovesPerPosition> ComputeRootImprovedPolicySe(
     TreeNode* node,
     const std::array<float, constants::kMaxMovesPerPosition> masked_logits,
-    const absl::InlinedVector<int, 16>& visited_actions, float coef) {
+    const absl::InlinedVector<int, 16>& visited_actions, float coef,
+    float shrink_k) {
   const float v_mix = VMixed(node);
   alignas(MM_ALIGN) std::array<float, constants::kMaxMovesPerPosition>
       logits_improved;
   for (int action = 0; action < constants::kMaxMovesPerPosition; ++action) {
     const float q = core::InlinedVecContains(visited_actions, action)
-                        ? Q(node, action)
+                        ? ShrunkQ(node, action, v_mix, shrink_k)
                         : v_mix;
     logits_improved[action] = masked_logits[action] + coef * q;
   }
@@ -250,17 +260,20 @@ float ComputeKLD(
 
 // Compute completedQ = {q(a) if N(a) > 0, v_mixed otherwise }.
 std::array<float, constants::kMaxMovesPerPosition> ComputeImprovedPolicy(
-    const TreeNode* node, const int n) {
+    const TreeNode* node, const int n, const float shrink_k) {
   constexpr float kQRange = 3.0f;
   const auto q_norm = [](float q) { return (q + 1.5f) / kQRange; };
-  float v_mix = q_norm(VMixed(node));
+  const float v_mix_raw = VMixed(node);
+  float v_mix = q_norm(v_mix_raw);
   const float q_scale_factor = n <= 0 ? 0 : 2 * std::log(static_cast<float>(n));
   alignas(MM_ALIGN) std::array<float, constants::kMaxMovesPerPosition>
       logits_improved;
   for (int action = 0; action < constants::kMaxMovesPerPosition; ++action) {
     logits_improved[action] =
         node->move_logits[action] +
-        QTransform(NAction(node, action) > 0 ? q_norm(Q(node, action)) : v_mix,
+        QTransform(NAction(node, action) > 0
+                       ? q_norm(ShrunkQ(node, action, v_mix_raw, shrink_k))
+                       : v_mix,
                    q_scale_factor);
   }
 
@@ -587,11 +600,13 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
         params.sigma_se_n_eff == GumbelSearchParams::SigmaSeNEff::kWinner
             ? SeSigmaCoefficient(root, winner, params)
             : SeSigmaCoefficient(root, top_k_actions, params);
-    pi_improved = ComputeRootImprovedPolicySe(root, masked_logits,
-                                              top_k_actions, se_coef);
+    pi_improved =
+        ComputeRootImprovedPolicySe(root, masked_logits, top_k_actions, se_coef,
+                                    params.completed_q_shrink_k);
   } else {
-    pi_improved = ComputeRootImprovedPolicy(root, masked_logits, top_k_actions,
-                                            visit_advantage);
+    pi_improved =
+        ComputeRootImprovedPolicy(root, masked_logits, top_k_actions,
+                                  visit_advantage, params.completed_q_shrink_k);
   }
 
   Loc raw_nn_move = game::AsLoc(Argmax(root->move_logits));
@@ -850,6 +865,12 @@ void GumbelEvaluator::AssignBiasCacheEntry(const game::Game& game,
 void GumbelEvaluator::Backward(SearchPath& path, const PuctParams puct_params,
                                bool use_idempotent_updates) {
   auto [_, leaf] = path.back();
+  const float uw_coeff = puct_params.uncertainty_weight_coeff;
+  const float leaf_weight =
+      uw_coeff > 0.0f
+          ? uw_coeff / (leaf->init_err_est +
+                        uw_coeff / puct_params.uncertainty_max_weight)
+          : 1.0f;
   float leaf_q = leaf->init_util_est;
   float leaf_q_outcome = leaf->init_outcome_est;
   float leaf_score = leaf->init_score_est;
@@ -859,20 +880,23 @@ void GumbelEvaluator::Backward(SearchPath& path, const PuctParams puct_params,
     float leaf_q_mult =
         leaf->color_to_move == parent->color_to_move ? 1.0f : -1.0f;
 
-    SingleBackup(parent, parent_action, i == path.size() - 1,
+    SingleBackup(parent, parent_action, i == path.size() - 1, leaf_weight,
                  leaf_q_mult * leaf_q, leaf_q_mult * leaf_q_outcome,
                  leaf_q_mult * leaf_score, puct_params, use_idempotent_updates);
   }
 }
 
 void GumbelEvaluator::SingleBackup(TreeNode* node, game::Loc action,
-                                   bool is_leaf, float leaf_q,
-                                   float leaf_q_outcome, float leaf_score,
+                                   bool is_leaf, float leaf_weight,
+                                   float leaf_q, float leaf_q_outcome,
+                                   float leaf_score,
                                    const PuctParams puct_params,
                                    bool is_idempotent) {
   if (is_leaf) {
     node->n += 1;
-    node->w = node->init_util_est;
+    node->leaf_weight = leaf_weight;
+    node->wsum = leaf_weight;
+    node->w = leaf_weight * node->init_util_est;
     node->w_outcome = node->init_outcome_est;
     node->v = node->init_util_est;
     node->v_outcome = node->init_outcome_est;
@@ -890,12 +914,14 @@ void GumbelEvaluator::SingleBackup(TreeNode* node, game::Loc action,
     const float obs_bias = bias_cache_ != nullptr && node->bias_cache_entry
                                ? bias_cache_->UpdateAndFetch(node)
                                : 0.0f;
-    RecomputeNodeStats(node, obs_bias);
+    RecomputeNodeStats(node, obs_bias,
+                       puct_params.uncertainty_weight_coeff > 0.0f);
   } else {
     // incremental
-    node->w += leaf_q;
+    node->w += leaf_weight * leaf_q;
+    node->wsum += leaf_weight;
     node->w_outcome += leaf_q_outcome;
-    node->v = node->w / node->n;
+    node->v = node->w / node->wsum;
     node->v_outcome = node->w_outcome / node->n;
     node->score = leaf_score * (1.0f / N(node)) +
                   node->score * ((N(node) - 1.0f) / N(node));

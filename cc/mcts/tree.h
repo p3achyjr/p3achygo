@@ -52,6 +52,11 @@ struct TreeNode final {
   // n * dq2_ewma estimates the squared standard error of v; it spikes while v
   // is still drifting.
   float dq2_ewma = 0;
+  // Uncertainty-weighted backups (PuctParams::uncertainty_weight_coeff > 0):
+  // this node's own leaf weight and the sum of leaf weights in its subtree.
+  // Both stay 1 / n when the feature is off.
+  float leaf_weight = 1;
+  float wsum = 1;
 
   std::array<float, kNumVBuckets> v_categorical_prior{};
   std::array<uint32_t, kNumVBuckets> v_categorical{};
@@ -185,11 +190,14 @@ inline void AdvanceState(TreeNode* node) {
   node->state.store(TreeNodeState::kNnEvaluated, std::memory_order_release);
 }
 
-inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f) {
+inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f,
+                               const bool use_leaf_weights = false) {
   const float v_old = node->v;
   const float adj_init_util_est = node->init_util_est - obs_bias;
-  float w = adj_init_util_est, w_outcome = node->init_outcome_est,
-        total_score = node->init_score_est, w_err = node->init_err_est;
+  const float own_w = use_leaf_weights ? node->leaf_weight : 1.0f;
+  float w = own_w * adj_init_util_est, wsum = own_w,
+        w_outcome = node->init_outcome_est, total_score = node->init_score_est,
+        w_err = node->init_err_est;
   int max_child_n = 0;
   for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
     // flip signs.
@@ -197,14 +205,21 @@ inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f) {
     if (child == nullptr) {
       continue;
     }
-    w -= (node->child_visits[a] * child->v);
+    // Edge weight: child's subtree weight scaled to the visits that came
+    // through this edge (KataGo's childWeight).
+    const float edge_w =
+        use_leaf_weights
+            ? child->wsum * node->child_visits[a] / std::max(child->n, 1)
+            : static_cast<float>(node->child_visits[a]);
+    w -= (edge_w * child->v);
+    wsum += edge_w;
     w_outcome -= (node->child_visits[a] * child->v_outcome);
     total_score -= (node->child_visits[a] * child->score);
     max_child_n = node->child_visits[a] > max_child_n ? node->child_visits[a]
                                                       : max_child_n;
     w_err += node->child_visits[a] * child->v_err;
   }
-  float v = w / node->n;
+  float v = w / wsum;
   float v_outcome = w_outcome / node->n;
   float score = total_score / node->n;
   float v_err = w_err / node->n;
@@ -242,6 +257,7 @@ inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f) {
   }
 
   node->w = w;
+  node->wsum = wsum;
   node->w_outcome = w_outcome;
   node->v = v;
   node->v_outcome = v_outcome;
