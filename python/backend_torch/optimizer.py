@@ -250,6 +250,7 @@ def build_convmuon_param_groups(
     *,
     lr: float = 1e-3,
     adam_lr_ratio: float = 1.0,
+    head_lr_factor: Optional[float] = None,
     exclude_layers: Optional[List[str]] = None,
     momentum: float = 0.95,
     nesterov: bool = True,
@@ -297,6 +298,12 @@ def build_convmuon_param_groups(
                 ("muon", scale) if scale is not None else ("adam", 1.0)
             )
 
+    head_params = []
+    if head_lr_factor is not None:
+        head_ids = {id(p) for n, p in named if _HEAD_RE.search(n)}
+        head_params = [p for p in adamw_params if id(p) in head_ids]
+        adamw_params = [p for p in adamw_params if id(p) not in head_ids]
+
     groups: List[dict] = []
     if muon_params:
         groups.append(
@@ -318,6 +325,17 @@ def build_convmuon_param_groups(
                 "params": adamw_params,
                 "lr": lr * adam_lr_ratio,
                 "group": "adamw",
+                "betas": adam_betas,
+                "eps": adam_eps,
+            }
+        )
+    if head_params:
+        groups.append(
+            {
+                "params": head_params,
+                "lr": lr * head_lr_factor,
+                "group": "adamw",
+                "head": True,
                 "betas": adam_betas,
                 "eps": adam_eps,
             }
@@ -354,6 +372,7 @@ class ConvMuon(Optimizer):
         weight_decay: float = 0.1,
         adam_weight_decay: float = 0.004,
         adam_lr_ratio: float = 1.0,
+        head_lr_factor: Optional[float] = None,
         rms_rate: Optional[float] = 0.2,
         scale_weight_decay_by_rms: bool = False,
         wd_lr_exponent: Optional[float] = None,
@@ -363,6 +382,7 @@ class ConvMuon(Optimizer):
         self._base_muon_wd = weight_decay
         self._base_adam_wd = adam_weight_decay
         self._adam_lr_ratio = adam_lr_ratio
+        self._head_lr_factor = head_lr_factor
         self._rms_rate = rms_rate
         self._scale_wd_by_rms = scale_weight_decay_by_rms
         self._wd_lr_exponent = wd_lr_exponent
@@ -425,7 +445,7 @@ class ConvMuon(Optimizer):
         self._lr_schedule = value if callable(value) else None
         lr = float(value(0)) if callable(value) else float(value)
         for group in self.param_groups:
-            group["lr"] = lr if group["group"] == "muon" else lr * self._adam_lr_ratio
+            group["lr"] = self._group_lr(group, lr)
 
     @property
     def weight_decay(self) -> float:
@@ -461,8 +481,26 @@ class ConvMuon(Optimizer):
         # Re-derive adamw group LR from current muon LR.
         muon_lr = self.learning_rate
         for g in self.param_groups:
-            if g.get("group") == "adamw":
-                g["lr"] = muon_lr * self._adam_lr_ratio
+            g["lr"] = self._group_lr(g, muon_lr)
+
+    @property
+    def head_lr_factor(self) -> Optional[float]:
+        return self._head_lr_factor
+
+    @head_lr_factor.setter
+    def head_lr_factor(self, value: Optional[float]):
+        self._head_lr_factor = None if value is None else float(value)
+        muon_lr = self.learning_rate
+        for g in self.param_groups:
+            g["lr"] = self._group_lr(g, muon_lr)
+
+    def _group_lr(self, group: dict, lr: float) -> float:
+        if group["group"] == "muon":
+            return lr
+        if group.get("head"):
+            assert self._head_lr_factor is not None, "head group without head_lr_factor"
+            return lr * self._head_lr_factor
+        return lr * self._adam_lr_ratio
 
     @property
     def global_clipnorm(self) -> float:
@@ -518,9 +556,7 @@ class ConvMuon(Optimizer):
         if self._lr_schedule is not None:
             lr = float(self._lr_schedule(self._global_step))
             for group in self.param_groups:
-                group["lr"] = (
-                    lr if group["group"] == "muon" else lr * self._adam_lr_ratio
-                )
+                group["lr"] = self._group_lr(group, lr)
         self._global_step += 1
 
         all_params = [
@@ -776,6 +812,7 @@ class TorchLossScaleOptimizer:
 # ---------------------------------------------------------------------------
 
 _MUON_EXCLUDE_LAYERS_TORCH = [r".*policy_head.*", r".*value_head.*"]
+_HEAD_RE = re.compile(r"(^|\.)(policy_head|value_head)\.")
 
 
 def _remap_resume_state_for_added_params(inner, saved_inner, model):
@@ -879,6 +916,7 @@ def make_optimizer(model, config, lr_schedule, is_gpu, *, loaded_state=None):
             model,
             lr=seed_lr,
             adam_lr_ratio=config.adam_lr_ratio,
+            head_lr_factor=config.head_lr_factor,
             exclude_layers=_MUON_EXCLUDE_LAYERS_TORCH,
         )
         optimizer = ConvMuon(
@@ -887,6 +925,7 @@ def make_optimizer(model, config, lr_schedule, is_gpu, *, loaded_state=None):
             weight_decay=config.muon_wd,
             adam_weight_decay=config.adam_wd,
             adam_lr_ratio=config.adam_lr_ratio,
+            head_lr_factor=config.head_lr_factor,
             wd_lr_exponent=config.wd_lr_exponent,
             wd_lr_max=config.wd_lr_max,
             global_clipnorm=config.global_clipnorm,
@@ -910,6 +949,7 @@ def make_optimizer(model, config, lr_schedule, is_gpu, *, loaded_state=None):
         inner.weight_decay = config.muon_wd
         inner.adam_weight_decay = config.adam_wd
         inner.adam_lr_ratio = config.adam_lr_ratio
+        inner.head_lr_factor = config.head_lr_factor
         inner.wd_lr_exponent = config.wd_lr_exponent
         inner.wd_lr_max = config.wd_lr_max
     inner.global_clipnorm = config.global_clipnorm
