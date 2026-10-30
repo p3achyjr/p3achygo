@@ -70,6 +70,8 @@ struct PlayerSearchConfig {
   bool se_use_jitter = false;
   int se_min_n = 3;
   float se_cap = 0.0f;
+  float uncertainty_weight_coeff = 0.0f;
+  float uncertainty_max_weight = 8.0f;
   bool enable_parent_var_scaling = false;
   float parent_var_lambda = 0.85f;
   float parent_var_prior_visits = 2.0f;
@@ -240,6 +242,10 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.se_min_n = std::stoi(val);
     else if (key == "se_cap")
       cfg.se_cap = std::stof(val);
+    else if (key == "uncertainty_weight_coeff")
+      cfg.uncertainty_weight_coeff = std::stof(val);
+    else if (key == "uncertainty_max_weight")
+      cfg.uncertainty_max_weight = std::stof(val);
     else if (key == "enable_parent_var_scaling")
       cfg.enable_parent_var_scaling = internal::ParseBool(val);
     else if (key == "parent_var_lambda")
@@ -344,6 +350,17 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
   ROW(v_cat_var_scale_prior_visits, i_);
   ROW(p_opt_weight, f);
   ROW(root_fpu, f);
+  ROW(se_bonus_x, f);
+  ROW(se_use_jitter, b);
+  ROW(se_min_n, i_);
+  ROW(se_cap, f);
+  ROW(uncertainty_weight_coeff, f);
+  ROW(uncertainty_max_weight, f);
+  ROW(enable_parent_var_scaling, b);
+  ROW(parent_var_lambda, f);
+  ROW(parent_var_prior_visits, f);
+  ROW(s_ref_default, f);
+  ROW(tree_reuse, b);
   ROW(sampling_temperature, f);
   ROW(sampling_num_moves, i_);
   ROW(num_threads_per_game, i_);

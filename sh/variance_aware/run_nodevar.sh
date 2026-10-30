@@ -7,6 +7,7 @@ GPU="${1:-3}"; NUM="${2:-200}"; VISITS="${3:-1600}"
 TAG="${4:-nodevar_n$VISITS}"
 WT=/root/p3achygo-exp
 DATA=/root/p3achygo-data
+export LD_LIBRARY_PATH=/opt/trt-10.14/root/usr/lib/x86_64-linux-gnu:/opt/tensorrt/lib:${LD_LIBRARY_PATH:-}  # TRT builder resource libs are dlopen-ed via LD_LIBRARY_PATH
 OUT="$DATA/exp/variance-aware"
 mkdir -p "$OUT"
 [ -e "$OUT/$TAG.log" ] && { echo "refusing to overwrite $OUT/$TAG.log" >&2; exit 1; }

@@ -6,6 +6,7 @@ set -euo pipefail
 GPU="${1:-1}"; NUM="${2:-300}"; SKIP="${3:-0}"; TAG="${4:-exp1_sigma}"
 WT=/root/p3achygo-exp
 DATA=/root/p3achygo-data
+export LD_LIBRARY_PATH=/opt/trt-10.14/root/usr/lib/x86_64-linux-gnu:/opt/tensorrt/lib:${LD_LIBRARY_PATH:-}  # TRT builder resource libs are dlopen-ed via LD_LIBRARY_PATH
 OUT="$DATA/exp/variance-aware"
 mkdir -p "$OUT"
 [ -e "$OUT/$TAG.log" ] && { echo "refusing to overwrite $OUT/$TAG.log" >&2; exit 1; }

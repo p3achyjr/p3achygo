@@ -55,6 +55,9 @@ ABSL_FLAG(std::string, model_path, "", "Path to model.");
 ABSL_FLAG(std::string, chunk_path, "",
           "Path to tfrecord chunk (.tfrecord.zz).");
 ABSL_FLAG(int, num_examples, 500, "Number of examples to process.");
+ABSL_FLAG(float, shrink_k, 0.0f,
+          "Completed-Q shrinkage toward v_mix (pseudo-visits) for the N-arm "
+          "targets. GT is never shrunk.");
 ABSL_FLAG(int, seed_visits, 30,
           "PUCT visits used to seed each tree before Gumbel search.");
 ABSL_FLAG(bool, verbose, false,
@@ -240,7 +243,8 @@ SearchResult RunSeededGumbel(GumbelEvaluator& evaluator, Game& game,
   }
 
   if (pi_seeded_out != nullptr) {
-    *pi_seeded_out = ComputeImprovedPolicy(root, 0);
+    *pi_seeded_out =
+        ComputeImprovedPolicy(root, 0, absl::GetFlag(FLAGS_shrink_k));
   }
 
   // Gumbel search: use the fixed per-position seed so that the Gumbel noise
@@ -249,7 +253,8 @@ SearchResult RunSeededGumbel(GumbelEvaluator& evaluator, Game& game,
   auto params = GumbelSearchParams::Builder().set_n(n).set_k(k).build();
   auto result = evaluator.SearchRoot(gumbel_prob, game, node_table.get(), root,
                                      color_to_move, params);
-  return {ComputeImprovedPolicy(root, 0), result.mcts_move, result.visits};
+  return {ComputeImprovedPolicy(root, 0, absl::GetFlag(FLAGS_shrink_k)),
+          result.mcts_move, result.visits};
 }
 
 // Returns the normalized empirical visit distribution: child_visits[a] / sum.
@@ -380,7 +385,8 @@ DynamicResult RunDynamic(GumbelEvaluator& evaluator, Game& game,
         PuctParams::Builder().set_kind(PuctRootSelectionPolicy::kLcb).build());
   }
 
-  const auto pi_seeded = ComputeImprovedPolicy(root, 0);
+  const auto pi_seeded =
+      ComputeImprovedPolicy(root, 0, absl::GetFlag(FLAGS_shrink_k));
   // KLD(seed || prior): computable online, used as band signal for N selection.
   const float kld_band = ComputeKLD(pi_seeded, root->move_probs);
   const int n = NForKld(kld_band);
@@ -390,7 +396,8 @@ DynamicResult RunDynamic(GumbelEvaluator& evaluator, Game& game,
   auto result = evaluator.SearchRoot(gumbel_prob, game, node_table.get(), root,
                                      color_to_move, params);
 
-  return {{ComputeImprovedPolicy(root, 0), result.mcts_move, result.visits},
+  return {{ComputeImprovedPolicy(root, 0, absl::GetFlag(FLAGS_shrink_k)),
+           result.mcts_move, result.visits},
           pi_seeded,
           kld_band,
           n};
