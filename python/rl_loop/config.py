@@ -6,7 +6,7 @@ import json
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 
 @dataclass
@@ -61,6 +61,9 @@ class RunConfig(object):
     nn_timeout_us: int
     # Use the Aurora polar factor (leverage-uniform Muon) for non-square Muon params.
     muon_aurora: bool = False
+    # LR multiplier for policy/value head params (AdamW path), relative to the
+    # global LR. None = heads use adam_lr_ratio like other AdamW params.
+    head_lr_factor: Optional[float] = None
 
 
 def parse(run_id: str) -> RunConfig:
@@ -89,6 +92,7 @@ def parse(run_id: str) -> RunConfig:
         optimizer = obj.get("optimizer", "sgd")
         adam_wd = obj.get("adam_wd", 0.01)
         adam_lr_ratio = obj.get("adam_lr_ratio", 1.0)
+        head_lr_factor = obj.get("head_lr_factor", None)
         muon_wd = obj.get("muon_wd", 0.02)
         wd_auto_scale = obj.get("wd_auto_scale", False)
         wd_lr_exponent = obj.get("wd_lr_exponent", None)
@@ -170,4 +174,5 @@ def parse(run_id: str) -> RunConfig:
             nonroot_var_scale_prior_visits,
             nn_timeout_us,
             muon_aurora=muon_aurora,
+            head_lr_factor=head_lr_factor,
         )
