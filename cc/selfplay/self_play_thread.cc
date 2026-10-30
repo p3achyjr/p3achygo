@@ -52,6 +52,10 @@ static constexpr float kPlayFromBookProb = 0.0f;
 // Probability of handicap game.
 static constexpr float kHandicapGame = 0.05f;
 
+// Probability of starting from 1-4 random corner moves (lines 3-5, distinct
+// corners), followed by normal opening sampling.
+static constexpr float kCornerOpeningProb = 0.05f;
+
 // Thresholds at which to compute pass-alive regions.
 static constexpr int kComputePAMoveNums[] = {200, 250, 300, 350, 400};
 
@@ -247,6 +251,30 @@ InitState GetInitState(Probability& probability, GoExploitReuseBuffer* buffer,
     }
     seen_state->kind = InitState::Kind::kGoExploit;
     return seen_state.value();
+  } else if (p <= kPlayFromBookProb + kHandicapGame + use_seen_state_prob +
+                      kCornerOpeningProb) {
+    // Play 1-4 moves in distinct random corners, each on lines 3-5.
+    int corners[] = {0, 1, 2, 3};
+    const int num_moves = RandRange(probability.prng(), 1, 5);
+    s0.kind = InitState::Kind::kCorner;
+    s0.move_num = num_moves;
+    s0.last_moves.clear();
+    for (int i = 0; i < constants::kNumLastMoves - num_moves; ++i) {
+      s0.last_moves.emplace_back(kNoopMove);
+    }
+
+    for (int i = 0; i < num_moves; ++i) {
+      std::swap(corners[i], corners[RandRange(probability.prng(), i, 4)]);
+      const int di = RandRange(probability.prng(), 2, 5);
+      const int dj = RandRange(probability.prng(), 2, 5);
+      const Loc loc{corners[i] & 1 ? BOARD_LEN - 1 - di : di,
+                    corners[i] & 2 ? BOARD_LEN - 1 - dj : dj};
+      s0.board.PlayMove(loc, s0.color_to_move);
+      s0.last_moves.emplace_back(Move{s0.color_to_move, loc});
+      s0.color_to_move = game::OppositeColor(s0.color_to_move);
+    }
+
+    return s0;
   }
 
   // fall back to empty game.
@@ -286,6 +314,8 @@ std::string ToString(const InitState::Kind& kind) {
       return "GoExploit";
     case InitState::Kind::kRegret:
       return "Regret";
+    case InitState::Kind::kCorner:
+      return "Corner";
     default:
       return "Unknown";
   }
@@ -327,10 +357,11 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         init_state.first_move_behavior != FirstMoveBehavior::kSample;
     const int init_mv_num = init_state.move_num;
 
-    // ForkManager for fresh games only (kEmpty, kBook, kHandicap).
+    // ForkManager for fresh games only (kEmpty, kBook, kHandicap, kCorner).
     const bool is_fresh_game = init_state.kind == InitState::Kind::kEmpty ||
                                init_state.kind == InitState::Kind::kBook ||
-                               init_state.kind == InitState::Kind::kHandicap;
+                               init_state.kind == InitState::Kind::kHandicap ||
+                               init_state.kind == InitState::Kind::kCorner;
 
     // Game state.
     Game game(init_state.board, init_state.last_moves, init_mv_num);
@@ -362,9 +393,13 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     // Number of moves for which to sample directly from the policy.
     // kPlay/kForceFullSearch disable raw policy sampling.
     // For mid-game positions, the cap decays with a half-life of 40 moves so
-    // that late-game restarts do less raw-policy sampling.
-    int const max_raw_policy_moves = std::round(
-        kMaxNumRawPolicyMoves * std::pow(0.5f, init_state.move_num / 40.0f));
+    // that late-game restarts do less raw-policy sampling. Corner openings keep
+    // the full cap.
+    int const max_raw_policy_moves =
+        init_state.kind == InitState::Kind::kCorner
+            ? kMaxNumRawPolicyMoves
+            : std::round(kMaxNumRawPolicyMoves *
+                         std::pow(0.5f, init_state.move_num / 40.0f));
     int const num_moves_raw_policy =
         !disable_sampling && max_raw_policy_moves > 0 &&
                 probability.Uniform() < kOpeningExploreProb
@@ -381,6 +416,16 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         << "  Komi=" << init_state.board.komi()
         << "  Raw Policy Moves=" << num_moves_raw_policy
         << "  Tau Opening=" << tau_opening
+        << (init_state.kind == InitState::Kind::kCorner
+                ? "  Corner Moves=" +
+                      [&]() {
+                        std::stringstream ss;
+                        for (const Move& m : init_state.last_moves) {
+                          if (m.loc != kNoopLoc) ss << m.loc;
+                        }
+                        return ss.str();
+                      }()
+                : "")
         << (init_state.fork_kind.has_value()
                 ? "  ForkKind=" + ToString(*init_state.fork_kind) +
                       "  Starting Position\n" +
