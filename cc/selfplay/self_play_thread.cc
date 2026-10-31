@@ -19,7 +19,6 @@
 #include "cc/mcts/tree.h"
 #include "cc/recorder/game_recorder.h"
 #include "cc/recorder/move_search_stats.h"
-#include "cc/selfplay/book.h"
 #include "cc/selfplay/fork_manager.h"
 #include "cc/selfplay/move_sel_manager.h"
 #include "cc/selfplay/reuse_buffer.h"
@@ -46,15 +45,20 @@ static constexpr int kMaxNumRawPolicyMoves = 30;
 // Probability of exploration.
 static constexpr float kOpeningExploreProb = 1.0f;
 
-// Probability of playing from opening book.
-static constexpr float kPlayFromBookProb = 0.0f;
-
 // Probability of handicap game.
 static constexpr float kHandicapGame = 0.05f;
 
 // Probability of starting from 1-4 random corner moves (lines 3-5, distinct
 // corners), followed by normal opening sampling.
-static constexpr float kCornerOpeningProb = 0.05f;
+static constexpr float kCornerOpeningProb = 0.10f;
+
+// Raw-policy opening draws that land on the first/second line with a prior
+// below kEdgeResamplePriorMin are redrawn with these per-draw probabilities,
+// at most kMaxEdgeResamples times.
+static constexpr float kFirstLineResampleProb = 0.8f;
+static constexpr float kSecondLineResampleProb = 0.3f;
+static constexpr float kEdgeResamplePriorMin = 0.01f;
+static constexpr int kMaxEdgeResamples = 10;
 
 // Thresholds at which to compute pass-alive regions.
 static constexpr int kComputePAMoveNums[] = {200, 250, 300, 350, 400};
@@ -217,25 +221,7 @@ InitState GetInitState(Probability& probability, GoExploitReuseBuffer* buffer,
                 FirstMoveBehavior::kSample,
                 InitState::Kind::kEmpty};
   float p = probability.Uniform();
-  if (p <= kPlayFromBookProb) {
-    const int index = probability.Uniform() * kOpeningBook.size();
-    const int num_moves =
-        std::round(probability.Uniform() * kOpeningBook[index].size());
-    s0.kind = InitState::Kind::kBook;
-    s0.last_moves.clear();
-    for (int i = 0; i < constants::kNumLastMoves - num_moves; ++i) {
-      s0.last_moves.emplace_back(kNoopMove);
-    }
-
-    for (int i = 0; i < num_moves; ++i) {
-      const auto loc = kOpeningBook[index][i];
-      s0.board.PlayMove(loc, s0.color_to_move);
-      s0.last_moves.emplace_back(Move{s0.color_to_move, loc});
-      s0.color_to_move = game::OppositeColor(s0.color_to_move);
-    }
-
-    return s0;
-  } else if (p <= kPlayFromBookProb + kHandicapGame) {
+  if (p <= kHandicapGame) {
     int handicap = std::floor(probability.Uniform() * 3 + 2);
     float komi = (handicap - 2) * 14 + 20.5;  // katago ;)
     return InitState{Board(handicap, komi),
@@ -244,14 +230,14 @@ InitState GetInitState(Probability& probability, GoExploitReuseBuffer* buffer,
                      0,
                      FirstMoveBehavior::kSample,
                      InitState::Kind::kHandicap};
-  } else if (p <= kPlayFromBookProb + kHandicapGame + use_seen_state_prob) {
+  } else if (p <= kHandicapGame + use_seen_state_prob) {
     std::optional<InitState> seen_state = buffer->Get();
     if (!seen_state) {
       return s0;
     }
     seen_state->kind = InitState::Kind::kGoExploit;
     return seen_state.value();
-  } else if (p <= kPlayFromBookProb + kHandicapGame + use_seen_state_prob +
+  } else if (p <= kHandicapGame + use_seen_state_prob +
                       kCornerOpeningProb) {
     // Play 1-4 moves in distinct random corners, each on lines 3-5.
     int corners[] = {0, 1, 2, 3};
@@ -265,8 +251,19 @@ InitState GetInitState(Probability& probability, GoExploitReuseBuffer* buffer,
 
     for (int i = 0; i < num_moves; ++i) {
       std::swap(corners[i], corners[RandRange(probability.prng(), i, 4)]);
-      const int di = RandRange(probability.prng(), 2, 5);
-      const int dj = RandRange(probability.prng(), 2, 5);
+      // Corner point weights, indexed [di - 2][dj - 2] (lines 3-5):
+      // 3-3, 3-4, 4-3 at 18; 4-4, 3-5, 5-3, 4-5, 5-4, 5-5 at 10.
+      static constexpr int kCornerPointWeights[9] = {18, 18, 10, 18, 10,
+                                                     10, 10, 10, 10};
+      static constexpr int kCornerWeightTotal = 114;
+      int r = RandRange(probability.prng(), 0, kCornerWeightTotal);
+      int k = 0;
+      while (r >= kCornerPointWeights[k]) {
+        r -= kCornerPointWeights[k];
+        ++k;
+      }
+      const int di = 2 + k / 3;
+      const int dj = 2 + k % 3;
       const Loc loc{corners[i] & 1 ? BOARD_LEN - 1 - di : di,
                     corners[i] & 2 ? BOARD_LEN - 1 - dj : dj};
       s0.board.PlayMove(loc, s0.color_to_move);
@@ -306,8 +303,6 @@ std::string ToString(const InitState::Kind& kind) {
   switch (kind) {
     case InitState::Kind::kEmpty:
       return "Empty";
-    case InitState::Kind::kBook:
-      return "Book";
     case InitState::Kind::kHandicap:
       return "Handicap";
     case InitState::Kind::kGoExploit:
@@ -357,9 +352,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         init_state.first_move_behavior != FirstMoveBehavior::kSample;
     const int init_mv_num = init_state.move_num;
 
-    // ForkManager for fresh games only (kEmpty, kBook, kHandicap, kCorner).
+    // ForkManager for fresh games only (kEmpty, kHandicap, kCorner).
     const bool is_fresh_game = init_state.kind == InitState::Kind::kEmpty ||
-                               init_state.kind == InitState::Kind::kBook ||
                                init_state.kind == InitState::Kind::kHandicap ||
                                init_state.kind == InitState::Kind::kCorner;
 
@@ -634,8 +628,26 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       auto begin = std::chrono::steady_clock::now();
       GumbelResult gumbel_res = [&]() {
         if (sampling_raw_policy) {
-          return gumbel_evaluator.Sample(probability, game, root_node,
-                                         color_to_move, tau_opening);
+          GumbelResult res = gumbel_evaluator.Sample(
+              probability, game, root_node, color_to_move, tau_opening);
+          for (int i = 0; i < kMaxEdgeResamples; ++i) {
+            const Loc mv = res.mcts_move;
+            if (mv == kPassLoc) break;
+            const int line = std::min({mv.i, mv.j, BOARD_LEN - 1 - mv.i,
+                                       BOARD_LEN - 1 - mv.j}) +
+                             1;
+            const float p_resample = line == 1   ? kFirstLineResampleProb
+                                     : line == 2 ? kSecondLineResampleProb
+                                                 : 0.0f;
+            if (p_resample == 0.0f ||
+                res.pi_improved[mv] >= kEdgeResamplePriorMin ||
+                probability.Uniform() >= p_resample) {
+              break;
+            }
+            res = gumbel_evaluator.Sample(probability, game, root_node,
+                                          color_to_move, tau_opening);
+          }
+          return res;
         }
         return is_move_selected_for_training || !use_puct_fast_search
                    ? gumbel_evaluator.SearchRoot(
