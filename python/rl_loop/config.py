@@ -58,6 +58,7 @@ class RunConfig(object):
     bias_cache_lambda: float
     bias_cache_alpha: float
     nonroot_var_scale_prior_visits: int
+    nn_timeout_us: int
 
 
 def parse(run_id: str) -> RunConfig:
@@ -118,6 +119,7 @@ def parse(run_id: str) -> RunConfig:
         bias_cache_lambda = obj.get("bias_cache_lambda", 0.0)
         bias_cache_alpha = obj.get("bias_cache_alpha", 0.8)
         nonroot_var_scale_prior_visits = obj.get("nonroot_var_scale_prior_visits", 10)
+        nn_timeout_us = obj.get("nn_timeout_us", 400)
 
         return RunConfig(
             from_existing_run,
@@ -163,4 +165,5 @@ def parse(run_id: str) -> RunConfig:
             bias_cache_lambda,
             bias_cache_alpha,
             nonroot_var_scale_prior_visits,
+            nn_timeout_us,
         )

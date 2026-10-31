@@ -7,23 +7,19 @@
   "lr_schedule": [
     [
       0,
-      1e-4
+      0.0001
     ],
     [
       430,
-      5e-5
+      5e-05
     ],
     [
       563,
-      2e-5
+      2e-05
     ],
     [
       600,
-      1e-5
-    ],
-    [
-      630,
-      1.5e-5
+      1e-05
     ]
   ],
   "lr_growth_window": 10,
@@ -55,6 +51,7 @@
   "adam_wd": 0.1,
   "adam_lr_ratio": 0.5,
   "wd_auto_scale": true,
-  "wd_lr_max": 1e-4,
-  "wd_lr_exponent": 0.3
+  "wd_lr_max": 0.0001,
+  "wd_lr_exponent": 0.3,
+  "nn_timeout_us": 2000
 }

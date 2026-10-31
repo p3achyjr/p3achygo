@@ -173,6 +173,7 @@ def loop(
             + f" --bias_cache_lambda={config.bias_cache_lambda}"
             + f" --bias_cache_alpha={config.bias_cache_alpha}"
             + f" --nonroot_var_scale_prior_visits={config.nonroot_var_scale_prior_visits}"
+            + f" --nn_timeout_us={config.nn_timeout_us}"
             + (f" --sel_mult_calibration_file={calib_file}" if calib_file else "")
         )
 

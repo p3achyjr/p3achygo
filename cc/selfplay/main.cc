@@ -28,6 +28,10 @@
 
 ABSL_FLAG(std::string, model_path, "", "Path to model.");
 ABSL_FLAG(int, num_threads, 1, "Number of threads to use.");
+ABSL_FLAG(int, nn_timeout_us, 400,
+          "NNInterface batching timeout (us): how long the inference thread "
+          "waits for every search thread to load a leaf before running a "
+          "partial batch. Tune to the engine's per-batch inference time.");
 ABSL_FLAG(std::string, recorder_path, "",
           "Path to write SGF files and TF examples. 'sgf' and 'chunks' are "
           "appended to the path.");
@@ -173,7 +177,10 @@ int main(int argc, char** argv) {
       nn::CreateEngine(nn::KindFromEnginePath(model_path), model_path,
                        num_threads, nn::GetVersionFromModelPath(model_path));
   std::unique_ptr<nn::NNInterface> nn_interface =
-      std::make_unique<nn::NNInterface>(num_threads, std::move(engine));
+      std::make_unique<nn::NNInterface>(num_threads,
+                                        absl::GetFlag(FLAGS_nn_timeout_us),
+                                        constants::kDefaultNNCacheSize,
+                                        std::move(engine));
   nn_interface->SetNumCacheLastMoves(1);
 
   // initialize serialization objects.
