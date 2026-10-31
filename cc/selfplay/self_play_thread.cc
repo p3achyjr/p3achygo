@@ -251,19 +251,14 @@ InitState GetInitState(Probability& probability, GoExploitReuseBuffer* buffer,
 
     for (int i = 0; i < num_moves; ++i) {
       std::swap(corners[i], corners[RandRange(probability.prng(), i, 4)]);
-      // Corner point weights, indexed [di - 2][dj - 2] (lines 3-5):
-      // 3-3, 3-4, 4-3 at 18; 4-4, 3-5, 5-3, 4-5, 5-4, 5-5 at 10.
-      static constexpr int kCornerPointWeights[9] = {18, 18, 10, 18, 10,
-                                                     10, 10, 10, 10};
-      static constexpr int kCornerWeightTotal = 114;
-      int r = RandRange(probability.prng(), 0, kCornerWeightTotal);
-      int k = 0;
-      while (r >= kCornerPointWeights[k]) {
-        r -= kCornerPointWeights[k];
-        ++k;
-      }
-      const int di = 2 + k / 3;
-      const int dj = 2 + k % 3;
+      // Offsets from the corner (lines 3-5). 3-3, 3-4 and 4-3 are listed
+      // twice so they carry double the weight of the other six points.
+      static constexpr Loc kCornerOffsets[12] = {
+          {2, 2}, {2, 2}, {2, 3}, {2, 3}, {3, 2}, {3, 2},
+          {3, 3}, {2, 4}, {4, 2}, {3, 4}, {4, 3}, {4, 4}};
+      const Loc d = kCornerOffsets[RandRange(probability.prng(), 0, 12)];
+      const int di = d.i;
+      const int dj = d.j;
       const Loc loc{corners[i] & 1 ? BOARD_LEN - 1 - di : di,
                     corners[i] & 2 ? BOARD_LEN - 1 - dj : dj};
       s0.board.PlayMove(loc, s0.color_to_move);
