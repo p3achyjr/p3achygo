@@ -65,25 +65,30 @@ float QTransform(float q, float max_b) {
 }
 
 // interpolates NN value evaluation with empirical values derived from visits.
+// Visit count comes from the node's own child_visits, not node->n: at the
+// root, node->n is not updated during the search (see SearchRoot), so
+// SumChildrenN(root) would be stale and unsearched moves would be filled
+// with the raw network value instead of v_mix.
 float VMixed(const TreeNode* node) {
-  if (SumChildrenN(node) == 0) {
+  double weighted_visited_q = 0;
+  double visited_prob = 0;
+  double visited_n = 0;
+  for (int action = 0; action < constants::kMaxMovesPerPosition; ++action) {
+    const float n_a = NAction(node, action);
+    if (n_a > 0) {
+      weighted_visited_q += (node->move_probs[action] * Q(node, action));
+      visited_prob += node->move_probs[action];
+      visited_n += n_a;
+    }
+  }
+  if (visited_n == 0) {
     return node->init_util_est;
   }
 
-  double weighted_visited_q = 0;
-  double visited_prob = 0;
-  for (int action = 0; action < constants::kMaxMovesPerPosition; ++action) {
-    if (NAction(node, action) > 0) {
-      weighted_visited_q += (node->move_probs[action] * Q(node, action));
-      visited_prob += node->move_probs[action];
-    }
-  }
-
   double interpolated_q =
-      (weighted_visited_q * SumChildrenN(node) / visited_prob +
-       node->init_util_est);
+      (weighted_visited_q * visited_n / visited_prob + node->init_util_est);
 
-  return interpolated_q / (1 + SumChildrenN(node));
+  return interpolated_q / (1 + visited_n);
 }
 
 int Argmax(const std::array<float, constants::kMaxMovesPerPosition>& arr) {
