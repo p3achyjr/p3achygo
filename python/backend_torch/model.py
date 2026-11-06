@@ -25,6 +25,7 @@ from backend_torch.model_layers_common import (
     make_dense,
     mish,
 )
+from backend_torch.model_transformer import TransformerResidualBlock
 from model_config import BTL_PROJ_CONV_SIZE_DEFAULT, with_btl_proj_conv_size
 
 # ---------------------------------------------------------------------------
@@ -183,6 +184,52 @@ class NbtResidualBlock(nn.Module):
         return h + residual
 
 
+class NestedAttnBottleneckBlock(nn.Module):
+    """1×1 reduce → Classic(inner) → 2 transformer layers → Classic(inner) → 1×1 expand + skip.
+
+    Same as NbtResidualBlock with two transformer layers between the inner conv
+    pairs. The transformer layers carry their own (attn, ffn) residuals, so there
+    is no extra skip around them.
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        bottleneck_channels: int,
+        conv_size: int,
+        num_heads: int,
+        pos_len: int,
+        rope_learnable: bool = True,
+    ):
+        super().__init__()
+        self.reduce_bn = make_bn(channels)
+        self.reduce_conv = make_conv(channels, bottleneck_channels, 1, use_bias=False)
+        self.res0 = ClassicResidualBlock(
+            bottleneck_channels, bottleneck_channels, 2, conv_size
+        )
+        self.tfmr0 = TransformerResidualBlock(
+            bottleneck_channels, num_heads, pos_len, rope_learnable=rope_learnable
+        )
+        self.tfmr1 = TransformerResidualBlock(
+            bottleneck_channels, num_heads, pos_len, rope_learnable=rope_learnable
+        )
+        self.res1 = ClassicResidualBlock(
+            bottleneck_channels, bottleneck_channels, 2, conv_size
+        )
+        self.expand_bn = make_bn(bottleneck_channels)
+        self.expand_conv = make_conv(bottleneck_channels, channels, 1, use_bias=False)
+
+    def forward(self, x: torch.Tensor, training: bool = False) -> torch.Tensor:
+        residual = x
+        h = self.reduce_conv(mish(self.reduce_bn(x)))
+        h = self.res0(h, training)
+        h = self.tfmr0(h)
+        h = self.tfmr1(h)
+        h = self.res1(h, training)
+        h = self.expand_conv(mish(self.expand_bn(h)))
+        return h + residual
+
+
 class BroadcastResidualBlock(nn.Module):
     """Mirrors keras BroadcastResidualBlock exactly.
 
@@ -272,6 +319,17 @@ def _build_trunk_from_generic_arch(
         use_se = cfg.get("use_se", False)
         if block_type == "nbt":
             blocks.append(NbtResidualBlock(out_ch, bot_ch, ks, use_se=use_se))
+        elif block_type == "nbt_attn":
+            blocks.append(
+                NestedAttnBottleneckBlock(
+                    out_ch,
+                    bot_ch,
+                    ks,
+                    cfg["num_heads"],
+                    board_len,
+                    rope_learnable=cfg.get("rope_learnable", True),
+                )
+            )
         elif block_type == "broadcast":
             blocks.append(BroadcastResidualBlock(out_ch, board_len))
         elif block_type in ("btl", "classic"):
