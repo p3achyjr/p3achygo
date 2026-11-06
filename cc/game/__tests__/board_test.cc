@@ -1604,6 +1604,73 @@ TEST_CASE("LadderTest") {
     CHECK_EQ(board, board_copy);
   }
 
+  SUBCASE("CaptureEscapeLadderControl") {
+    // CaptureEscapeLadder after white extends at (15, 2) and black ataris at
+    // (15, 3), connecting (16, 3). White has no capture escape left and the
+    // ladder works.
+    auto board = ParseBoardDSL(R"(
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . x . . . . . . . . . . . . . . . . .
+      . x o x x . . . . . . . . . . . . . .
+      . x o x o . . . . . . . . . . . . . .
+      . . x o . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+    )");
+
+    auto board_copy = board;
+    auto laddered_stones = board.GetLadderedStones();
+    CHECK(laddered_stones[AsIndex(Loc{16, 2}, BOARD_LEN)] == WHITE);
+    CHECK(laddered_stones[AsIndex(Loc{15, 2}, BOARD_LEN)] == WHITE);
+    CHECK_EQ(board, board_copy);
+  }
+
+  SUBCASE("CaptureEscapeLadder") {
+    // White (16, 2) is in atari at (15, 2), but black (16, 3) is also in atari
+    // at (15, 3). White escapes by capturing at (15, 3). If white instead
+    // extends at (15, 2), black ataris at (15, 3), which also saves (16, 3),
+    // and the ladder works. The capture is only available on white's first
+    // move, so the solver has to consider it at the root.
+    auto board = ParseBoardDSL(R"(
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . x . . . . . . . . . . . . . . . . .
+      . x . . x . . . . . . . . . . . . . .
+      . x o x o . . . . . . . . . . . . . .
+      . . x o . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+    )");
+
+    auto board_copy = board;
+    auto laddered_stones = board.GetLadderedStones();
+    CHECK(laddered_stones[AsIndex(Loc{16, 2}, BOARD_LEN)] == EMPTY);
+    CHECK_EQ(board, board_copy);
+  }
+
   SUBCASE("LadderSenseis1") {
     // Test a simple pattern using the DSL
     auto board = ParseBoardDSL(R"(

@@ -693,7 +693,7 @@ Board::BoardData Board::GetStonesWithLiberties(const int liberties) const {
 Board::BoardData Board::GetLadderedStones() const {
   struct Solver {
     friend Board;
-    std::pair<Loc, Loc> FindTwoLiberties(Board& board, groupid gid) {
+    std::pair<Loc, Loc> FindTwoLiberties(const Board& board, groupid gid) {
       const auto& g_tracker = board.group_tracker_;
       Loc l0 = kNoopLoc, l1 = kNoopLoc;
       const GroupTracker::GroupInfo& g_info = g_tracker.GroupInfoAt(gid);
@@ -723,7 +723,7 @@ Board::BoardData Board::GetLadderedStones() const {
       return {l0, l1};
     }
 
-    Loc FindLiberty(Board& board, groupid gid) {
+    Loc FindLiberty(const Board& board, groupid gid) {
       const auto& g_tracker = board.group_tracker_;
       const GroupTracker::GroupInfo& g_info = g_tracker.GroupInfoAt(gid);
       const Loc root = g_info.root;
@@ -746,8 +746,8 @@ Board::BoardData Board::GetLadderedStones() const {
       CHECK(false) << "No liberty found\n";
     }
 
-    absl::InlinedVector<groupid, 16> FindSurroundingStonesInAtari(Board& board,
-                                                                  groupid gid) {
+    absl::InlinedVector<groupid, 16> FindSurroundingStonesInAtari(
+        const Board& board, groupid gid) {
       const auto& g_tracker = board.group_tracker_;
       const GroupTracker::GroupInfo& g_info = g_tracker.GroupInfoAt(gid);
       const Loc root = g_info.root;
@@ -774,17 +774,25 @@ Board::BoardData Board::GetLadderedStones() const {
       return in_atari;
     }
 
-    bool Solve(Board& board, groupid gid, Color g_color, Color color_to_move,
-               const Loc group_root, Loc last_move, size_t call_depth) {
+    bool Solve(const Board& parent, groupid gid, Color g_color,
+               Color color_to_move, const Loc group_root, Loc last_move,
+               size_t call_depth) {
       if (call_depth > 300) {
         return false;
       }
 
-      MoveStatus last_move_status =
-          board.PlayMove(last_move, OppositeColor(color_to_move));
-      if (last_move_status != MoveStatus::kValid) {
-        return g_color != color_to_move;
+      // kNoopLoc: nothing to play (root call, defender to move), so search
+      // `parent` directly. Otherwise play `last_move` on a copy.
+      std::optional<Board> child;
+      if (last_move != kNoopLoc) {
+        child.emplace(parent);
+        MoveStatus last_move_status =
+            child->PlayMove(last_move, OppositeColor(color_to_move));
+        if (last_move_status != MoveStatus::kValid) {
+          return g_color != color_to_move;
+        }
       }
+      const Board& board = child ? *child : parent;
 
       if (color_to_move != g_color) {
         // last move may have coalesced groups.
@@ -793,8 +801,7 @@ Board::BoardData Board::GetLadderedStones() const {
       const auto liberties = board.group_tracker_.LibertiesForGroup(gid);
 
       const auto continuation = [&](Loc l) {
-        Board board_copy = board;
-        return Solve(board_copy, gid, g_color, OppositeColor(color_to_move),
+        return Solve(board, gid, g_color, OppositeColor(color_to_move),
                      group_root, l, call_depth + 1);
       };
 
@@ -862,9 +869,9 @@ Board::BoardData Board::GetLadderedStones() const {
 
       // Naive case covered. Solve.
       const Loc group_root = board.group_tracker_.GroupInfoAt(gid).root;
-      Board board_copy = board;
-      return Solve(board_copy, gid, g_color, OppositeColor(g_color), group_root,
-                   liberty, 0);
+      // Start on the defender's turn so Solve tries both the extension and
+      // capturing an adjacent stone in atari.
+      return Solve(board, gid, g_color, g_color, group_root, kNoopLoc, 0);
     }
   };
 
@@ -873,6 +880,7 @@ Board::BoardData Board::GetLadderedStones() const {
   for (auto enc = 0; enc < BOARD_LEN * BOARD_LEN; ++enc) {
     const Loc loc = AsLoc(enc);
     const groupid gid = group_tracker_.GroupAt(loc);
+    if (gid == kInvalidGroupId) continue;  // empty point
     const auto gid_exists = [&](const groupid gid) {
       return std::find(groups_in_atari.begin(), groups_in_atari.end(), gid) !=
              groups_in_atari.end();
