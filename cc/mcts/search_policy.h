@@ -404,17 +404,23 @@ class PuctScorer final {
                     const game::Color color_to_move,
                     bool is_root = false) const {
     PuctScores pucts = ComputeScores(node, is_root);
-    float max_puct_score = kMinPuctScore;
-    game::Loc max_move = game::kNoopLoc;
-    for (const auto& [a, puct_score] : pucts) {
-      const game::Loc mv = game::AsLoc(a);
-      if (puct_score > max_puct_score && game.IsValidMove(mv, color_to_move)) {
-        max_puct_score = puct_score;
-        max_move = mv;
+    // Highest score first (lowest index on ties), then check legality, so
+    // IsValidMove runs once per pick instead of once per new running max.
+    // Picks the same move as checking legality during the scan.
+    while (true) {
+      float max_puct_score = kMinPuctScore;
+      int max_a = -1;
+      for (const auto& [a, puct_score] : pucts) {
+        if (puct_score > max_puct_score) {
+          max_puct_score = puct_score;
+          max_a = a;
+        }
       }
+      if (max_a < 0) return game::kNoopLoc;
+      const game::Loc mv = game::AsLoc(max_a);
+      if (game.IsValidMove(mv, color_to_move)) return mv;
+      pucts[max_a].second = kMinPuctScore;
     }
-
-    return max_move;
   }
 
  private:
