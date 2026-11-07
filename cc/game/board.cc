@@ -491,6 +491,21 @@ Board::Board(int handicap, float komi)
   seen_states_.insert(hash_);
 }
 
+Board::Board(const Board& parent, HistoryLinkTag)
+    : zobrist_(parent.zobrist_),
+      board_(parent.board_),
+      move_count_(parent.move_count_),
+      prohibit_pass_alive_(parent.prohibit_pass_alive_),
+      scoring_(parent.scoring_),
+      consecutive_passes_(parent.consecutive_passes_),
+      passes_(parent.passes_),
+      komi_(parent.komi_),
+      num_b_prisoners_(parent.num_b_prisoners_),
+      num_w_prisoners_(parent.num_w_prisoners_),
+      hash_(parent.hash_),
+      group_tracker_(parent.group_tracker_),
+      history_parent_(&parent) {}
+
 Board::Board(bool prohibit_pass_alive, float komi, Scoring scoring)
     : zobrist_(Zobrist::get()),
       board_(),
@@ -636,8 +651,10 @@ MoveResult Board::PlayMoveDry(Loc loc, Color color) const {
 
   // check if we have already seen this board position.
   Zobrist::Hash hash = RecomputeHash(move_transition, capture_transitions);
-  if (seen_states_.contains(hash)) {
-    return MoveResult{MoveStatus::kRepeatedPosition, std::nullopt};
+  for (const Board* b = this; b != nullptr; b = b->history_parent_) {
+    if (b->seen_states_.contains(hash)) {
+      return MoveResult{MoveStatus::kRepeatedPosition, std::nullopt};
+    }
   }
 
   return MoveResult{MoveStatus::kValid,
@@ -785,7 +802,7 @@ Board::BoardData Board::GetLadderedStones() const {
       // `parent` directly. Otherwise play `last_move` on a copy.
       std::optional<Board> child;
       if (last_move != kNoopLoc) {
-        child.emplace(parent);
+        child.emplace(parent, HistoryLinkTag{});
         MoveStatus last_move_status =
             child->PlayMove(last_move, OppositeColor(color_to_move));
         if (last_move_status != MoveStatus::kValid) {

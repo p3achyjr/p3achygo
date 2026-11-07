@@ -294,6 +294,11 @@ class Board final {
   Board(int handicap, float komi);
   Board(bool prohibit_pass_alive, float komi = 7.5,
         Scoring scoring = Scoring::kDefault);
+  // Ladder-search child of `parent`: copies the position but not the
+  // superko history. Superko checks walk the parent chain instead, so
+  // `parent` must outlive this board.
+  struct HistoryLinkTag {};
+  Board(const Board& parent, HistoryLinkTag);
   ~Board() = default;
 
   Board& operator=(const Board& other) {
@@ -384,6 +389,8 @@ class Board final {
   Zobrist::Hash hash_;
   GroupTracker group_tracker_;
   absl::flat_hash_set<Zobrist::Hash> seen_states_;
+  // Set only on ladder-search children (see HistoryLinkTag constructor).
+  const Board* history_parent_ = nullptr;
 };
 
 inline bool operator==(const GroupTracker& g0, const GroupTracker& g1) {
