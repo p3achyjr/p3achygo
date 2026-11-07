@@ -341,6 +341,27 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     InitState init_state =
         GetInitState(probability, reuse_buffer, config.use_seen_state_prob,
                      num_games_played);
+    if (init_state.kind == InitState::Kind::kHandicap) {
+      // Replace the fixed handicap komi with the net's estimate of fair komi.
+      // Probe once at the fixed komi (in-distribution); the score head is from
+      // the side to move's (white's) perspective and includes komi, so
+      // fair komi = komi - E[score].
+      const float probe_komi = init_state.board.komi();
+      Game probe_game(init_state.board, init_state.last_moves,
+                      init_state.move_num);
+      NNInferResult probe = nn_interface->LoadAndGetInference(
+          thread_id, probe_game, init_state.color_to_move, probability);
+      float score_est = 0.0f;
+      for (int i = 0; i < constants::kNumScoreLogits; ++i) {
+        score_est +=
+            probe.score_probs[i] * (i - constants::kScoreInflectionPoint + .5f);
+      }
+      init_state.board.SetKomi(std::floor(probe_komi - score_est) + 0.5f);
+      LOG_TO_SINK(INFO, sink)
+          << "Handicap komi probe: probe_komi=" << probe_komi
+          << "  E[score]=" << score_est
+          << "  komi=" << init_state.board.komi();
+    }
     const bool force_full_search_first_move =
         init_state.first_move_behavior == FirstMoveBehavior::kForceFullSearch;
     const bool disable_sampling =
