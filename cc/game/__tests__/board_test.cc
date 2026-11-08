@@ -144,11 +144,34 @@ TEST_CASE("BoardTest") {
     board.PlayBlack(2, 3);
     board.PlayWhite(2, 4);
     board.PlayBlack(1, 2);
+    CHECK((board.ko_loc() == game::kNoopLoc));
     board.PlayWhite(1, 3);
     board.PlayWhite(2, 2);
 
     CHECK(board.at(2, 3) == EMPTY);
+    CHECK((board.ko_loc() == game::Loc{2, 3}));
     CHECK_FALSE(MoveOk(board.PlayBlack(2, 3)));
+    CHECK((board.ko_loc() == game::Loc{2, 3}));
+    board.Pass(BLACK);
+    CHECK((board.ko_loc() == game::kNoopLoc));
+  }
+
+  // x x o x     x = black, o = white
+  // o o x .     black at (0, 1) captures (0, 2) but joins (0, 0): not a ko.
+  SUBCASE("CaptureOneStoneWithConnectedStoneIsNotKo") {
+    game::Board board;
+
+    board.PlayBlack(0, 0);
+    board.PlayWhite(1, 0);
+    board.PlayWhite(1, 1);
+    board.PlayWhite(0, 2);
+    board.PlayBlack(1, 2);
+    board.PlayBlack(0, 3);
+    CHECK(MoveOk(board.PlayBlack(0, 1)));
+
+    CHECK(board.at(0, 2) == EMPTY);
+    CHECK((board.ko_loc() == game::kNoopLoc));
+    CHECK(MoveOk(board.PlayWhite(0, 2)));
   }
 
   SUBCASE("SendTwoReturnOne") {
@@ -166,6 +189,7 @@ TEST_CASE("BoardTest") {
 
     CHECK(board.at(0, 0) == EMPTY);
     CHECK(board.at(1, 0) == EMPTY);
+    CHECK((board.ko_loc() == game::kNoopLoc));
     CHECK_FALSE(MoveOk(board.PlayBlack(1, 0)));
   }
 

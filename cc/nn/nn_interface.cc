@@ -101,7 +101,8 @@ NNInterface::NNKey NNInterface::MakeKey(const game::Game& game,
           game.move(off).loc;
     }
   }
-  return NNKey{color_to_move, game.board().hash(), last_moves, game.komi()};
+  return NNKey{color_to_move, game.board().hash(), last_moves, game.komi(),
+               cache_key_ko_ ? game.board().ko_loc() : kNoopLoc};
 }
 
 NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,

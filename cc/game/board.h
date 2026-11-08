@@ -314,6 +314,10 @@ class Board final {
   inline int at(int i, int j) const { return board_[i * BOARD_LEN + j]; }
   inline float komi() const { return komi_; }
   inline Zobrist::Hash hash() const { return hash_; }
+  // Point the player to move may not play because of a simple ko, else
+  // kNoopLoc. Set when the last move captured exactly one stone with a lone
+  // stone whose only liberty is the captured point.
+  inline Loc ko_loc() const { return ko_loc_; }
   inline int move_count() const { return move_count_; }
   inline const BoardData& position() const { return board_; }
 
@@ -387,6 +391,7 @@ class Board final {
   int num_w_prisoners_;
 
   Zobrist::Hash hash_;
+  Loc ko_loc_ = kNoopLoc;
   GroupTracker group_tracker_;
   absl::flat_hash_set<Zobrist::Hash> seen_states_;
   // Set only on ladder-search children (see HistoryLinkTag constructor).
@@ -405,7 +410,7 @@ inline bool operator==(const Board& b0, const Board& b1) {
          b0.passes_ == b1.passes_ && b0.komi_ == b1.komi_ &&
          b0.num_b_prisoners_ == b1.num_b_prisoners_ &&
          b0.num_w_prisoners_ == b1.num_w_prisoners_ && b0.hash_ == b1.hash_ &&
-         b0.group_tracker_ == b1.group_tracker_ &&
+         b0.ko_loc_ == b1.ko_loc_ && b0.group_tracker_ == b1.group_tracker_ &&
          b0.seen_states_ == b1.seen_states_;
 }
 

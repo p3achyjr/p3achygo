@@ -503,6 +503,7 @@ Board::Board(const Board& parent, HistoryLinkTag)
       num_b_prisoners_(parent.num_b_prisoners_),
       num_w_prisoners_(parent.num_w_prisoners_),
       hash_(parent.hash_),
+      ko_loc_(parent.ko_loc_),
       group_tracker_(parent.group_tracker_),
       history_parent_(&parent) {}
 
@@ -586,6 +587,13 @@ MoveStatus Board::PlayMove(Loc loc, Color color) {
   SetLoc(loc, color);
   group_tracker_.Move(loc, color);
 
+  // simple ko: captured one stone with a lone stone left in atari.
+  ko_loc_ = kNoopLoc;
+  if (captured_stones.size() == 1 && AdjacentOfColor(loc, color).empty() &&
+      group_tracker_.LibertiesForGroupAt(loc) == 1) {
+    ko_loc_ = captured_stones[0];
+  }
+
   // update tracking variables
   consecutive_passes_ = 0;
   move_count_++;
@@ -599,6 +607,7 @@ MoveStatus Board::PlayMove(Loc loc, Color color) {
 MoveStatus Board::Pass(Color color) {
   consecutive_passes_++;
   passes_++;
+  ko_loc_ = kNoopLoc;
 
   if (!IsGameOver() && prohibit_pass_alive_ &&
       passes_ >= constants::kNumPassesBeforeBensons) {

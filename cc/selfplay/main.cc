@@ -177,11 +177,13 @@ int main(int argc, char** argv) {
       nn::CreateEngine(nn::KindFromEnginePath(model_path), model_path,
                        num_threads, nn::GetVersionFromModelPath(model_path));
   std::unique_ptr<nn::NNInterface> nn_interface =
-      std::make_unique<nn::NNInterface>(num_threads,
-                                        absl::GetFlag(FLAGS_nn_timeout_us),
-                                        constants::kDefaultNNCacheSize,
-                                        std::move(engine));
-  nn_interface->SetNumCacheLastMoves(1);
+      std::make_unique<nn::NNInterface>(
+          num_threads, absl::GetFlag(FLAGS_nn_timeout_us),
+          constants::kDefaultNNCacheSize, std::move(engine));
+  // Key the NN cache on {color, board hash, komi, simple-ko point}: no move
+  // history.
+  nn_interface->SetNumCacheLastMoves(0);
+  nn_interface->SetCacheKeyKo(true);
 
   // initialize serialization objects.
   std::unique_ptr<recorder::GameRecorder> game_recorder =
