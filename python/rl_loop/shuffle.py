@@ -1,8 +1,8 @@
-'''
+"""
 Shuffler wrapper.
 
 Invokes a C++ binary and waits until a new model is uploaded, before stopping.
-'''
+"""
 
 from __future__ import annotations
 
@@ -25,63 +25,105 @@ AVG_NUM_SYMMETRIES = 3
 
 running = True
 
-flags.DEFINE_string('bin_path', '', 'Local path to shuffler binary.')
-flags.DEFINE_string('run_id', '', 'ID corresponding to the current run.')
-flags.DEFINE_string('local_run_dir', '/tmp/p3achygo',
-                    'Local path for training data')
-flags.DEFINE_bool('local_only', False, 'Whether to run RL loop locally.')
+flags.DEFINE_string("bin_path", "", "Local path to shuffler binary.")
+flags.DEFINE_string("run_id", "", "ID corresponding to the current run.")
+flags.DEFINE_string("local_run_dir", "/tmp/p3achygo", "Local path for training data")
+flags.DEFINE_bool("local_only", False, "Whether to run RL loop locally.")
 
 
 def handle_shutdown(signum, _):
-  logging.info(f'Received Shutdown Signal {signum}')
-  global running
-  running = False
+    logging.info(f"Received Shutdown Signal {signum}")
+    global running
+    running = False
 
 
 def print_stdout(out: Popen.stdout):  # pytype : disable=unbound-type-param
-  for line in out:
-    print(line.rstrip())
+    for line in out:
+        print(line.rstrip())
 
 
 def download_chunks(local_sp_chunk_dir: str, sp_chunks: set[str]):
-  if FLAGS.local_only:
-    return
-  for sp_chunk in sp_chunks:
-    chunk_filename = str(Path(sp_chunk).name)
-    local_chunk_path = str(Path(local_sp_chunk_dir, chunk_filename))
-    gcs._download(local_chunk_path, sp_chunk)
+    if FLAGS.local_only:
+        return
+    for sp_chunk in sp_chunks:
+        chunk_filename = str(Path(sp_chunk).name)
+        local_chunk_path = str(Path(local_sp_chunk_dir, chunk_filename))
+        gcs._download(local_chunk_path, sp_chunk)
 
 
 def num_samples_in_chunks(gcs_sp_chunks: set[str]) -> int:
-  '''
-  Calculates total number of samples in a set of self-play chunks. The number
-  of examples in each chunk is embedded in the filename.
-  '''
+    """
+    Calculates total number of samples in a set of self-play chunks. The number
+    of examples in each chunk is embedded in the filename.
+    """
 
-  def find_match(path: str):
-    p = Path(path)
-    for part in p.parts:
-      match = gcs.SP_CHUNK_RE.fullmatch(part)
-      if match != None:
-        return match
+    def find_match(path: str):
+        p = Path(path)
+        for part in p.parts:
+            match = gcs.SP_CHUNK_RE.fullmatch(part)
+            if match != None:
+                return match
 
-    return None
+        return None
 
-  num_samples = 0
-  for sp_chunk in gcs_sp_chunks:
-    match = find_match(sp_chunk)
-    if not match:
-      logging.error(f'No regex match for chunk file: {sp_chunk}')
-      continue
+    num_samples = 0
+    for sp_chunk in gcs_sp_chunks:
+        match = find_match(sp_chunk)
+        if not match:
+            logging.error(f"No regex match for chunk file: {sp_chunk}")
+            continue
 
-    if len(match.groups()) != 6:
-      logging.error(f'Wrong number of matches for chunk file: {sp_chunk}')
-      continue
+        if len(match.groups()) != 6:
+            logging.error(f"Wrong number of matches for chunk file: {sp_chunk}")
+            continue
 
-    _, _, _, num_samples_in_chunk, _, _ = match.groups()
-    num_samples += int(num_samples_in_chunk)
+        _, _, _, num_samples_in_chunk, _, _ = match.groups()
+        num_samples += int(num_samples_in_chunk)
 
-  return num_samples
+    return num_samples
+
+
+def window_min_gen(sp_chunks: set[str], train_window_size: int) -> int:
+    """
+    Oldest generation in the training window. Mirrors
+    TfRecordWatcher::PopulateInitialTrainingWindow: take chunks newest first (by
+    gen, then timestamp) until `train_window_size` examples are reached. In local
+    mode the C++ shuffler only sees chunks with a .done marker, so we do too.
+    """
+    infos = []
+    for sp_chunk in sp_chunks:
+        p = Path(sp_chunk)
+        if (
+            FLAGS.local_only
+            and not p.with_name(p.name.replace(".tfrecord.zz", ".done")).exists()
+        ):
+            continue
+        match = gcs.SP_CHUNK_RE.fullmatch(p.name)
+        if match:
+            gen, _, _, n, ts, _ = match.groups()
+            infos.append((int(gen), int(ts), int(n)))
+    infos.sort(reverse=True)
+
+    window_size, min_gen = 0, 0
+    for gen, _, n in infos:
+        if window_size >= train_window_size:
+            break
+        min_gen = gen
+        window_size += n
+    return min_gen
+
+
+def read_int(path: Path) -> int | None:
+    try:
+        return int(path.read_text().strip())
+    except FileNotFoundError:
+        return None
+
+
+def write_int(path: Path, value: int):
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(f"{value}\n")
+    os.replace(tmp, path)
 
 
 def loop(bin_path: str, run_id: str, local_run_dir: str):
@@ -140,6 +182,8 @@ def loop(bin_path: str, run_id: str, local_run_dir: str):
 
                 download_chunks(local_sp_chunk_dir, new_sp_chunks)
                 num_new_samples += num_samples_in_chunks(new_sp_chunks)
+                if new_sp_chunks:
+                    write_int(counter_path, num_samples_generated + num_new_samples)
 
         logging.info(f"Broke out of shuffler loop")
         if shuf_proc.poll() is None:
@@ -166,7 +210,21 @@ def loop(bin_path: str, run_id: str, local_run_dir: str):
     gcs_sp_chunks = set(fs.list_sp_chunks(run_id))
     fs.rsync_chunks(run_id, local_sp_chunk_dir)
 
-    num_samples_generated = num_samples_in_chunks(gcs_sp_chunks)
+    # COUNTER: total examples generated so far. MIN_GEN: oldest gen in the
+    # current training window. Together they let a new box download only chunks
+    # with gen >= MIN_GEN. Chunks written while the shuffler is down are not
+    # counted (slight undercount).
+    counter_path = Path(local_run_dir, "COUNTER")
+    min_gen_path = Path(local_run_dir, "MIN_GEN")
+    num_samples_generated = read_int(counter_path)
+    if num_samples_generated is None:
+        num_samples_generated = num_samples_in_chunks(gcs_sp_chunks)
+        logging.info(
+            f"No COUNTER file. Counted {num_samples_generated} examples from chunk filenames."
+        )
+    else:
+        logging.info(f"Read COUNTER={num_samples_generated}.")
+    write_int(counter_path, num_samples_generated)
 
     config = config_module.parse(run_id)
     chunk_gen = fs.get_most_recent_chunk(run_id) + 1
@@ -177,10 +235,13 @@ def loop(bin_path: str, run_id: str, local_run_dir: str):
         select_sample_prob = shuffle_metadata.select_sample_probability(
             train_window_size, config.games_per_gen, AVG_NUM_SYMMETRIES
         )
+        min_gen = window_min_gen(gcs_sp_chunks, train_window_size)
+        write_int(min_gen_path, min_gen)
         logging.info(
             f"Generating chunk gen {chunk_gen} with "
             + f"training window size {train_window_size} and "
-            + f"select sample probability {select_sample_prob:.4f}."
+            + f"select sample probability {select_sample_prob:.4f}. "
+            + f"Window min gen {min_gen}."
         )
         num_new_samples, gcs_sp_chunks = generate_one_chunk(
             chunk_gen,
@@ -244,23 +305,23 @@ def loop(bin_path: str, run_id: str, local_run_dir: str):
 
 
 def main(_):
-  if FLAGS.bin_path == '':
-    logging.error('No --bin_path specified.')
-    return
+    if FLAGS.bin_path == "":
+        logging.error("No --bin_path specified.")
+        return
 
-  if FLAGS.run_id == '':
-    logging.error('No --run_id specified.')
-    return
+    if FLAGS.run_id == "":
+        logging.error("No --run_id specified.")
+        return
 
-  fs_mode = 'local' if FLAGS.local_only else 'gcs'
-  fs.configure_fs(mode=fs_mode, local_path=FLAGS.local_run_dir)
+    fs_mode = "local" if FLAGS.local_only else "gcs"
+    fs.configure_fs(mode=fs_mode, local_path=FLAGS.local_run_dir)
 
-  loop(FLAGS.bin_path, FLAGS.run_id, FLAGS.local_run_dir)
+    loop(FLAGS.bin_path, FLAGS.run_id, FLAGS.local_run_dir)
 
 
-if __name__ == '__main__':
-  signal.signal(signal.SIGINT, handle_shutdown)
-  signal.signal(signal.SIGTERM, handle_shutdown)
-  sys.stdout.reconfigure(line_buffering=True)  # pytype: disable=attribute-error
-  sys.stderr.reconfigure(line_buffering=True)  # pytype: disable=attribute-error
-  app.run(main)
+if __name__ == "__main__":
+    signal.signal(signal.SIGINT, handle_shutdown)
+    signal.signal(signal.SIGTERM, handle_shutdown)
+    sys.stdout.reconfigure(line_buffering=True)  # pytype: disable=attribute-error
+    sys.stderr.reconfigure(line_buffering=True)  # pytype: disable=attribute-error
+    app.run(main)
