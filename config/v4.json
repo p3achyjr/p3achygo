@@ -57,5 +57,5 @@
   "wd_auto_scale": true,
   "wd_lr_max": 0.0001,
   "wd_lr_exponent": 0.3,
-  "nn_timeout_us": 2000
+  "nn_timeout_us": 1000
 }
