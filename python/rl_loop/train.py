@@ -113,6 +113,7 @@ def train_one_gen(
             f"\n  Effective AdamW Weight Decay={inner_optimizer.effective_adam_weight_decay:.4g}"
             f"\n  AdamW LR Ratio={inner_optimizer.adam_lr_ratio}"
             f"\n  Momentum={inner_optimizer.momentum}"
+            f"\n  Aurora={getattr(inner_optimizer, 'aurora', False)}"
             f"\n  WD Auto Scale={config.wd_auto_scale}"
             f"\n  WD LR Exponent={inner_optimizer.wd_lr_exponent}"
             f"\n  WD LR Max={inner_optimizer.wd_lr_max}"

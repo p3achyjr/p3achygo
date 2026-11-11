@@ -107,6 +107,40 @@ def _newtonschulz_batched(Gs: Tensor, steps: int) -> Tensor:
     return X.to(dtype=Gs.dtype)
 
 
+def _aurora_polar_batched(
+    Gs: Tensor,
+    steps: int,
+    pp_iterations: int = 2,
+    pp_beta: float = 0.5,
+    eps: float = 1e-7,
+) -> Tensor:
+    """Aurora: leverage-uniform polar factor (port of KataGo `muon._aurora_polar`).
+
+    For non-square matrices, iteratively rescales the rows of the tall
+    orientation so the polar factor has uniform row norms (sqrt(n/m)) before
+    orthogonalizing; this gives every neuron an update of equal size instead
+    of one proportional to its gradient's leverage. Square matrices fall back
+    to plain NS5. Input/output shape `(B, M, N)`.
+    """
+    m, n = Gs.size(1), Gs.size(2)
+    if m == n:
+        return _newtonschulz_batched(Gs, steps).clone()
+    transposed = m < n
+    G32 = (Gs.mT if transposed else Gs).float()
+    if transposed:
+        m, n = n, m
+    D = 1.0 / G32.norm(dim=-1, keepdim=True).clamp(min=eps)
+    U = G32
+    for k in range(pp_iterations):
+        # `.clone()`: reduce-overhead NS reuses its output buffer across calls.
+        U = _newtonschulz_batched(D * G32, steps).clone().float()
+        if k < pp_iterations - 1:
+            row_sq = U.pow(2).sum(dim=-1, keepdim=True).clamp(min=eps * eps)
+            D = D * ((n / m) / row_sq).pow(pp_beta)
+    U = U.to(dtype=Gs.dtype)
+    return U.mT if transposed else U
+
+
 # ---------------------------------------------------------------------------
 # Param-group builder (free function — separates classification from update)
 # ---------------------------------------------------------------------------
@@ -359,7 +393,9 @@ class ConvMuon(Optimizer):
         wd_lr_exponent: Optional[float] = None,
         wd_lr_max: Optional[float] = None,
         global_clipnorm: float = float("inf"),
+        aurora: bool = False,
     ):
+        self._aurora = aurora
         self._base_muon_wd = weight_decay
         self._base_adam_wd = adam_weight_decay
         self._adam_lr_ratio = adam_lr_ratio
@@ -471,6 +507,14 @@ class ConvMuon(Optimizer):
     @global_clipnorm.setter
     def global_clipnorm(self, value: float):
         self._global_clipnorm = float(value)
+
+    @property
+    def aurora(self) -> bool:
+        return self._aurora
+
+    @aurora.setter
+    def aurora(self, value: bool):
+        self._aurora = bool(value)
 
     @property
     def wd_lr_exponent(self):
@@ -622,7 +666,10 @@ class ConvMuon(Optimizer):
             # `.clone()` is required because reduce-overhead mode reuses the
             # output buffer across calls; without it, bucket N+1 silently
             # overwrites bucket N's output.
-            stacked_upd = _newtonschulz_batched(stacked, ns_steps).clone()
+            if self._aurora:
+                stacked_upd = _aurora_polar_batched(stacked, ns_steps)
+            else:
+                stacked_upd = _newtonschulz_batched(stacked, ns_steps).clone()
 
             # Same per-bucket adj_lr (since adj_lr depends only on shape).
             bucket_adj_lr = (
@@ -890,6 +937,7 @@ def make_optimizer(model, config, lr_schedule, is_gpu, *, loaded_state=None):
             wd_lr_exponent=config.wd_lr_exponent,
             wd_lr_max=config.wd_lr_max,
             global_clipnorm=config.global_clipnorm,
+            aurora=getattr(config, "muon_aurora", False),
         )
 
     # Wrap before load so the wrapper-format state_dict (with {"inner",
@@ -912,6 +960,7 @@ def make_optimizer(model, config, lr_schedule, is_gpu, *, loaded_state=None):
         inner.adam_lr_ratio = config.adam_lr_ratio
         inner.wd_lr_exponent = config.wd_lr_exponent
         inner.wd_lr_max = config.wd_lr_max
+        inner.aurora = getattr(config, "muon_aurora", False)
     inner.global_clipnorm = config.global_clipnorm
 
     return optimizer
