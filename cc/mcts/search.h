@@ -41,8 +41,57 @@ enum class CollisionDetectorKind : uint8_t {
   kProduct = 3,
 };
 
+// Pipelined search: state shared by the two thread groups. Each group owns a
+// GlobalSearchState (its own round and barriers) and a wave of the shared
+// NNInterface; the groups take turns descending: a group waits for the token
+// at the start of each round and hands it to the other group once all its
+// workers have submitted (descent_remaining hits 0). A group that has exited
+// no longer blocks the other.
+struct PipeShared {
+  std::atomic<int> token{0};
+  std::array<std::atomic<bool>, 2> exited{};
+  std::atomic<uint32_t> gen{0};
+  // Visits of both groups, for the visit budget (checked once per round by
+  // each group's round reset, so all workers of a group stop together).
+  std::atomic<int> total_num_visits{0};
+
+  void Reset() {
+    token.store(0, std::memory_order_relaxed);
+    exited[0].store(false, std::memory_order_relaxed);
+    exited[1].store(false, std::memory_order_relaxed);
+    total_num_visits.store(0, std::memory_order_relaxed);
+  }
+  void Notify() {
+    gen.fetch_add(1, std::memory_order_release);
+    gen.notify_all();
+  }
+  void Pass(int to) {
+    token.store(to, std::memory_order_release);
+    Notify();
+  }
+  void Exit(int g) {
+    exited[g].store(true, std::memory_order_release);
+    Notify();
+  }
+  void WaitTurn(int g) {
+    while (true) {
+      const uint32_t cur = gen.load(std::memory_order_acquire);
+      if (token.load(std::memory_order_acquire) == g ||
+          exited[1 - g].load(std::memory_order_acquire)) {
+        return;
+      }
+      gen.wait(cur, std::memory_order_acquire);
+    }
+  }
+};
+
 struct GlobalSearchState {
   absl::Mutex mu;
+
+  // Pipelined search: group index (0 when not pipelined) and the shared
+  // pipeline state (nullptr when not pipelined).
+  int group = 0;
+  PipeShared* pipe = nullptr;
 
   // Per-round state; all guarded by mu.
   bool did_signal = false;
@@ -96,6 +145,8 @@ struct GlobalSearchState {
     should_stop.store(false, std::memory_order_relaxed);
     should_stop_this_round = false;
     bias_cache = nullptr;
+    group = 0;
+    pipe = nullptr;
   }
 };
 
@@ -140,12 +191,22 @@ class Search final {
   Result Run(core::Probability& probability, game::Game& game,
              NodeTable* node_table, TreeNode* const root,
              game::Color color_to_move, Params params);
-  void StopSearch() { global_search_state_.should_stop = true; }
+  void StopSearch() {
+    global_search_state_.should_stop = true;
+    global_search_state2_.should_stop = true;
+  }
+  // Pipelined search: a second NNInterface slot. When set, Run() in
+  // concurrent mode splits num_threads into two groups of num_threads / 2,
+  // group 0 on `slot_`, group 1 on `slot2`.
+  void SetPipelineSlot(nn::NNInterface::Slot slot2) { slot2_.emplace(slot2); }
 
  private:
   nn::NNInterface::Slot slot_;
   BiasCache* bias_cache_ = nullptr;
   GlobalSearchState global_search_state_{};
+  std::optional<nn::NNInterface::Slot> slot2_;
+  GlobalSearchState global_search_state2_{};
+  PipeShared pipe_{};
 };
 
 /*
