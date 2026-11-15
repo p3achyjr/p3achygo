@@ -928,6 +928,13 @@ Search::Result Search::Run(core::Probability& probability, Game& game,
         RunWithDetector(gs, slot, game, node_table, root, color_to_move,
                         SmartRetryCollisionPolicy(p.max_collision_retries), p);
         break;
+      case CollisionPolicyKind::kSmartRetryDepth:
+        RunWithDetector(
+            gs, slot, game, node_table, root, color_to_move,
+            SmartRetryCollisionPolicy(p.max_collision_retries, p.fork_depth_c,
+                                      p.fork_depth_p),
+            p);
+        break;
     }
   };
   if (pipelined) {

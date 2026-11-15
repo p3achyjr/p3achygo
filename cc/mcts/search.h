@@ -32,6 +32,7 @@ enum class CollisionPolicyKind : uint8_t {
   kAbort = 0,
   kRetry = 1,
   kSmartRetry = 2,
+  kSmartRetryDepth = 3,
 };
 
 enum class CollisionDetectorKind : uint8_t {
@@ -168,6 +169,8 @@ class Search final {
     CollisionDetectorKind collision_detector_kind;
     float vl_delta = -1.5f;
     int max_collision_retries = 4;
+    float fork_depth_c = 0.0f;  // kSmartRetryDepth
+    float fork_depth_p = 0.0f;
     float max_o_ratio = 0.8f;
     Mode mode = Search::Mode::kConcurrent;
     ScoreUtilityParams score_util_params;
@@ -376,8 +379,16 @@ class RetryCollisionPolicy final {
  */
 class SmartRetryCollisionPolicy final {
  public:
-  SmartRetryCollisionPolicy(const int max_num_retries)
-      : max_num_retries_(max_num_retries) {};
+  // depth_c / depth_p (kSmartRetryDepth) fork at the lowest
+  // gap / (i + 1 - depth_c)^depth_p over path index i (root = 0). Indices with
+  // i + 1 - depth_c <= 0 are not forked; if no other index is, retry from the
+  // root. depth_c = depth_p = 0 is plain smart retry.
+  SmartRetryCollisionPolicy(const int max_num_retries,
+                            const float depth_c = 0.0f,
+                            const float depth_p = 0.0f)
+      : max_num_retries_(max_num_retries),
+        depth_c_(depth_c),
+        depth_p_(depth_p) {};
   ~SmartRetryCollisionPolicy() = default;
   inline CollisionResult Handle(const GlobalSearchState& global_search_state,
                                 const SearchPath& search_path) {
@@ -390,15 +401,22 @@ class SmartRetryCollisionPolicy final {
     }
 
     int min_index = -1;
+    bool skipped_eligible = false;
     float min_diff = std::numeric_limits<float>::max();
     for (int i = 0; i < search_path.size(); ++i) {
       const auto& [node, move, top_actions] = search_path[i];
       if (move == game::kNoopLoc || top_actions[1].first < 0) {
         continue;
       }
+      const float base = i + 1 - depth_c_;
+      if (base <= 0) {
+        skipped_eligible = true;
+        continue;
+      }
 
       const float diff =
-          std::abs(top_actions[0].second - top_actions[1].second);
+          std::abs(top_actions[0].second - top_actions[1].second) /
+          (depth_p_ == 0.0f ? 1.0f : std::pow(base, depth_p_));
       if (diff < min_diff) {
         min_index = i;
         min_diff = diff;
@@ -406,6 +424,9 @@ class SmartRetryCollisionPolicy final {
     }
 
     if (min_index == -1) {
+      if (skipped_eligible) {
+        return {CollisionResult::Action::kRetry, std::nullopt};
+      }
       // out of paths to retry.
       return {CollisionResult::Action::kAbort, std::nullopt};
     }
@@ -430,6 +451,8 @@ class SmartRetryCollisionPolicy final {
 
  private:
   const int max_num_retries_;
+  const float depth_c_;
+  const float depth_p_;
   int num_retries_ = 0;
 };
 
