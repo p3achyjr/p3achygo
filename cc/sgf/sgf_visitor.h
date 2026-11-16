@@ -11,6 +11,7 @@ class SgfBPlayerProp;
 class SgfWPlayerProp;
 class SgfBMoveProp;
 class SgfWMoveProp;
+class SgfSetupProp;
 class SgfNode;
 
 /*
@@ -27,6 +28,7 @@ class SgfVisitor {
   virtual void Visit(const SgfWPlayerProp* prop) = 0;
   virtual void Visit(const SgfBMoveProp* prop) = 0;
   virtual void Visit(const SgfWMoveProp* prop) = 0;
+  virtual void Visit(const SgfSetupProp* prop) = 0;
   virtual void Visit(const SgfNode* node) = 0;
 };
 }  // namespace sgf

@@ -33,7 +33,8 @@ class GameRecorderImpl final : public GameRecorder {
 
   void RecordGame(int thread_id, const game::Board& init_board,
                   const game::Game& game,
-                  const std::vector<MoveSearchRecord>& move_infos) override;
+                  const std::vector<MoveSearchRecord>& move_infos,
+                  std::string start_note) override;
 
   void RecordEvalGame(int thread_id, const game::Game& game,
                       const std::string& b_name,
@@ -94,20 +95,22 @@ GameRecorderImpl::~GameRecorderImpl() {
 
 void GameRecorderImpl::RecordGame(
     int thread_id, const game::Board& init_board, const game::Game& game,
-    const std::vector<MoveSearchRecord>& move_infos) {
+    const std::vector<MoveSearchRecord>& move_infos, std::string start_note) {
   if (path_.empty()) {
     return;
   }
 
   thread_mus_[thread_id].Lock();
+  // Search trees are only logged for games from an empty board.
+  std::vector<mcts::TreeNode*> roots;
   if (init_board.IsEmpty()) {
-    std::vector<mcts::TreeNode*> roots(move_infos.size());
+    roots.resize(move_infos.size());
     std::transform(
         move_infos.begin(), move_infos.end(), roots.begin(),
         [](const MoveSearchRecord& move_info) { return move_info.root; });
-    sgf_recorder_->RecordGame(thread_id, game, kP3achyGoName, kP3achyGoName,
-                              roots);
   }
+  sgf_recorder_->RecordGame(thread_id, game, kP3achyGoName, kP3achyGoName,
+                            roots, init_board, std::move(start_note));
   tf_recorder_->RecordGame(thread_id, init_board, game, move_infos);
   thread_mus_[thread_id].Unlock();
 

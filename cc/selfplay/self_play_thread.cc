@@ -8,6 +8,7 @@
 
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "absl/strings/str_cat.h"
 #include "cc/constants/constants.h"
 #include "cc/core/file_log_sink.h"
 #include "cc/core/heap.h"
@@ -90,6 +91,24 @@ static constexpr int kDownBadSmallK = 8;
 
 // PUCT used for fast search.
 static constexpr float kPuctFastSearchProb = 0.25;
+
+// Probability of starting from a mined sgfpos position (taken from the empty
+// share).
+static constexpr float kSgfPosProb = 0.05f;
+
+// For kOsc sgfpos starts, the down-bad reduction of full searches is off for
+// this many plies.
+static constexpr int kSgfPosOscPlies = 20;
+
+// Empty and corner games play an even number of opening plies. A fraction
+// kLightOpeningProb of them choose each opening move with a light search
+// (kLightOpeningN visits, kLightOpeningK candidates), sampling a searched move
+// by WinrateWeight of its winrate. The rest sample the raw policy at a
+// temperature decaying linearly from kOpeningTempStart to 1.
+static constexpr float kLightOpeningProb = 0.25f;
+static constexpr int kLightOpeningN = 80;
+static constexpr int kLightOpeningK = 8;
+static constexpr float kOpeningTempStart = 1.5f;
 
 // Whether the thread should continue running.
 static std::atomic<bool> running = true;
@@ -219,7 +238,8 @@ void AddRegretGuidedStates(Probability& probability, ReuseBuffer* reuse_buffer,
 }
 
 InitState GetInitState(Probability& probability, GoExploitReuseBuffer* buffer,
-                       float use_seen_state_prob, int num_games_played) {
+                       float use_seen_state_prob, int num_games_played,
+                       const std::vector<SgfPos>& sgfpos) {
   const float komi =
       std::round(7.0f + std::clamp(probability.Gaussian(), -3.0f, 3.0f)) +
       (probability.Uniform() < 0.5f ? -0.5f : 0.5f);
@@ -278,8 +298,26 @@ InitState GetInitState(Probability& probability, GoExploitReuseBuffer* buffer,
     return s0;
   }
 
+  if (p <= kHandicapGame + use_seen_state_prob + kCornerOpeningProb +
+               kSgfPosProb &&
+      !sgfpos.empty()) {
+    const int index = RandRange(probability.prng(), 0, sgfpos.size());
+    InitState s = sgfpos[index].state;
+    s.sgfpos_index = index;
+    return s;
+  }
+
   // fall back to empty game.
   return s0;
+}
+
+// Weight of a searched opening move with winrate `wr` (mover's view): winrates
+// >= .3 are used as is; below, wr^t with t going linearly from 1 at .3 to 4 at
+// 0.
+float WinrateWeight(float wr) {
+  wr = std::clamp(wr, 0.0f, 1.0f);
+  if (wr >= 0.3f) return wr;
+  return std::pow(wr, 1.0f + 3.0f * (0.3f - wr) / 0.3f);
 }
 
 std::string ToString(const ForkKind& kind) {
@@ -315,6 +353,8 @@ std::string ToString(const InitState::Kind& kind) {
       return "Regret";
     case InitState::Kind::kCorner:
       return "Corner";
+    case InitState::Kind::kSgfPos:
+      return "SgfPos";
     default:
       return "Unknown";
   }
@@ -349,7 +389,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     // Populate initial state either from seen states or s_0.
     InitState init_state =
         GetInitState(probability, reuse_buffer, config.use_seen_state_prob,
-                     num_games_played);
+                     num_games_played, config.sgfpos);
     if (init_state.kind == InitState::Kind::kHandicap) {
       // Replace the fixed handicap komi with the net's estimate of fair komi.
       // Probe once at the fixed komi (in-distribution); the score head is from
@@ -416,11 +456,24 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
             ? kMaxNumRawPolicyMoves
             : std::round(kMaxNumRawPolicyMoves *
                          std::pow(0.5f, init_state.move_num / 40.0f));
+    // Empty and corner games: even number of opening plies, light-search or
+    // decaying-temperature opening (see kLightOpeningProb).
+    const bool new_opening = init_state.kind == InitState::Kind::kEmpty ||
+                             init_state.kind == InitState::Kind::kCorner;
+    const bool light_opening =
+        new_opening && probability.Uniform() < kLightOpeningProb;
     int const num_moves_raw_policy =
         !disable_sampling && max_raw_policy_moves > 0 &&
                 probability.Uniform() < kOpeningExploreProb
-            ? RandRange(probability.prng(), 0, max_raw_policy_moves + 1)
+            ? (new_opening
+                   ? 2 * RandRange(probability.prng(), 0,
+                                   max_raw_policy_moves / 2 + 1)
+                   : RandRange(probability.prng(), 0, max_raw_policy_moves + 1))
             : 0;
+    // kOsc sgfpos starts: no down-bad reduction for the first kSgfPosOscPlies.
+    const bool is_osc_start =
+        init_state.sgfpos_index >= 0 &&
+        config.sgfpos[init_state.sgfpos_index].type == SgfPos::Type::kOsc;
     const auto max_opening_tau_width =
         num_moves_raw_policy == 0 ? 1.0f : 1.0f / (2 * num_moves_raw_policy);
     const auto tau_opening =
@@ -432,6 +485,11 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         << "  Komi=" << init_state.board.komi()
         << "  Raw Policy Moves=" << num_moves_raw_policy
         << "  Tau Opening=" << tau_opening
+        << (new_opening ? (light_opening ? "  Opening=light" : "  Opening=temp")
+                        : "")
+        << (init_state.sgfpos_index >= 0
+                ? "  SgfPos=" + config.sgfpos[init_state.sgfpos_index].id
+                : "")
         << (init_state.kind == InitState::Kind::kCorner
                 ? "  Corner Moves=" +
                       [&]() {
@@ -506,22 +564,26 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       // reduceVisits, play.cpp): if the same side is winning by more than
       // |kDownBadThreshold| in each of the last kNumDownBadMovesThreshold root
       // values, this is (least extreme |q| - .9) / .1. Otherwise 0.
-      float const down_bad_past = [&black_root_q_outcomes]() {
-        const size_t num_qs = black_root_q_outcomes.size();
-        if (num_qs < kNumDownBadMovesThreshold) {
-          return 0.0f;
-        }
-        float min_q = 1.0f, max_q = -1.0f;
-        for (size_t i = num_qs - kNumDownBadMovesThreshold; i < num_qs; ++i) {
-          min_q = std::min(min_q, black_root_q_outcomes[i]);
-          max_q = std::max(max_q, black_root_q_outcomes[i]);
-        }
-        const float signed_most_extreme =
-            std::min(std::max(min_q, -max_q), 1.0f);
-        const float threshold = -kDownBadThreshold;
-        return std::max(0.0f,
-                        (signed_most_extreme - threshold) / (1.0f - threshold));
-      }();
+      float const down_bad_past =
+          (is_osc_start && game.num_moves() < kSgfPosOscPlies)
+              ? 0.0f
+              : [&black_root_q_outcomes]() {
+                  const size_t num_qs = black_root_q_outcomes.size();
+                  if (num_qs < kNumDownBadMovesThreshold) {
+                    return 0.0f;
+                  }
+                  float min_q = 1.0f, max_q = -1.0f;
+                  for (size_t i = num_qs - kNumDownBadMovesThreshold;
+                       i < num_qs; ++i) {
+                    min_q = std::min(min_q, black_root_q_outcomes[i]);
+                    max_q = std::max(max_q, black_root_q_outcomes[i]);
+                  }
+                  const float signed_most_extreme =
+                      std::min(std::max(min_q, -max_q), 1.0f);
+                  const float threshold = -kDownBadThreshold;
+                  return std::max(0.0f, (signed_most_extreme - threshold) /
+                                            (1.0f - threshold));
+                }();
       bool const is_either_down_bad = down_bad_past > 0.0f;
       // KataGo's visitReductionProp: 0 at the threshold, 1 at |q| = 1.
       float const down_bad_reduction = down_bad_past * down_bad_past;
@@ -654,9 +716,45 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       // Run and Profile Search.
       auto begin = std::chrono::steady_clock::now();
       GumbelResult gumbel_res = [&]() {
+        if (sampling_raw_policy && light_opening) {
+          GumbelResult res = gumbel_evaluator.SearchRoot(
+              probability, game, node_table.get(), root_node, color_to_move,
+              GumbelSearchParams::Builder()
+                  .set_n(kLightOpeningN)
+                  .set_k(kLightOpeningK)
+                  .set_tau(tau)
+                  .set_nonroot_var_scale_prior_visits(
+                      config.nonroot_var_scale_prior_visits)
+                  .build());
+          // Sample a searched move by the winrate weight of its Q.
+          absl::InlinedVector<std::pair<int, float>,
+                              constants::kMaxMovesPerPosition>
+              weights;
+          float total = 0.0f;
+          for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+            if (NAction(root_node, a) == 0) continue;
+            const float w =
+                WinrateWeight((QOutcome(root_node, a) + 1.0f) / 2.0f);
+            weights.push_back({a, w});
+            total += w;
+          }
+          float u = probability.Uniform() * total;
+          for (const auto& [a, w] : weights) {
+            res.mcts_move = game::AsLoc(a);
+            if ((u -= w) <= 0.0f) break;
+          }
+          return res;
+        }
         if (sampling_raw_policy) {
+          // Empty/corner games: temperature decays linearly from
+          // kOpeningTempStart on the first opening ply to 1 on the last.
+          const float opening_temp =
+              new_opening ? kOpeningTempStart +
+                                (1.0f - kOpeningTempStart) * game.num_moves() /
+                                    std::max(num_moves_raw_policy - 1, 1)
+                          : tau_opening;
           GumbelResult res = gumbel_evaluator.Sample(
-              probability, game, root_node, color_to_move, tau_opening);
+              probability, game, root_node, color_to_move, opening_temp);
           for (int i = 0; i < kMaxEdgeResamples; ++i) {
             const Loc mv = res.mcts_move;
             if (mv == kPassLoc) break;
@@ -672,7 +770,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
               break;
             }
             res = gumbel_evaluator.Sample(probability, game, root_node,
-                                          color_to_move, tau_opening);
+                                          color_to_move, opening_temp);
           }
           return res;
         }
@@ -995,7 +1093,23 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     fork_manager.FinalizeGame(game, probability);
 
     auto begin = std::chrono::high_resolution_clock::now();
-    game_recorder->RecordGame(thread_id, init_state.board, game, move_infos);
+    const std::string start_note = absl::StrCat(
+        "start=", ToString(init_state.kind),
+        " start_move=", init_state.move_num, " first_move=",
+        init_state.first_move_behavior == FirstMoveBehavior::kSample ? "sample"
+        : init_state.first_move_behavior == FirstMoveBehavior::kPlay
+            ? "play"
+            : "full_search",
+        init_state.fork_kind.has_value()
+            ? " fork=" + ToString(*init_state.fork_kind)
+            : "",
+        init_state.sgfpos_index >= 0
+            ? " sgfpos=" + config.sgfpos[init_state.sgfpos_index].id
+            : "",
+        new_opening ? (light_opening ? " opening=light" : " opening=temp") : "",
+        " raw_policy_moves=", num_moves_raw_policy);
+    game_recorder->RecordGame(thread_id, init_state.board, game, move_infos,
+                              start_note);
     auto end = std::chrono::high_resolution_clock::now();
 
     LOG_TO_SINK(INFO, sink)
