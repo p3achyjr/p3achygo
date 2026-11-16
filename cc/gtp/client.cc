@@ -1,6 +1,5 @@
 #include "cc/gtp/client.h"
 
-#include <cstdlib>
 #include <functional>
 #include <iostream>
 #include <sstream>
@@ -201,22 +200,6 @@ void Client::GenmoveAnalyze(game::Color color, int centiseconds) {
 
 namespace {
 
-// Writes one whole line per call. Chained operator<< interleaves between
-// threads and produces spliced, misleading traces.
-void TraceCmd(const char* event, GTPCode code, bool analyze_running,
-              bool genmove_analyze_running, bool resume) {
-  static const bool on = [] {
-    const char* v = std::getenv("P3_PONDER_TRACE");
-    return v != nullptr && v[0] == '1';
-  }();
-  if (!on) return;
-  std::ostringstream ss;
-  ss << "PTRACE " << event << " code=" << static_cast<int>(code)
-     << " resume=" << resume << " analyze_running=" << analyze_running
-     << " genmove_analyze_running=" << genmove_analyze_running << "\n";
-  std::cerr << ss.str() << std::flush;
-}
-
 // Whether pondering should resume once a command finishes.
 //
 // Resuming is the default: a query like `printboard` should not cost the engine
@@ -271,14 +254,9 @@ void Client::HandleCommand(Command cmd) {
   // are spawned here, on this thread, when the command is later dequeued -- so
   // StopAnalysis() can run before the spawn and find nothing to join. Both
   // flags are guarded by mu_, which is held for all of HandleCommand.
-  TraceCmd("CMD_BEGIN", cmd.code, analyze_running_, genmove_analyze_running_,
-           false);
   ScopedPonderPause ponder_pause(service_.get(), [this, code = cmd.code] {
-    const bool resume = ShouldResumePonderingAfter(code) && !analyze_running_ &&
-                        !genmove_analyze_running_;
-    TraceCmd("CMD_END", code, analyze_running_, genmove_analyze_running_,
-             resume);
-    return resume;
+    return ShouldResumePonderingAfter(code) && !analyze_running_ &&
+           !genmove_analyze_running_;
   });
   switch (cmd.code) {
     case GTPCode::kProtocolVersion:
