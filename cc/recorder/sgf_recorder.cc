@@ -149,9 +149,30 @@ void PopulateTree(SgfNode* sgf_node, TreeNode* node, Color color) {
 
 std::unique_ptr<SgfNode> ToSgfNode(const Game& game, const std::string& b_name,
                                    const std::string& w_name,
-                                   const std::vector<TreeNode*>& roots) {
+                                   const std::vector<TreeNode*>& roots,
+                                   const Board& init_board = Board(),
+                                   const std::string& start_note = "") {
   std::unique_ptr<SgfNode> root_node = std::make_unique<SgfNode>();
   PopulateHeader(root_node.get(), game.komi(), game.result(), b_name, w_name);
+  std::vector<Loc> setup_b, setup_w;
+  for (int i = 0; i < BOARD_LEN; ++i) {
+    for (int j = 0; j < BOARD_LEN; ++j) {
+      const Color c = init_board.at(i, j);
+      if (c == BLACK) setup_b.push_back(Loc{i, j});
+      if (c == WHITE) setup_w.push_back(Loc{i, j});
+    }
+  }
+  if (!setup_b.empty()) {
+    root_node->AddProperty(
+        std::make_unique<SgfSetupProp>(BLACK, std::move(setup_b)));
+  }
+  if (!setup_w.empty()) {
+    root_node->AddProperty(
+        std::make_unique<SgfSetupProp>(WHITE, std::move(setup_w)));
+  }
+  if (!start_note.empty() && game.num_moves() == 0) {
+    root_node->AddProperty(std::make_unique<SgfCommentProp>(start_note));
+  }
 
   int num_moves = game.num_moves();
   SgfNode* current_node = root_node.get();
@@ -162,6 +183,9 @@ std::unique_ptr<SgfNode> ToSgfNode(const Game& game, const std::string& b_name,
       child->AddProperty(std::make_unique<SgfBMoveProp>(move.loc));
     } else if (move.color == WHITE) {
       child->AddProperty(std::make_unique<SgfWMoveProp>(move.loc));
+    }
+    if (i == 0 && !start_note.empty()) {
+      child->AddProperty(std::make_unique<SgfCommentProp>(start_note));
     }
 
     SgfNode* tmp = child.get();
@@ -190,8 +214,9 @@ class SgfRecorderImpl final : public SgfRecorder {
 
   // Recorder Impl.
   void RecordGame(int thread_id, const game::Game& game, std::string b_name,
-                  std::string w_name,
-                  const std::vector<mcts::TreeNode*>& roots) override;
+                  std::string w_name, const std::vector<mcts::TreeNode*>& roots,
+                  const game::Board& init_board,
+                  std::string start_note) override;
   void RecordEvalGame(int thread_id, const game::Game& game, std::string b_name,
                       std::string w_name) override;
   void Flush() override;
@@ -199,6 +224,8 @@ class SgfRecorderImpl final : public SgfRecorder {
  private:
   struct Record {
     Game game;
+    Board init_board;
+    std::string start_note;
     int first_move;
     std::string b_name;
     std::string w_name;
@@ -235,7 +262,9 @@ SgfRecorderImpl::SgfRecorderImpl(std::string path, int num_threads, int gen,
 
 void SgfRecorderImpl::RecordGame(int thread_id, const game::Game& game,
                                  std::string b_name, std::string w_name,
-                                 const std::vector<mcts::TreeNode*>& roots) {
+                                 const std::vector<mcts::TreeNode*>& roots,
+                                 const game::Board& init_board,
+                                 std::string start_note) {
   CHECK(game.has_result());
 
   // Deep copy the trees to keep them alive until flush (only if non-empty)
@@ -249,6 +278,8 @@ void SgfRecorderImpl::RecordGame(int thread_id, const game::Game& game,
   std::vector<std::unique_ptr<Record>>& thread_records = records_[thread_id];
   auto record =
       std::unique_ptr<Record>(new Record{.game = game,
+                                         .init_board = init_board,
+                                         .start_note = std::move(start_note),
                                          .first_move = 0,
                                          .b_name = std::move(b_name),
                                          .w_name = std::move(w_name),
@@ -258,7 +289,8 @@ void SgfRecorderImpl::RecordGame(int thread_id, const game::Game& game,
 
 void SgfRecorderImpl::RecordEvalGame(int thread_id, const game::Game& game,
                                      std::string b_name, std::string w_name) {
-  RecordGame(thread_id, game, b_name, w_name, /*roots=*/{});
+  RecordGame(thread_id, game, b_name, w_name, /*roots=*/{}, game::Board(),
+             /*start_note=*/"");
 }
 
 // Only one thread can call this function. Additionally, no thread can call
@@ -280,7 +312,8 @@ void SgfRecorderImpl::Flush() {
           record->roots.empty() ? games_in_batch : games_with_trees_in_batch;
       std::string& sgf_string = record->roots.empty() ? sgfs : sgfs_with_trees;
       sgf_string += serializer.Serialize(
-          ToSgfNode(record->game, record->b_name, record->w_name, record->roots)
+          ToSgfNode(record->game, record->b_name, record->w_name, record->roots,
+                    record->init_board, record->start_note)
               .get());
       sgf_string += "\n";
       ++game_counter;

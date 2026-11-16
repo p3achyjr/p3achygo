@@ -8,6 +8,7 @@
 
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "absl/strings/str_cat.h"
 #include "cc/constants/constants.h"
 #include "cc/core/file_log_sink.h"
 #include "cc/core/heap.h"
@@ -995,7 +996,19 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     fork_manager.FinalizeGame(game, probability);
 
     auto begin = std::chrono::high_resolution_clock::now();
-    game_recorder->RecordGame(thread_id, init_state.board, game, move_infos);
+    const std::string start_note = absl::StrCat(
+        "start=", ToString(init_state.kind),
+        " start_move=", init_state.move_num, " first_move=",
+        init_state.first_move_behavior == FirstMoveBehavior::kSample ? "sample"
+        : init_state.first_move_behavior == FirstMoveBehavior::kPlay
+            ? "play"
+            : "full_search",
+        init_state.fork_kind.has_value()
+            ? " fork=" + ToString(*init_state.fork_kind)
+            : "",
+        " raw_policy_moves=", num_moves_raw_policy);
+    game_recorder->RecordGame(thread_id, init_state.board, game, move_infos,
+                              start_note);
     auto end = std::chrono::high_resolution_clock::now();
 
     LOG_TO_SINK(INFO, sink)

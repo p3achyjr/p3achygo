@@ -48,6 +48,22 @@ std::unique_ptr<SgfNode> ToSgfNode(const Game& game) {
 }
 
 TEST_CASE("SgfSerializer") {
+  SUBCASE("SetupStonesAndStartNote") {
+    SgfSerializer serializer;
+    std::unique_ptr<SgfNode> root = std::make_unique<SgfNode>();
+    root->AddProperty(std::make_unique<SgfSetupProp>(
+        BLACK, std::vector<Loc>{Loc{3, 3}, Loc{15, 15}}));
+    root->AddProperty(
+        std::make_unique<SgfSetupProp>(WHITE, std::vector<Loc>{Loc{3, 15}}));
+    std::unique_ptr<SgfNode> child = std::make_unique<SgfNode>();
+    child->AddProperty(std::make_unique<SgfWMoveProp>(Loc{15, 3}));
+    child->AddProperty(std::make_unique<SgfCommentProp>("start=GoExploit"));
+    root->AddChild(std::move(child));
+
+    CHECK_EQ(serializer.Serialize(root.get()),
+             "(;FF[4]GM[1]AB[dd][pp]AW[dp];W[pd]C[start=GoExploit])");
+  }
+
   SUBCASE("Empty") {
     SgfSerializer serializer;
     game::Game game = GameFromMoves({});

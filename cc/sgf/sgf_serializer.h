@@ -32,6 +32,7 @@ class SgfSerializer final : public sgf::SgfVisitor {
   void Visit(const sgf::SgfWPlayerProp* property) override;
   void Visit(const sgf::SgfBMoveProp* property) override;
   void Visit(const sgf::SgfWMoveProp* property) override;
+  void Visit(const sgf::SgfSetupProp* property) override;
   void Visit(const sgf::SgfNode* node) override;
 
  private:

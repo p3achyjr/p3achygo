@@ -76,6 +76,12 @@ void SgfSerializer::Visit(const SgfWMoveProp* prop) {
   sgf_ += prop->tag() + "[" + SgfString(prop->move()) + "]";
 }
 
+void SgfSerializer::Visit(const SgfSetupProp* prop) {
+  if (prop->locs().empty()) return;
+  sgf_ += prop->tag();
+  for (const auto& loc : prop->locs()) sgf_ += "[" + SgfString(loc) + "]";
+}
+
 void SgfSerializer::Visit(const SgfNode* node) { VisitNode(node, false); }
 
 void SgfSerializer::VisitNode(const SgfNode* node, bool is_root) {

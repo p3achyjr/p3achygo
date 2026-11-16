@@ -26,10 +26,13 @@ class SgfRecorder {
   SgfRecorder& operator=(SgfRecorder&&) = delete;
 
   // Recorder Impl.
-  virtual void RecordGame(
-      int thread_id, const game::Game& game, std::string b_name,
-      std::string w_name,
-      const std::vector<mcts::TreeNode*>& roots) = 0;
+  // `init_board` stones are written as setup stones (AB/AW) on the root, and
+  // a non-empty `start_note` as a comment on the first move.
+  virtual void RecordGame(int thread_id, const game::Game& game,
+                          std::string b_name, std::string w_name,
+                          const std::vector<mcts::TreeNode*>& roots,
+                          const game::Board& init_board = game::Board(),
+                          std::string start_note = "") = 0;
 
   // For eval games (no tree logging - two player trees can't be stitched)
   virtual void RecordEvalGame(int thread_id, const game::Game& game,
@@ -49,9 +52,8 @@ class SgfRecorder {
  * Records a single game at the file given. Returns whether the write was
  * successful.
  */
-bool RecordSingleSgfWithTrees(
-    std::string path, const game::Game& game,
-    const std::vector<mcts::TreeNode*>& roots);
+bool RecordSingleSgfWithTrees(std::string path, const game::Game& game,
+                              const std::vector<mcts::TreeNode*>& roots);
 
 }  // namespace recorder
 
