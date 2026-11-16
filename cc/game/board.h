@@ -366,8 +366,6 @@ class Board final {
 
   bool IsSelfCapture(Loc loc, Color color) const;
 
-  std::pair<float, std::array<Color, BOARD_LEN * BOARD_LEN>>
-  TrompTaylorScoreAndOwnership(Color color) const;
   std::pair<float, std::array<Color, BOARD_LEN * BOARD_LEN>> ScoreAndOwnership(
       Color color) const;
 
