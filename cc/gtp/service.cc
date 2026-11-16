@@ -616,10 +616,6 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
     CHECK(cfg_.sampling_num_moves == 0) << "Not Supported";
     BiasCache* bias_cache = bias_cache_.has_value() ? &*bias_cache_ : nullptr;
     Search s(nn_interface_->MakeSlot(0), bias_cache);
-    // Pipelined search: group 1 uses the second wave's rows.
-    if (nn_interface_->num_waves() > 1) {
-      s.SetPipelineSlot(nn_interface_->MakeSlot(nn_interface_->wave_size()));
-    }
     const bool use_visit_budget = cfg_.time_ms == 0;
     const bool use_auto_time = cfg_.time_ms == -1;
     const auto [time_auto, time_metadata] =
@@ -661,9 +657,7 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
     }
     if (verbose_) {
       std::cerr << "Thought for " << res.time_ms
-                << "ms. Visits=" << res.num_visits
-                << " Aborted=" << res.num_aborted
-                << " Collisions=" << res.num_collisions << "\n";
+                << "ms. Visits=" << res.num_visits << "\n";
     }
     move = res.move;
   } else {
@@ -783,10 +777,6 @@ void ServiceImpl::StartPondering() {
 void ServiceImpl::Ponder(std::stop_token token) {
   BiasCache* bias_cache = bias_cache_.has_value() ? &*bias_cache_ : nullptr;
   Search s(nn_interface_->MakeSlot(0), bias_cache);
-  // Pipelined search: group 1 uses the second wave's rows.
-  if (nn_interface_->num_waves() > 1) {
-    s.SetPipelineSlot(nn_interface_->MakeSlot(nn_interface_->wave_size()));
-  }
   // StopSearch() fires immediately when the jthread stop is requested.
   std::stop_callback stop_cb(token, [&s] { s.StopSearch(); });
 
@@ -827,26 +817,6 @@ void ServiceImpl::Ponder(std::stop_token token) {
     std::string model_path, eval::PlayerSearchConfig cfg, bool verbose) {
   const int num_threads = cfg.num_threads_per_game;
   const bool uses_psearch = num_threads > 1 || cfg.time_ms != 0;
-  if (num_threads > 1) {
-    // Pipelined search: two thread groups of num_threads / 2 sharing one
-    // NNInterface with one engine (batch num_threads / 2, same model_path)
-    // per group.
-    CHECK(num_threads % 2 == 0)
-        << "pipelined search needs an even num_threads_per_game, got "
-        << num_threads;
-    std::vector<std::unique_ptr<nn::Engine>> engines;
-    for (int w = 0; w < 2; ++w) {
-      engines.push_back(nn::CreateEngine(
-          nn::KindFromEnginePath(model_path), model_path, num_threads / 2,
-          nn::GetVersionFromModelPath(model_path)));
-    }
-    // Cache 2 x 16384: same per-thread cache size as two interfaces.
-    std::unique_ptr<NNInterface> nn_interface = std::make_unique<NNInterface>(
-        num_threads, std::numeric_limits<int64_t>::max(), 2 * 16384,
-        std::move(engines), NNInterface::SignalKind::kExplicit, 1,
-        NNInterface::WakeStrategy::kGenCounter);
-    return std::make_unique<ServiceImpl>(std::move(nn_interface), cfg, verbose);
-  }
   std::unique_ptr<nn::Engine> engine =
       nn::CreateEngine(nn::KindFromEnginePath(model_path), model_path,
                        num_threads, nn::GetVersionFromModelPath(model_path));

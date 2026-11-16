@@ -95,10 +95,6 @@ struct TreeNode final {
   std::atomic<int> n_in_flight = 0;
   std::atomic<bool> is_pending_update = false;
   std::atomic<int> sum_n_in_flights = 0;
-  // Pipelined search: in-flight count per thread group (the backup
-  // last-arriver test uses the group's own count). Group 0 only when not
-  // pipelined.
-  std::array<std::atomic<int>, 2> n_in_flight_group{};
 };
 
 inline float N(const TreeNode* node) { return node == nullptr ? 0 : node->n; }
