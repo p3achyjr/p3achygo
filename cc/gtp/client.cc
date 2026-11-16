@@ -1,5 +1,6 @@
 #include "cc/gtp/client.h"
 
+#include <functional>
 #include <iostream>
 #include <sstream>
 #include <thread>
@@ -197,7 +198,66 @@ void Client::GenmoveAnalyze(game::Color color, int centiseconds) {
   mu_.Unlock();
 }
 
+namespace {
+
+// Whether pondering should resume once a command finishes.
+//
+// Resuming is the default: a query like `printboard` should not cost the engine
+// its thinking time. Only list a command here when resuming would actually be
+// wrong -- because something else owns the engine, or because we are shutting
+// down. "Game is over" is handled service-side in EnsurePondering(), which has
+// the game state.
+bool ShouldResumePonderingAfter(GTPCode code) {
+  switch (code) {
+    // Analysis owns the engine until it is stopped; pondering alongside it
+    // would run two searches over the same tree and NN slot.
+    case GTPCode::kAnalyze:
+    case GTPCode::kGenMoveAnalyze:
+    // Shutting down -- do not start work we are about to join.
+    case GTPCode::kQuit:
+      return false;
+    default:
+      return true;
+  }
+}
+
+// Pauses pondering for the duration of a command, and resumes it afterwards for
+// the commands above. Pausing unconditionally is the point: a newly added
+// command is safe by default rather than safe only if its author remembered.
+//
+// Analysis commands never resume here, and do not need to: InputLoop calls
+// StopAnalysis() before queueing each command, so analysis is never live while
+// HandleCommand runs.
+class [[nodiscard]] ScopedPonderPause {
+ public:
+  ScopedPonderPause(Service* s, std::function<bool()> should_resume)
+      : s_(s), should_resume_(std::move(should_resume)) {
+    s_->PausePondering();
+  }
+  ~ScopedPonderPause() {
+    if (should_resume_()) s_->EnsurePondering();
+  }
+  ScopedPonderPause(const ScopedPonderPause&) = delete;
+  ScopedPonderPause& operator=(const ScopedPonderPause&) = delete;
+
+ private:
+  Service* s_;
+  std::function<bool()> should_resume_;
+};
+
+}  // namespace
+
 void Client::HandleCommand(Command cmd) {
+  // Evaluated at scope exit, after the handler has had a chance to start
+  // analysis. Do not assume analysis has already been torn down: InputLoop
+  // calls StopAnalysis() before *queueing* a command, but the analysis threads
+  // are spawned here, on this thread, when the command is later dequeued -- so
+  // StopAnalysis() can run before the spawn and find nothing to join. Both
+  // flags are guarded by mu_, which is held for all of HandleCommand.
+  ScopedPonderPause ponder_pause(service_.get(), [this, code = cmd.code] {
+    return ShouldResumePonderingAfter(code) && !analyze_running_ &&
+           !genmove_analyze_running_;
+  });
   switch (cmd.code) {
     case GTPCode::kProtocolVersion:
       AddResponse(service_->GtpProtocolVersion(cmd.id));

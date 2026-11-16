@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <iomanip>
 #include <sstream>
 #include <stop_token>
@@ -137,19 +138,14 @@ class ServiceImpl final : public Service {
   void StopPondering();
   void StartPondering();
   void Ponder(std::stop_token token);
+  bool IsPondering() const { return ponder_thread_.joinable(); }
+
+ public:
+  void PausePondering() override;
+  void EnsurePondering() override;
+
+ private:
   inline TreeNode* current_root() const { return current_root_; }
-
-  // RAII guard: stops pondering on construction, restarts on destruction.
-  // Must not be created as a temporary (use [[nodiscard]] to catch this).
-  struct [[nodiscard]] PonderPause {
-    explicit PonderPause(ServiceImpl& s) : s_(s) { s_.StopPondering(); }
-    ~PonderPause() { s_.StartPondering(); }
-    PonderPause(const PonderPause&) = delete;
-    PonderPause& operator=(const PonderPause&) = delete;
-
-   private:
-    ServiceImpl& s_;
-  };
 
   const eval::PlayerSearchConfig cfg_;
   TimeControl time_control_;
@@ -178,7 +174,7 @@ ServiceImpl::ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
       time_control_(cfg.time_control_flags),
       verbose_(verbose),
       nn_interface_(std::move(nn_interface)),
-      game_(std::make_unique<Game>(false)),
+      game_(std::make_unique<Game>(false, game::Board::Scoring::kTrompTaylor)),
       node_table_(
           cfg.use_mcgs
               ? std::unique_ptr<NodeTable>(std::make_unique<McgsNodeTable>())
@@ -236,13 +232,11 @@ Response<> ServiceImpl::GtpBoardSize(std::optional<int> id, int board_size) {
 }
 
 Response<> ServiceImpl::GtpClearBoard(std::optional<int> id) {
-  PonderPause pause(*this);
   ClearBoard();
   return MakeResponse(id);
 }
 
 Response<> ServiceImpl::GtpKomi(std::optional<int> id, float komi) {
-  PonderPause pause(*this);
   komi_ = komi;
   game_->SetKomi(komi);
   return MakeResponse(id);
@@ -255,13 +249,11 @@ Response<> ServiceImpl::GtpPlay(std::optional<int> id, Move move) {
   if (verbose_) {
     std::cerr << "Playing " << move << "\n";
   }
-  StopPondering();
   MakeMove(move.color, move.loc);
   return MakeResponse(id);
 }
 
 Response<Loc> ServiceImpl::GtpGenMove(std::optional<int> id, Color color) {
-  PonderPause pause(*this);
   const auto mcts_move = GenMoveCommon(color);
   if (V(current_root()) < -0.96f && game_->num_moves() > 50) {
     return MakeResponse(id, kNoopLoc);
@@ -291,10 +283,10 @@ Response<> ServiceImpl::GtpUndo(std::optional<int> id) {
   if (game_->num_moves() == 0) {
     return MakeErrorResponse(id, "Nothing to undo.");
   }
-  PonderPause pause(*this);
 
   // Replay from beginning, excluding last move.
-  std::unique_ptr<Game> new_game = std::make_unique<Game>(false);
+  std::unique_ptr<Game> new_game =
+      std::make_unique<Game>(false, game::Board::Scoring::kTrompTaylor);
   new_game->SetKomi(komi_);
   for (int move_num = 0; move_num < game_->num_moves() - 1; ++move_num) {
     Move move = game_->move(move_num);
@@ -363,7 +355,6 @@ game::Loc ServiceImpl::GtpGenMoveAnalyze(game::Color color) {
 
 game::Loc ServiceImpl::GtpCgosGenmoveAnalyze(game::Color color,
                                              std::string* analysis_json) {
-  PonderPause pause(*this);
   const auto mcts_move = GenMoveCommon(color);
   if (V(current_root()) < -0.96f && game_->num_moves() > 50) {
     return kNoopLoc;
@@ -391,8 +382,6 @@ Response<std::string> ServiceImpl::GtpPlayDbg(std::optional<int> id,
   if (!game_->IsValidMove(move.loc, move.color)) {
     return MakeErrorResponse<std::string>(id, "illegal move");
   }
-  StopPondering();
-
   std::string dbg_str;
   dbg_str += "---- Move Num " + std::to_string(game_->num_moves()) + " ----\n";
   dbg_str += "\nTree Stats:\n  N: " +
@@ -473,7 +462,6 @@ std::string ServiceImpl::BuildExplainComment() {
 
 Response<std::string> ServiceImpl::GtpGenMoveDbg(std::optional<int> id,
                                                  game::Color color) {
-  PonderPause pause(*this);
   const auto mcts_move = GenMoveCommon(color);
   std::string dbg_str = last_explain_comment_;
 
@@ -513,7 +501,6 @@ Response<> ServiceImpl::GtpLoadSgf(std::optional<int> id,
 
   GameInfo game_info = ExtractGameInfo(sgf_root->get());
 
-  PonderPause pause(*this);
   ClearBoard();
   for (const auto& mv : game_info.main_variation) {
     MakeMove(mv.color, mv.loc);
@@ -548,6 +535,75 @@ Response<> ServiceImpl::GtpTimeLeft(std::optional<int> id, Color color,
   return MakeResponse(id);
 }
 
+// ---------------------------------------------------------------------------
+// PONDER RACE INSTRUMENTATION (temporary; remove once diagnosed).
+// Enabled by env P3_PONDER_TRACE=1. Writes one line per event to stderr with a
+// monotonic timestamp and thread id, plus a live count of in-flight searches.
+// If in_flight ever exceeds 1, a ponder search and a genmove search are running
+// concurrently -- they share NNInterface slot 0, so that is a real bug.
+// ---------------------------------------------------------------------------
+namespace ponder_trace {
+
+std::atomic<int> g_in_flight{0};
+std::atomic<int> g_max_in_flight{0};
+std::atomic<long> g_overlaps{0};
+
+inline bool Enabled() {
+  static const bool on = [] {
+    const char* v = std::getenv("P3_PONDER_TRACE");
+    return v != nullptr && v[0] == '1';
+  }();
+  return on;
+}
+
+inline double NowMs() {
+  using namespace std::chrono;
+  static const auto t0 = steady_clock::now();
+  return duration<double, std::milli>(steady_clock::now() - t0).count();
+}
+
+inline void Log(const char* event, const std::string& detail) {
+  if (!Enabled()) return;
+  std::ostringstream ss;
+  ss << "PTRACE " << std::fixed << std::setprecision(3) << NowMs()
+     << " tid=" << std::this_thread::get_id()
+     << " inflight=" << g_in_flight.load(std::memory_order_relaxed) << " "
+     << event;
+  if (!detail.empty()) ss << " " << detail;
+  ss << "\n";
+  std::cerr << ss.str() << std::flush;
+}
+
+// RAII: counts an in-flight search and screams if two ever overlap.
+struct SearchScope {
+  const char* kind;
+  explicit SearchScope(const char* kind, const std::string& detail)
+      : kind(kind) {
+    const int n = g_in_flight.fetch_add(1, std::memory_order_acq_rel) + 1;
+    int prev = g_max_in_flight.load(std::memory_order_relaxed);
+    while (n > prev && !g_max_in_flight.compare_exchange_weak(
+                           prev, n, std::memory_order_relaxed)) {
+    }
+    if (n > 1) {
+      g_overlaps.fetch_add(1, std::memory_order_relaxed);
+      if (Enabled()) {
+        std::ostringstream ss;
+        ss << "PTRACE " << std::fixed << std::setprecision(3) << NowMs()
+           << " tid=" << std::this_thread::get_id()
+           << " *** OVERLAP *** n=" << n << " kind=" << kind << "\n";
+        std::cerr << ss.str() << std::flush;
+      }
+    }
+    Log((std::string(kind) + "_BEGIN").c_str(), detail);
+  }
+  ~SearchScope() {
+    Log((std::string(kind) + "_END").c_str(), "");
+    g_in_flight.fetch_sub(1, std::memory_order_acq_rel);
+  }
+};
+
+}  // namespace ponder_trace
+
 game::Loc ServiceImpl::GenMoveCommon(Color color) {
   if (color != current_color_) {
     // We are moving twice consecutively. Fake a pass first.
@@ -581,14 +637,24 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
                   << "  obv_move_factor=" << time_metadata.obv_move_factor
                   << "  stddev_factor=" << time_metadata.stddev_factor
                   << "  middlegame_factor=" << time_metadata.middlegame_factor
+                  << "  winning_attenuator=" << time_metadata.winning_attenuator
+                  << "  pre_search_wr=" << time_metadata.pre_search_winrate
+                  << "  root_n=" << (current_root() ? current_root()->n : -1)
                   << "\n";
       }
     }
     Search::Params search_params = search_params_;
     search_params.total_visit_budget = use_visit_budget ? cfg_.n : 1 << 20;
     search_params.total_visit_time_ms = time_ms;
-    Search::Result res = s.Run(probability_, *game_, node_table_.get(),
-                               current_root(), color, search_params);
+    Search::Result res;
+    {
+      ponder_trace::SearchScope scope(
+          "GENMOVE", "root=" + std::to_string((uintptr_t)current_root()) +
+                         " color=" + std::to_string((int)color) +
+                         " moves=" + std::to_string(game_->num_moves()));
+      res = s.Run(probability_, *game_, node_table_.get(), current_root(),
+                  color, search_params);
+    }
     if (verbose_) {
       std::cerr << "Thought for " << res.time_ms
                 << "ms. Visits=" << res.num_visits << "\n";
@@ -639,6 +705,9 @@ std::vector<std::pair<game::Loc, float>> ServiceImpl::GetTopPolicyMoves(
 }
 
 void ServiceImpl::MakeMove(Color color, Loc loc) {
+  ponder_trace::Log("MAKEMOVE_BEGIN",
+                    "root=" + std::to_string((uintptr_t)current_root_) +
+                        " moves=" + std::to_string(game_->num_moves()));
   game_->PlayMove(loc, color);
   current_color_ = game::OppositeColor(color);
 
@@ -658,10 +727,13 @@ void ServiceImpl::MakeMove(Color color, Loc loc) {
     std::cerr << "Reap Took " << dur << "ms\n";
   }
   current_root_ = next_root;
+  ponder_trace::Log("MAKEMOVE_END",
+                    "root=" + std::to_string((uintptr_t)current_root_) +
+                        " moves=" + std::to_string(game_->num_moves()));
 }
 
 void ServiceImpl::ClearBoard() {
-  game_ = std::make_unique<Game>(false);
+  game_ = std::make_unique<Game>(false, game::Board::Scoring::kTrompTaylor);
   game_->SetKomi(komi_);
   node_table_ =
       cfg_.use_mcgs
@@ -673,12 +745,31 @@ void ServiceImpl::ClearBoard() {
   if (bias_cache_) bias_cache_->PruneUnused();
 }
 
+void ServiceImpl::PausePondering() {
+  if (IsPondering()) StopPondering();
+}
+
+void ServiceImpl::EnsurePondering() {
+  if (IsPondering()) return;
+  // Nothing to think about once the game is finished. Search::Run() would
+  // return immediately anyway; this just avoids spawning a thread per command.
+  if (game_->IsGameOver()) return;
+  StartPondering();
+}
+
 void ServiceImpl::StopPondering() {
+  const bool was = ponder_thread_.joinable();
+  ponder_trace::Log("STOP_PONDER_BEGIN", "joinable=" + std::to_string(was));
   ponder_thread_ = {};  // request_stop() + join()
+  ponder_trace::Log("STOP_PONDER_END", "");
 }
 
 void ServiceImpl::StartPondering() {
   if (cfg_.enable_pondering) {
+    ponder_trace::Log("START_PONDER",
+                      "root=" + std::to_string((uintptr_t)current_root_) +
+                          " color=" + std::to_string((int)current_color_) +
+                          " moves=" + std::to_string(game_->num_moves()));
     ponder_thread_ = std::jthread(&ServiceImpl::Ponder, this);
   }
 }
@@ -699,8 +790,16 @@ void ServiceImpl::Ponder(std::stop_token token) {
   Search::Params params = search_params_;
   params.total_visit_budget = 1 << 17;
   params.total_visit_time_ms = -1;
-  s.Run(probability_, *game_, node_table_.get(), current_root(), current_color_,
-        params);
+  {
+    ponder_trace::SearchScope scope(
+        "PONDER",
+        "root=" + std::to_string((uintptr_t)current_root()) +
+            " color=" + std::to_string((int)current_color_) +
+            " moves=" + std::to_string(game_->num_moves()) +
+            " stop_requested=" + std::to_string((int)token.stop_requested()));
+    s.Run(probability_, *game_, node_table_.get(), current_root(),
+          current_color_, params);
+  }
 
   if (verbose_) {
     const auto end = std::chrono::steady_clock::now();

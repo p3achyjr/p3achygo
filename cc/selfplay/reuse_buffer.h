@@ -27,10 +27,10 @@ enum class FirstMoveBehavior : uint8_t {
 struct InitState {
   enum class Kind : uint8_t {
     kEmpty = 0,
-    kBook = 1,
     kHandicap = 2,
     kGoExploit = 3,
     kRegret = 4,
+    kCorner = 5,
   };
   game::Board board;
   absl::InlinedVector<game::Move, constants::kNumLastMoves> last_moves;

@@ -491,11 +491,28 @@ Board::Board(int handicap, float komi)
   seen_states_.insert(hash_);
 }
 
-Board::Board(bool prohibit_pass_alive, float komi)
+Board::Board(const Board& parent, HistoryLinkTag)
+    : zobrist_(parent.zobrist_),
+      board_(parent.board_),
+      move_count_(parent.move_count_),
+      prohibit_pass_alive_(parent.prohibit_pass_alive_),
+      scoring_(parent.scoring_),
+      consecutive_passes_(parent.consecutive_passes_),
+      passes_(parent.passes_),
+      komi_(parent.komi_),
+      num_b_prisoners_(parent.num_b_prisoners_),
+      num_w_prisoners_(parent.num_w_prisoners_),
+      hash_(parent.hash_),
+      ko_loc_(parent.ko_loc_),
+      group_tracker_(parent.group_tracker_),
+      history_parent_(&parent) {}
+
+Board::Board(bool prohibit_pass_alive, float komi, Scoring scoring)
     : zobrist_(Zobrist::get()),
       board_(),
       move_count_(0),
       prohibit_pass_alive_(prohibit_pass_alive),
+      scoring_(scoring),
       consecutive_passes_(0),
       passes_(0),
       komi_(komi),
@@ -570,6 +587,13 @@ MoveStatus Board::PlayMove(Loc loc, Color color) {
   SetLoc(loc, color);
   group_tracker_.Move(loc, color);
 
+  // simple ko: captured one stone with a lone stone left in atari.
+  ko_loc_ = kNoopLoc;
+  if (captured_stones.size() == 1 && AdjacentOfColor(loc, color).empty() &&
+      group_tracker_.LibertiesForGroupAt(loc) == 1) {
+    ko_loc_ = captured_stones[0];
+  }
+
   // update tracking variables
   consecutive_passes_ = 0;
   move_count_++;
@@ -583,6 +607,7 @@ MoveStatus Board::PlayMove(Loc loc, Color color) {
 MoveStatus Board::Pass(Color color) {
   consecutive_passes_++;
   passes_++;
+  ko_loc_ = kNoopLoc;
 
   if (!IsGameOver() && prohibit_pass_alive_ &&
       passes_ >= constants::kNumPassesBeforeBensons) {
@@ -635,8 +660,10 @@ MoveResult Board::PlayMoveDry(Loc loc, Color color) const {
 
   // check if we have already seen this board position.
   Zobrist::Hash hash = RecomputeHash(move_transition, capture_transitions);
-  if (seen_states_.contains(hash)) {
-    return MoveResult{MoveStatus::kRepeatedPosition, std::nullopt};
+  for (const Board* b = this; b != nullptr; b = b->history_parent_) {
+    if (b->seen_states_.contains(hash)) {
+      return MoveResult{MoveStatus::kRepeatedPosition, std::nullopt};
+    }
   }
 
   return MoveResult{MoveStatus::kValid,
@@ -692,7 +719,7 @@ Board::BoardData Board::GetStonesWithLiberties(const int liberties) const {
 Board::BoardData Board::GetLadderedStones() const {
   struct Solver {
     friend Board;
-    std::pair<Loc, Loc> FindTwoLiberties(Board& board, groupid gid) {
+    std::pair<Loc, Loc> FindTwoLiberties(const Board& board, groupid gid) {
       const auto& g_tracker = board.group_tracker_;
       Loc l0 = kNoopLoc, l1 = kNoopLoc;
       const GroupTracker::GroupInfo& g_info = g_tracker.GroupInfoAt(gid);
@@ -722,7 +749,7 @@ Board::BoardData Board::GetLadderedStones() const {
       return {l0, l1};
     }
 
-    Loc FindLiberty(Board& board, groupid gid) {
+    Loc FindLiberty(const Board& board, groupid gid) {
       const auto& g_tracker = board.group_tracker_;
       const GroupTracker::GroupInfo& g_info = g_tracker.GroupInfoAt(gid);
       const Loc root = g_info.root;
@@ -745,8 +772,8 @@ Board::BoardData Board::GetLadderedStones() const {
       CHECK(false) << "No liberty found\n";
     }
 
-    absl::InlinedVector<groupid, 16> FindSurroundingStonesInAtari(Board& board,
-                                                                  groupid gid) {
+    absl::InlinedVector<groupid, 16> FindSurroundingStonesInAtari(
+        const Board& board, groupid gid) {
       const auto& g_tracker = board.group_tracker_;
       const GroupTracker::GroupInfo& g_info = g_tracker.GroupInfoAt(gid);
       const Loc root = g_info.root;
@@ -773,17 +800,25 @@ Board::BoardData Board::GetLadderedStones() const {
       return in_atari;
     }
 
-    bool Solve(Board& board, groupid gid, Color g_color, Color color_to_move,
-               const Loc group_root, Loc last_move, size_t call_depth) {
+    bool Solve(const Board& parent, groupid gid, Color g_color,
+               Color color_to_move, const Loc group_root, Loc last_move,
+               size_t call_depth) {
       if (call_depth > 300) {
         return false;
       }
 
-      MoveStatus last_move_status =
-          board.PlayMove(last_move, OppositeColor(color_to_move));
-      if (last_move_status != MoveStatus::kValid) {
-        return g_color != color_to_move;
+      // kNoopLoc: nothing to play (root call, defender to move), so search
+      // `parent` directly. Otherwise play `last_move` on a copy.
+      std::optional<Board> child;
+      if (last_move != kNoopLoc) {
+        child.emplace(parent, HistoryLinkTag{});
+        MoveStatus last_move_status =
+            child->PlayMove(last_move, OppositeColor(color_to_move));
+        if (last_move_status != MoveStatus::kValid) {
+          return g_color != color_to_move;
+        }
       }
+      const Board& board = child ? *child : parent;
 
       if (color_to_move != g_color) {
         // last move may have coalesced groups.
@@ -792,8 +827,7 @@ Board::BoardData Board::GetLadderedStones() const {
       const auto liberties = board.group_tracker_.LibertiesForGroup(gid);
 
       const auto continuation = [&](Loc l) {
-        Board board_copy = board;
-        return Solve(board_copy, gid, g_color, OppositeColor(color_to_move),
+        return Solve(board, gid, g_color, OppositeColor(color_to_move),
                      group_root, l, call_depth + 1);
       };
 
@@ -861,9 +895,9 @@ Board::BoardData Board::GetLadderedStones() const {
 
       // Naive case covered. Solve.
       const Loc group_root = board.group_tracker_.GroupInfoAt(gid).root;
-      Board board_copy = board;
-      return Solve(board_copy, gid, g_color, OppositeColor(g_color), group_root,
-                   liberty, 0);
+      // Start on the defender's turn so Solve tries both the extension and
+      // capturing an adjacent stone in atari.
+      return Solve(board, gid, g_color, g_color, group_root, kNoopLoc, 0);
     }
   };
 
@@ -872,6 +906,7 @@ Board::BoardData Board::GetLadderedStones() const {
   for (auto enc = 0; enc < BOARD_LEN * BOARD_LEN; ++enc) {
     const Loc loc = AsLoc(enc);
     const groupid gid = group_tracker_.GroupAt(loc);
+    if (gid == kInvalidGroupId) continue;  // empty point
     const auto gid_exists = [&](const groupid gid) {
       return std::find(groups_in_atari.begin(), groups_in_atari.end(), gid) !=
              groups_in_atari.end();
@@ -916,6 +951,8 @@ bool Board::IsSelfCapture(Loc loc, Color color) const {
 
 std::pair<float, std::array<Color, BOARD_LEN * BOARD_LEN>>
 Board::ScoreAndOwnership(Color color) const {
+  // Tromp-Taylor is the same count without pass-alive judgment.
+  const bool tromp_taylor = scoring_ == Scoring::kTrompTaylor;
   bool counted[BOARD_LEN][BOARD_LEN]{};
   std::array<Color, BOARD_LEN * BOARD_LEN> ownership{};
   int score = 0;
@@ -925,6 +962,7 @@ Board::ScoreAndOwnership(Color color) const {
         continue;
       } else if (at(i, j) == color) {
         bool stone_is_dead =
+            !tromp_taylor &&
             group_tracker_.IsPassAliveForColor(Loc{i, j}, OppositeColor(color));
         if (!stone_is_dead) {
           ++score;
@@ -955,7 +993,7 @@ Board::ScoreAndOwnership(Color color) const {
 
         // either empty region or opposite color
         if (AtLoc(loc) == OppositeColor(color)) {
-          if (group_tracker_.IsPassAliveForColor(loc, color)) {
+          if (!tromp_taylor && group_tracker_.IsPassAliveForColor(loc, color)) {
             region.emplace_back(loc);
             ++region_score;  // dead stone should not be double-counted.
           } else {

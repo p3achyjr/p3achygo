@@ -1,0 +1,35 @@
+{
+  "num_generations": 330,
+  "start_gen": 50,
+  "model_config": {
+    "trunk": [
+      ["transformer_btl", {"output_dim": 512, "embed_dim": 256, "num_heads": 8, "proj_conv_size": 1, "rope_learnable": false}],
+      ["transformer_btl", {"output_dim": 512, "embed_dim": 256, "num_heads": 8, "proj_conv_size": 1, "rope_learnable": false}],
+      ["transformer_btl", {"output_dim": 512, "embed_dim": 256, "num_heads": 8, "proj_conv_size": 1, "rope_learnable": false}],
+      ["transformer_btl", {"output_dim": 512, "embed_dim": 256, "num_heads": 8, "proj_conv_size": 1, "rope_learnable": false}],
+      ["transformer_btl", {"output_dim": 512, "embed_dim": 256, "num_heads": 8, "proj_conv_size": 1, "rope_learnable": false}],
+      ["transformer_btl", {"output_dim": 512, "embed_dim": 256, "num_heads": 8, "proj_conv_size": 1, "rope_learnable": false}],
+      ["transformer_btl", {"output_dim": 512, "embed_dim": 256, "num_heads": 8, "proj_conv_size": 1, "rope_learnable": false}],
+      ["transformer_btl", {"output_dim": 512, "embed_dim": 256, "num_heads": 8, "proj_conv_size": 1, "rope_learnable": false}],
+      ["transformer_btl", {"output_dim": 512, "embed_dim": 256, "num_heads": 8, "proj_conv_size": 1, "rope_learnable": false}],
+      ["transformer_btl", {"output_dim": 512, "embed_dim": 256, "num_heads": 8, "proj_conv_size": 1, "rope_learnable": false}]
+    ],
+    "policy_head_channels": 48,
+    "value_head_channels": 48,
+    "c_val": 128
+  },
+  "games_first_gen": 5000,
+  "games_per_gen": 5000,
+  "batch_size": 256,
+  "lr_schedule": [[0, 1e-4]],
+  "lr_growth_window": 10,
+  "lr_transition_window": 10,
+  "extra_train_gens": 0,
+  "optimizer": "muon",
+  "muon_wd": 0.1,
+  "adam_wd": 0.1,
+  "adam_lr_ratio": 0.5,
+  "wd_auto_scale": true,
+  "wd_lr_max": 1e-4,
+  "wd_lr_exponent": 0.3
+}

@@ -15,6 +15,11 @@ Game::Game(
       result_(Result{EMPTY, 0, 0, {}}),
       init_mv_num_(init_mv_num) {}
 Game::Game() : Game(true /* prohibit_pass_alive */) {}
+Game::Game(bool prohibit_pass_alive, Board::Scoring scoring)
+    : board_(prohibit_pass_alive, 7.5, scoring),
+      moves_({kNoopMove, kNoopMove, kNoopMove, kNoopMove, kNoopMove}),
+      result_(Result{EMPTY, 0, 0, {}}),
+      init_mv_num_(0) {}
 Game::Game(bool prohibit_pass_alive)
     : board_(prohibit_pass_alive),
       moves_({kNoopMove, kNoopMove, kNoopMove, kNoopMove, kNoopMove}),

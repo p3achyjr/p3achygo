@@ -30,6 +30,7 @@ class Game final {
       const int init_mv_num);
   Game();
   Game(bool prohibit_pass_alive);
+  Game(bool prohibit_pass_alive, Board::Scoring scoring);
   ~Game() = default;
 
   const Board& board() const;

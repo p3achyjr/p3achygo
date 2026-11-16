@@ -89,6 +89,7 @@ def eval(
     k: int,
     n: int,
     gpu_ids: list[int] = None,
+    nn_timeout_us: int = 400,
 ) -> EvalResult:
     """`cur_model_path` and `cand_model_path` are the _base_ paths of the models."""
     cur_p = Path(cur_model_path)
@@ -115,6 +116,7 @@ def eval(
             + f" --recorder_path={local_run_dir}"
             + f" --cache_size={EVAL_CACHE_SIZE}"
             + f" --num_games={games_per_worker}"
+            + f" --timeout={nn_timeout_us}"
             + f" --cur_n={n} --cur_use_puct=1 --cur_use_lcb=1 --cur_use_bias_cache=true"
             # + f" --cur_var_scale_cpuct=true --cur_var_scale_prior_visits=10"
             + f" --cur_p_opt_weight=0.0"
@@ -232,6 +234,7 @@ def loop(
             local_run_dir,
             config.eval_k,
             get_eval_n(config, next_model_gen),
+            nn_timeout_us=config.nn_timeout_us,
             gpu_ids=gpu_ids,
         )
         if eval_result.winner == EvalResult.CAND:

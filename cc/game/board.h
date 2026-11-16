@@ -280,10 +280,25 @@ class GroupTracker final {
  */
 class Board final {
  public:
+  // How to score a finished position.
+  //   kDefault      - Benson dead-stone removal: a stone is not counted if it
+  //                   sits in the opponent's pass-alive region, and such stones
+  //                   inside your own region count as your points.
+  //   kTrompTaylor  - no death judgment. Every stone on the board counts for
+  //                   its color; an empty region counts for a color iff only
+  //                   that color borders it. Matches what CGOS actually scores.
+  enum class Scoring : uint8_t { kDefault = 0, kTrompTaylor = 1 };
+
   using BoardData = std::array<Color, BOARD_LEN * BOARD_LEN>;
   Board(float komi = 7.5);
   Board(int handicap, float komi);
-  Board(bool prohibit_pass_alive, float komi = 7.5);
+  Board(bool prohibit_pass_alive, float komi = 7.5,
+        Scoring scoring = Scoring::kDefault);
+  // Ladder-search child of `parent`: copies the position but not the
+  // superko history. Superko checks walk the parent chain instead, so
+  // `parent` must outlive this board.
+  struct HistoryLinkTag {};
+  Board(const Board& parent, HistoryLinkTag);
   ~Board() = default;
 
   Board& operator=(const Board& other) {
@@ -299,6 +314,10 @@ class Board final {
   inline int at(int i, int j) const { return board_[i * BOARD_LEN + j]; }
   inline float komi() const { return komi_; }
   inline Zobrist::Hash hash() const { return hash_; }
+  // Point the player to move may not play because of a simple ko, else
+  // kNoopLoc. Set when the last move captured exactly one stone with a lone
+  // stone whose only liberty is the captured point.
+  inline Loc ko_loc() const { return ko_loc_; }
   inline int move_count() const { return move_count_; }
   inline const BoardData& position() const { return board_; }
 
@@ -361,6 +380,8 @@ class Board final {
   BoardData board_;
   int move_count_;
   const bool prohibit_pass_alive_;
+  // Configuration, not board state: deliberately excluded from operator==.
+  Scoring scoring_ = Scoring::kDefault;
   int consecutive_passes_;
   int passes_;
   float komi_;
@@ -368,8 +389,11 @@ class Board final {
   int num_w_prisoners_;
 
   Zobrist::Hash hash_;
+  Loc ko_loc_ = kNoopLoc;
   GroupTracker group_tracker_;
   absl::flat_hash_set<Zobrist::Hash> seen_states_;
+  // Set only on ladder-search children (see HistoryLinkTag constructor).
+  const Board* history_parent_ = nullptr;
 };
 
 inline bool operator==(const GroupTracker& g0, const GroupTracker& g1) {
@@ -384,7 +408,7 @@ inline bool operator==(const Board& b0, const Board& b1) {
          b0.passes_ == b1.passes_ && b0.komi_ == b1.komi_ &&
          b0.num_b_prisoners_ == b1.num_b_prisoners_ &&
          b0.num_w_prisoners_ == b1.num_w_prisoners_ && b0.hash_ == b1.hash_ &&
-         b0.group_tracker_ == b1.group_tracker_ &&
+         b0.ko_loc_ == b1.ko_loc_ && b0.group_tracker_ == b1.group_tracker_ &&
          b0.seen_states_ == b1.seen_states_;
 }
 

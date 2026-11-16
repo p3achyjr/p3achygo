@@ -11,7 +11,12 @@ import math
 import keras
 
 from constants import *
-from model_config import ModelConfig
+from model_config import (
+    BTL_PROJ_CONV_SIZE_DEFAULT,
+    BTL_PROJ_CONV_SIZE_LEGACY,
+    ModelConfig,
+    with_btl_proj_conv_size,
+)
 from backend_tf.model_layers_common import *
 from backend_tf.model_transformer import *
 from backend_tf.train import ModelPredictions, GroundTruth
@@ -999,6 +1004,9 @@ class P3achyGoModel(keras.Model):
     ):
         assert num_blocks > 1 or generic_arch is not None
         set_global_c_l2(c_l2)
+        # Record the projection kernel explicitly so saved checkpoints don't
+        # depend on the default.
+        generic_arch = with_btl_proj_conv_size(generic_arch, BTL_PROJ_CONV_SIZE_DEFAULT)
 
         super(P3achyGoModel, self).__init__(name=name)
         self.act = keras.activations.mish
@@ -1474,6 +1482,15 @@ class P3achyGoModel(keras.Model):
             "c_l2": self.c_l2,
             "name": self.name,
         }
+
+    @classmethod
+    def from_config(cls, config):
+        config = dict(config)
+        # transformer_btl entries saved before `proj_conv_size` existed were 3x3.
+        config["generic_arch"] = with_btl_proj_conv_size(
+            config.get("generic_arch"), BTL_PROJ_CONV_SIZE_LEGACY
+        )
+        return cls(**config)
 
     def get_build_config(self):
         """Return config needed to rebuild the model's state."""

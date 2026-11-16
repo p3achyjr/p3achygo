@@ -18,6 +18,7 @@ import numpy as np
 import torch
 
 from backend_torch.model import P3achyGoModel
+from model_config import BTL_PROJ_CONV_SIZE_LEGACY, with_btl_proj_conv_size
 
 
 # ---------------------------------------------------------------------------
@@ -72,7 +73,11 @@ def load_with_optimizer(path: str):
     Returns `(model, opt_state)` where `opt_state` is `None` if the file
     didn't bundle one."""
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
-    config = ckpt["config"]
+    config = dict(ckpt["config"])
+    # transformer_btl entries saved before `proj_conv_size` existed were 3x3.
+    config["generic_arch"] = with_btl_proj_conv_size(
+        config.get("generic_arch"), BTL_PROJ_CONV_SIZE_LEGACY
+    )
     model = _model_from_config(config)
     model.load_state_dict(ckpt["model"])
     return model, ckpt.get("optimizer")

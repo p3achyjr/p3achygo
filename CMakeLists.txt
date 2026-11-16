@@ -19,6 +19,7 @@ option(USE_CUDA "Enable CUDA support" ON)
 option(USE_TENSORFLOW "Enable TensorFlow support" OFF)
 option(USE_TENSORRT "Enable TensorRT support" OFF)
 option(USE_ASAN "Enable AddressSanitizer" OFF)
+option(USE_TSAN "Enable ThreadSanitizer" OFF)
 option(USE_LTO "Enable Link Time Optimization" OFF)
 
 # Set board size
@@ -33,6 +34,12 @@ if(USE_ASAN)
     message(STATUS "Enabling AddressSanitizer (ASan)")
     add_compile_options(-fsanitize=address -fno-omit-frame-pointer -g)
     add_link_options(-fsanitize=address)
+endif()
+
+if(USE_TSAN)
+    message(STATUS "Enabling ThreadSanitizer (TSan)")
+    add_compile_options(-fsanitize=thread -fno-omit-frame-pointer -g -O1)
+    add_link_options(-fsanitize=thread)
 endif()
 
 # Link Time Optimization

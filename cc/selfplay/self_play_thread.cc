@@ -19,7 +19,6 @@
 #include "cc/mcts/tree.h"
 #include "cc/recorder/game_recorder.h"
 #include "cc/recorder/move_search_stats.h"
-#include "cc/selfplay/book.h"
 #include "cc/selfplay/fork_manager.h"
 #include "cc/selfplay/move_sel_manager.h"
 #include "cc/selfplay/reuse_buffer.h"
@@ -46,11 +45,20 @@ static constexpr int kMaxNumRawPolicyMoves = 30;
 // Probability of exploration.
 static constexpr float kOpeningExploreProb = 1.0f;
 
-// Probability of playing from opening book.
-static constexpr float kPlayFromBookProb = 0.0f;
-
 // Probability of handicap game.
 static constexpr float kHandicapGame = 0.05f;
+
+// Probability of starting from 1-4 random corner moves (lines 3-5, distinct
+// corners), followed by normal opening sampling.
+static constexpr float kCornerOpeningProb = 0.10f;
+
+// Raw-policy opening draws that land on the first/second line with a prior
+// below kEdgeResamplePriorMin are redrawn with these per-draw probabilities,
+// at most kMaxEdgeResamples times.
+static constexpr float kFirstLineResampleProb = 0.8f;
+static constexpr float kSecondLineResampleProb = 0.3f;
+static constexpr float kEdgeResamplePriorMin = 0.01f;
+static constexpr int kMaxEdgeResamples = 10;
 
 // Thresholds at which to compute pass-alive regions.
 static constexpr int kComputePAMoveNums[] = {200, 250, 300, 350, 400};
@@ -67,8 +75,18 @@ static constexpr float kOverSearchNodeProb = 0.15f;
 // Threshold beneath which we are down bad (should resign).
 static constexpr float kDownBadThreshold = -0.90f;
 
-// Number of moves at down bad threshold before decreasing visit count.
-static constexpr float kNumDownBadMovesThreshold = 5;
+// Number of most recent root values (one side winning in all of them) needed
+// before we are down bad (KataGo reduceVisitsThresholdLookback).
+static constexpr int kNumDownBadMovesThreshold = 3;
+
+// Minimum fraction of the base selection probability kept for decided
+// positions (KataGo selfplay reducedVisitsWeight = 0.1).
+static constexpr float kDownBadMinSelectWeight = 0.1f;
+
+// Down-bad trainable moves searched with fewer than this many visits use
+// kDownBadSmallK considered moves instead of the selected k.
+static constexpr int kDownBadSmallNThreshold = 160;
+static constexpr int kDownBadSmallK = 8;
 
 // PUCT used for fast search.
 static constexpr float kPuctFastSearchProb = 0.25;
@@ -213,25 +231,7 @@ InitState GetInitState(Probability& probability, GoExploitReuseBuffer* buffer,
                 FirstMoveBehavior::kSample,
                 InitState::Kind::kEmpty};
   float p = probability.Uniform();
-  if (p <= kPlayFromBookProb) {
-    const int index = probability.Uniform() * kOpeningBook.size();
-    const int num_moves =
-        std::round(probability.Uniform() * kOpeningBook[index].size());
-    s0.kind = InitState::Kind::kBook;
-    s0.last_moves.clear();
-    for (int i = 0; i < constants::kNumLastMoves - num_moves; ++i) {
-      s0.last_moves.emplace_back(kNoopMove);
-    }
-
-    for (int i = 0; i < num_moves; ++i) {
-      const auto loc = kOpeningBook[index][i];
-      s0.board.PlayMove(loc, s0.color_to_move);
-      s0.last_moves.emplace_back(Move{s0.color_to_move, loc});
-      s0.color_to_move = game::OppositeColor(s0.color_to_move);
-    }
-
-    return s0;
-  } else if (p <= kPlayFromBookProb + kHandicapGame) {
+  if (p <= kHandicapGame) {
     int handicap = std::floor(probability.Uniform() * 3 + 2);
     float komi = (handicap - 2) * 14 + 20.5;  // katago ;)
     return InitState{Board(handicap, komi),
@@ -240,13 +240,42 @@ InitState GetInitState(Probability& probability, GoExploitReuseBuffer* buffer,
                      0,
                      FirstMoveBehavior::kSample,
                      InitState::Kind::kHandicap};
-  } else if (p <= kPlayFromBookProb + kHandicapGame + use_seen_state_prob) {
+  } else if (p <= kHandicapGame + use_seen_state_prob) {
     std::optional<InitState> seen_state = buffer->Get();
     if (!seen_state) {
       return s0;
     }
     seen_state->kind = InitState::Kind::kGoExploit;
     return seen_state.value();
+  } else if (p <= kHandicapGame + use_seen_state_prob + kCornerOpeningProb) {
+    // Play 1-4 moves in distinct random corners, each on lines 3-5.
+    int corners[] = {0, 1, 2, 3};
+    const int num_moves = RandRange(probability.prng(), 1, 5);
+    s0.kind = InitState::Kind::kCorner;
+    s0.move_num = num_moves;
+    s0.last_moves.clear();
+    for (int i = 0; i < constants::kNumLastMoves - num_moves; ++i) {
+      s0.last_moves.emplace_back(kNoopMove);
+    }
+
+    for (int i = 0; i < num_moves; ++i) {
+      std::swap(corners[i], corners[RandRange(probability.prng(), i, 4)]);
+      // Offsets from the corner (lines 3-5). 3-3, 3-4 and 4-3 are listed
+      // twice so they carry double the weight of the other six points.
+      static constexpr Loc kCornerOffsets[12] = {
+          {2, 2}, {2, 2}, {2, 3}, {2, 3}, {3, 2}, {3, 2},
+          {3, 3}, {2, 4}, {4, 2}, {3, 4}, {4, 3}, {4, 4}};
+      const Loc d = kCornerOffsets[RandRange(probability.prng(), 0, 12)];
+      const int di = d.i;
+      const int dj = d.j;
+      const Loc loc{corners[i] & 1 ? BOARD_LEN - 1 - di : di,
+                    corners[i] & 2 ? BOARD_LEN - 1 - dj : dj};
+      s0.board.PlayMove(loc, s0.color_to_move);
+      s0.last_moves.emplace_back(Move{s0.color_to_move, loc});
+      s0.color_to_move = game::OppositeColor(s0.color_to_move);
+    }
+
+    return s0;
   }
 
   // fall back to empty game.
@@ -278,14 +307,14 @@ std::string ToString(const InitState::Kind& kind) {
   switch (kind) {
     case InitState::Kind::kEmpty:
       return "Empty";
-    case InitState::Kind::kBook:
-      return "Book";
     case InitState::Kind::kHandicap:
       return "Handicap";
     case InitState::Kind::kGoExploit:
       return "GoExploit";
     case InitState::Kind::kRegret:
       return "Regret";
+    case InitState::Kind::kCorner:
+      return "Corner";
     default:
       return "Unknown";
   }
@@ -321,16 +350,36 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     InitState init_state =
         GetInitState(probability, reuse_buffer, config.use_seen_state_prob,
                      num_games_played);
+    if (init_state.kind == InitState::Kind::kHandicap) {
+      // Replace the fixed handicap komi with the net's estimate of fair komi.
+      // Probe once at the fixed komi (in-distribution); the score head is from
+      // the side to move's (white's) perspective and includes komi, so
+      // fair komi = komi - E[score].
+      const float probe_komi = init_state.board.komi();
+      Game probe_game(init_state.board, init_state.last_moves,
+                      init_state.move_num);
+      NNInferResult probe = nn_interface->LoadAndGetInference(
+          thread_id, probe_game, init_state.color_to_move, probability);
+      float score_est = 0.0f;
+      for (int i = 0; i < constants::kNumScoreLogits; ++i) {
+        score_est +=
+            probe.score_probs[i] * (i - constants::kScoreInflectionPoint + .5f);
+      }
+      init_state.board.SetKomi(std::floor(probe_komi - score_est) + 0.5f);
+      LOG_TO_SINK(INFO, sink)
+          << "Handicap komi probe: probe_komi=" << probe_komi
+          << "  E[score]=" << score_est << "  komi=" << init_state.board.komi();
+    }
     const bool force_full_search_first_move =
         init_state.first_move_behavior == FirstMoveBehavior::kForceFullSearch;
     const bool disable_sampling =
         init_state.first_move_behavior != FirstMoveBehavior::kSample;
     const int init_mv_num = init_state.move_num;
 
-    // ForkManager for fresh games only (kEmpty, kBook, kHandicap).
+    // ForkManager for fresh games only (kEmpty, kHandicap, kCorner).
     const bool is_fresh_game = init_state.kind == InitState::Kind::kEmpty ||
-                               init_state.kind == InitState::Kind::kBook ||
-                               init_state.kind == InitState::Kind::kHandicap;
+                               init_state.kind == InitState::Kind::kHandicap ||
+                               init_state.kind == InitState::Kind::kCorner;
 
     // Game state.
     Game game(init_state.board, init_state.last_moves, init_mv_num);
@@ -346,12 +395,10 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     // Aggregate Info for each move.
     std::vector<MoveSearchRecord> move_infos;
 
-    // Number of consecutive moves at which we are beneath kDownBadThreshold.
-    int num_consecutive_down_bad_moves = 0;
-
-    // Post-search root_q_outcome from the previous move, used to compute
-    // down_bad_coeff without relying on an uninitialized root_node.
-    float prev_root_q_outcome = 0.0f;
+    // Post-search root_q_outcome of every move so far, from black's
+    // perspective. Used to decide whether the game is decided (KataGo
+    // reduceVisits).
+    std::vector<float> black_root_q_outcomes;
 
     // Whether to log full MCTS search trees.
     bool const log_mcts_trees = probability.Uniform() < kLogFullTreeProb;
@@ -362,9 +409,13 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
     // Number of moves for which to sample directly from the policy.
     // kPlay/kForceFullSearch disable raw policy sampling.
     // For mid-game positions, the cap decays with a half-life of 40 moves so
-    // that late-game restarts do less raw-policy sampling.
-    int const max_raw_policy_moves = std::round(
-        kMaxNumRawPolicyMoves * std::pow(0.5f, init_state.move_num / 40.0f));
+    // that late-game restarts do less raw-policy sampling. Corner openings keep
+    // the full cap.
+    int const max_raw_policy_moves =
+        init_state.kind == InitState::Kind::kCorner
+            ? kMaxNumRawPolicyMoves
+            : std::round(kMaxNumRawPolicyMoves *
+                         std::pow(0.5f, init_state.move_num / 40.0f));
     int const num_moves_raw_policy =
         !disable_sampling && max_raw_policy_moves > 0 &&
                 probability.Uniform() < kOpeningExploreProb
@@ -381,6 +432,16 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         << "  Komi=" << init_state.board.komi()
         << "  Raw Policy Moves=" << num_moves_raw_policy
         << "  Tau Opening=" << tau_opening
+        << (init_state.kind == InitState::Kind::kCorner
+                ? "  Corner Moves=" +
+                      [&]() {
+                        std::stringstream ss;
+                        for (const Move& m : init_state.last_moves) {
+                          if (m.loc != kNoopLoc) ss << m.loc;
+                        }
+                        return ss.str();
+                      }()
+                : "")
         << (init_state.fork_kind.has_value()
                 ? "  ForkKind=" + ToString(*init_state.fork_kind) +
                       "  Starting Position\n" +
@@ -441,26 +502,29 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       // moves.
       // Choose n, k = kDownBadParams if we are down bad.
       bool const sampling_raw_policy = game.num_moves() < num_moves_raw_policy;
-      bool const is_either_down_bad =
-          num_consecutive_down_bad_moves >= kNumDownBadMovesThreshold;
-
-      // How down bad our root q is, from [0, 1]. 0 is max, 1 is min (i.e.)
-      // down_bad_coeff(-1) = 0, down_bad_coeff(|q| < .9) = 0.
-      float const down_bad_coeff = [prev_root_q_outcome]() {
-        float root_v = prev_root_q_outcome;
-        if (root_v > kDownBadThreshold && root_v < -kDownBadThreshold) {
-          // We are not down bad.
-          return 1.0f;
+      // How far past the down bad threshold the game is, in [0, 1] (KataGo
+      // reduceVisits, play.cpp): if the same side is winning by more than
+      // |kDownBadThreshold| in each of the last kNumDownBadMovesThreshold root
+      // values, this is (least extreme |q| - .9) / .1. Otherwise 0.
+      float const down_bad_past = [&black_root_q_outcomes]() {
+        const size_t num_qs = black_root_q_outcomes.size();
+        if (num_qs < kNumDownBadMovesThreshold) {
+          return 0.0f;
         }
-
-        // max distance to min/max v.
-        float max_delta = 1.0f - std::abs(kDownBadThreshold);
-        // how close we are to min/max v (closer should be penalized more).
-        float delta = 1.0f - std::abs(root_v);
-        float down_bad_coeff = delta / max_delta;
-
-        return down_bad_coeff;
+        float min_q = 1.0f, max_q = -1.0f;
+        for (size_t i = num_qs - kNumDownBadMovesThreshold; i < num_qs; ++i) {
+          min_q = std::min(min_q, black_root_q_outcomes[i]);
+          max_q = std::max(max_q, black_root_q_outcomes[i]);
+        }
+        const float signed_most_extreme =
+            std::min(std::max(min_q, -max_q), 1.0f);
+        const float threshold = -kDownBadThreshold;
+        return std::max(0.0f,
+                        (signed_most_extreme - threshold) / (1.0f - threshold));
       }();
+      bool const is_either_down_bad = down_bad_past > 0.0f;
+      // KataGo's visitReductionProp: 0 at the threshold, 1 at |q| = 1.
+      float const down_bad_reduction = down_bad_past * down_bad_past;
 
       // NN Stats.
       float qz_nn = root_node->init_outcome_est;
@@ -489,18 +553,18 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       // Probability of selecting a move for training, scaled by sel_mult.
       // If we are not down bad, this is a base probability of
       // `kMoveSelectedForTrainingProb`. If we are down bad, then we anneal our
-      // selection probability by down_bad_coeff^2. So if V(root) = -.95,
-      // down_bad_coeff = .5, and our probability is annealed by .5 * .5 = .25.
+      // selection probability towards kDownBadMinSelectWeight of that, as
+      // KataGo anneals its training weight: at |q| = .95 the probability is
+      // multiplied by .775, at .99 by .271, at 1 by .1.
       auto const [select_move_prob, select_move_prob_base] =
-          [sampling_raw_policy, is_either_down_bad, down_bad_coeff,
+          [sampling_raw_policy, down_bad_reduction,
            sel_mult]() -> std::pair<float, float> {
         if (sampling_raw_policy) {
           return {0.0f, 0.0f};
         }
         const float base =
-            is_either_down_bad
-                ? down_bad_coeff * down_bad_coeff * kMoveSelectedForTrainingProb
-                : kMoveSelectedForTrainingProb;
+            (1.0f - down_bad_reduction * (1.0f - kDownBadMinSelectWeight)) *
+            kMoveSelectedForTrainingProb;
         return {base * sel_mult, base};
       }();
 
@@ -525,19 +589,21 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       }();
 
       // Visit count cap for trainable moves. If we are not down bad, then we
-      // return the default. Otherwise, we anneal according to n =
-      // (1 - down_bad_coeff) * default_n + down_bad_coeff * default_n. We
-      // anneal k linearly according to where n falls on the scale [default_n,
-      // training_n].
+      // return the default. Otherwise, we anneal n from selected_n towards
+      // default_n as KataGo anneals its visits: n = selected_n -
+      // down_bad_reduction * (selected_n - default_n). k stays at the selected
+      // k unless n drops below kDownBadSmallNThreshold.
       GumbelParams const trainable_gumbel_params = [&config, is_either_down_bad,
-                                                    down_bad_coeff]() {
+                                                    down_bad_reduction]() {
         if (!is_either_down_bad) {
           return config.selected_params;
         }
 
-        int n = (1.0f - down_bad_coeff) * config.default_params.n +
-                down_bad_coeff * config.selected_params.n;
-        int k = config.default_params.k;
+        int n = std::round(config.selected_params.n -
+                           down_bad_reduction * (config.selected_params.n -
+                                                 config.default_params.n));
+        int k = n < kDownBadSmallNThreshold ? kDownBadSmallK
+                                            : config.selected_params.k;
         return GumbelParams{n, k};
       }();
 
@@ -589,8 +655,26 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       auto begin = std::chrono::steady_clock::now();
       GumbelResult gumbel_res = [&]() {
         if (sampling_raw_policy) {
-          return gumbel_evaluator.Sample(probability, game, root_node,
-                                         color_to_move, tau_opening);
+          GumbelResult res = gumbel_evaluator.Sample(
+              probability, game, root_node, color_to_move, tau_opening);
+          for (int i = 0; i < kMaxEdgeResamples; ++i) {
+            const Loc mv = res.mcts_move;
+            if (mv == kPassLoc) break;
+            const int line = std::min({mv.i, mv.j, BOARD_LEN - 1 - mv.i,
+                                       BOARD_LEN - 1 - mv.j}) +
+                             1;
+            const float p_resample = line == 1   ? kFirstLineResampleProb
+                                     : line == 2 ? kSecondLineResampleProb
+                                                 : 0.0f;
+            if (p_resample == 0.0f ||
+                res.pi_improved[mv] >= kEdgeResamplePriorMin ||
+                probability.Uniform() >= p_resample) {
+              break;
+            }
+            res = gumbel_evaluator.Sample(probability, game, root_node,
+                                          color_to_move, tau_opening);
+          }
+          return res;
         }
         return is_move_selected_for_training || !use_puct_fast_search
                    ? gumbel_evaluator.SearchRoot(
@@ -692,12 +776,8 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
       positions_for_regret.push_back({color_to_move, game.board(), move,
                                       nn_util_est, q_post,
                                       /*is_eligible=*/move_n != 0});
-      if (-std::abs(root_q_outcome) < kDownBadThreshold) {
-        ++num_consecutive_down_bad_moves;
-      } else {
-        num_consecutive_down_bad_moves = 0;
-      }
-      prev_root_q_outcome = root_q_outcome;
+      black_root_q_outcomes.push_back(color_to_move == BLACK ? root_q_outcome
+                                                             : -root_q_outcome);
 
       // Fork before playing the move (ForkManager sees the pre-move board).
       fork_manager.MaybeFork(

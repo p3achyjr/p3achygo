@@ -60,6 +60,16 @@ class Service {
   virtual Response<> GtpLoadSgf(std::optional<int> id,
                                 std::string filename) = 0;
 
+  // Pondering control. Owned by the command dispatcher (Client::HandleCommand),
+  // which pauses before every command and resumes after the ones that used to
+  // manage pondering themselves. Individual Gtp* handlers must not touch it: a
+  // pondering search mutates the tree and holds NN slot 0, so a handler that
+  // forgot to pause would race it.
+  //
+  // Both are idempotent, and both are only ever called from the client thread.
+  virtual void PausePondering() = 0;   // no-op if not currently pondering.
+  virtual void EnsurePondering() = 0;  // no-op if pondering or disabled.
+
   static absl::StatusOr<std::unique_ptr<Service>> CreateService(
       std::string model_path, eval::PlayerSearchConfig cfg,
       bool verbose = false);

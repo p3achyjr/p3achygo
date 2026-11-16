@@ -128,9 +128,7 @@ class NNInterface final {
                                                 color_to_move, probability);
     }
 
-    void SignalReadyForInference() {
-      nn_interface_->SignalReadyForInference();
-    }
+    void SignalReadyForInference() { nn_interface_->SignalReadyForInference(); }
     void UnregisterSearchTask() { nn_interface_->UnregisterSearchTask(); }
 
    private:
@@ -166,6 +164,9 @@ class NNInterface final {
   // Controls how many of the most-recent moves are included in the NN cache
   // key. Range [0, kNumLastMoves]. Default: kNumLastMoves (5).
   void SetNumCacheLastMoves(int n) { num_cache_last_moves_ = n; }
+
+  // Whether to include the board's simple-ko point in the NN cache key.
+  void SetCacheKeyKo(bool b) { cache_key_ko_ = b; }
 
   // Blocks until result is ready.
   NNInferResult LoadAndGetInference(int thread_id, const game::Game& game,
@@ -209,11 +210,12 @@ class NNInterface final {
     // [oldest, ..., most recent]; unused leading slots are kNoopLoc.
     std::array<game::Loc, constants::kNumLastMoves> last_moves;
     float komi;
+    game::Loc ko;  // kNoopLoc unless cache_key_ko_.
 
     friend bool operator==(const NNKey& c0, const NNKey& c1) {
       return c0.color_to_move == c1.color_to_move &&
              c0.board_hash == c1.board_hash && c0.last_moves == c1.last_moves &&
-             c0.komi == c1.komi;
+             c0.komi == c1.komi && c0.ko == c1.ko;
     }
 
     template <typename H>
@@ -222,7 +224,7 @@ class NNInterface final {
       for (const game::Loc& loc : c.last_moves) {
         h = H::combine(std::move(h), loc);
       }
-      h = H::combine(std::move(h), c.komi);
+      h = H::combine(std::move(h), c.komi, c.ko);
       return h;
     }
   };
@@ -323,6 +325,7 @@ class NNInterface final {
   const int num_threads_;
   const SignalKind signal_kind_;
   int num_cache_last_moves_ = constants::kNumLastMoves;
+  bool cache_key_ko_ = false;
 
   // Synchronization
   absl::Mutex mu_;

@@ -144,11 +144,34 @@ TEST_CASE("BoardTest") {
     board.PlayBlack(2, 3);
     board.PlayWhite(2, 4);
     board.PlayBlack(1, 2);
+    CHECK((board.ko_loc() == game::kNoopLoc));
     board.PlayWhite(1, 3);
     board.PlayWhite(2, 2);
 
     CHECK(board.at(2, 3) == EMPTY);
+    CHECK((board.ko_loc() == game::Loc{2, 3}));
     CHECK_FALSE(MoveOk(board.PlayBlack(2, 3)));
+    CHECK((board.ko_loc() == game::Loc{2, 3}));
+    board.Pass(BLACK);
+    CHECK((board.ko_loc() == game::kNoopLoc));
+  }
+
+  // x x o x     x = black, o = white
+  // o o x .     black at (0, 1) captures (0, 2) but joins (0, 0): not a ko.
+  SUBCASE("CaptureOneStoneWithConnectedStoneIsNotKo") {
+    game::Board board;
+
+    board.PlayBlack(0, 0);
+    board.PlayWhite(1, 0);
+    board.PlayWhite(1, 1);
+    board.PlayWhite(0, 2);
+    board.PlayBlack(1, 2);
+    board.PlayBlack(0, 3);
+    CHECK(MoveOk(board.PlayBlack(0, 1)));
+
+    CHECK(board.at(0, 2) == EMPTY);
+    CHECK((board.ko_loc() == game::kNoopLoc));
+    CHECK(MoveOk(board.PlayWhite(0, 2)));
   }
 
   SUBCASE("SendTwoReturnOne") {
@@ -166,6 +189,7 @@ TEST_CASE("BoardTest") {
 
     CHECK(board.at(0, 0) == EMPTY);
     CHECK(board.at(1, 0) == EMPTY);
+    CHECK((board.ko_loc() == game::kNoopLoc));
     CHECK_FALSE(MoveOk(board.PlayBlack(1, 0)));
   }
 
@@ -1601,6 +1625,73 @@ TEST_CASE("LadderTest") {
     MESSAGE("EdgeLadder took " << us << " us\n");
     CHECK(laddered_stones[AsIndex(Loc{18, 7}, BOARD_LEN)] == BLACK);
     CHECK(laddered_stones[AsIndex(Loc{18, 8}, BOARD_LEN)] == BLACK);
+    CHECK_EQ(board, board_copy);
+  }
+
+  SUBCASE("CaptureEscapeLadderControl") {
+    // CaptureEscapeLadder after white extends at (15, 2) and black ataris at
+    // (15, 3), connecting (16, 3). White has no capture escape left and the
+    // ladder works.
+    auto board = ParseBoardDSL(R"(
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . x . . . . . . . . . . . . . . . . .
+      . x o x x . . . . . . . . . . . . . .
+      . x o x o . . . . . . . . . . . . . .
+      . . x o . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+    )");
+
+    auto board_copy = board;
+    auto laddered_stones = board.GetLadderedStones();
+    CHECK(laddered_stones[AsIndex(Loc{16, 2}, BOARD_LEN)] == WHITE);
+    CHECK(laddered_stones[AsIndex(Loc{15, 2}, BOARD_LEN)] == WHITE);
+    CHECK_EQ(board, board_copy);
+  }
+
+  SUBCASE("CaptureEscapeLadder") {
+    // White (16, 2) is in atari at (15, 2), but black (16, 3) is also in atari
+    // at (15, 3). White escapes by capturing at (15, 3). If white instead
+    // extends at (15, 2), black ataris at (15, 3), which also saves (16, 3),
+    // and the ladder works. The capture is only available on white's first
+    // move, so the solver has to consider it at the root.
+    auto board = ParseBoardDSL(R"(
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+      . x . . . . . . . . . . . . . . . . .
+      . x . . x . . . . . . . . . . . . . .
+      . x o x o . . . . . . . . . . . . . .
+      . . x o . . . . . . . . . . . . . . .
+      . . . . . . . . . . . . . . . . . . .
+    )");
+
+    auto board_copy = board;
+    auto laddered_stones = board.GetLadderedStones();
+    CHECK(laddered_stones[AsIndex(Loc{16, 2}, BOARD_LEN)] == EMPTY);
     CHECK_EQ(board, board_copy);
   }
 

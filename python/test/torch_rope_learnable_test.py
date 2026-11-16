@@ -307,5 +307,78 @@ class RoPEOptimizerTest(unittest.TestCase):
         )
 
 
+# ---------------------------------------------------------------------------
+# 4. Fixed (non-learnable) θ via `learnable=False` / `rope_learnable: false`
+# ---------------------------------------------------------------------------
+
+
+class RoPEFixedThetaTest(unittest.TestCase):
+    def test_fixed_theta_is_buffer_not_parameter(self):
+        r = RoPE(
+            pos_len=POS_LEN, head_dim=HEAD_DIM, num_rotations=NUM_ROT, learnable=False
+        )
+        self.assertNotIsInstance(r.log_theta, torch.nn.Parameter)
+        self.assertFalse(r.log_theta.requires_grad)
+        self.assertEqual(len(list(r.parameters())), 0)
+        self.assertAlmostEqual(r.log_theta.item(), math.log(ROPE_THETA), places=6)
+        # Still checkpointed, so fixed/learnable checkpoints share a layout.
+        self.assertEqual(list(r.state_dict().keys()), ["log_theta"])
+
+    def test_fixed_matches_learnable_at_init_and_gets_no_grad(self):
+        torch.manual_seed(0)
+        x = _rand_input().requires_grad_(True)
+        fixed = RoPE(
+            pos_len=POS_LEN, head_dim=HEAD_DIM, num_rotations=NUM_ROT, learnable=False
+        )
+        learn = RoPE(pos_len=POS_LEN, head_dim=HEAD_DIM, num_rotations=NUM_ROT)
+        self.assertTrue(torch.allclose(fixed(x), learn(x)))
+        w = torch.randn_like(x)
+        (fixed(x) * w).sum().backward()  # must not raise; θ has no grad
+        self.assertIsNone(fixed.log_theta.grad)
+
+    def test_generic_arch_flag_removes_theta_from_optimizer(self):
+        from backend_torch.model import _build_trunk_from_generic_arch
+
+        arch = {
+            "trunk": [
+                [
+                    "transformer_btl",
+                    {
+                        "output_dim": 16,
+                        "embed_dim": 16,
+                        "num_heads": 2,
+                        "rope_learnable": False,
+                    },
+                ]
+            ]
+        }
+        trunk = _build_trunk_from_generic_arch(arch, board_len=POS_LEN)
+        names = [n for n, _ in trunk.named_parameters()]
+        self.assertFalse(any(n.endswith("log_theta") for n in names))
+        # Buffers still carry θ so the forward path is unchanged.
+        self.assertEqual(
+            sum(n.endswith("log_theta") for n, _ in trunk.named_buffers()), 2
+        )
+        groups, _ = build_convmuon_param_groups(
+            trunk, exclude_layers=_MUON_EXCLUDE_LAYERS_TORCH
+        )
+        all_ids = {id(p) for g in groups for p in g["params"]}
+        theta_ids = {id(b) for n, b in trunk.named_buffers() if n.endswith("log_theta")}
+        self.assertTrue(all_ids.isdisjoint(theta_ids))
+
+    def test_generic_arch_default_stays_learnable(self):
+        from backend_torch.model import _build_trunk_from_generic_arch
+
+        arch = {
+            "trunk": [
+                ["transformer_btl", {"output_dim": 16, "embed_dim": 16, "num_heads": 2}]
+            ]
+        }
+        trunk = _build_trunk_from_generic_arch(arch, board_len=POS_LEN)
+        self.assertEqual(
+            sum(n.endswith("log_theta") for n, _ in trunk.named_parameters()), 2
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

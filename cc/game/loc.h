@@ -39,6 +39,8 @@ inline bool operator==(const Loc& x, const Loc& y) {
   return x.i == y.i && x.j == y.j;
 }
 
+inline bool operator!=(const Loc& x, const Loc& y) { return !(x == y); }
+
 inline std::ostream& operator<<(std::ostream& os, const Loc& loc) {
   return os << "(" << loc.i << ", " << loc.j << ")";
 }
