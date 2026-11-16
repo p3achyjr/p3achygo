@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <iomanip>
@@ -406,21 +407,33 @@ class PuctScorer final {
     PuctScores pucts = ComputeScores(node, is_root);
     // Highest score first (lowest index on ties), then check legality, so
     // IsValidMove runs once per pick instead of once per new running max.
-    // Picks the same move as checking legality during the scan. Each pass
-    // excludes one action, so there are at most kMaxMovesPerPosition passes.
-    for (int pass = 0; pass < constants::kMaxMovesPerPosition; ++pass) {
-      float max_puct_score = kMinPuctScore;
-      int max_a = -1;
+    // Picks the same move as checking legality during the scan. Each scan
+    // collects the kPickChunk best remaining actions and checks them in order,
+    // excluding the illegal ones, so there are at most
+    // ceil(kMaxMovesPerPosition / kPickChunk) scans.
+    constexpr int kPickChunk = 4;
+    for (int pass = 0; pass < constants::kMaxMovesPerPosition;
+         pass += kPickChunk) {
+      // Sorted by score descending; ties keep scan (index) order.
+      std::array<int, kPickChunk> best;
+      int num_best = 0;
       for (const auto& [a, puct_score] : pucts) {
-        if (puct_score > max_puct_score) {
-          max_puct_score = puct_score;
-          max_a = a;
+        if (!(puct_score > kMinPuctScore)) continue;
+        int pos = num_best;
+        while (pos > 0 && puct_score > pucts[best[pos - 1]].second) --pos;
+        if (pos >= kPickChunk) continue;
+        for (int k = std::min(num_best, kPickChunk - 1); k > pos; --k) {
+          best[k] = best[k - 1];
         }
+        best[pos] = a;
+        num_best = std::min(num_best + 1, kPickChunk);
       }
-      if (max_a < 0) break;
-      const game::Loc mv = game::AsLoc(max_a);
-      if (game.IsValidMove(mv, color_to_move)) return mv;
-      pucts[max_a].second = kMinPuctScore;
+      if (num_best == 0) break;
+      for (int k = 0; k < num_best; ++k) {
+        const game::Loc mv = game::AsLoc(best[k]);
+        if (game.IsValidMove(mv, color_to_move)) return mv;
+        pucts[best[k]].second = kMinPuctScore;
+      }
     }
     return game::kNoopLoc;
   }
