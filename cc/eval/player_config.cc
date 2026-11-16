@@ -77,8 +77,6 @@ mcts::Search::Params MakeSearchParams(const eval::PlayerSearchConfig& cfg) {
     collision_policy = mcts::CollisionPolicyKind::kRetry;
   } else if (cfg.collision_policy == "smart_retry") {
     collision_policy = mcts::CollisionPolicyKind::kSmartRetry;
-  } else if (cfg.collision_policy == "smart_retry_depth") {
-    collision_policy = mcts::CollisionPolicyKind::kSmartRetryDepth;
   } else {
     collision_policy = mcts::CollisionPolicyKind::kAbort;
   }
@@ -130,8 +128,6 @@ mcts::Search::Params MakeSearchParams(const eval::PlayerSearchConfig& cfg) {
       .collision_detector_kind = collision_detector,
       .vl_delta = cfg.vl_delta,
       .max_collision_retries = cfg.max_collision_retries,
-      .fork_depth_c = cfg.fork_depth_c,
-      .fork_depth_p = cfg.fork_depth_p,
       .max_o_ratio = cfg.max_o_ratio,
       .mode = mode,
       .score_util_params = MakeScoreUtilityParams(cfg),
