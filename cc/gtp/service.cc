@@ -425,6 +425,7 @@ std::string ServiceImpl::BuildExplainComment() {
     int n;
     float q;
     float qstd;
+    float qz;  // outcome-only value (no score term), mover's view, in [-1, 1]
     float prior;
     float opt_prior;
   };
@@ -438,6 +439,7 @@ std::string ServiceImpl::BuildExplainComment() {
         root->child_visits[a],
         Q(root, a),
         std::sqrt(QVar(root, a)),
+        QOutcome(root, a),
         root->move_probs[a],
         root->opt_probs[a],
     });
@@ -454,7 +456,8 @@ std::string ServiceImpl::BuildExplainComment() {
     const auto& c = visited_children[i];
     ss << "  " << GtpValueString(AsLoc(c.action)) << "  n=" << c.n
        << "  q=" << c.q << "  qstd=" << c.qstd << "  lcb=" << c.lcb
-       << "  prior=" << c.prior << "  opt_prior=" << c.opt_prior << "\n";
+       << "  prior=" << c.prior << "  opt_prior=" << c.opt_prior
+       << "  qz=" << c.qz << "\n";
   }
 
   return ss.str();
