@@ -35,8 +35,12 @@ endif()
 
 # Full implementation with TensorFlow
 add_library(nn_interface
+    nn_interface_base.cc
+    nn_interface_base.h
     nn_interface.cc
     nn_interface.h
+    pipelined_nn_interface.cc
+    pipelined_nn_interface.h
 )
 
 target_link_libraries(nn_interface

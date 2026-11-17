@@ -19,16 +19,6 @@ namespace {
 using namespace ::core;
 using namespace ::game;
 
-std::unique_ptr<Waker> MakeWaker(NNInterface::WakeStrategy strategy) {
-  switch (strategy) {
-    case NNInterface::WakeStrategy::kMutex:
-      return std::make_unique<MutexWaker>();
-    case NNInterface::WakeStrategy::kGenCounter:
-    default:
-      return std::make_unique<GenCounterWaker>();
-  }
-}
-
 // 2 ** 20. Inference Result is 6kb, so this will be about ~6GB of RAM.
 static constexpr char kSavedModelTagServe[] = "serve";
 
@@ -89,20 +79,9 @@ NNInterface::~NNInterface() {
   }
 }
 
-NNInterface::NNKey NNInterface::MakeKey(const game::Game& game,
-                                        game::Color color_to_move) const {
-  const int num_moves = game.num_moves();
-  std::array<game::Loc, constants::kNumLastMoves> last_moves;
-  last_moves.fill(kNoopLoc);
-  for (int i = 0; i < num_cache_last_moves_; ++i) {
-    const int off = num_moves - num_cache_last_moves_ + i;
-    if (off >= 0) {
-      last_moves[constants::kNumLastMoves - num_cache_last_moves_ + i] =
-          game.move(off).loc;
-    }
-  }
-  return NNKey{color_to_move, game.board().hash(), last_moves, game.komi(),
-               cache_key_ko_ ? game.board().ko_loc() : kNoopLoc};
+NNKey NNInterface::MakeKey(const game::Game& game,
+                          game::Color color_to_move) const {
+  return MakeNNKey(game, color_to_move, num_cache_last_moves_, cache_key_ko_);
 }
 
 NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
@@ -245,36 +224,7 @@ void NNInterface::CacheInsert(int thread_id, const NNKey& key,
 
 void NNInterface::LoadBatch(int thread_id, const game::Game& game,
                             game::Color color_to_move, game::Symmetry sym) {
-  GoFeatures input_features;
-  input_features.bsize = BOARD_LEN;
-  input_features.color = color_to_move;
-
-  int num_moves = game.num_moves();
-  for (int i = 0; i < constants::kNumLastMoves; ++i) {
-    int mv_offset = num_moves - constants::kNumLastMoves + i;
-    if (mv_offset < 0) {
-      input_features.last_moves[i] = kNoopLoc;
-      continue;
-    } else if (game.move(mv_offset).loc == kPassLoc) {
-      input_features.last_moves[i] = kPassLoc;
-      continue;
-    }
-    input_features.last_moves[i] =
-        ApplySymmetry(sym, game.move(mv_offset).loc, BOARD_LEN);
-  }
-
-  input_features.board = ApplySymmetry(sym, game.board().position(), BOARD_LEN);
-  input_features.stones_atari =
-      ApplySymmetry(sym, game.board().GetStonesInAtari(), BOARD_LEN);
-  input_features.stones_two_liberties =
-      ApplySymmetry(sym, game.board().GetStonesWithLiberties(2), BOARD_LEN);
-  input_features.stones_three_liberties =
-      ApplySymmetry(sym, game.board().GetStonesWithLiberties(3), BOARD_LEN);
-  input_features.stones_laddered =
-      ApplySymmetry(sym, game.board().GetLadderedStones(), BOARD_LEN);
-  input_features.komi = game.komi();
-
-  engine_->LoadBatch(thread_id, input_features);
+  engine_->LoadBatch(thread_id, MakeGoFeatures(game, color_to_move, sym));
 }
 
 void NNInterface::InferLoop() {
