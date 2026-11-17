@@ -91,6 +91,60 @@ float VMixed(const TreeNode* node) {
   return interpolated_q / (1 + visited_n);
 }
 
+// Logs node stats when an improved policy came out non-finite (diagnostic for
+// the SampleFromPolicy total=nan crashes seen with the nbt net, 2026-11-17).
+void LogIfNonFinite(
+    const TreeNode* node,
+    const std::array<float, constants::kMaxMovesPerPosition>& pi,
+    const char* where) {
+  if (std::all_of(pi.begin(), pi.end(),
+                  [](float x) { return std::isfinite(x); })) {
+    return;
+  }
+  std::ostringstream ss;
+  double visited_prob = 0;
+  int bad_logits = 0, bad_probs = 0, bad_q = 0;
+  double sum_probs = 0;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    bad_logits += !std::isfinite(node->move_logits[a]);
+    bad_probs += !std::isfinite(node->move_probs[a]);
+    sum_probs += node->move_probs[a];
+    if (NAction(node, a) > 0) {
+      visited_prob += node->move_probs[a];
+      bad_q += !std::isfinite(Q(node, a));
+    }
+  }
+  ss << "NONFINITE improved policy (" << where << "): n=" << node->n
+     << " v=" << node->v << " w=" << node->w
+     << " init_util=" << node->init_util_est
+     << " init_outcome=" << node->init_outcome_est
+     << " init_score=" << node->init_score_est
+     << " init_err=" << node->init_err_est
+     << " obs_bias=" << node->last_obs_bias_term
+     << " weight=" << node->last_weight_term << " bias_entry="
+     << (node->bias_cache_entry
+             ? std::to_string(node->bias_cache_entry->first) + "," +
+                   std::to_string(node->bias_cache_entry->second)
+             : std::string("none"))
+     << " VMixed=" << VMixed(node) << " visited_prob=" << visited_prob
+     << " sum_probs=" << sum_probs << " bad_logits=" << bad_logits
+     << " bad_probs=" << bad_probs << " bad_q=" << bad_q << "\n";
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    if (NAction(node, a) == 0) continue;
+    const TreeNode* c = node->children[a].load(std::memory_order_relaxed);
+    ss << "  a=" << a << " N=" << NAction(node, a) << " Q=" << Q(node, a)
+       << " prob=" << node->move_probs[a] << " logit=" << node->move_logits[a];
+    if (c) {
+      ss << " child{n=" << c->n << " v=" << c->v
+         << " init_util=" << c->init_util_est
+         << " obs_bias=" << c->last_obs_bias_term
+         << " terminal=" << c->is_terminal << "}";
+    }
+    ss << "\n";
+  }
+  LOG(ERROR) << ss.str();
+}
+
 int Argmax(const std::array<float, constants::kMaxMovesPerPosition>& arr) {
   int arg_max = 0;
   float max_val = -FLT_MAX;
@@ -174,7 +228,10 @@ std::array<float, constants::kMaxMovesPerPosition> ComputeRootImprovedPolicy(
         masked_logits[action] + (kVisit + max_n) * kValueScale * q;
   }
 
-  return core::SoftmaxV(logits_improved);
+  std::array<float, constants::kMaxMovesPerPosition> pi =
+      core::SoftmaxV(logits_improved);
+  LogIfNonFinite(node, pi, "root");
+  return pi;
 }
 
 // Compute completedQ = {q(a) if N(a) > 0, v_mixed otherwise }.
@@ -213,7 +270,10 @@ std::array<float, constants::kMaxMovesPerPosition> ComputeImprovedPolicy(
                    q_scale_factor);
   }
 
-  return core::SoftmaxV(logits_improved);
+  std::array<float, constants::kMaxMovesPerPosition> pi =
+      core::SoftmaxV(logits_improved);
+  LogIfNonFinite(node, pi, "nonroot");
+  return pi;
 }
 
 Loc GumbelNonRootSearchPolicy::SelectNextAction(const TreeNode* node,
