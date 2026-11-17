@@ -61,6 +61,8 @@ struct PlayerSearchConfig {
   bool enable_v_cat_var_scaling = false;
   int v_cat_var_scale_prior_visits = 10;
   float p_opt_weight = 0.0f;
+  float root_p_opt_weight = -1.0f;  // < 0: same as p_opt_weight
+  bool p_opt_geometric = false;
   float root_fpu = 0.1f;
   int sampling_num_moves = 0;
   float sampling_temperature = 0.0f;
@@ -251,6 +253,10 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.v_cat_var_scale_prior_visits = std::stoi(val);
     else if (key == "p_opt_weight")
       cfg.p_opt_weight = std::stof(val);
+    else if (key == "root_p_opt_weight")
+      cfg.root_p_opt_weight = std::stof(val);
+    else if (key == "p_opt_geometric")
+      cfg.p_opt_geometric = internal::ParseBool(val);
     else if (key == "root_fpu")
       cfg.root_fpu = std::stof(val);
     else if (key == "sampling_temperature")
@@ -377,6 +383,8 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
   ROW(enable_v_cat_var_scaling, b);
   ROW(v_cat_var_scale_prior_visits, i_);
   ROW(p_opt_weight, f);
+  ROW(root_p_opt_weight, f);
+  ROW(p_opt_geometric, b);
   ROW(root_fpu, f);
   ROW(se_bonus_x, f);
   ROW(se_use_jitter, b);

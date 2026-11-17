@@ -54,10 +54,28 @@ absl::Status Client::Start(std::string model_path, eval::PlayerSearchConfig cfg,
   }
 
   service_ = std::move(service.value());
+  sink_ = [](const std::string& s) { std::cout << s << std::flush; };
+  StartThreads();
+  return absl::OkStatus();
+}
+
+void Client::Start(std::unique_ptr<Service> service,
+                   std::function<void(const std::string&)> sink) {
+  service_ = std::move(service);
+  sink_ = std::move(sink);
+  StartThreads();
+}
+
+void Client::Stop() {
+  absl::MutexLock l(&mu_);
+  silent_quit_ = true;
+  cmd_queue_.emplace_back(Command{std::nullopt, GTPCode::kQuit, {}});
+}
+
+void Client::StartThreads() {
   running_.store(true, std::memory_order_release);
   client_thread_ = std::thread(&Client::ClientLoop, this);
   response_thread_ = std::thread(&Client::ResponseLoop, this);
-  return absl::OkStatus();
 }
 
 InputLoopStatus Client::ParseAndAddCommand(std::string cmd_string) {
@@ -89,9 +107,10 @@ InputLoopStatus Client::ParseAndAddCommand(std::string cmd_string) {
 
   absl::MutexLock l(&mu_);
   if (cmd.code == GTPCode::kUnknownCommand) {
-    // unknown or ill-formatted command.
+    // unknown or ill-formatted command. Keep the id so the response can be
+    // routed in batch mode.
     cmd_queue_.emplace_back(
-        Command{std::nullopt, GTPCode::kUnknownCommand, {"unknown command"}});
+        Command{cmd.id, GTPCode::kUnknownCommand, {"unknown command"}});
     return InputLoopStatus::kContinue;
   }
 
@@ -135,6 +154,8 @@ void Client::ClientLoop() {
       HandleCommand(cmd);
     }
   }
+  absl::MutexLock l(&mu_);
+  client_loop_done_ = true;
 }
 
 bool Client::ShouldWakeClientThread() {
@@ -142,19 +163,22 @@ bool Client::ShouldWakeClientThread() {
 }
 
 void Client::ResponseLoop() {
-  while (running_.load(std::memory_order_acquire)) {
+  while (true) {
     absl::MutexLock l(&mu_,
                       absl::Condition(this, &Client::ShouldWakeResponseThread));
     // Consume entire response queue.
     while (!response_queue_.empty()) {
-      std::cout << response_queue_.front() << std::flush;
+      sink_(response_queue_.front());
       response_queue_.pop_front();
     }
+    // Only exit once the client loop can no longer add responses, so nothing
+    // is left unwritten.
+    if (client_loop_done_) return;
   }
 }
 
 bool Client::ShouldWakeResponseThread() {
-  return !running_.load(std::memory_order_acquire) || !response_queue_.empty();
+  return client_loop_done_ || !response_queue_.empty();
 }
 
 void Client::AnalysisSnapshotLoop(game::Color color, int centiseconds,
@@ -333,7 +357,7 @@ void Client::HandleCommand(Command cmd) {
       AddResponse(MakeErrorResponse(cmd.id, "unknown command"));
       return;
     case GTPCode::kQuit:
-      AddResponse(MakeResponse(cmd.id));
+      if (!silent_quit_) AddResponse(MakeResponse(cmd.id));
       running_.store(false, std::memory_order_release);
       return;
     case GTPCode::kPrintBoard:
