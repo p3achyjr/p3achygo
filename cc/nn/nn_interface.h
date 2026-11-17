@@ -3,8 +3,14 @@
 
 #include <array>
 #include <atomic>
+#include <deque>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <thread>
+#include <tuple>
+#include <utility>
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/inlined_vector.h"
@@ -15,6 +21,7 @@
 #include "cc/constants/constants.h"
 #include "cc/core/lru_cache.h"
 #include "cc/core/probability.h"
+#include "cc/core/spin_mutex.h"
 #include "cc/game/color.h"
 #include "cc/game/game.h"
 #include "cc/game/symmetry.h"
@@ -26,6 +33,9 @@ class Tensor;
 }  // namespace tensorflow
 
 namespace nn {
+
+// INST: steady_clock ns of the last RunInference() start/end.
+inline std::atomic<int64_t> g_inst_infer_start{0}, g_inst_infer_end{0};
 
 // Helper predicate for absl::Condition used by MutexWaker.
 inline bool ResReadyTrue(std::atomic<bool>* r) {
@@ -104,14 +114,17 @@ class NNInterface final {
   // never have to pass it explicitly.
   struct Slot {
     Slot(NNInterface* nn_interface, int task_offset)
-        : nn_interface_(nn_interface), task_offset_(task_offset) {}
+        : nn_interface_(nn_interface),
+          task_offset_(task_offset),
+          wave_(nn_interface->WaveOf(task_offset)) {}
 
     SignalKind signal_kind() const { return nn_interface_->signal_kind(); }
 
-    void LoadEntry(int thread_id, const game::Game& game,
+    // Returns true on an NN cache hit (FetchEntry then returns it at once).
+    bool LoadEntry(int thread_id, const game::Game& game,
                    game::Color color_to_move, core::Probability& probability) {
-      nn_interface_->LoadEntry(thread_id, task_offset_, game, color_to_move,
-                               probability);
+      return nn_interface_->LoadEntry(thread_id, task_offset_, game,
+                                      color_to_move, probability);
     }
 
     NNInferResult FetchEntry(int thread_id, const game::Game& game,
@@ -128,12 +141,18 @@ class NNInterface final {
                                                 color_to_move, probability);
     }
 
-    void SignalReadyForInference() { nn_interface_->SignalReadyForInference(); }
-    void UnregisterSearchTask() { nn_interface_->UnregisterSearchTask(); }
+    void SignalReadyForInference() {
+      nn_interface_->SignalReadyForInference(wave_);
+    }
+    void UnregisterSearchTask() { nn_interface_->UnregisterSearchTask(wave_); }
+    NNInterface* nn() const { return nn_interface_; }
+    // EXP shared interface: the buffer set (wave) this slot's rows live in.
+    int wave() const { return wave_; }
 
    private:
     NNInterface* nn_interface_;
     int task_offset_;
+    int wave_;
   };
 
   Slot MakeSlot(int task_offset) { return Slot(this, task_offset); }
@@ -153,6 +172,26 @@ class NNInterface final {
               std::unique_ptr<Engine> engine, SignalKind signal_kind,
               int num_shared_search_tasks,
               WakeStrategy wake_strategy = WakeStrategy::kGenCounter);
+  // EXP shared interface (pipelined search): one interface, one buffer set
+  // (engine of batch num_threads / W) per wave. Thread t lives in wave
+  // t / (num_threads / W), row t % (num_threads / W). Each wave has its own
+  // signal count, wake-up and inference; the engine runs outside mu_.
+  // num_infer_threads: W (one per wave; waves' inferences may overlap on the
+  // GPU) or 1 (one thread runs whichever wave is ready; never two at once).
+  NNInterface(int num_threads, int64_t timeout, size_t cache_size,
+              std::vector<std::unique_ptr<Engine>> wave_engines,
+              SignalKind signal_kind, int num_shared_search_tasks,
+              WakeStrategy wake_strategy, int num_infer_threads);
+  // EXP round-free search (queue mode, KataGo-style): num_threads workers,
+  // one engine of batch engine_batch. LoadEntry featurizes into the worker's
+  // staging slot and queues it; one inference thread takes up to engine_batch
+  // queued rows as soon as at least max(1, min_fill) are queued (with
+  // min_fill > 1: or after min_fill_timeout_us with at least one queued),
+  // runs the engine, and copies each row's output to the worker's result slot.
+  // SignalReadyForInference() is a no-op.
+  NNInterface(int num_threads, size_t cache_size,
+              std::unique_ptr<Engine> engine, int engine_batch, int min_fill,
+              int64_t min_fill_timeout_us, WakeStrategy wake_strategy);
   ~NNInterface();
 
   // Disable Copy
@@ -161,12 +200,53 @@ class NNInterface final {
 
   SignalKind signal_kind() const { return signal_kind_; }
 
+  // INST: this interface's last RunInference() start/end (steady_clock ns), and
+  // a log of every RunInference() interval (for GPU-busy / overlap).
+  std::atomic<int64_t> inst_infer_start{0}, inst_infer_end{0};
+  // INST: per-wave last inference start/end (wave 0 only when not shared).
+  std::array<std::atomic<int64_t>, 2> inst_wave_start{}, inst_wave_end{};
+  std::vector<std::pair<int64_t, int64_t>> InstTakeIntervals() {
+    absl::MutexLock l(&inst_iv_mu_);
+    std::vector<std::pair<int64_t, int64_t>> out;
+    out.swap(inst_iv_);
+    return out;
+  }
+
   // Controls how many of the most-recent moves are included in the NN cache
   // key. Range [0, kNumLastMoves]. Default: kNumLastMoves (5).
   void SetNumCacheLastMoves(int n) { num_cache_last_moves_ = n; }
 
   // Whether to include the board's simple-ko point in the NN cache key.
   void SetCacheKeyKo(bool b) { cache_key_ko_ = b; }
+
+  // EXP (P3_SHARED_CACHE=1, queue mode only): one LRU cache of `total_size`
+  // entries shared by all threads, guarded by a spin lock, instead of the
+  // per-thread caches.
+  void EnableSharedCache(size_t total_size);
+
+  // EXP (P3_SHARED_CACHE=kata, queue mode only): KataGo's NNCacheTable design
+  // (neuralnet/nneval.cpp): direct-mapped table of 2^log2_size slots holding
+  // shared_ptr<const (key, result)>, slot = hash(key) & mask, a set overwrites
+  // the slot (no LRU); a pool of 2^log2_mutexes std::mutex, mutex = slot &
+  // pool mask (pool clamped to the table size, as KataGo). A get compares the
+  // full stored key.
+  // Also allowed on a pipelined shared interface (num_waves > 1): every cache
+  // read is one locked lookup (CacheLookup), and FetchEntry returns the hit
+  // its LoadEntry held instead of looking up again.
+  void EnableKataCache(int log2_size, int log2_mutexes);
+
+  // EXP: NN cache counters since the last call (lookups / hits from LoadEntry
+  // and LoadAndGetInference; spin-LRU lock contention), then resets them.
+  struct CacheCounters {
+    int64_t lookups = 0, hits = 0, lock_contended = 0, lock_spins = 0;
+  };
+  CacheCounters TakeCacheCounters() {
+    CacheCounters c;
+    c.lookups = nnc_lookups_.exchange(0, std::memory_order_relaxed);
+    c.hits = nnc_hits_.exchange(0, std::memory_order_relaxed);
+    std::tie(c.lock_contended, c.lock_spins) = shared_cache_mu_.TakeContention();
+    return c;
+  }
 
   // Blocks until result is ready.
   NNInferResult LoadAndGetInference(int thread_id, const game::Game& game,
@@ -183,24 +263,34 @@ class NNInterface final {
   void UnregisterThread(int thread_id) ABSL_LOCKS_EXCLUDED(mu_);
 
   // async API
-  void LoadEntry(int thread_id, int offset, const game::Game& game,
+  // Returns true on a cache hit (FetchEntry returns that result).
+  bool LoadEntry(int thread_id, int offset, const game::Game& game,
                  game::Color color_to_move, core::Probability& probability)
       ABSL_LOCKS_EXCLUDED(mu_);
   NNInferResult FetchEntry(int thread_id, int offset, const game::Game& game,
                            game::Color color_to_move) ABSL_LOCKS_EXCLUDED(mu_);
-  inline void SignalReadyForInference() {
+  inline void SignalReadyForInference(int wave = 0) {
+    if (queue_mode_) return;
     {
       absl::MutexLock l(&mu_);
-      ++num_signaled_search_tasks_;
+      ++num_signaled_search_tasks_[wave];
     }
     if (num_threads_ == 1) {
       Infer();  // No infer_thread_ exists; run synchronously.
     }
   }
-  inline void UnregisterSearchTask() {
+  inline void UnregisterSearchTask(int wave = 0) {
     absl::MutexLock l(&mu_);
-    ++num_exited_search_tasks_;
+    ++num_exited_search_tasks_[wave];
   }
+  int num_waves() const { return num_waves_; }
+  bool queue_mode() const { return queue_mode_; }
+  // INST queue mode: batches run, rows evaluated, and time (ns) the inference
+  // thread spent copying rows in / out around the engine call.
+  std::atomic<int64_t> inst_q_batches{0}, inst_q_rows{0}, inst_q_in_ns{0},
+      inst_q_out_ns{0};
+  int wave_size() const { return wave_size_; }
+  int WaveOf(int canonical_tid) const { return canonical_tid / wave_size_; }
 
  private:
   static constexpr int64_t kTimeoutUs = 400;
@@ -244,8 +334,9 @@ class NNInterface final {
 
   // Cache Helpers.
   void InitializeCache(size_t cache_size);
-  bool CacheContains(int thread_id, const NNKey& key);
-  std::optional<NNInferResult> CacheGet(int thread_id, const NNKey& key);
+  // One lookup (counts a lookup / hit). With the shared cache another thread
+  // may evict between two calls, so callers look up once and keep the result.
+  std::optional<NNInferResult> CacheLookup(int thread_id, const NNKey& key);
   void CacheInsert(int thread_id, const NNKey& key,
                    const NNInferResult& result);
   void LoadBatch(int thread_id, const game::Game& game,
@@ -253,7 +344,11 @@ class NNInterface final {
   inline NNInferResult GetBatch(int thread_id, game::Symmetry sym)
       ABSL_LOCKS_EXCLUDED(mu_) {
     NNInferResult infer_result;
-    engine_->GetBatch(thread_id, infer_result);
+    if (queue_mode_) {
+      infer_result = q_results_[thread_id];
+    } else {
+      engines_[WaveOf(thread_id)]->GetBatch(RowOf(thread_id), infer_result);
+    }
 
     // Clear res_ready without the lock. Safe because:
     // - engine_->GetBatch() completes before this store (release ordering).
@@ -295,7 +390,7 @@ class NNInterface final {
   inline void SignalLoadedAndBlockUntilReady(int thread_id)
       ABSL_LOCKS_EXCLUDED(mu_) {
     if (num_threads_ == 1) {
-      engine_->RunInference();
+      engines_[0]->RunInference();
       return;
     }
     ThreadInfo& thread_info = thread_info_[thread_id];
@@ -304,14 +399,17 @@ class NNInterface final {
       thread_info.loaded_for_inference = true;
       thread_info.res_ready.store(false, std::memory_order_relaxed);
       thread_info.res_cached = false;
+      if (queue_mode_) q_.push_back(thread_id);
     }
     // mu_ released before calling waker — same convention for both strategies.
-    waker_->Wait(thread_info.res_ready, mu_);
+    wakers_[WaveOf(thread_id)]->Wait(thread_info.res_ready, mu_);
   }
 
   inline void BlockUntilReady(int thread_id) ABSL_LOCKS_EXCLUDED(mu_) {
-    waker_->Wait(thread_info_[thread_id].res_ready, mu_);
+    wakers_[WaveOf(thread_id)]->Wait(thread_info_[thread_id].res_ready, mu_);
   }
+
+  int RowOf(int canonical_tid) const { return canonical_tid % wave_size_; }
 
   NNKey MakeKey(const game::Game& game, game::Color color_to_move) const;
 
@@ -319,6 +417,28 @@ class NNInterface final {
   void InferLoop();
   void Infer() ABSL_LOCKS_EXCLUDED(mu_);
   bool ShouldInfer() const;
+
+  // EXP shared interface: inference loop / step for wave `only` (-1: any).
+  struct WaveCond {
+    const NNInterface* self;
+    int only;
+  };
+  static bool AnyWaveReady(WaveCond* c);
+  bool WaveShouldInfer(int wave) const;
+  void InferWavesLoop(int only);
+  void InferWaves(int only) ABSL_LOCKS_EXCLUDED(mu_);
+
+  // EXP queue mode.
+  static bool QueueReady(NNInterface* self);
+  void InferQueueLoop();
+  void InferQueue() ABSL_LOCKS_EXCLUDED(mu_);
+  bool queue_mode_ = false;
+  int q_engine_batch_ = 0;
+  int q_min_fill_ = 1;
+  int64_t q_min_fill_timeout_us_ = 0;
+  std::deque<int> q_ ABSL_GUARDED_BY(mu_);  // queued thread ids.
+  std::vector<GoFeatures> q_staged_;        // per thread, written by owner.
+  std::vector<NNInferResult> q_results_;    // per thread, written by infer.
 
   std::string id_;
   int num_registered_threads_ ABSL_GUARDED_BY(mu_);
@@ -333,25 +453,53 @@ class NNInterface final {
 
   // Inference thread. Runs inference until told to stop.
   std::thread infer_thread_;
+  // EXP shared interface: wave inference threads (empty when num_waves_ == 1).
+  std::vector<std::thread> wave_infer_threads_;
+  static constexpr int kMaxWaves = 2;
+  int num_waves_ = 1;
+  int wave_size_;       // num_threads_ / num_waves_.
+  int last_wave_ = -1;  // last wave run by a shared infer thread.
   std::atomic<bool> running_;
 
   std::array<core::LRUCache<NNKey, NNInferResult>, constants::kMaxNumThreads>
       thread_caches_;  // Per-thread cache.
+  // EXP shared cache (see EnableSharedCache / EnableKataCache).
+  bool shared_cache_ = false;  // either kind.
+  bool kata_cache_ = false;
+  using KataEntry = std::shared_ptr<const std::pair<NNKey, NNInferResult>>;
+  std::unique_ptr<KataEntry[]> kc_entries_;
+  uint64_t kc_mask_ = 0;
+  std::unique_ptr<std::mutex[]> kc_mutexes_;
+  uint64_t kc_mutex_mask_ = 0;
+  core::SpinMutex shared_cache_mu_;
+  core::LRUCache<NNKey, NNInferResult> shared_cache_lru_;
+  // Per thread: the cache hit found by LoadEntry, returned by the matching
+  // FetchEntry (written and read only by the owning thread).
+  std::vector<std::optional<std::pair<NNKey, NNInferResult>>> load_hits_;
+  std::atomic<int64_t> nnc_lookups_{0};
+  std::atomic<int64_t> nnc_hits_{0};
   const int64_t timeout_;
 
-  // Engine.
-  std::unique_ptr<Engine> engine_;
+  // Engines: one per wave (one when not shared).
+  std::vector<std::unique_ptr<Engine>> engines_;
 
   // Per-thread symmetries.
   absl::InlinedVector<game::Symmetry, constants::kMaxNumThreads> symmetries_;
 
   // Explicit signalling.
   const int num_shared_search_tasks_;
-  int num_signaled_search_tasks_ = 0;
-  int num_exited_search_tasks_ = 0;
+  // Per wave; index 0 only when not shared.
+  std::array<int, kMaxWaves> num_signaled_search_tasks_{};
+  std::array<int, kMaxWaves> num_exited_search_tasks_{};
 
   // Wakeup strategy: owns the waiting/notification mechanism.
-  std::unique_ptr<Waker> waker_;
+  // One per wave.
+  std::vector<std::unique_ptr<Waker>> wakers_;
+
+  // INST: RunInference() intervals since the last InstTakeIntervals().
+  absl::Mutex inst_iv_mu_;
+  std::vector<std::pair<int64_t, int64_t>> inst_iv_
+      ABSL_GUARDED_BY(inst_iv_mu_);
 };
 
 }  // namespace nn
