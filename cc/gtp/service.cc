@@ -647,8 +647,6 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
     search_params.total_visit_budget = use_visit_budget ? cfg_.n : 1 << 20;
     search_params.total_visit_time_ms = time_ms;
     Search::Result res;
-    // Count this search's NN cache lookups only (not pondering's).
-    nn_interface_->TakeCacheCounters();
     {
       ponder_trace::SearchScope scope(
           "GENMOVE", "root=" + std::to_string((uintptr_t)current_root()) +
@@ -661,11 +659,6 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
       std::cerr << "Thought for " << res.time_ms
                 << "ms. Visits=" << res.num_visits << "\n";
     }
-    const nn::NNCache::Counters nnc = nn_interface_->TakeCacheCounters();
-    std::cerr << "NNC lookups=" << nnc.lookups << " hits=" << nnc.hits
-              << " hit_rate="
-              << (nnc.lookups > 0 ? double(nnc.hits) / nnc.lookups : 0.0)
-              << "\n";
     move = res.move;
   } else {
     CHECK(cfg_.use_puct || cfg_.sampling_num_moves == 0) << "Not Supported";

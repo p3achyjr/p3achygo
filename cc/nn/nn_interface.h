@@ -181,9 +181,6 @@ class NNInterface final {
   // Whether to include the board's simple-ko point in the NN cache key.
   void SetCacheKeyKo(bool b) { cache_key_ko_ = b; }
 
-  // NN cache lookup / hit counts since the last call, then resets them.
-  NNCache::Counters TakeCacheCounters() { return cache_->TakeCounters(); }
-
   // Blocks until result is ready.
   NNInferResult LoadAndGetInference(int thread_id, const game::Game& game,
                                     game::Color color_to_move,

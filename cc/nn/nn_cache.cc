@@ -14,8 +14,8 @@ PerThreadNNCache::PerThreadNNCache(int num_threads, size_t total_size) {
   }
 }
 
-std::optional<NNInferResult> PerThreadNNCache::GetImpl(int thread_id,
-                                                       const NNKey& key) {
+std::optional<NNInferResult> PerThreadNNCache::Get(int thread_id,
+                                                   const NNKey& key) {
   return caches_[thread_id].Get(key);
 }
 
@@ -36,8 +36,8 @@ SharedNNCache::SharedNNCache(size_t num_entries, int log2_mutexes) {
   mutex_mask_ = (uint64_t{1} << log2_mutexes) - 1;
 }
 
-std::optional<NNInferResult> SharedNNCache::GetImpl(int /*thread_id*/,
-                                                    const NNKey& key) {
+std::optional<NNInferResult> SharedNNCache::Get(int /*thread_id*/,
+                                                const NNKey& key) {
   if (entries_ == nullptr) return std::nullopt;
   const uint64_t slot = SlotOf(key);
   Entry entry;

@@ -89,20 +89,6 @@ TEST_CASE("SharedNNCache: get after insert, full-key compare") {
   CHECK(IsResult(*hit, 4.0f));
 }
 
-TEST_CASE("SharedNNCache: lookup / hit counters") {
-  SharedNNCache cache(1024);
-  CHECK(!cache.Get(0, Key(1)).has_value());
-  cache.Insert(0, Key(1), Result(1.0f));
-  CHECK(cache.Get(0, Key(1)).has_value());
-  CHECK(cache.Get(0, Key(1)).has_value());
-  NNCache::Counters c = cache.TakeCounters();
-  CHECK(c.lookups == 3);
-  CHECK(c.hits == 2);
-  c = cache.TakeCounters();
-  CHECK(c.lookups == 0);
-  CHECK(c.hits == 0);
-}
-
 TEST_CASE("SharedNNCache: one slot, inserts overwrite") {
   SharedNNCache cache(1);
   cache.Insert(0, Key(1), Result(1.0f));
@@ -145,7 +131,7 @@ TEST_CASE("SharedNNCache: concurrent get / insert stress") {
   CHECK(hits.load() > 0);
 }
 
-TEST_CASE("PerThreadNNCache: per-thread entries, LRU eviction, counters") {
+TEST_CASE("PerThreadNNCache: per-thread entries, LRU eviction") {
   PerThreadNNCache cache(/*num_threads=*/2, /*total_size=*/4);  // 2 per thread
   cache.Insert(0, Key(1), Result(1.0f));
   CHECK(cache.Get(0, Key(1)).has_value());
@@ -156,9 +142,6 @@ TEST_CASE("PerThreadNNCache: per-thread entries, LRU eviction, counters") {
   CHECK(cache.Get(0, Key(1)).has_value());
   CHECK(!cache.Get(0, Key(2)).has_value());
   CHECK(cache.Get(0, Key(3)).has_value());
-  NNCache::Counters c = cache.TakeCounters();
-  CHECK(c.lookups == 6);
-  CHECK(c.hits == 4);
 }
 
 }  // namespace nn

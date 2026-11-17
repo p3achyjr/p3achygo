@@ -2,7 +2,6 @@
 #define NN_NN_CACHE_H_
 
 #include <array>
-#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -48,40 +47,15 @@ struct NNKey {
 
 /*
  * NN result cache used by NNInterface. `thread_id` is the caller's canonical
- * thread id; implementations may ignore it. Get also counts lookups and hits.
+ * thread id; implementations may ignore it.
  */
 class NNCache {
  public:
-  struct Counters {
-    int64_t lookups = 0;
-    int64_t hits = 0;
-  };
-
   virtual ~NNCache() = default;
 
-  std::optional<NNInferResult> Get(int thread_id, const NNKey& key) {
-    std::optional<NNInferResult> hit = GetImpl(thread_id, key);
-    lookups_.fetch_add(1, std::memory_order_relaxed);
-    if (hit.has_value()) hits_.fetch_add(1, std::memory_order_relaxed);
-    return hit;
-  }
+  virtual std::optional<NNInferResult> Get(int thread_id, const NNKey& key) = 0;
   virtual void Insert(int thread_id, const NNKey& key,
                       const NNInferResult& result) = 0;
-
-  // Lookup / hit counts since the last call (relaxed; for stats only), then
-  // resets them.
-  Counters TakeCounters() {
-    return Counters{lookups_.exchange(0, std::memory_order_relaxed),
-                    hits_.exchange(0, std::memory_order_relaxed)};
-  }
-
- protected:
-  virtual std::optional<NNInferResult> GetImpl(int thread_id,
-                                               const NNKey& key) = 0;
-
- private:
-  std::atomic<int64_t> lookups_{0};
-  std::atomic<int64_t> hits_{0};
 };
 
 /*
@@ -93,12 +67,9 @@ class PerThreadNNCache final : public NNCache {
  public:
   PerThreadNNCache(int num_threads, size_t total_size);
 
+  std::optional<NNInferResult> Get(int thread_id, const NNKey& key) override;
   void Insert(int thread_id, const NNKey& key,
               const NNInferResult& result) override;
-
- protected:
-  std::optional<NNInferResult> GetImpl(int thread_id,
-                                       const NNKey& key) override;
 
  private:
   std::vector<core::LRUCache<NNKey, NNInferResult>> caches_;
@@ -129,6 +100,7 @@ class SharedNNCache final : public NNCache {
   SharedNNCache(SharedNNCache const&) = delete;
   SharedNNCache& operator=(SharedNNCache const&) = delete;
 
+  std::optional<NNInferResult> Get(int thread_id, const NNKey& key) override;
   void Insert(int thread_id, const NNKey& key,
               const NNInferResult& result) override;
 
@@ -136,10 +108,6 @@ class SharedNNCache final : public NNCache {
   size_t num_mutexes() const {
     return mutexes_ == nullptr ? 0 : mutex_mask_ + 1;
   }
-
- protected:
-  std::optional<NNInferResult> GetImpl(int thread_id,
-                                       const NNKey& key) override;
 
  private:
   using Entry = std::shared_ptr<const std::pair<NNKey, NNInferResult>>;
