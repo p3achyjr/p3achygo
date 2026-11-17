@@ -825,7 +825,7 @@ void ServiceImpl::Ponder(std::stop_token token) {
       std::move(engine),
       uses_psearch ? NNInterface::SignalKind::kExplicit
                    : NNInterface::SignalKind::kAuto,
-      1, NNInterface::WakeStrategy::kMutex);
+      1, NNInterface::WakeStrategy::kGenCounter);
   return std::make_unique<ServiceImpl>(std::move(nn_interface), cfg, verbose);
 }
 
