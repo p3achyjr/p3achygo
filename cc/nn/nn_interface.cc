@@ -9,7 +9,6 @@
 #include "absl/log/log.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
-#include "cc/core/lru_cache.h"
 #include "cc/game/symmetry.h"
 #include "cc/nn/engine/go_features.h"
 
@@ -62,6 +61,8 @@ NNInterface::NNInterface(int num_threads, int64_t timeout, size_t cache_size,
       num_threads_(num_threads),
       thread_info_(num_threads_),
       running_(true),
+      cache_(cache_size),
+      held_hits_(num_threads),
       timeout_(timeout),
       engine_(std::move(engine)),
       symmetries_(num_threads_),
@@ -70,13 +71,43 @@ NNInterface::NNInterface(int num_threads, int64_t timeout, size_t cache_size,
       num_signaled_search_tasks_(0),
       num_exited_search_tasks_(0),
       waker_(MakeWaker(wake_strategy)) {
-  InitializeCache(cache_size);
   if (num_threads_ > 1) {
     infer_thread_ = std::thread(&NNInterface::InferLoop, this);
   }
 
   LOG(INFO) << "NNInterface Initialized. Engine Type: `"
             << KindToString(engine_->kind()) << "`";
+}
+
+NNInterface::NNInterface(int num_threads, size_t cache_size,
+                         std::unique_ptr<Engine> engine, int engine_batch,
+                         WakeStrategy wake_strategy)
+    : num_registered_threads_(num_threads),
+      num_threads_(num_threads),
+      signal_kind_(SignalKind::kRoundFree),
+      thread_info_(num_threads),
+      running_(true),
+      cache_(cache_size),
+      held_hits_(num_threads),
+      timeout_(0),
+      engine_(std::move(engine)),
+      symmetries_(num_threads),
+      num_shared_search_tasks_(1),
+      waker_(MakeWaker(wake_strategy)),
+      rf_engine_batch_(engine_batch),
+      rf_staged_(num_threads),
+      rf_results_(num_threads),
+      rf_ownership_(num_threads) {
+  CHECK(num_threads_ > 1) << "round-free NNInterface needs > 1 thread, got "
+                          << num_threads_;
+  CHECK(engine_batch >= 1 && engine_batch <= num_threads_)
+      << "round-free NNInterface needs 1 <= engine_batch <= num_threads, got "
+      << engine_batch << " / " << num_threads_;
+  infer_thread_ = std::thread(&NNInterface::InferRoundFreeLoop, this);
+
+  LOG(INFO) << "NNInterface Initialized (round-free, " << num_threads_
+            << " threads, engine batch " << rf_engine_batch_
+            << "). Engine Type: `" << KindToString(engine_->kind()) << "`";
 }
 
 NNInterface::~NNInterface() {
@@ -89,8 +120,8 @@ NNInterface::~NNInterface() {
   }
 }
 
-NNInterface::NNKey NNInterface::MakeKey(const game::Game& game,
-                                        game::Color color_to_move) const {
+NNKey NNInterface::MakeKey(const game::Game& game,
+                           game::Color color_to_move) const {
   const int num_moves = game.num_moves();
   std::array<game::Loc, constants::kNumLastMoves> last_moves;
   last_moves.fill(kNoopLoc);
@@ -110,12 +141,12 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
                                                Probability& probability) {
   NNKey cache_key = MakeKey(game, color_to_move);
 
-  if (CacheContains(thread_id, cache_key)) {
+  if (std::optional<NNInferResult> hit = cache_.Get(cache_key)) {
     // Cached. Immediately return result.
     absl::MutexLock l(&mu_);
     thread_info_[thread_id].res_cached = true;
 
-    return CacheGet(thread_id, cache_key).value();
+    return *hit;
   }
 
   // Not cached. Load for inference.
@@ -128,13 +159,22 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
   NNInferResult infer_result = GetBatch(thread_id, sym);
 
   // Cache this result.
-  CacheInsert(thread_id, cache_key, infer_result);
+  cache_.Insert(cache_key, infer_result);
   return infer_result;
 }
 
 std::array<float, constants::kNumBoardLocs> NNInterface::LoadAndGetOwnership(
     int thread_id, const Game& game, Color color_to_move) {
   LoadBatch(thread_id, game, color_to_move, Symmetry::kIdentity);
+  if (signal_kind_ == SignalKind::kRoundFree) {
+    {
+      absl::MutexLock l(&mu_);
+      thread_info_[thread_id].wants_ownership = true;
+    }
+    SignalLoadedAndBlockUntilReady(thread_id);
+    thread_info_[thread_id].res_ready.store(false, std::memory_order_release);
+    return rf_ownership_[thread_id];
+  }
   SignalLoadedAndBlockUntilReady(thread_id);
 
   // Inference result is now ready.
@@ -174,8 +214,11 @@ void NNInterface::LoadEntry(int thread_id, int offset, const game::Game& game,
   const int canonical_tid = thread_id + offset;
   NNKey cache_key = MakeKey(game, color_to_move);
 
-  if (CacheContains(canonical_tid, cache_key)) {
-    // Cached. Do not need to wait for this thread.
+  if (std::optional<NNInferResult> hit = cache_.Get(cache_key)) {
+    // Cached. Do not need to wait for this thread. Hold the result for
+    // FetchEntry: the shared cache may evict the entry before then.
+    held_hits_[canonical_tid] = *hit;
+    thread_info_[canonical_tid].hit_held = true;
     absl::MutexLock l(&mu_);
     thread_info_[canonical_tid].res_cached = true;
     return;
@@ -195,6 +238,9 @@ void NNInterface::LoadEntry(int thread_id, int offset, const game::Game& game,
     thread_info.loaded_for_inference = true;
     thread_info.res_ready.store(false, std::memory_order_relaxed);
     thread_info.res_cached = false;
+    if (signal_kind_ == SignalKind::kRoundFree) {
+      rf_queue_.push_back(canonical_tid);
+    }
   }
 }
 
@@ -205,11 +251,12 @@ NNInferResult NNInterface::FetchEntry(int thread_id, int offset,
   NNKey cache_key = MakeKey(game, color_to_move);
 
   ThreadInfo& thread_info = thread_info_[canonical_tid];
-  if (CacheContains(canonical_tid, cache_key)) {
-    // Cached. Return cache entry.
+  if (thread_info.hit_held) {
+    // Cached at LoadEntry. Return the held entry.
+    thread_info.hit_held = false;
     absl::MutexLock l(&mu_);
     thread_info.res_cached = false;
-    return CacheGet(canonical_tid, cache_key).value();
+    return held_hits_[canonical_tid];
   }
 
   waker_->Wait(thread_info.res_ready, mu_);
@@ -218,29 +265,8 @@ NNInferResult NNInterface::FetchEntry(int thread_id, int offset,
       GetBatch(canonical_tid, symmetries_[canonical_tid]);
 
   // Cache this result.
-  CacheInsert(canonical_tid, cache_key, infer_result);
+  cache_.Insert(cache_key, infer_result);
   return infer_result;
-}
-
-void NNInterface::InitializeCache(size_t cache_size) {
-  for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
-    thread_caches_[thread_id] =
-        LRUCache<NNKey, NNInferResult>(cache_size / num_threads_);
-  }
-}
-
-bool NNInterface::CacheContains(int thread_id, const NNKey& key) {
-  return thread_caches_[thread_id].Contains(key);
-}
-
-std::optional<NNInferResult> NNInterface::CacheGet(int thread_id,
-                                                   const NNKey& key) {
-  return thread_caches_[thread_id].Get(key);
-}
-
-void NNInterface::CacheInsert(int thread_id, const NNKey& key,
-                              const NNInferResult& result) {
-  thread_caches_[thread_id].Insert(key, result);
 }
 
 void NNInterface::LoadBatch(int thread_id, const game::Game& game,
@@ -274,6 +300,11 @@ void NNInterface::LoadBatch(int thread_id, const game::Game& game,
       ApplySymmetry(sym, game.board().GetLadderedStones(), BOARD_LEN);
   input_features.komi = game.komi();
 
+  if (signal_kind_ == SignalKind::kRoundFree) {
+    // The inference thread copies it into an engine row.
+    rf_staged_[thread_id] = input_features;
+    return;
+  }
   engine_->LoadBatch(thread_id, input_features);
 }
 
@@ -409,6 +440,58 @@ bool NNInterface::ShouldInfer() const {
   }
 
   return exists_pending;
+}
+
+/* static */ bool NNInterface::RoundFreeReady(NNInterface* self) {
+  return !self->running_.load(std::memory_order_acquire) ||
+         !self->rf_queue_.empty();
+}
+
+void NNInterface::InferRoundFreeLoop() {
+  while (running_.load(std::memory_order_acquire)) {
+    InferRoundFree();
+  }
+}
+
+// One round-free batch: waits until a row is queued, takes up to
+// rf_engine_batch_ queued rows in queue order, and runs the engine with mu_
+// released. A thread queues a row only after reading its previous result, so
+// the staging and result slots of a taken row are not touched by their owner
+// until res_ready is set below.
+void NNInterface::InferRoundFree() {
+  mu_.LockWhen(absl::Condition(&RoundFreeReady, this));
+  if (!running_.load(std::memory_order_acquire)) {
+    mu_.Unlock();
+    return;
+  }
+  absl::InlinedVector<int, constants::kMaxNumThreads> rows;
+  absl::InlinedVector<bool, constants::kMaxNumThreads> ownership;
+  while (!rf_queue_.empty() &&
+         static_cast<int>(rows.size()) < rf_engine_batch_) {
+    const int t = rf_queue_.front();
+    rf_queue_.pop_front();
+    rows.push_back(t);
+    ownership.push_back(thread_info_[t].wants_ownership);
+  }
+  mu_.Unlock();
+
+  for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
+    engine_->LoadBatch(i, rf_staged_[rows[i]]);
+  }
+  engine_->RunInference();
+  for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
+    engine_->GetBatch(i, rf_results_[rows[i]]);
+    if (ownership[i]) engine_->GetOwnership(i, rf_ownership_[rows[i]]);
+  }
+
+  absl::MutexLock l(&mu_);
+  for (const int t : rows) {
+    ThreadInfo& thread = thread_info_[t];
+    thread.loaded_for_inference = false;
+    thread.wants_ownership = false;
+    thread.res_ready.store(true, std::memory_order_release);
+  }
+  waker_->NotifyAll();
 }
 
 }  // namespace nn
