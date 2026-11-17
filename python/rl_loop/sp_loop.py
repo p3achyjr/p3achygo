@@ -157,6 +157,15 @@ def loop(
             if calib_path.is_file():
                 calib_file = calib_file = str(calib_path)
 
+        # sgfpos positions live on R2 (not in git); a box-side puller keeps a
+        # copy under local_run_dir. Re-read each generation; skip if missing.
+        sgfpos_path = None
+        if config.sgfpos_path:
+            sgfpos_path = Path(local_run_dir, config.sgfpos_path)
+            if not sgfpos_path.is_file():
+                logging.warning(f"sgfpos file {sgfpos_path} missing; no sgfpos starts.")
+                sgfpos_path = None
+
         cmd_str = (
             f"{bin_path} --num_threads={num_threads}"
             + f" --model_path={str(model_path)}"
@@ -175,11 +184,7 @@ def loop(
             + f" --nonroot_var_scale_prior_visits={config.nonroot_var_scale_prior_visits}"
             + f" --nn_timeout_us={config.nn_timeout_us}"
             + (f" --sel_mult_calibration_file={calib_file}" if calib_file else "")
-            + (
-                f" --sgfpos_path={Path(Path(__file__).parent.parent.parent, config.sgfpos_path)}"
-                if config.sgfpos_path
-                else ""
-            )
+            + (f" --sgfpos_path={sgfpos_path}" if sgfpos_path else "")
         )
 
         logging.info(f"Running Self-Play Command:\n'{cmd_str}'")

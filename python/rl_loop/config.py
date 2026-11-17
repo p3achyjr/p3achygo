@@ -64,7 +64,8 @@ class RunConfig(object):
     # LR multiplier for policy/value head params (AdamW path), relative to the
     # global LR. None = heads use adam_lr_ratio like other AdamW params.
     head_lr_factor: Optional[float] = None
-    # Path to sgfpos start positions, relative to the repo root ("" = none).
+    # Path to sgfpos start positions, relative to local_run_dir ("" = none).
+    # The file is a self-play artifact synced from R2, not checked in.
     sgfpos_path: str = ""
 
 
