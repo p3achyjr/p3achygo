@@ -99,6 +99,25 @@ if(BUILD_BINARIES)
         m
         dl
     )
+    add_executable(node_var_dump
+        node_var_dump.cc
+    )
+    target_link_libraries(node_var_dump PRIVATE
+        core_impl
+        game
+        gumbel
+        node_table
+        nn_interface
+        engine_factory
+        tfrecord
+        tf_example_proto
+        absl::flags
+        absl::flags_parse
+        absl::log
+        absl::log_initialize
+        m
+        dl
+    )
     add_executable(scoring_compare scoring_compare.cc)
     target_link_libraries(scoring_compare PRIVATE
         core_impl

@@ -625,6 +625,9 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
   if (root->state == TreeNodeState::kNew) {
     leaf_evaluator_.EvaluateRoot(probability, game, root, color_to_move);
   }
+  if (puct_params.uncertainty_weight_coeff > 0.0f) {
+    root->leaf_weight = UncertaintyLeafWeight(root->init_err_est, puct_params);
+  }
 
   // Freeze visit counts, so we can reconstruct stats later.
   std::array<float, constants::kMaxMovesPerPosition> visit_counts_pre_search;
@@ -641,7 +644,9 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
                color_to_move, root->init_score_est, &search_policy,
                /*first_is_root=*/true);
     const bool use_idempotent_updates =
-        node_table->is_graph() || (bias_cache_ != nullptr);
+        node_table->is_graph() || (bias_cache_ != nullptr) ||
+        puct_params.value_weight_exponent > 0.0f ||
+        puct_params.uncertainty_weight_coeff > 0.0f;
     Backward(search_path, puct_params, use_idempotent_updates);
   }
 
@@ -795,6 +800,11 @@ void GumbelEvaluator::SingleBackup(TreeNode* node, game::Loc action,
                                    bool is_idempotent) {
   if (is_leaf) {
     node->n += 1;
+    if (puct_params.uncertainty_weight_coeff > 0.0f) {
+      // Every visit to a leaf (incl. terminal revisits) is its own eval.
+      node->leaf_weight = UncertaintyLeafWeight(node->init_err_est, puct_params);
+      node->wsum = node->leaf_weight * node->n;
+    }
     node->w = node->init_util_est;
     node->w_outcome = node->init_outcome_est;
     node->v = node->init_util_est;
@@ -813,7 +823,8 @@ void GumbelEvaluator::SingleBackup(TreeNode* node, game::Loc action,
     const float obs_bias = bias_cache_ != nullptr && node->bias_cache_entry
                                ? bias_cache_->UpdateAndFetch(node)
                                : 0.0f;
-    RecomputeNodeStats(node, obs_bias);
+    RecomputeNodeStats(node, obs_bias, puct_params.value_weight_exponent,
+                       puct_params.uncertainty_weight_coeff > 0.0f);
   } else {
     // incremental
     node->w += leaf_q;

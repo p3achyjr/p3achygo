@@ -38,9 +38,61 @@ struct PuctParams {
   float p_opt_weight = 0.0f;
   // FPU reduction at the root. Set to 0 to disable root FPU (KataGo style).
   float root_fpu = kDefaultFPU;
+  // KataGo rootPolicyOptimism: if >= 0, the root prior is
+  // softmax((1 - w) * move_logits + w * opt_logits) (logit-space mix); other
+  // nodes keep p_opt_weight. < 0 disables.
+  float root_p_opt_logit_weight = -1.0f;
   // Distribution variance scaling knobs.
   bool enable_v_cat_var_scaling = false;
   int v_cat_var_scale_prior_visits = 10;
+  // KataGo valueWeightExponent: downweight children with bad values when
+  // recomputing node stats. 0 disables.
+  float value_weight_exponent = 0.0f;
+
+  // N-aware parent-level variance scaling (KataGo cpuctUtilityStdevScale),
+  // one factor per node shared by all children:
+  //   factor = 1 + lambda * (s_hat / s_ref(n) - 1)
+  //   s_hat^2 = (k * s_ref(n)^2 + n * v_var(node)) / (k + n)
+  // s_ref is a reference stddev per floor(log2(n)) bin (fit offline);
+  // entries <= 0 fall back to s_ref_default.
+  static constexpr int kSRefBins = 24;
+  bool enable_parent_var_scaling = false;
+  float parent_var_lambda = 0.85f;
+  float parent_var_prior_visits = 2.0f;
+  float s_ref_default = 0.4f;
+  std::array<float, kSRefBins> s_ref{};
+  // If set, s_ref(n) = c0 + c1 * L + c2 * L^2 with L = log2(n), replacing the
+  // bin table.
+  bool use_s_ref_poly = false;
+  std::array<float, 3> s_ref_poly{};
+
+  // Uncertainty-weighted backups (KataGo useUncertainty): each playout's leaf
+  // counts with weight coeff / (err + coeff / max_weight) / scale, where err =
+  // NN short-term outcome error (init_err_est). Weights replace visit counts in
+  // the backed-up stats and in the PUCT N terms. 0 disables.
+  float uncertainty_weight_coeff = 0.0f;
+  float uncertainty_max_weight = 8.0f;
+  float uncertainty_weight_scale = 1.0f;
+
+  // Per-child variance scaling with shrinkage toward the parent's variance:
+  //   var_hat(a) = (k * v_var(parent) + N(a) * v_var(a)) / (k + N(a))
+  //   factor(a)  = sqrt(var_hat(a)) / ref,
+  //   ref        = sum_a N(a) * sqrt(var_hat(a)) / sum_a N(a)
+  // factor(a) multiplies c_puct for child a. k <= 0 disables.
+  float child_var_shrink_k = 0.0f;
+
+  // Per-child stddev normalized by the mean stddev expected at the child's
+  // visit count, shrunk toward 1:
+  //   rho(a)     = sqrt(v_var(a)) / S(n(a)), 1 if n(a) < 2
+  //   rho_hat(a) = (k + N(a) * rho(a)) / (k + N(a))
+  //   factor(a)  = rho_hat(a) / ref, ref = sum_a N(a) rho_hat(a) / sum_a N(a)
+  // S(n) = c0 + c1 L + c2 L^2, L = log2 n (child_sd_poly). factor(a)
+  // multiplies c_puct for child a and takes precedence over
+  // child_var_shrink_k. k <= 0 disables. nonroot_only leaves the root as if
+  // disabled.
+  float child_sd_norm_k = 0.0f;
+  bool child_sd_norm_nonroot_only = false;
+  std::array<float, 3> child_sd_poly{};
 
   // Forward-declared; defined below once PuctParams is complete.
   class Builder;
@@ -93,6 +145,10 @@ class PuctParams::Builder {
     p_.p_opt_weight = v;
     return *this;
   }
+  Builder& set_root_p_opt_logit_weight(float v) {
+    p_.root_p_opt_logit_weight = v;
+    return *this;
+  }
   Builder& set_root_fpu(float v) {
     p_.root_fpu = v;
     return *this;
@@ -105,11 +161,126 @@ class PuctParams::Builder {
     p_.v_cat_var_scale_prior_visits = v;
     return *this;
   }
+  Builder& set_value_weight_exponent(float v) {
+    p_.value_weight_exponent = v;
+    return *this;
+  }
+  Builder& set_uncertainty_weight_coeff(float v) {
+    p_.uncertainty_weight_coeff = v;
+    return *this;
+  }
+  Builder& set_uncertainty_max_weight(float v) {
+    p_.uncertainty_max_weight = v;
+    return *this;
+  }
+  Builder& set_uncertainty_weight_scale(float v) {
+    p_.uncertainty_weight_scale = v;
+    return *this;
+  }
+  Builder& set_enable_parent_var_scaling(bool v) {
+    p_.enable_parent_var_scaling = v;
+    return *this;
+  }
+  Builder& set_parent_var_lambda(float v) {
+    p_.parent_var_lambda = v;
+    return *this;
+  }
+  Builder& set_parent_var_prior_visits(float v) {
+    p_.parent_var_prior_visits = v;
+    return *this;
+  }
+  Builder& set_s_ref_default(float v) {
+    p_.s_ref_default = v;
+    return *this;
+  }
+  Builder& set_s_ref(const std::array<float, PuctParams::kSRefBins>& v) {
+    p_.s_ref = v;
+    return *this;
+  }
+  Builder& set_s_ref_poly(bool use, const std::array<float, 3>& c) {
+    p_.use_s_ref_poly = use;
+    p_.s_ref_poly = c;
+    return *this;
+  }
+  Builder& set_child_var_shrink_k(float v) {
+    p_.child_var_shrink_k = v;
+    return *this;
+  }
+  Builder& set_child_sd_norm(float k, bool nonroot_only,
+                             const std::array<float, 3>& poly) {
+    p_.child_sd_norm_k = k;
+    p_.child_sd_norm_nonroot_only = nonroot_only;
+    p_.child_sd_poly = poly;
+    return *this;
+  }
   PuctParams build() const { return p_; }
 
  private:
   PuctParams p_;
 };
+
+inline float UncertaintyLeafWeight(const float err, const PuctParams& p) {
+  const float c = p.uncertainty_weight_coeff;
+  return c / (err + c / p.uncertainty_max_weight) / p.uncertainty_weight_scale;
+}
+
+// See PuctParams::child_var_shrink_k. All factors are 1 when no child has a
+// visit or every var_hat is 0.
+inline std::array<float, constants::kMaxMovesPerPosition> ChildVarShrinkFactors(
+    const TreeNode* node, const float k) {
+  std::array<float, constants::kMaxMovesPerPosition> s_hat;
+  const float parent_var = std::max(node->v_var, 0.0f);
+  float weighted_s = 0.0f, total_n = 0.0f;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    const TreeNode* child = node->child(a);
+    const float n_a = child == nullptr ? 0.0f : node->child_visits[a];
+    const float child_var = n_a > 0 ? std::max(child->v_var, 0.0f) : 0.0f;
+    s_hat[a] = std::sqrt((k * parent_var + n_a * child_var) / (k + n_a));
+    weighted_s += n_a * s_hat[a];
+    total_n += n_a;
+  }
+  std::array<float, constants::kMaxMovesPerPosition> factors;
+  if (total_n == 0.0f || weighted_s <= 0.0f) {
+    factors.fill(1.0f);
+    return factors;
+  }
+  const float ref = weighted_s / total_n;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    factors[a] = s_hat[a] / ref;
+  }
+  return factors;
+}
+
+// See PuctParams::child_sd_norm_k. All factors are 1 when no child has a
+// visit.
+inline std::array<float, constants::kMaxMovesPerPosition> ChildSdNormFactors(
+    const TreeNode* node, const float k, const std::array<float, 3>& poly) {
+  std::array<float, constants::kMaxMovesPerPosition> rho_hat;
+  float weighted = 0.0f, total_n = 0.0f;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    const TreeNode* child = node->child(a);
+    const float n_a = child == nullptr ? 0.0f : node->child_visits[a];
+    float rho = 1.0f;
+    if (n_a > 0 && child->n >= 2) {
+      const float l = std::log2(static_cast<float>(child->n));
+      const float s = std::max(poly[0] + poly[1] * l + poly[2] * l * l, 1e-4f);
+      rho = std::sqrt(std::max(child->v_var, 0.0f)) / s;
+    }
+    rho_hat[a] = (k + n_a * rho) / (k + n_a);
+    weighted += n_a * rho_hat[a];
+    total_n += n_a;
+  }
+  std::array<float, constants::kMaxMovesPerPosition> factors;
+  if (total_n == 0.0f || weighted <= 0.0f) {
+    factors.fill(1.0f);
+    return factors;
+  }
+  const float ref = weighted / total_n;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    factors[a] = rho_hat[a] / ref;
+  }
+  return factors;
+}
 
 /*
  * Base class representing a search policy.
@@ -155,13 +326,26 @@ class PuctScorer final {
         enable_m3_bonus_(params.enable_m3_bonus),
         m3_prior_visits_(params.m3_prior_visits),
         p_opt_weight_(params.p_opt_weight),
+        root_p_opt_logit_weight_(params.root_p_opt_logit_weight),
         root_fpu_(params.root_fpu),
         enable_v_cat_var_scaling_(params.enable_v_cat_var_scaling),
+        enable_parent_var_scaling_(params.enable_parent_var_scaling),
+        parent_var_lambda_(params.parent_var_lambda),
+        parent_var_prior_visits_(params.parent_var_prior_visits),
+        s_ref_default_(params.s_ref_default),
+        s_ref_(params.s_ref),
+        use_s_ref_poly_(params.use_s_ref_poly),
+        s_ref_poly_(params.s_ref_poly),
+        use_leaf_weights_(params.uncertainty_weight_coeff > 0.0f),
+        child_var_shrink_k_(params.child_var_shrink_k),
+        child_sd_norm_k_(params.child_sd_norm_k),
+        child_sd_norm_nonroot_only_(params.child_sd_norm_nonroot_only),
+        child_sd_poly_(params.child_sd_poly),
         q_fn_(q_fn),
         n_fn_(n_fn) {};
 
   static inline float ScaleCPuct(float c_puct, const float c_puct_visit_scaling,
-                                 const int n) {
+                                 const float n) {
     const float c_puct_visit_scaling_term =
         c_puct_visit_scaling * std::log((n + 500.0f) / 500.0f);
     c_puct += c_puct_visit_scaling_term;
@@ -181,6 +365,26 @@ class PuctScorer final {
     const std::array<int, constants::kMaxMovesPerPosition> child_visits =
         node->child_visits;
     const std::array<float, constants::kMaxMovesPerPosition> move_probs = [&] {
+      if (is_root && root_p_opt_logit_weight_ >= 0.0f) {
+        // log(opt_probs) = opt logits - logsumexp; the constant cancels.
+        const float w = root_p_opt_logit_weight_;
+        std::array<float, constants::kMaxMovesPerPosition> mixed;
+        float max_l = -std::numeric_limits<float>::infinity();
+        for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+          mixed[a] = (1.0f - w) * node->move_logits[a] +
+                     w * std::log(std::max(node->opt_probs[a], 1e-30f));
+          max_l = std::max(max_l, mixed[a]);
+        }
+        float sum = 0.0f;
+        for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+          mixed[a] = std::exp(mixed[a] - max_l);
+          sum += mixed[a];
+        }
+        for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+          mixed[a] /= sum;
+        }
+        return mixed;
+      }
       if (p_opt_weight_ == 0.0f) {
         return node->move_probs;
       } else if (p_opt_weight_ == 1.0f) {
@@ -249,14 +453,47 @@ class PuctScorer final {
     const float fpu = is_root ? root_fpu_ : kDefaultFPU;
     const float v_fpu = v - fpu * std::sqrt(p_explored);
 
-    // Scale c_puct.
-    const float c_puct = ScaleCPuct(c_puct_, c_puct_visit_scaling_, n);
-    const float c_puct_v_2 = ScaleCPuct(c_puct_v_2_, c_puct_visit_scaling_, n);
+    // N-aware parent-level variance scaling (see PuctParams).
+    const float c_puct_parent_factor = [&]() -> float {
+      if (!enable_parent_var_scaling_ || n < 1) {
+        return 1.0f;
+      }
+      const float s_ref = [&]() -> float {
+        if (use_s_ref_poly_) {
+          const float l = std::log2(static_cast<float>(n));
+          return s_ref_poly_[0] + s_ref_poly_[1] * l + s_ref_poly_[2] * l * l;
+        }
+        int bin = 0;
+        for (int m = n; m > 1 && bin < PuctParams::kSRefBins - 1; m >>= 1) {
+          ++bin;
+        }
+        return s_ref_[bin] > 0.0f ? s_ref_[bin] : s_ref_default_;
+      }();
+      const float k = parent_var_prior_visits_;
+      const float var_hat = (k * s_ref * s_ref + n * v_var) / (k + n);
+      return 1.0f + parent_var_lambda_ * (std::sqrt(var_hat) / s_ref - 1.0f);
+    }();
+
+    // Uncertainty-weighted backups: children count with their edge weights
+    // instead of visits, and the node's own eval with its leaf weight.
+    std::array<float, constants::kMaxMovesPerPosition> child_weights{};
+    if (use_leaf_weights_) {
+      for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+        child_weights[a] = ChildEdgeWeight(node, a);
+      }
+    }
 
     // Finally, compute PUCT values.
     // Compute PUCT values.
     // const float canonical_n = n_fn_(n, n_in_flight);
     const float canonical_n = [&]() {
+      if (use_leaf_weights_) {
+        float total_w = node->leaf_weight;
+        for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+          total_w += child_weights[a] + child_visits_in_flight[a];
+        }
+        return total_w;
+      }
       float total_n = 1;  // Initialize to 1 to account for visit to root. This
                           // prevents the case where the exploration term
                           // devolves to 0 when a node has no child visits.
@@ -265,6 +502,24 @@ class PuctScorer final {
       }
       return total_n;
     }();
+
+    // Scale c_puct.
+    const float n_for_cpuct = use_leaf_weights_ ? canonical_n : n;
+    const float c_puct = ScaleCPuct(c_puct_, c_puct_visit_scaling_, n_for_cpuct) *
+                         c_puct_parent_factor;
+    const float c_puct_v_2 =
+        ScaleCPuct(c_puct_v_2_, c_puct_visit_scaling_, n_for_cpuct);
+    std::array<float, constants::kMaxMovesPerPosition> child_var_shrink_factors;
+    if (child_var_shrink_k_ > 0.0f) {
+      child_var_shrink_factors = ChildVarShrinkFactors(node, child_var_shrink_k_);
+    }
+    const bool use_child_sd_norm =
+        child_sd_norm_k_ > 0.0f && !(child_sd_norm_nonroot_only_ && is_root);
+    std::array<float, constants::kMaxMovesPerPosition> child_sd_norm_factors;
+    if (use_child_sd_norm) {
+      child_sd_norm_factors =
+          ChildSdNormFactors(node, child_sd_norm_k_, child_sd_poly_);
+    }
     std::array<std::pair<int, float>, constants::kMaxMovesPerPosition> pucts{};
     for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
       // Katago-style root variance scaling. I have no intuition as to why this
@@ -292,9 +547,13 @@ class PuctScorer final {
                float(prior_weight + child_n);
       };
       const float c_puct_var_scale_factor =
-          enable_var_scaling_ ? c_puct_var_child_scale_factor() : 1.0f;
+          use_child_sd_norm          ? child_sd_norm_factors[a]
+          : child_var_shrink_k_ > 0.0f ? child_var_shrink_factors[a]
+          : enable_var_scaling_      ? c_puct_var_child_scale_factor()
+                                     : 1.0f;
       const float canonical_child_n =
-          n_fn_(child_visits[a], child_visits_in_flight[a]);
+          use_leaf_weights_ ? child_weights[a] + child_visits_in_flight[a]
+                            : n_fn_(child_visits[a], child_visits_in_flight[a]);
       const float canonical_q =
           q_fn_(child_visits[a] > 0 ? qs[a] : v_fpu, child_visits[a],
                 child_visits_in_flight[a]);
@@ -436,8 +695,21 @@ class PuctScorer final {
   const bool enable_m3_bonus_;
   const int m3_prior_visits_;
   const float p_opt_weight_;
+  const float root_p_opt_logit_weight_;
   const float root_fpu_;
   const bool enable_v_cat_var_scaling_;
+  const bool enable_parent_var_scaling_;
+  const float parent_var_lambda_;
+  const float parent_var_prior_visits_;
+  const float s_ref_default_;
+  const std::array<float, PuctParams::kSRefBins> s_ref_;
+  const bool use_s_ref_poly_;
+  const std::array<float, 3> s_ref_poly_;
+  const bool use_leaf_weights_;
+  const float child_var_shrink_k_;
+  const float child_sd_norm_k_;
+  const bool child_sd_norm_nonroot_only_;
+  const std::array<float, 3> child_sd_poly_;
   QFn q_fn_;
   NFn n_fn_;
 };

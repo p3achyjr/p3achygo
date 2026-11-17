@@ -61,6 +61,32 @@ struct PlayerSearchConfig {
   int v_cat_var_scale_prior_visits = 10;
   float p_opt_weight = 0.0f;
   float root_fpu = 0.1f;
+  // KataGo rootPolicyOptimism (logit-space root mix). < 0 disables.
+  float root_p_opt_logit_weight = -1.0f;
+  // KataGo valueWeightExponent (Gumbel/PUCT path only). 0 disables.
+  float value_weight_exponent = 0.0f;
+  // false: start every search from a fresh root (no subtree carried over).
+  bool tree_reuse = true;
+  // N-aware parent variance scaling (see mcts::PuctParams).
+  bool enable_parent_var_scaling = false;
+  float parent_var_lambda = 0.85f;
+  float parent_var_prior_visits = 2.0f;
+  float s_ref_default = 0.4f;
+  // Loaded from `s_ref_path`: whitespace-separated stddev per floor(log2 n)
+  // bin. Missing bins stay 0 and fall back to s_ref_default.
+  std::array<float, mcts::PuctParams::kSRefBins> s_ref{};
+  // `s_ref_poly: c0 c1 c2` -> s_ref(n) = c0 + c1 L + c2 L^2, L = log2 n.
+  bool use_s_ref_poly = false;
+  std::array<float, 3> s_ref_poly{};
+  // Uncertainty-weighted backups (see mcts::PuctParams). 0 disables.
+  float uncertainty_weight_coeff = 0.0f;
+  float uncertainty_max_weight = 8.0f;
+  float uncertainty_weight_scale = 1.0f;
+  float child_var_shrink_k = 0.0f;
+  // See mcts::PuctParams::child_sd_norm_k. `child_sd_poly: c0 c1 c2`.
+  float child_sd_norm_k = 0.0f;
+  bool child_sd_norm_nonroot_only = false;
+  std::array<float, 3> child_sd_poly{};
   int sampling_num_moves = 0;
   float sampling_temperature = 0.0f;
 
@@ -210,7 +236,55 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.p_opt_weight = std::stof(val);
     else if (key == "root_fpu")
       cfg.root_fpu = std::stof(val);
-    else if (key == "sampling_temperature")
+    else if (key == "root_p_opt_logit_weight")
+      cfg.root_p_opt_logit_weight = std::stof(val);
+    else if (key == "value_weight_exponent")
+      cfg.value_weight_exponent = std::stof(val);
+    else if (key == "tree_reuse")
+      cfg.tree_reuse = internal::ParseBool(val);
+    else if (key == "enable_parent_var_scaling")
+      cfg.enable_parent_var_scaling = internal::ParseBool(val);
+    else if (key == "parent_var_lambda")
+      cfg.parent_var_lambda = std::stof(val);
+    else if (key == "parent_var_prior_visits")
+      cfg.parent_var_prior_visits = std::stof(val);
+    else if (key == "s_ref_default")
+      cfg.s_ref_default = std::stof(val);
+    else if (key == "uncertainty_weight_coeff")
+      cfg.uncertainty_weight_coeff = std::stof(val);
+    else if (key == "uncertainty_max_weight")
+      cfg.uncertainty_max_weight = std::stof(val);
+    else if (key == "uncertainty_weight_scale")
+      cfg.uncertainty_weight_scale = std::stof(val);
+    else if (key == "child_var_shrink_k")
+      cfg.child_var_shrink_k = std::stof(val);
+    else if (key == "child_sd_norm_k")
+      cfg.child_sd_norm_k = std::stof(val);
+    else if (key == "child_sd_norm_nonroot_only")
+      cfg.child_sd_norm_nonroot_only = internal::ParseBool(val);
+    else if (key == "child_sd_poly") {
+      std::istringstream ss(val);
+      if (!(ss >> cfg.child_sd_poly[0] >> cfg.child_sd_poly[1] >>
+            cfg.child_sd_poly[2])) {
+        throw std::runtime_error("child_sd_poly needs 3 floats: " + val);
+      }
+    }
+    else if (key == "s_ref_path") {
+      std::ifstream sf(val);
+      if (!sf.is_open()) {
+        throw std::runtime_error("Could not open s_ref_path: " + val);
+      }
+      float s;
+      for (int i = 0; i < mcts::PuctParams::kSRefBins && (sf >> s); ++i) {
+        cfg.s_ref[i] = s;
+      }
+    } else if (key == "s_ref_poly") {
+      std::istringstream ss(val);
+      if (!(ss >> cfg.s_ref_poly[0] >> cfg.s_ref_poly[1] >> cfg.s_ref_poly[2])) {
+        throw std::runtime_error("s_ref_poly needs 3 floats: " + val);
+      }
+      cfg.use_s_ref_poly = true;
+    } else if (key == "sampling_temperature")
       cfg.sampling_temperature = std::stof(val);
     else if (key == "sampling_num_moves")
       cfg.sampling_num_moves = std::stoi(val);
@@ -299,6 +373,25 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
   ROW(v_cat_var_scale_prior_visits, i_);
   ROW(p_opt_weight, f);
   ROW(root_fpu, f);
+  ROW(root_p_opt_logit_weight, f);
+  ROW(value_weight_exponent, f);
+  ROW(tree_reuse, b);
+  ROW(enable_parent_var_scaling, b);
+  ROW(parent_var_lambda, f);
+  ROW(parent_var_prior_visits, f);
+  ROW(s_ref_default, f);
+  ROW(use_s_ref_poly, b);
+  auto poly = [&](const std::array<float, 3>& c) {
+    return f(c[0]) + " " + f(c[1]) + " " + f(c[2]);
+  };
+  ROW(s_ref_poly, poly);
+  ROW(uncertainty_weight_coeff, f);
+  ROW(uncertainty_max_weight, f);
+  ROW(uncertainty_weight_scale, f);
+  ROW(child_var_shrink_k, f);
+  ROW(child_sd_norm_k, f);
+  ROW(child_sd_norm_nonroot_only, b);
+  ROW(child_sd_poly, poly);
   ROW(sampling_temperature, f);
   ROW(sampling_num_moves, i_);
   ROW(num_threads_per_game, i_);

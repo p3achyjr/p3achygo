@@ -1,6 +1,7 @@
 #ifndef MCTS_TREE_H_
 #define MCTS_TREE_H_
 
+#include <array>
 #include <cmath>
 #include <memory>
 
@@ -44,6 +45,11 @@ struct TreeNode final {
   float v = 0;
   float v_var = 0;
   double v_m3 = 0;  // non-standardized skewness (3rd moment)
+  // Uncertainty-weighted backups (PuctParams::uncertainty_weight_coeff > 0):
+  // this node's own leaf weight and the total weight of its subtree
+  // (own + children's edge weights). Unused when the feature is off.
+  float leaf_weight = 1;
+  float wsum = 1;
 
   std::array<float, kNumVBuckets> v_categorical_prior{};
   std::array<uint32_t, kNumVBuckets> v_categorical{};
@@ -177,10 +183,86 @@ inline void AdvanceState(TreeNode* node) {
   node->state.store(TreeNodeState::kNnEvaluated, std::memory_order_release);
 }
 
-inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f) {
+// CDF of Student's t with 3 degrees of freedom.
+inline double TDist3Cdf(const double t) {
+  const double x = t / std::sqrt(3.0);
+  return 0.5 + (x / (1.0 + x * x) + std::atan(x)) / M_PI;
+}
+
+// KataGo's value weighting (Search::downweightBadChildrenAndNormalizeWeight):
+// scales each visited child's weight by p^exponent, where p is the t3 CDF of
+// how far the child's utility (parent's perspective) sits from the weighted
+// mean of the children, in units of a visit-based stdev. Weights are then
+// rescaled to their original sum.
+inline void DownweightBadChildren(
+    const TreeNode* node, const float value_weight_exponent,
+    std::array<float, constants::kMaxMovesPerPosition>& child_weights) {
+  double total_weight = 0.0, weighted_utility = 0.0;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    if (child_weights[a] == 0) continue;
+    total_weight += child_weights[a];
+    weighted_utility += child_weights[a] * -node->child(a)->v;
+  }
+  if (total_weight <= 0.0) return;
+
+  const double simple_value = weighted_utility / total_weight;
+  double new_total_weight = 0.0;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    if (child_weights[a] == 0) continue;
+    const double precision = 1.5 * std::sqrt(child_weights[a]);
+    const double stdev = std::sqrt(0.00000001 + 1.0 / precision);
+    const double z = (-node->child(a)->v - simple_value) / stdev;
+    const double p = TDist3Cdf(z) + 0.0001;
+    child_weights[a] *= std::pow(p, value_weight_exponent);
+    new_total_weight += child_weights[a];
+  }
+
+  const double factor = total_weight / new_total_weight;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    child_weights[a] *= factor;
+  }
+}
+
+// Edge weight of child `a` under uncertainty-weighted backups: the child's
+// subtree weight scaled to the visits that came through this edge (KataGo's
+// getChildWeight).
+inline float ChildEdgeWeight(const TreeNode* node, int a) {
+  const TreeNode* child = node->child(a);
+  if (child == nullptr || child->n <= 0) return 0.0f;
+  return child->wsum * node->child_visits[a] / child->n;
+}
+
+inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f,
+                               const float value_weight_exponent = 0.0f,
+                               const bool use_leaf_weights = false) {
+  // Weight of each child in the aggregate stats. Visit counts unless leaf
+  // (uncertainty) weights or value weighting are enabled.
+  std::array<float, constants::kMaxMovesPerPosition> child_weights{};
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    if (node->child(a) == nullptr) continue;
+    child_weights[a] = use_leaf_weights ? ChildEdgeWeight(node, a)
+                                        : node->child_visits[a];
+  }
+  if (value_weight_exponent > 0.0f) {
+    DownweightBadChildren(node, value_weight_exponent, child_weights);
+  }
+
+  // The node's own evaluation counts with its leaf weight; the denominator is
+  // the total weight (= n when leaf weights are off).
+  const float own_w = use_leaf_weights ? node->leaf_weight : 1.0f;
+  float denom = node->n;
+  if (use_leaf_weights) {
+    denom = own_w;
+    for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+      denom += child_weights[a];
+    }
+  }
+
   const float adj_init_util_est = node->init_util_est - obs_bias;
-  float w = adj_init_util_est, w_outcome = node->init_outcome_est,
-        total_score = node->init_score_est, w_err = node->init_err_est;
+  float w = own_w * adj_init_util_est,
+        w_outcome = own_w * node->init_outcome_est,
+        total_score = own_w * node->init_score_est,
+        w_err = own_w * node->init_err_est;
   int max_child_n = 0;
   for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
     // flip signs.
@@ -188,17 +270,17 @@ inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f) {
     if (child == nullptr) {
       continue;
     }
-    w -= (node->child_visits[a] * child->v);
-    w_outcome -= (node->child_visits[a] * child->v_outcome);
-    total_score -= (node->child_visits[a] * child->score);
+    w -= (child_weights[a] * child->v);
+    w_outcome -= (child_weights[a] * child->v_outcome);
+    total_score -= (child_weights[a] * child->score);
     max_child_n = node->child_visits[a] > max_child_n ? node->child_visits[a]
                                                       : max_child_n;
-    w_err += node->child_visits[a] * child->v_err;
+    w_err += child_weights[a] * child->v_err;
   }
-  float v = w / node->n;
-  float v_outcome = w_outcome / node->n;
-  float score = total_score / node->n;
-  float v_err = w_err / node->n;
+  float v = w / denom;
+  float v_outcome = w_outcome / denom;
+  float score = total_score / denom;
+  float v_err = w_err / denom;
 
   // Variance of a mixture distribution:
   // Var(Y) = (1/N) * sum(i : 0...k) ni(vi + (mi - m)^2)
@@ -208,16 +290,16 @@ inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f) {
   // Derived by defining X - u = X - u_i + d_i, and solving for E[(X - u)^3]
   float m = adj_init_util_est - v;
   float m_outcome = node->init_outcome_est - v_outcome;
-  float m2 = m * m;
-  float m2_outcome = m_outcome * m_outcome;
+  float m2 = own_w * m * m;
+  float m2_outcome = own_w * m_outcome * m_outcome;
   double m3 = m2 * m;
   double m3_outcome = m2_outcome * m_outcome;
   for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
-    const int n_a = node->child_visits[a];
-    if (n_a == 0) {
+    if (node->child_visits[a] == 0) {
       continue;
     }
 
+    const float n_a = child_weights[a];
     const TreeNode* child = node->child(a);
     const float dv = -child->v - v;
     const float dv_outcome = -child->v_outcome - v_outcome;
@@ -238,11 +320,12 @@ inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f) {
   node->v_outcome = v_outcome;
   node->score = score;
   node->max_child_n = max_child_n;
-  node->v_var = m2 / node->n;
-  node->v_outcome_var = m2_outcome / node->n;
-  node->v_m3 = m3 / node->n;
-  node->v_outcome_m3 = m3_outcome / node->n;
+  node->v_var = m2 / denom;
+  node->v_outcome_var = m2_outcome / denom;
+  node->v_m3 = m3 / denom;
+  node->v_outcome_m3 = m3_outcome / denom;
   node->v_err = v_err;
+  if (use_leaf_weights) node->wsum = denom;
 }
 
 inline void UpdateVCategorial(TreeNode* node, const float leaf_q_outcome) {

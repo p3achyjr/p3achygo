@@ -47,6 +47,7 @@ ABSL_FLAG(int, cache_size, constants::kDefaultNNCacheSize / 2,
           "Default size of cache.");
 ABSL_FLAG(int, timeout, kTimeoutUs, "NNInterface timeout in us.");
 ABSL_FLAG(std::string, id, "", "Optional Run ID");
+ABSL_FLAG(float, komi, 7.5f, "Komi for all eval games.");
 
 // Per-player config files. When provided, each file sets the base config for
 // that player. Individual flags below still take priority if explicitly passed
@@ -458,7 +459,8 @@ int main(int argc, char** argv) {
             << eval::FormatPlayerConfigs(cur_cfg, cand_cfg);
 
   // Spawn games.
-  EvalConfig config = EvalConfig{cur_cfg, cand_cfg};
+  EvalConfig config = EvalConfig{cur_cfg, cand_cfg, absl::GetFlag(FLAGS_komi)};
+  LOG(INFO) << "Komi: " << config.komi;
   std::vector<std::thread> threads;
   std::vector<std::future<EvalResult>> eval_results;
   for (int game_id = 0; game_id < num_games; ++game_id) {
