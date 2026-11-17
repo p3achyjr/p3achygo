@@ -70,6 +70,15 @@ if(BUILD_TESTS)
     add_test(NAME nn_interface_sync_test COMMAND nn_interface_sync_test)
     set_tests_properties(nn_interface_sync_test PROPERTIES TIMEOUT 265)
 
+    add_executable(nn_interface_reeval_test __tests__/nn_interface_reeval_test.cc)
+    target_link_libraries(nn_interface_reeval_test PRIVATE
+        nn_interface
+        game
+        core_impl
+        core_doctest
+    )
+    add_test(NAME nn_interface_reeval_test COMMAND nn_interface_reeval_test)
+
     add_executable(nn_cache_test __tests__/nn_cache_test.cc)
     target_link_libraries(nn_cache_test PRIVATE
         nn_interface

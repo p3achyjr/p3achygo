@@ -146,6 +146,15 @@ struct PlayerSearchConfig {
   // GTP round-free search: the shared NN cache has 2^nn_cache_log2_size slots
   // (0 disables it).
   int nn_cache_log2_size = 18;
+
+  // Degenerate-eval re-evaluation (NNInterface::SetDegenerateReeval): re-run
+  // an eval whose max policy logit > nn_reeval_max_logit or whose
+  // |E[outcome] - E[mcts_value_dist]| > nn_reeval_value_disagree under up to
+  // nn_reeval_max_retries other symmetries. 0 = off. Not applied in
+  // round-based parallel search (kExplicit).
+  float nn_reeval_max_logit = 0.0f;
+  float nn_reeval_value_disagree = 0.0f;
+  int nn_reeval_max_retries = 2;
 };
 
 namespace internal {
@@ -235,6 +244,12 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.nn_batch_size = std::stoi(val);
     else if (key == "nn_cache_log2_size")
       cfg.nn_cache_log2_size = std::stoi(val);
+    else if (key == "nn_reeval_max_logit")
+      cfg.nn_reeval_max_logit = std::stof(val);
+    else if (key == "nn_reeval_value_disagree")
+      cfg.nn_reeval_value_disagree = std::stof(val);
+    else if (key == "nn_reeval_max_retries")
+      cfg.nn_reeval_max_retries = std::stoi(val);
     else if (key == "use_bias_cache")
       cfg.use_bias_cache = internal::ParseBool(val);
     else if (key == "bias_cache_alpha")
@@ -417,6 +432,9 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
   ROW(round_free, b);
   ROW(nn_batch_size, i_);
   ROW(nn_cache_log2_size, i_);
+  ROW(nn_reeval_max_logit, f);
+  ROW(nn_reeval_value_disagree, f);
+  ROW(nn_reeval_max_retries, i_);
 #undef ROW
 
   // Compute column widths.

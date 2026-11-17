@@ -877,7 +877,12 @@ void ServiceImpl::Ponder(std::stop_token token) {
         NNInterface::WakeStrategy::kGenCounter);
     nn_interface->SetNumCacheLastMoves(0);
     nn_interface->SetCacheKeyKo(true);
-    return std::make_unique<ServiceImpl>(std::move(nn_interface), cfg, verbose);
+    nn_interface->SetDegenerateReeval(cfg.nn_reeval_max_logit,
+                                      cfg.nn_reeval_value_disagree,
+                                      cfg.nn_reeval_max_retries);
+    NNInterface* nn_interface_ptr = nn_interface.get();
+    return std::make_unique<ServiceImpl>(std::move(nn_interface),
+                                         nn_interface_ptr, 0, cfg, verbose);
   }
   std::unique_ptr<nn::Engine> engine =
       nn::CreateEngine(nn::KindFromEnginePath(model_path), model_path,
@@ -888,6 +893,9 @@ void ServiceImpl::Ponder(std::stop_token token) {
       uses_psearch ? NNInterface::SignalKind::kExplicit
                    : NNInterface::SignalKind::kAuto,
       1, NNInterface::WakeStrategy::kMutex);
+  nn_interface->SetDegenerateReeval(cfg.nn_reeval_max_logit,
+                                    cfg.nn_reeval_value_disagree,
+                                    cfg.nn_reeval_max_retries);
   NNInterface* nn_interface_ptr = nn_interface.get();
   return std::make_unique<ServiceImpl>(std::move(nn_interface),
                                        nn_interface_ptr, 0, cfg, verbose);

@@ -181,6 +181,28 @@ class NNInterface final {
   // Whether to include the board's simple-ko point in the NN cache key.
   void SetCacheKeyKo(bool b) { cache_key_ko_ = b; }
 
+  // Degenerate-eval re-evaluation (LoadAndGetInference, and FetchEntry in
+  // round-free mode). An
+  // eval is degenerate if its largest policy logit exceeds `max_logit` (> 0),
+  // or if |E[outcome] - E[mcts_value_dist]| (both in [-1, 1]) exceeds
+  // `value_disagree` (> 0). A degenerate eval is re-run under up to
+  // `max_retries` other symmetries; the first non-degenerate result is kept
+  // (else the one with the smallest max logit).
+  // Motivation: nbt nets give confident garbage on some symmetries
+  // (2026-11-17: top logit ~20-30 vs <=15 normally, |score| > 100, outcome
+  // head contradicting the saturated mcts-value head).
+  void SetDegenerateReeval(float max_logit, float value_disagree,
+                           int max_retries) {
+    reeval_max_logit_ = max_logit;
+    reeval_value_disagree_ = value_disagree;
+    reeval_max_retries_ = max_retries;
+    if (max_logit > 0.0f || value_disagree > 0.0f) {
+      LOG(INFO) << "NN re-eval on: max_logit=" << max_logit
+                << " value_disagree=" << value_disagree
+                << " max_retries=" << max_retries;
+    }
+  }
+
   // Blocks until result is ready.
   NNInferResult LoadAndGetInference(int thread_id, const game::Game& game,
                                     game::Color color_to_move,
@@ -325,6 +347,21 @@ class NNInterface final {
   const SignalKind signal_kind_;
   int num_cache_last_moves_ = constants::kNumLastMoves;
   bool cache_key_ko_ = false;
+  bool IsDegenerate(const NNInferResult& r, float* max_logit) const;
+  // If re-eval is on and `infer_result` is degenerate, re-runs the position
+  // under up to reeval_max_retries_ other symmetries (blocking) and replaces
+  // `infer_result` with the first non-degenerate one (else the smallest max
+  // logit). `offset` picks the cyclic start among the 7 other symmetries.
+  void MaybeReeval(int thread_id, const game::Game& game,
+                   game::Color color_to_move, game::Symmetry sym, int offset,
+                   NNInferResult& infer_result);
+  float reeval_max_logit_ = 0.0f;       // 0 = off.
+  float reeval_value_disagree_ = 0.0f;  // 0 = off.
+  int reeval_max_retries_ = 0;
+  std::atomic<int64_t> num_evals_ = 0;
+  std::atomic<int64_t> num_degenerate_evals_ = 0;
+  std::atomic<int64_t> num_reeval_extra_evals_ = 0;
+  std::atomic<int64_t> num_reeval_rescued_ = 0;
 
   // Synchronization
   absl::Mutex mu_;

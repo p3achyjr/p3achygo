@@ -2,7 +2,9 @@
 
 #include <stdlib.h>
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <thread>
 
 #include "absl/log/check.h"
@@ -158,6 +160,10 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
 
   NNInferResult infer_result = GetBatch(thread_id, sym);
 
+  MaybeReeval(thread_id, game, color_to_move, sym,
+              core::RandRange(probability.prng(), 0, game::kSymUpperBound - 1),
+              infer_result);
+
   // Cache this result.
   cache_->Insert(thread_id, cache_key, infer_result);
   return infer_result;
@@ -265,9 +271,74 @@ NNInferResult NNInterface::FetchEntry(int thread_id, int offset,
   NNInferResult infer_result =
       GetBatch(canonical_tid, symmetries_[canonical_tid]);
 
+  // Round-free only: a retry is one more queued row, so it does not stall
+  // other threads. Round-based modes would need another signal this round.
+  if (signal_kind_ == SignalKind::kRoundFree) {
+    MaybeReeval(
+        canonical_tid, game, color_to_move, symmetries_[canonical_tid],
+        static_cast<int>(game.board().hash() % (game::kSymUpperBound - 1)),
+        infer_result);
+  }
+
   // Cache this result.
   cache_->Insert(canonical_tid, cache_key, infer_result);
   return infer_result;
+}
+
+void NNInterface::MaybeReeval(int thread_id, const game::Game& game,
+                              game::Color color_to_move, game::Symmetry sym,
+                              int offset, NNInferResult& infer_result) {
+  if (reeval_max_logit_ <= 0.0f && reeval_value_disagree_ <= 0.0f) return;
+  // kExplicit fires a batch only when every search task signals, which a
+  // single thread's retry does not do: it would block until the timeout.
+  if (signal_kind_ == SignalKind::kExplicit) return;
+  const int64_t n_evals = ++num_evals_;
+  float best;
+  if (!IsDegenerate(infer_result, &best)) return;
+  const int64_t n_degen = ++num_degenerate_evals_;
+  // Other symmetries in cyclic order from `offset` (all distinct from `sym`).
+  for (int r = 0; r < reeval_max_retries_ && r < game::kSymUpperBound - 1;
+       ++r) {
+    const Symmetry alt =
+        static_cast<Symmetry>((static_cast<int>(sym) + 1 +
+                               (offset + r) % (game::kSymUpperBound - 1)) %
+                              game::kSymUpperBound);
+    LoadBatch(thread_id, game, color_to_move, alt);
+    SignalLoadedAndBlockUntilReady(thread_id);
+    NNInferResult alt_result = GetBatch(thread_id, alt);
+    ++num_reeval_extra_evals_;
+    float alt_max;
+    if (!IsDegenerate(alt_result, &alt_max)) {
+      infer_result = alt_result;
+      ++num_reeval_rescued_;
+      break;
+    }
+    if (alt_max < best) {
+      best = alt_max;
+      infer_result = alt_result;
+    }
+  }
+  if (n_degen % 1000 == 1) {
+    LOG(INFO) << "NN re-eval: evals " << n_evals << ", degenerate " << n_degen
+              << ", extra evals " << num_reeval_extra_evals_.load()
+              << ", rescued " << num_reeval_rescued_.load();
+  }
+}
+
+bool NNInterface::IsDegenerate(const NNInferResult& r, float* max_logit) const {
+  *max_logit = *std::max_element(r.move_logits.begin(), r.move_logits.end());
+  if (reeval_max_logit_ > 0.0f && *max_logit > reeval_max_logit_) return true;
+  if (reeval_value_disagree_ > 0.0f) {
+    const float v = r.value_probs[1] - r.value_probs[0];
+    float mcts_v = 0.0f;
+    for (int i = 0; i < constants::kNumVBuckets; ++i) {
+      mcts_v +=
+          r.mcts_value_dist[i] *
+          (-1.0f + (2 * i + 1) / static_cast<float>(constants::kNumVBuckets));
+    }
+    if (std::abs(v - mcts_v) > reeval_value_disagree_) return true;
+  }
+  return false;
 }
 
 void NNInterface::LoadBatch(int thread_id, const game::Game& game,

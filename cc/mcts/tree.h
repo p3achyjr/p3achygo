@@ -212,10 +212,10 @@ inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f,
     }
     // Edge weight: child's subtree weight scaled to the visits that came
     // through this edge (KataGo's childWeight).
-    const float edge_w =
-        use_leaf_weights
-            ? child->wsum * node->child_visits[a] / std::max(child->n, 1)
-            : static_cast<float>(node->child_visits[a]);
+    const float edge_w = use_leaf_weights
+                             ? child->wsum * node->child_visits[a] /
+                                   std::max(static_cast<int>(child->n), 1)
+                             : static_cast<float>(node->child_visits[a]);
     w -= (edge_w * child->v);
     wsum += edge_w;
     w_outcome -= (node->child_visits[a] * child->v_outcome);

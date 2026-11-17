@@ -108,6 +108,9 @@ int BatchLoop(const std::string& model_path, eval::PlayerSearchConfig cfg,
                          nn::NNInterface::SignalKind::kExplicit, max_games)
                    : std::make_unique<nn::NNInterface>(
                          num_threads, nn_timeout_us, 16384, std::move(engine));
+  nn_interface->SetDegenerateReeval(cfg.nn_reeval_max_logit,
+                                    cfg.nn_reeval_value_disagree,
+                                    cfg.nn_reeval_max_retries);
   if (!uses_psearch) {
     // Games register their thread only while searching (see
     // Service::CreateSharedService), so start with nothing registered.
