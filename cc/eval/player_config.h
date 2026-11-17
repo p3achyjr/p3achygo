@@ -85,8 +85,8 @@ struct PlayerSearchConfig {
   // N function: "identity" | "virtual_visit"
   std::string n_fn = "virtual_visit";
 
-  // Collision policy: "abort" | "retry" | "smart_retry"
-  std::string collision_policy = "abort";
+  // Collision policy: "abort" | "retry" | "smart_retry" | "smart_retry_depth"
+  std::string collision_policy = "smart_retry_depth";
 
   // Collision detector: "noop" | "n_in_flight" | "level_saturation" | "product"
   std::string collision_detector = "noop";
@@ -99,6 +99,11 @@ struct PlayerSearchConfig {
   // "smart_retry" collision policies.
   int max_collision_retries = 4;
 
+  // "smart_retry_depth": fork at argmin gap / (i + 1 - c)^p over path index i
+  // (root = 0); i + 1 - c <= 0 is ineligible. c = p = 0 is "smart_retry".
+  float fork_depth_c = 0.8f;
+  float fork_depth_p = 0.5f;
+
   // Search mode: "concurrent" | "batch"
   std::string search_mode = "concurrent";
 
@@ -107,6 +112,19 @@ struct PlayerSearchConfig {
 
   // BuUct descent: maximum allowed ratio of in-flight visits to total visits.
   float max_o_ratio = 1.0f;
+
+  // GTP only: run round-free search when num_threads_per_game > 1 (workers
+  // never wait for each other; see SignalKind::kRoundFree). false runs
+  // round-based search.
+  bool round_free = true;
+
+  // GTP round-free search: NN engine batch size, at most num_threads_per_game
+  // (the engine must be built for it). 0 = num_threads_per_game.
+  int nn_batch_size = 0;
+
+  // GTP round-free search: the shared NN cache has 2^nn_cache_log2_size slots
+  // (0 disables it).
+  int nn_cache_log2_size = 18;
 };
 
 namespace internal {
@@ -190,6 +208,12 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
     // Other
     else if (key == "use_mcgs")
       cfg.use_mcgs = internal::ParseBool(val);
+    else if (key == "round_free")
+      cfg.round_free = internal::ParseBool(val);
+    else if (key == "nn_batch_size")
+      cfg.nn_batch_size = std::stoi(val);
+    else if (key == "nn_cache_log2_size")
+      cfg.nn_cache_log2_size = std::stoi(val);
     else if (key == "use_bias_cache")
       cfg.use_bias_cache = internal::ParseBool(val);
     else if (key == "bias_cache_alpha")
@@ -236,6 +260,10 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.vl_delta = std::stof(val);
     else if (key == "max_collision_retries")
       cfg.max_collision_retries = std::stoi(val);
+    else if (key == "fork_depth_c")
+      cfg.fork_depth_c = std::stof(val);
+    else if (key == "fork_depth_p")
+      cfg.fork_depth_p = std::stof(val);
     else if (key == "search_mode")
       cfg.search_mode = val;
     else if (key == "descent_policy")
@@ -311,9 +339,14 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
   ROW(collision_detector, s);
   ROW(vl_delta, f);
   ROW(max_collision_retries, i_);
+  ROW(fork_depth_c, f);
+  ROW(fork_depth_p, f);
   ROW(search_mode, s);
   ROW(descent_policy, s);
   ROW(max_o_ratio, f);
+  ROW(round_free, b);
+  ROW(nn_batch_size, i_);
+  ROW(nn_cache_log2_size, i_);
 #undef ROW
 
   // Compute column widths.

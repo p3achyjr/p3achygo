@@ -163,9 +163,9 @@ class CountingEngine : public Engine {
  private:
   const int num_threads_;
   std::atomic<int> generation_;
-  std::vector<std::atomic<int>> buffer_;       // [thread * kSlotElems + i]
-  std::vector<std::atomic<int>> result_gen_;   // gen written by RunInference
-  std::vector<std::atomic<int>> load_gen_;     // gen captured at LoadBatch
+  std::vector<std::atomic<int>> buffer_;      // [thread * kSlotElems + i]
+  std::vector<std::atomic<int>> result_gen_;  // gen written by RunInference
+  std::vector<std::atomic<int>> load_gen_;    // gen captured at LoadBatch
   std::atomic<bool> race_detected_;
   std::atomic<bool> stale_detected_;
   std::atomic<bool> wrong_slot_detected_;

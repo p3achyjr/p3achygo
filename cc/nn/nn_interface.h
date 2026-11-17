@@ -3,8 +3,10 @@
 
 #include <array>
 #include <atomic>
+#include <deque>
 #include <optional>
 #include <thread>
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/inlined_vector.h"
@@ -13,12 +15,12 @@
 #include "absl/status/status.h"
 #include "absl/synchronization/mutex.h"
 #include "cc/constants/constants.h"
-#include "cc/core/lru_cache.h"
 #include "cc/core/probability.h"
 #include "cc/game/color.h"
 #include "cc/game/game.h"
 #include "cc/game/symmetry.h"
 #include "cc/nn/engine/engine.h"
+#include "cc/nn/nn_cache.h"
 
 namespace tensorflow {
 class GraphDef;
@@ -87,6 +89,12 @@ class NNInterface final {
   enum class SignalKind : uint8_t {
     kAuto = 0,
     kExplicit = 1,
+    // Round-free search: workers queue rows at any time; the inference thread
+    // runs up to `engine_batch` queued rows (FIFO) as soon as one is queued.
+    // Rows are staged per thread and results copied out per thread, so a
+    // thread's row is not tied to an engine row. SignalReadyForInference()
+    // has no effect. Built with the round-free constructor only.
+    kRoundFree = 2,
   };
 
   // How workers are notified when inference completes.
@@ -153,6 +161,11 @@ class NNInterface final {
               std::unique_ptr<Engine> engine, SignalKind signal_kind,
               int num_shared_search_tasks,
               WakeStrategy wake_strategy = WakeStrategy::kGenCounter);
+  // Round-free search (SignalKind::kRoundFree). `engine` has batch size
+  // `engine_batch`, at most `num_threads`.
+  NNInterface(int num_threads, size_t cache_size,
+              std::unique_ptr<Engine> engine, int engine_batch,
+              WakeStrategy wake_strategy = WakeStrategy::kGenCounter);
   ~NNInterface();
 
   // Disable Copy
@@ -204,31 +217,6 @@ class NNInterface final {
 
  private:
   static constexpr int64_t kTimeoutUs = 400;
-  struct NNKey {
-    game::Color color_to_move;
-    game::Zobrist::Hash board_hash;
-    // [oldest, ..., most recent]; unused leading slots are kNoopLoc.
-    std::array<game::Loc, constants::kNumLastMoves> last_moves;
-    float komi;
-    game::Loc ko;  // kNoopLoc unless cache_key_ko_.
-
-    friend bool operator==(const NNKey& c0, const NNKey& c1) {
-      return c0.color_to_move == c1.color_to_move &&
-             c0.board_hash == c1.board_hash && c0.last_moves == c1.last_moves &&
-             c0.komi == c1.komi && c0.ko == c1.ko;
-    }
-
-    template <typename H>
-    friend H AbslHashValue(H h, const NNKey& c) {
-      h = H::combine(std::move(h), c.color_to_move, c.board_hash);
-      for (const game::Loc& loc : c.last_moves) {
-        h = H::combine(std::move(h), loc);
-      }
-      h = H::combine(std::move(h), c.komi, c.ko);
-      return h;
-    }
-  };
-
   struct ThreadInfo {
     bool registered = true;  // If this thread is registered.
     bool loaded_for_inference =
@@ -236,24 +224,28 @@ class NNInterface final {
     std::atomic<bool> res_ready{false};  // Whether inference result is ready.
     bool res_cached = false;  // Whether the cache key is cached. Also toggles
                               // whether to cache the NN inference result.
+    // Owner thread only: LoadEntry found its key in the cache and holds the
+    // result in held_hits_ for the matching FetchEntry (a shared cache may
+    // evict the entry in between).
+    bool hit_held = false;
+    // kRoundFree: copy this row's ownership out after inference.
+    bool wants_ownership = false;
 
     ThreadInfo() = default;
     ThreadInfo(const ThreadInfo&) = delete;
     ThreadInfo& operator=(const ThreadInfo&) = delete;
   };
 
-  // Cache Helpers.
-  void InitializeCache(size_t cache_size);
-  bool CacheContains(int thread_id, const NNKey& key);
-  std::optional<NNInferResult> CacheGet(int thread_id, const NNKey& key);
-  void CacheInsert(int thread_id, const NNKey& key,
-                   const NNInferResult& result);
   void LoadBatch(int thread_id, const game::Game& game,
                  game::Color color_to_move, game::Symmetry sym);
   inline NNInferResult GetBatch(int thread_id, game::Symmetry sym)
       ABSL_LOCKS_EXCLUDED(mu_) {
     NNInferResult infer_result;
-    engine_->GetBatch(thread_id, infer_result);
+    if (signal_kind_ == SignalKind::kRoundFree) {
+      infer_result = rf_results_[thread_id];
+    } else {
+      engine_->GetBatch(thread_id, infer_result);
+    }
 
     // Clear res_ready without the lock. Safe because:
     // - engine_->GetBatch() completes before this store (release ordering).
@@ -304,6 +296,8 @@ class NNInterface final {
       thread_info.loaded_for_inference = true;
       thread_info.res_ready.store(false, std::memory_order_relaxed);
       thread_info.res_cached = false;
+      if (signal_kind_ == SignalKind::kRoundFree)
+        rf_queue_.push_back(thread_id);
     }
     // mu_ released before calling waker — same convention for both strategies.
     waker_->Wait(thread_info.res_ready, mu_);
@@ -320,6 +314,11 @@ class NNInterface final {
   void Infer() ABSL_LOCKS_EXCLUDED(mu_);
   bool ShouldInfer() const;
 
+  // Round-free inference loop: one batch per call.
+  void InferRoundFreeLoop();
+  void InferRoundFree() ABSL_LOCKS_EXCLUDED(mu_);
+  static bool RoundFreeReady(NNInterface* self);
+
   std::string id_;
   int num_registered_threads_ ABSL_GUARDED_BY(mu_);
   const int num_threads_;
@@ -335,8 +334,10 @@ class NNInterface final {
   std::thread infer_thread_;
   std::atomic<bool> running_;
 
-  std::array<core::LRUCache<NNKey, NNInferResult>, constants::kMaxNumThreads>
-      thread_caches_;  // Per-thread cache.
+  // Per-thread LRU caches, or one shared cache in round-free mode.
+  std::unique_ptr<NNCache> cache_;
+  // Per-thread cache hits held between LoadEntry and FetchEntry.
+  std::vector<NNInferResult> held_hits_;
   const int64_t timeout_;
 
   // Engine.
@@ -352,6 +353,13 @@ class NNInterface final {
 
   // Wakeup strategy: owns the waiting/notification mechanism.
   std::unique_ptr<Waker> waker_;
+
+  // kRoundFree only.
+  int rf_engine_batch_ = 0;
+  std::deque<int> rf_queue_ ABSL_GUARDED_BY(mu_);  // Queued thread ids.
+  std::vector<GoFeatures> rf_staged_;              // Per-thread input.
+  std::vector<NNInferResult> rf_results_;          // Per-thread output.
+  std::vector<std::array<float, constants::kNumBoardLocs>> rf_ownership_;
 };
 
 }  // namespace nn
