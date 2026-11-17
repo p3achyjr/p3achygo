@@ -3,7 +3,9 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstring>
 #include <optional>
+#include <vector>
 
 #include "absl/synchronization/mutex.h"
 #include "cc/constants/constants.h"
@@ -41,8 +43,112 @@ enum class CollisionDetectorKind : uint8_t {
   kProduct = 3,
 };
 
+// INST: generation-counter barrier (selected with env P3_BARRIER=gen).
+//
+// Each thread reads `gen_` BEFORE decrementing `remaining_`, so the value it
+// waits on is always the pre-release generation (the release needs this
+// thread's own decrement). The last arriver runs `on_last`, re-arms
+// `remaining_`, then publishes with a release increment of `gen_` and wakes
+// everyone. Visibility: all arrivals are acq_rel RMWs on `remaining_` (one
+// release sequence), so every thread's pre-arrival writes happen-before the
+// last arriver's `on_last`; waiters acquire `gen_`, so `on_last` and all
+// pre-arrival writes happen-before every waiter's return. `remaining_` is
+// re-armed before the release, and no thread can arrive at the next use until
+// it has observed the release, so the next use always starts at n.
+class GenBarrier {
+ public:
+  void Init(int n) {
+    n_ = n;
+    remaining_.store(n, std::memory_order_relaxed);
+  }
+
+  template <typename F>
+  void ArriveAndWait(F&& on_last) {
+    const uint32_t g = gen_.load(std::memory_order_acquire);
+    if (remaining_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+      on_last();
+      remaining_.store(n_, std::memory_order_relaxed);
+      gen_.fetch_add(1, std::memory_order_release);
+      gen_.notify_all();
+      return;
+    }
+    // atomic::wait may return spuriously; loop until the generation changes.
+    while (gen_.load(std::memory_order_acquire) == g) {
+      gen_.wait(g, std::memory_order_acquire);
+    }
+  }
+
+ private:
+  int n_ = 0;
+  std::atomic<int> remaining_{0};
+  std::atomic<uint32_t> gen_{0};
+};
+
+// INST pipelined search: state shared by the two thread groups. Each group
+// owns a GlobalSearchState (its own round, barriers and NNInterface); the
+// groups take turns descending: a group waits for the token at the start of
+// each round and hands it to the other group once all its workers have
+// submitted (descent_remaining hits 0). A group that has exited no longer
+// blocks the other.
+struct PipeShared {
+  std::atomic<int> token{0};
+  std::array<std::atomic<bool>, 2> exited{};
+  std::atomic<uint32_t> gen{0};
+  // Visits of both groups, for the visit budget (checked once per round by
+  // each group's round reset, so all workers of a group stop together).
+  std::atomic<int> total_num_visits{0};
+
+  void Reset() {
+    token.store(0, std::memory_order_relaxed);
+    exited[0].store(false, std::memory_order_relaxed);
+    exited[1].store(false, std::memory_order_relaxed);
+    total_num_visits.store(0, std::memory_order_relaxed);
+  }
+  void Notify() {
+    gen.fetch_add(1, std::memory_order_release);
+    gen.notify_all();
+  }
+  void Pass(int to) {
+    token.store(to, std::memory_order_release);
+    Notify();
+  }
+  void Exit(int g) {
+    exited[g].store(true, std::memory_order_release);
+    Notify();
+  }
+  void WaitTurn(int g) {
+    while (true) {
+      const uint32_t cur = gen.load(std::memory_order_acquire);
+      if (token.load(std::memory_order_acquire) == g ||
+          exited[1 - g].load(std::memory_order_acquire)) {
+        return;
+      }
+      gen.wait(cur, std::memory_order_acquire);
+    }
+  }
+};
+
 struct GlobalSearchState {
   absl::Mutex mu;
+
+  // INST pipelined search: group index (0 when not pipelined) and the shared
+  // pipeline state (nullptr when not pipelined).
+  int group = 0;
+  PipeShared* pipe = nullptr;
+  // INST: NNInterface used by this state's workers (per-interface inference
+  // timestamps for PHASES).
+  nn::NNInterface* inst_nn = nullptr;
+  // INST: this state's wave in inst_nn (EXP shared interface; else 0).
+  int inst_wave = 0;
+  // EXP round-free search (P3_ROUNDFREE=1 with a queue-mode NNInterface):
+  // no rounds or barriers; Descend skips the round submit bookkeeping.
+  bool round_free = false;
+
+  // INST: gen-counter barriers (P3_BARRIER=gen), armed in Search::Run.
+  GenBarrier gen_b1, gen_b2;
+  // INST: per-round timestamps written without mu (CAS max) or by the last
+  // arriver of a gen barrier.
+  std::atomic<int64_t> inst_b1_max{0}, inst_b2_max{0}, inst_b1_release{0};
 
   // Per-round state; all guarded by mu.
   bool did_signal = false;
@@ -78,7 +184,84 @@ struct GlobalSearchState {
   // Optional bias cache
   BiasCache* bias_cache = nullptr;
 
+  // INST lc0-style root picks (P3_ROOT_PICKS). Written by the barrier-2 last
+  // arriver (or before workers spawn); read by workers after the barrier.
+  bool root_picks_valid = false;
+  std::vector<std::pair<game::Loc, TopActions>> root_picks;
+
+  // INST: per-round phase timestamps (steady_clock ns) and accumulators.
+  // All guarded by mu.
+  struct Inst {
+    int64_t round_start = 0, submit_max = 0, submit_sum = 0, submit_n = 0;
+    int64_t fetch_min = INT64_MAX, fetch_max = 0;
+    // accumulators (ns, summed over rounds)
+    int64_t rounds = 0, nn_rounds = 0, a_submit_mean = 0, a_submit_max = 0,
+            a_infer_start = 0, a_infer_end = 0, a_fetch_min = 0,
+            a_fetch_max = 0, a_b1_max = 0, a_b2_max = 0, a_end = 0;
+    // per-thread accumulators flushed each round (ns, summed over threads)
+    int64_t descents = 0, root_wait = 0, root_hold = 0, other_wait = 0,
+            other_hold = 0, table_wait = 0, queue = 0, fetch = 0, backup = 0,
+            b1_wait = 0, b2_wait = 0, root_pre = 0, root_puct = 0;
+    // root picks: ns spent computing picks, rounds with picks, picks checked
+    // against the original locked path.
+    int64_t picks_ns = 0, pick_rounds = 0, picks_seq_checked = 0;
+    // pipelined search: token wait (ns, summed over threads); seqlock check
+    // (P3_SEQCHECK=1): PUCT child reads and reads that overlapped a recompute.
+    int64_t token_wait = 0, seq_reads = 0, seq_overlap = 0;
+    // smart retry: forks, forks at the root, plain retries (path too short),
+    // and sums of fork depth, colliding path length, forced-move rank and
+    // fork score gap (x1e6).
+    int64_t sr_forks = 0, sr_fork_root = 0, sr_plain = 0, sr_depth = 0,
+            sr_path_len = 0, sr_rank = 0, sr_gap_e6 = 0;
+
+    void Add(const Inst& o) {
+      rounds += o.rounds;
+      nn_rounds += o.nn_rounds;
+      a_submit_mean += o.a_submit_mean;
+      a_submit_max += o.a_submit_max;
+      a_infer_start += o.a_infer_start;
+      a_infer_end += o.a_infer_end;
+      a_fetch_min += o.a_fetch_min;
+      a_fetch_max += o.a_fetch_max;
+      a_b1_max += o.a_b1_max;
+      a_b2_max += o.a_b2_max;
+      a_end += o.a_end;
+      descents += o.descents;
+      root_wait += o.root_wait;
+      root_hold += o.root_hold;
+      other_wait += o.other_wait;
+      other_hold += o.other_hold;
+      table_wait += o.table_wait;
+      queue += o.queue;
+      fetch += o.fetch;
+      backup += o.backup;
+      b1_wait += o.b1_wait;
+      b2_wait += o.b2_wait;
+      root_pre += o.root_pre;
+      root_puct += o.root_puct;
+      picks_ns += o.picks_ns;
+      pick_rounds += o.pick_rounds;
+      picks_seq_checked += o.picks_seq_checked;
+      token_wait += o.token_wait;
+      seq_reads += o.seq_reads;
+      seq_overlap += o.seq_overlap;
+      sr_forks += o.sr_forks;
+      sr_fork_root += o.sr_fork_root;
+      sr_plain += o.sr_plain;
+      sr_depth += o.sr_depth;
+      sr_path_len += o.sr_path_len;
+      sr_rank += o.sr_rank;
+      sr_gap_e6 += o.sr_gap_e6;
+    }
+  } inst;
+
   void reset() {
+    inst = Inst{};
+    inst_b1_max.store(0, std::memory_order_relaxed);
+    inst_b2_max.store(0, std::memory_order_relaxed);
+    inst_b1_release.store(0, std::memory_order_relaxed);
+    gen_b1.Init(0);
+    gen_b2.Init(0);
     did_signal = false;
     round_parity = false;
     num_workers = 0;
@@ -96,6 +279,12 @@ struct GlobalSearchState {
     should_stop.store(false, std::memory_order_relaxed);
     should_stop_this_round = false;
     bias_cache = nullptr;
+    root_picks_valid = false;
+    group = 0;
+    pipe = nullptr;
+    inst_nn = nullptr;
+    inst_wave = 0;
+    round_free = false;
   }
 };
 
@@ -140,12 +329,22 @@ class Search final {
   Result Run(core::Probability& probability, game::Game& game,
              NodeTable* node_table, TreeNode* const root,
              game::Color color_to_move, Params params);
-  void StopSearch() { global_search_state_.should_stop = true; }
+  void StopSearch() {
+    global_search_state_.should_stop = true;
+    global_search_state2_.should_stop = true;
+  }
+  // INST pipelined search: a second NNInterface slot. When set, Run() in
+  // concurrent mode splits num_threads into two groups of num_threads / 2,
+  // group 0 on `slot_`, group 1 on `slot2`.
+  void SetPipelineSlot(nn::NNInterface::Slot slot2) { slot2_.emplace(slot2); }
 
  private:
   nn::NNInterface::Slot slot_;
   BiasCache* bias_cache_ = nullptr;
   GlobalSearchState global_search_state_{};
+  std::optional<nn::NNInterface::Slot> slot2_;
+  GlobalSearchState global_search_state2_{};
+  PipeShared pipe_{};
 };
 
 /*
@@ -185,6 +384,119 @@ class DeterministicDescentPolicy final {
     const TopActions top_actions =
         puct_scorer_.TopScores(node, game, color, is_root);
     return {game::AsLoc(top_actions[0].first), top_actions};
+  }
+
+  // INST split PUCT (see PuctScorer::Precompute).
+  using Precomp = typename PuctScorer<QFn, NFn>::Precomp;
+  static constexpr bool kSupportsSplit = true;
+  inline void Precompute(const TreeNode* node, bool is_root,
+                         Precomp* pre) const {
+    puct_scorer_.Precompute(node, is_root, pre);
+  }
+  // node->mu must be held. check: also run ComputeScores and CHECK bitwise
+  // equality.
+  inline DescentStep RunSplit(const Precomp& pre, const TreeNode* node,
+                              const game::Game& game, game::Color color,
+                              bool check) const {
+    const PuctScores pucts = puct_scorer_.Finalize(pre, node);
+    if (check) {
+      const PuctScores ref = puct_scorer_.ComputeScores(node, pre.is_root);
+      for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+        CHECK(ref[a].first == pucts[a].first &&
+              std::memcmp(&ref[a].second, &pucts[a].second, sizeof(float)) == 0)
+            << "split PUCT mismatch a=" << a << " ref=" << ref[a].second
+            << " split=" << pucts[a].second;
+      }
+    }
+    const TopActions top_actions =
+        puct_scorer_.TopScoresFrom(pucts, game, color);
+    return {game::AsLoc(top_actions[0].first), top_actions};
+  }
+
+  // INST lc0-style root picks. Pick k is the TopScores result with the root
+  // in-flight counts of picks 0..k-1 added to the current ones. Must run while
+  // no other thread touches the root (barrier last arriver, or before spawn).
+  inline void RootPicks(const TreeNode* root, const game::Game& game,
+                        game::Color color, int num,
+                        std::vector<DescentStep>* out) const {
+    thread_local Precomp pre;
+    puct_scorer_.Precompute(root, /*is_root=*/true, &pre);
+    std::array<int, constants::kMaxMovesPerPosition> cif;
+    for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+      TreeNode* child = root->child(a);
+      cif[a] = child == nullptr
+                   ? 0
+                   : child->n_in_flight.load(std::memory_order_relaxed);
+    }
+    std::array<int8_t, constants::kMaxMovesPerPosition> legal;
+    legal.fill(-1);
+    out->resize(num);
+    for (int k = 0; k < num; ++k) {
+      const PuctScores pucts = puct_scorer_.FinalizeWith(pre, cif);
+      const TopActions top =
+          puct_scorer_.TopScoresFrom(pucts, game, color, &legal);
+      (*out)[k] = {game::AsLoc(top[0].first), top};
+      if (top[0].first >= 0) cif[top[0].first]++;
+    }
+  }
+
+  // INST check for RootPicks. (1) Memoised legality gives the same TopActions
+  // as the uncached path for every pick. (2) While every earlier pick hit an
+  // existing child, bump those children's real n_in_flight and CHECK that the
+  // original locked path (TopScores -> ComputeScores) returns the same
+  // TopActions bitwise; undo the bumps at the end. Returns the number of picks
+  // compared against the original path.
+  inline int CheckRootPicks(TreeNode* root, const game::Game& game,
+                            game::Color color,
+                            const std::vector<DescentStep>& picks) const {
+    thread_local Precomp pre;
+    puct_scorer_.Precompute(root, /*is_root=*/true, &pre);
+    std::array<int, constants::kMaxMovesPerPosition> cif;
+    for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+      TreeNode* child = root->child(a);
+      cif[a] = child == nullptr
+                   ? 0
+                   : child->n_in_flight.load(std::memory_order_relaxed);
+    }
+    const auto same = [](const TopActions& x, const TopActions& y) {
+      for (int i = 0; i < 4; ++i) {
+        if (x[i].first != y[i].first ||
+            std::memcmp(&x[i].second, &y[i].second, sizeof(float)) != 0) {
+          return false;
+        }
+      }
+      return true;
+    };
+    std::vector<TreeNode*> bumped;
+    bool prefix_exists = true;
+    int n_seq = 0;
+    for (int k = 0; k < static_cast<int>(picks.size()); ++k) {
+      const TopActions uncached = puct_scorer_.TopScoresFrom(
+          puct_scorer_.FinalizeWith(pre, cif), game, color);
+      CHECK(same(uncached, picks[k].second))
+          << "root pick memo mismatch k=" << k;
+      if (prefix_exists) {
+        const TopActions seq =
+            puct_scorer_.TopScores(root, game, color, /*is_root=*/true);
+        CHECK(same(seq, picks[k].second))
+            << "root pick vs sequential mismatch k=" << k;
+        ++n_seq;
+      }
+      const int a = picks[k].second[0].first;
+      if (a < 0) continue;
+      cif[a]++;
+      TreeNode* child = root->child(a);
+      if (child == nullptr) {
+        prefix_exists = false;
+      } else if (prefix_exists) {
+        child->n_in_flight.fetch_add(1, std::memory_order_relaxed);
+        bumped.push_back(child);
+      }
+    }
+    for (TreeNode* child : bumped) {
+      child->n_in_flight.fetch_sub(1, std::memory_order_relaxed);
+    }
+    return n_seq;
   }
 
  private:
@@ -310,6 +622,14 @@ class RetryCollisionPolicy final {
   int num_retries_ = 0;
 };
 
+// INST smart retry: thread-local counters, flushed into
+// GlobalSearchState::inst with the other INST counters.
+struct SrInst {
+  int64_t forks = 0, fork_root = 0, plain = 0, depth = 0, path_len = 0,
+          rank = 0, gap_e6 = 0;
+};
+inline thread_local SrInst tl_sr;
+
 /*
  * Retries by attempting to find the next-best path.
  */
@@ -325,6 +645,7 @@ class SmartRetryCollisionPolicy final {
     }
     ++num_retries_;
     if (search_path.size() <= 1) {
+      ++tl_sr.plain;
       return {CollisionResult::Action::kRetry, std::nullopt};
     }
 
@@ -351,6 +672,16 @@ class SmartRetryCollisionPolicy final {
 
     // fork at min_index.
     const auto& [node, move, top_actions] = search_path[min_index];
+    // INST: forced-move rank is 2 at a new fork node, +1 per repeat fork at
+    // the same node within this descent (top_actions shift left below).
+    sr_rank_ = node == sr_last_node_ ? sr_rank_ + 1 : 2;
+    sr_last_node_ = node;
+    ++tl_sr.forks;
+    tl_sr.fork_root += min_index == 0;
+    tl_sr.depth += min_index;
+    tl_sr.path_len += search_path.size();
+    tl_sr.rank += sr_rank_;
+    tl_sr.gap_e6 += static_cast<int64_t>(min_diff * 1e6);
     // if we retry again from here, the forked move is the best move.
     const auto new_move = game::AsLoc(top_actions[1].first);
     // keep top_actions[0] as the top action as |p0 - pk| is what we want, not
@@ -365,11 +696,17 @@ class SmartRetryCollisionPolicy final {
     return {CollisionResult::Action::kRetry, new_search_path};
   }
 
-  inline void Reset() { num_retries_ = 0; }
+  inline void Reset() {
+    num_retries_ = 0;
+    sr_last_node_ = nullptr;
+    sr_rank_ = 0;
+  }
 
  private:
   const int max_num_retries_;
   int num_retries_ = 0;
+  const TreeNode* sr_last_node_ = nullptr;  // INST
+  int sr_rank_ = 0;                         // INST
 };
 
 /*
