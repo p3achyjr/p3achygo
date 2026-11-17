@@ -109,8 +109,10 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
                                                Color color_to_move,
                                                Probability& probability) {
   NNKey cache_key = MakeKey(game, color_to_move);
+  inst_lookups_.fetch_add(1, std::memory_order_relaxed);
 
   if (CacheContains(thread_id, cache_key)) {
+    inst_hits_.fetch_add(1, std::memory_order_relaxed);
     // Cached. Immediately return result.
     absl::MutexLock l(&mu_);
     thread_info_[thread_id].res_cached = true;

@@ -4,7 +4,10 @@
 
 #include <sys/stat.h>
 
+#include <atomic>
 #include <cctype>
+#include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -346,8 +349,32 @@ int main(int argc, char** argv) {
 
   LOG(INFO) << "Spawned " << num_threads << " threads.";
 
+  // MEASUREMENT ONLY (PR throughput A/B): NN lookups every 15 s.
+  std::atomic<bool> nnc_stop{false};
+  std::thread nnc_reporter([&]() {
+    const auto t0 = std::chrono::steady_clock::now();
+    int64_t cum_lookups = 0, cum_hits = 0;
+    while (!nnc_stop.load()) {
+      for (int i = 0; i < 15 && !nnc_stop.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+      }
+      const auto c = nn_interface->TakeCacheCounters();
+      cum_lookups += c.lookups;
+      cum_hits += c.hits;
+      const double secs = std::chrono::duration<double>(
+                              std::chrono::steady_clock::now() - t0)
+                              .count();
+      fprintf(stderr,
+              "NNCSP t=%.1f lookups=%ld hits=%ld cum_lookups=%ld cum_hits=%ld\n",
+              secs, (long)c.lookups, (long)c.hits, (long)cum_lookups,
+              (long)cum_hits);
+    }
+  });
+
   // Block until we receive signal from stdin.
   WaitForSignal();
+  nnc_stop.store(true);
+  nnc_reporter.join();
 
   for (auto& thread : threads) {
     thread.join();

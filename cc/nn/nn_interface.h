@@ -168,6 +168,17 @@ class NNInterface final {
   // Whether to include the board's simple-ko point in the NN cache key.
   void SetCacheKeyKo(bool b) { cache_key_ko_ = b; }
 
+  // MEASUREMENT ONLY (PR throughput A/B).
+  struct CacheCounters {
+    int64_t lookups = 0;
+    int64_t hits = 0;
+  };
+  CacheCounters TakeCacheCounters() {
+    return {inst_lookups_.exchange(0), inst_hits_.exchange(0)};
+  }
+  std::atomic<int64_t> inst_lookups_{0};
+  std::atomic<int64_t> inst_hits_{0};
+
   // Blocks until result is ready.
   NNInferResult LoadAndGetInference(int thread_id, const game::Game& game,
                                     game::Color color_to_move,
