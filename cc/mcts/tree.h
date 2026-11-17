@@ -6,6 +6,7 @@
 
 #include "absl/synchronization/mutex.h"
 #include "cc/constants/constants.h"
+#include "cc/core/relaxed_atomic.h"
 #include "cc/game/color.h"
 #include "cc/game/zobrist.h"
 #include "cc/mcts/constants.h"
@@ -37,33 +38,37 @@ struct TreeNode final {
   game::Color color_to_move;
 
   // change throughout search
-  // TODO: these are modified/read across threads. This is a latent data
-  // corruption bug on ARM.
-  int n = 0;
-  float w = 0;
-  float v = 0;
-  float v_var = 0;
-  double v_m3 = 0;  // non-standardized skewness (3rd moment)
+  // Written under `mu` (or by a single thread); read by other search threads
+  // without the lock, so they are relaxed atomics (plain loads/stores on
+  // x86-64). Writers must still be serialized.
+  core::RelaxedAtomic<int> n{0};
+  core::RelaxedAtomic<float> w{0};
+  core::RelaxedAtomic<float> v{0};
+  core::RelaxedAtomic<float> v_var{0};
+  core::RelaxedAtomic<double> v_m3{
+      0};  // non-standardized skewness (3rd moment)
 
   std::array<float, kNumVBuckets> v_categorical_prior{};
-  std::array<uint32_t, kNumVBuckets> v_categorical{};
+  std::array<core::RelaxedAtomic<uint32_t>, kNumVBuckets> v_categorical{};
   // combined upside/downside var. The weight of v_categorical_prior is
   // specified by the user.
-  float v_cat_var_up = 0;
-  float v_cat_var_down = 0;
+  core::RelaxedAtomic<float> v_cat_var_up{0};
+  core::RelaxedAtomic<float> v_cat_var_down{0};
 
-  float w_outcome = 0;
-  float v_outcome = 0;
-  float v_outcome_var = 0;
-  double v_outcome_m3 = 0;  // non-standardized skewness (3rd moment)
-  float score = 0;
-  float v_err = 0;
+  core::RelaxedAtomic<float> w_outcome{0};
+  core::RelaxedAtomic<float> v_outcome{0};
+  core::RelaxedAtomic<float> v_outcome_var{0};
+  core::RelaxedAtomic<double> v_outcome_m3{
+      0};  // non-standardized skewness (3rd moment)
+  core::RelaxedAtomic<float> score{0};
+  core::RelaxedAtomic<float> v_err{0};
 
-  int max_child_n = 0;
+  core::RelaxedAtomic<int> max_child_n{0};
 
   std::array<std::atomic<TreeNode*>, constants::kMaxMovesPerPosition>
       children{};
-  std::array<int, constants::kMaxMovesPerPosition> child_visits{};
+  std::array<core::RelaxedAtomic<int>, constants::kMaxMovesPerPosition>
+      child_visits{};
 
   // initial evaluation (conceptual write-once)
   std::array<float, constants::kMaxMovesPerPosition> move_logits{};
@@ -243,6 +248,13 @@ inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f) {
   node->v_m3 = m3 / node->n;
   node->v_outcome_m3 = m3_outcome / node->n;
   node->v_err = v_err;
+}
+
+// Snapshot of node->v_categorical as plain counts.
+inline std::array<uint32_t, kNumVBuckets> VCategorical(const TreeNode* node) {
+  std::array<uint32_t, kNumVBuckets> counts;
+  for (int i = 0; i < kNumVBuckets; ++i) counts[i] = node->v_categorical[i];
+  return counts;
 }
 
 inline void UpdateVCategorial(TreeNode* node, const float leaf_q_outcome) {

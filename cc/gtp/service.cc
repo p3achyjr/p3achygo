@@ -647,6 +647,8 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
     search_params.total_visit_budget = use_visit_budget ? cfg_.n : 1 << 20;
     search_params.total_visit_time_ms = time_ms;
     Search::Result res;
+    // Count this search's NN cache lookups only (not pondering's).
+    nn_interface_->TakeCacheCounters();
     {
       ponder_trace::SearchScope scope(
           "GENMOVE", "root=" + std::to_string((uintptr_t)current_root()) +
@@ -659,6 +661,11 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
       std::cerr << "Thought for " << res.time_ms
                 << "ms. Visits=" << res.num_visits << "\n";
     }
+    const nn::NNCache::Counters nnc = nn_interface_->TakeCacheCounters();
+    std::cerr << "NNC lookups=" << nnc.lookups << " hits=" << nnc.hits
+              << " hit_rate="
+              << (nnc.lookups > 0 ? double(nnc.hits) / nnc.lookups : 0.0)
+              << "\n";
     move = res.move;
   } else {
     CHECK(cfg_.use_puct || cfg_.sampling_num_moves == 0) << "Not Supported";
@@ -817,6 +824,31 @@ void ServiceImpl::Ponder(std::stop_token token) {
     std::string model_path, eval::PlayerSearchConfig cfg, bool verbose) {
   const int num_threads = cfg.num_threads_per_game;
   const bool uses_psearch = num_threads > 1 || cfg.time_ms != 0;
+  if (cfg.round_free && num_threads > 1) {
+    // Round-free search: one round-free NNInterface (engine batch
+    // nn_batch_size, default num_threads) with a shared NN cache of
+    // 2^nn_cache_log2_size slots (0: no cache) keyed on {color, board hash,
+    // komi, simple-ko point}.
+    CHECK(cfg.nn_cache_log2_size >= 0 && cfg.nn_cache_log2_size <= 30)
+        << "nn_cache_log2_size must be in [0, 30], got "
+        << cfg.nn_cache_log2_size;
+    const size_t cache_size =
+        cfg.nn_cache_log2_size == 0 ? 0 : size_t{1} << cfg.nn_cache_log2_size;
+    const int engine_batch =
+        cfg.nn_batch_size > 0 ? cfg.nn_batch_size : num_threads;
+    CHECK(engine_batch <= num_threads)
+        << "nn_batch_size (" << engine_batch
+        << ") must be at most num_threads_per_game (" << num_threads << ")";
+    std::unique_ptr<nn::Engine> engine =
+        nn::CreateEngine(nn::KindFromEnginePath(model_path), model_path,
+                         engine_batch, nn::GetVersionFromModelPath(model_path));
+    std::unique_ptr<NNInterface> nn_interface = std::make_unique<NNInterface>(
+        num_threads, cache_size, std::move(engine), engine_batch,
+        NNInterface::WakeStrategy::kGenCounter);
+    nn_interface->SetNumCacheLastMoves(0);
+    nn_interface->SetCacheKeyKo(true);
+    return std::make_unique<ServiceImpl>(std::move(nn_interface), cfg, verbose);
+  }
   std::unique_ptr<nn::Engine> engine =
       nn::CreateEngine(nn::KindFromEnginePath(model_path), model_path,
                        num_threads, nn::GetVersionFromModelPath(model_path));
