@@ -34,6 +34,7 @@ if(BUILD_BINARIES)
         gtp
         absl::flags
         absl::flags_parse
+        absl::strings
         m
         dl
     )

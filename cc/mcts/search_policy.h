@@ -37,6 +37,10 @@ struct PuctParams {
   int m3_prior_visits = 20;
   // How much to use optimistic policy. Formula: (1 - p_opt_weight) +
   float p_opt_weight = 0.0f;
+  // p_opt_weight used at the root; < 0 means same as p_opt_weight.
+  float root_p_opt_weight = -1.0f;
+  // Mix raw/optimistic policy geometrically (KataGo: interpolate logits).
+  bool p_opt_geometric = false;
   // FPU reduction at the root. Set to 0 to disable root FPU (KataGo style).
   float root_fpu = kDefaultFPU;
   // Distribution variance scaling knobs.
@@ -121,6 +125,14 @@ class PuctParams::Builder {
   }
   Builder& set_p_opt_weight(float v) {
     p_.p_opt_weight = v;
+    return *this;
+  }
+  Builder& set_root_p_opt_weight(float v) {
+    p_.root_p_opt_weight = v;
+    return *this;
+  }
+  Builder& set_p_opt_geometric(bool v) {
+    p_.p_opt_geometric = v;
     return *this;
   }
   Builder& set_root_fpu(float v) {
@@ -229,6 +241,8 @@ class PuctScorer final {
         enable_m3_bonus_(params.enable_m3_bonus),
         m3_prior_visits_(params.m3_prior_visits),
         p_opt_weight_(params.p_opt_weight),
+        root_p_opt_weight_(params.root_p_opt_weight),
+        p_opt_geometric_(params.p_opt_geometric),
         root_fpu_(params.root_fpu),
         enable_v_cat_var_scaling_(params.enable_v_cat_var_scaling),
         se_bonus_x_(params.se_bonus_x),
@@ -264,17 +278,37 @@ class PuctScorer final {
     const std::array<int, constants::kMaxMovesPerPosition> child_visits =
         node->child_visits;
     const std::array<float, constants::kMaxMovesPerPosition> move_probs = [&] {
-      if (p_opt_weight_ == 0.0f) {
+      const float w = (is_root && root_p_opt_weight_ >= 0.0f)
+                          ? root_p_opt_weight_
+                          : p_opt_weight_;
+      if (w == 0.0f) {
         return node->move_probs;
-      } else if (p_opt_weight_ == 1.0f) {
+      } else if (w == 1.0f) {
         return node->opt_probs;
       }
 
       std::array<float, constants::kMaxMovesPerPosition> move_probs;
+      if (p_opt_geometric_) {
+        // p^(1-w) * p_opt^w, renormalized == softmax of interpolated logits.
+        float sum = 0.0f;
+        for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+          const float p = node->move_probs[a], po = node->opt_probs[a];
+          move_probs[a] =
+              (p > 0.0f && po > 0.0f)
+                  ? std::exp((1.0f - w) * std::log(p) + w * std::log(po))
+                  : 0.0f;
+          sum += move_probs[a];
+        }
+        if (sum > 0.0f) {
+          for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+            move_probs[a] /= sum;
+          }
+        }
+        return move_probs;
+      }
       for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
-        move_probs[a] =
-            node->move_probs[a] +
-            p_opt_weight_ * (node->opt_probs[a] - node->move_probs[a]);
+        move_probs[a] = node->move_probs[a] +
+                        w * (node->opt_probs[a] - node->move_probs[a]);
       }
       return move_probs;
     }();
@@ -571,6 +605,8 @@ class PuctScorer final {
   const bool enable_m3_bonus_;
   const int m3_prior_visits_;
   const float p_opt_weight_;
+  const float root_p_opt_weight_;
+  const bool p_opt_geometric_;
   const float root_fpu_;
   const bool enable_v_cat_var_scaling_;
   const float se_bonus_x_;

@@ -34,6 +34,8 @@ mcts::PuctParams MakePuctParams(const eval::PlayerSearchConfig& cfg) {
       .set_enable_m3_bonus(cfg.enable_m3_bonus)
       .set_m3_prior_visits(cfg.m3_prior_visits)
       .set_p_opt_weight(cfg.p_opt_weight)
+      .set_root_p_opt_weight(cfg.root_p_opt_weight)
+      .set_p_opt_geometric(cfg.p_opt_geometric)
       .set_root_fpu(cfg.root_fpu)
       .set_enable_v_cat_var_scaling(cfg.enable_v_cat_var_scaling)
       .set_v_cat_var_scale_prior_visits(cfg.v_cat_var_scale_prior_visits)
@@ -125,6 +127,8 @@ mcts::Search::Params MakeSearchParams(const eval::PlayerSearchConfig& cfg) {
               .set_enable_m3_bonus(cfg.enable_m3_bonus)
               .set_m3_prior_visits(cfg.m3_prior_visits)
               .set_p_opt_weight(cfg.p_opt_weight)
+              .set_root_p_opt_weight(cfg.root_p_opt_weight)
+              .set_p_opt_geometric(cfg.p_opt_geometric)
               .set_root_fpu(cfg.root_fpu)
               .set_enable_v_cat_var_scaling(cfg.enable_v_cat_var_scaling)
               .set_v_cat_var_scale_prior_visits(

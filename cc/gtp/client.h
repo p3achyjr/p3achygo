@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <deque>
+#include <functional>
 #include <sstream>
 #include <thread>
 #include <vector>
@@ -28,6 +29,20 @@ class Client final {
 
   absl::Status Start(std::string model_path, eval::PlayerSearchConfig cfg,
                      bool verbose = false);
+
+  // Batch GTP: drive an already-built service, writing responses through
+  // `sink` instead of stdout. Each call to `sink` is one complete response.
+  void Start(std::unique_ptr<Service> service,
+             std::function<void(const std::string&)> sink);
+
+  // False once a quit command has been processed. The destructor then returns
+  // promptly.
+  bool Running() const { return running_.load(std::memory_order_acquire); }
+
+  // Queues a silent quit: already queued commands still run and answer, then
+  // the threads finish without writing a quit response. Used by batch mode at
+  // shutdown for games that never received a quit.
+  void Stop() ABSL_LOCKS_EXCLUDED(mu_);
 
   // Parses and adds `cmd_string` to the list of commands to process.
   // Returns whether to continue running the loop.
@@ -86,11 +101,18 @@ class Client final {
     return os;
   }
 
+  void StartThreads();
+
   std::unique_ptr<Service> service_;
+  std::function<void(const std::string&)> sink_;
   std::deque<Command> cmd_queue_ ABSL_GUARDED_BY(mu_);
   std::deque<std::string> response_queue_ ABSL_GUARDED_BY(mu_);
   absl::Mutex mu_;
   std::atomic<bool> running_;
+  // Set by ClientLoop on exit; ResponseLoop drains and exits after it.
+  bool client_loop_done_ ABSL_GUARDED_BY(mu_) = false;
+  // Set by Stop(): the pending quit gets no response.
+  bool silent_quit_ ABSL_GUARDED_BY(mu_) = false;
   std::thread client_thread_;
   std::thread response_thread_;
 

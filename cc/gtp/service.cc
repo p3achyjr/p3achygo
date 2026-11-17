@@ -84,7 +84,11 @@ std::string GtpBoardString(const Board& board) {
 
 class ServiceImpl final : public Service {
  public:
-  ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
+  // `owned_nn_interface` may be null, in which case `nn_interface` is shared
+  // with other services and this one uses thread ids starting at
+  // `task_offset`.
+  ServiceImpl(std::unique_ptr<NNInterface> owned_nn_interface,
+              NNInterface* nn_interface, int task_offset,
               eval::PlayerSearchConfig cfg, bool verbose);
 
   Response<int> GtpProtocolVersion(std::optional<int> id) override;
@@ -140,6 +144,28 @@ class ServiceImpl final : public Service {
   void Ponder(std::stop_token token);
   bool IsPondering() const { return ponder_thread_.joinable(); }
 
+  // With a shared NNInterface in kAuto mode, inference waits for every
+  // registered thread to load a position. Register this game's thread only
+  // for the duration of a synchronous evaluation so idle games (waiting on
+  // the opponent) do not stall the batch. No-op for an owned interface.
+  class ScopedNNThreadRegistration {
+   public:
+    explicit ScopedNNThreadRegistration(ServiceImpl* s)
+        : s_(s),
+          active_(s->owned_nn_interface_ == nullptr &&
+                  s->nn_interface_->signal_kind() ==
+                      NNInterface::SignalKind::kAuto) {
+      if (active_) s_->nn_interface_->RegisterThread(s_->task_offset_);
+    }
+    ~ScopedNNThreadRegistration() {
+      if (active_) s_->nn_interface_->UnregisterThread(s_->task_offset_);
+    }
+
+   private:
+    ServiceImpl* s_;
+    bool active_;
+  };
+
  public:
   void PausePondering() override;
   void EnsurePondering() override;
@@ -152,7 +178,9 @@ class ServiceImpl final : public Service {
   bool verbose_;
   float komi_ = 7.5f;
   Probability probability_;
-  std::unique_ptr<NNInterface> nn_interface_;
+  std::unique_ptr<NNInterface> owned_nn_interface_;
+  NNInterface* nn_interface_;
+  const int task_offset_;
   std::unique_ptr<GumbelEvaluator> gumbel_evaluator_;
   std::unique_ptr<Game> game_;
   std::unique_ptr<NodeTable> node_table_;
@@ -168,12 +196,15 @@ class ServiceImpl final : public Service {
   std::jthread ponder_thread_;
 };
 
-ServiceImpl::ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
+ServiceImpl::ServiceImpl(std::unique_ptr<NNInterface> owned_nn_interface,
+                         NNInterface* nn_interface, int task_offset,
                          eval::PlayerSearchConfig cfg, bool verbose)
     : cfg_(cfg),
       time_control_(cfg.time_control_flags),
       verbose_(verbose),
-      nn_interface_(std::move(nn_interface)),
+      owned_nn_interface_(std::move(owned_nn_interface)),
+      nn_interface_(nn_interface),
+      task_offset_(task_offset),
       game_(std::make_unique<Game>(false, game::Board::Scoring::kTrompTaylor)),
       node_table_(
           cfg.use_mcgs
@@ -186,7 +217,7 @@ ServiceImpl::ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
     bias_cache_.emplace(cfg_.bias_cache_alpha, cfg_.bias_cache_lambda);
   }
   gumbel_evaluator_ = std::make_unique<GumbelEvaluator>(
-      nn_interface_.get(), 0, MakeScoreUtilityParams(cfg_),
+      nn_interface_, task_offset_, MakeScoreUtilityParams(cfg_),
       bias_cache_ ? &*bias_cache_ : nullptr);
   current_root_ = node_table_->GetOrCreate(game_->board().hash(), BLACK, false);
   StartPondering();
@@ -417,7 +448,8 @@ std::string ServiceImpl::BuildExplainComment() {
   std::stringstream ss;
   ss << std::fixed << std::setprecision(4);
   ss << "Vnn=" << v_nn << " Vadj=" << v_adj << " V=" << v_tree
-     << " Score=" << score << " Vz=" << vz_tree << " Vstd=" << vstd << "\n";
+     << " Score=" << score << " Vz=" << vz_tree << " Vstd=" << vstd
+     << " NNerr=" << root->init_err_est << " Verr=" << root->v_err << "\n";
 
   struct ChildInfo {
     int action;
@@ -425,6 +457,7 @@ std::string ServiceImpl::BuildExplainComment() {
     int n;
     float q;
     float qstd;
+    float qz;  // outcome-only value (no score term), mover's view, in [-1, 1]
     float prior;
     float opt_prior;
   };
@@ -438,6 +471,7 @@ std::string ServiceImpl::BuildExplainComment() {
         root->child_visits[a],
         Q(root, a),
         std::sqrt(QVar(root, a)),
+        QOutcome(root, a),
         root->move_probs[a],
         root->opt_probs[a],
     });
@@ -454,7 +488,8 @@ std::string ServiceImpl::BuildExplainComment() {
     const auto& c = visited_children[i];
     ss << "  " << GtpValueString(AsLoc(c.action)) << "  n=" << c.n
        << "  q=" << c.q << "  qstd=" << c.qstd << "  lcb=" << c.lcb
-       << "  prior=" << c.prior << "  opt_prior=" << c.opt_prior << "\n";
+       << "  prior=" << c.prior << "  opt_prior=" << c.opt_prior
+       << "  qz=" << c.qz << "\n";
   }
 
   return ss.str();
@@ -477,8 +512,9 @@ Response<std::string> ServiceImpl::GtpGenMoveDbg(std::optional<int> id,
 
 Response<std::array<float, BOARD_LEN * BOARD_LEN>> ServiceImpl::GtpOwnership(
     std::optional<int> id) {
-  return MakeResponse(
-      id, nn_interface_->LoadAndGetOwnership(0, *game_, current_color_));
+  ScopedNNThreadRegistration registration(this);
+  return MakeResponse(id, nn_interface_->LoadAndGetOwnership(
+                              task_offset_, *game_, current_color_));
 }
 
 Response<std::string> ServiceImpl::GtpSerializeSgfWithTrees(
@@ -615,7 +651,7 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
     // requires parallel search.
     CHECK(cfg_.sampling_num_moves == 0) << "Not Supported";
     BiasCache* bias_cache = bias_cache_.has_value() ? &*bias_cache_ : nullptr;
-    Search s(nn_interface_->MakeSlot(0), bias_cache);
+    Search s(nn_interface_->MakeSlot(task_offset_), bias_cache);
     const bool use_visit_budget = cfg_.time_ms == 0;
     const bool use_auto_time = cfg_.time_ms == -1;
     const auto [time_auto, time_metadata] =
@@ -662,6 +698,7 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
     move = res.move;
   } else {
     CHECK(cfg_.use_puct || cfg_.sampling_num_moves == 0) << "Not Supported";
+    ScopedNNThreadRegistration registration(this);
     GumbelResult res = [&]() {
       if (!cfg_.use_puct) {
         return gumbel_evaluator_->SearchRoot(
@@ -776,7 +813,7 @@ void ServiceImpl::StartPondering() {
 
 void ServiceImpl::Ponder(std::stop_token token) {
   BiasCache* bias_cache = bias_cache_.has_value() ? &*bias_cache_ : nullptr;
-  Search s(nn_interface_->MakeSlot(0), bias_cache);
+  Search s(nn_interface_->MakeSlot(task_offset_), bias_cache);
   // StopSearch() fires immediately when the jthread stop is requested.
   std::stop_callback stop_cb(token, [&s] { s.StopSearch(); });
 
@@ -826,7 +863,16 @@ void ServiceImpl::Ponder(std::stop_token token) {
       uses_psearch ? NNInterface::SignalKind::kExplicit
                    : NNInterface::SignalKind::kAuto,
       1, NNInterface::WakeStrategy::kMutex);
-  return std::make_unique<ServiceImpl>(std::move(nn_interface), cfg, verbose);
+  NNInterface* nn_interface_ptr = nn_interface.get();
+  return std::make_unique<ServiceImpl>(std::move(nn_interface),
+                                       nn_interface_ptr, 0, cfg, verbose);
+}
+
+/* static */ std::unique_ptr<Service> Service::CreateSharedService(
+    nn::NNInterface* nn_interface, int task_offset,
+    eval::PlayerSearchConfig cfg, bool verbose) {
+  return std::make_unique<ServiceImpl>(nullptr, nn_interface, task_offset, cfg,
+                                       verbose);
 }
 
 }  // namespace gtp

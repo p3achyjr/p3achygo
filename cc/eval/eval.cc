@@ -248,6 +248,8 @@ void PlayEvalGame(size_t seed, int game_id, int total_num_workers,
                         .set_enable_m3_bonus(active_cfg.enable_m3_bonus)
                         .set_m3_prior_visits(active_cfg.m3_prior_visits)
                         .set_p_opt_weight(active_cfg.p_opt_weight)
+                        .set_root_p_opt_weight(active_cfg.root_p_opt_weight)
+                        .set_p_opt_geometric(active_cfg.p_opt_geometric)
                         .set_root_fpu(active_cfg.root_fpu)
                         .set_se_bonus_x(active_cfg.se_bonus_x)
                         .set_se_use_jitter(active_cfg.se_use_jitter)

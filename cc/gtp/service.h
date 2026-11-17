@@ -10,6 +10,7 @@
 #include "cc/game/loc.h"
 #include "cc/game/move.h"
 #include "cc/gtp/command.h"
+#include "cc/nn/nn_interface.h"
 
 namespace gtp {
 
@@ -73,6 +74,16 @@ class Service {
   static absl::StatusOr<std::unique_ptr<Service>> CreateService(
       std::string model_path, eval::PlayerSearchConfig cfg,
       bool verbose = false);
+
+  // Batch GTP: a service that shares `nn_interface` with other services, so
+  // all games' evaluations go through one batched engine. This service uses
+  // NN thread ids [task_offset, task_offset + cfg.num_threads_per_game). In
+  // the serial (kAuto) case it registers its thread id only while searching,
+  // so idle games never hold up a batch. `nn_interface` must outlive the
+  // service.
+  static std::unique_ptr<Service> CreateSharedService(
+      nn::NNInterface* nn_interface, int task_offset,
+      eval::PlayerSearchConfig cfg, bool verbose = false);
 
  protected:
   Service() = default;
