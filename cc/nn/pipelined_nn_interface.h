@@ -11,9 +11,9 @@
 #include "absl/container/inlined_vector.h"
 #include "absl/synchronization/mutex.h"
 #include "cc/constants/constants.h"
-#include "cc/core/lru_cache.h"
 #include "cc/game/symmetry.h"
 #include "cc/nn/engine/engine.h"
+#include "cc/nn/nn_cache.h"
 #include "cc/nn/nn_interface_base.h"
 
 namespace nn {
@@ -28,7 +28,8 @@ namespace nn {
  */
 class PipelinedNNInterface final : public NNInterfaceBase {
  public:
-  PipelinedNNInterface(int num_threads, int64_t timeout, size_t cache_size,
+  // The NN cache (NNCache) has 2^cache_log2_size slots, shared by all threads.
+  PipelinedNNInterface(int num_threads, int64_t timeout, int cache_log2_size,
                        std::vector<std::unique_ptr<Engine>> wave_engines,
                        SignalKind signal_kind, int num_shared_search_tasks,
                        WakeStrategy wake_strategy);
@@ -61,11 +62,20 @@ class PipelinedNNInterface final : public NNInterfaceBase {
     absl::MutexLock l(&mu_);
     ++num_exited_search_tasks_[wave];
   }
+  bool LoadedFromCache(int thread_id, int offset) const override {
+    return load_hits_[thread_id + offset] != nullptr;
+  }
+  CacheStats TakeCacheStats() override {
+    const NNCache::Stats s = cache_.TakeStats();
+    return {s.lookups, s.hits};
+  }
   int num_waves() const override { return num_waves_; }
   int wave_size() const override { return wave_size_; }
 
  private:
   static constexpr int kMaxWaves = 2;
+  // NNCache mutex pool size (as KataGo's default).
+  static constexpr int kCacheLog2Mutexes = 16;
 
   struct ThreadInfo {
     bool loaded_for_inference =
@@ -79,9 +89,10 @@ class PipelinedNNInterface final : public NNInterfaceBase {
   };
 
   int RowOf(int canonical_tid) const { return canonical_tid % wave_size_; }
+  // Cache key: color, position hash and simple-ko point (no move history).
   NNKey MakeKey(const game::Game& game, game::Color color_to_move) const {
-    return MakeNNKey(game, color_to_move, constants::kNumLastMoves,
-                     /*cache_key_ko=*/false);
+    return MakeNNKey(game, color_to_move, /*num_cache_last_moves=*/0,
+                     /*cache_key_ko=*/true);
   }
   void LoadBatch(int thread_id, const game::Game& game,
                  game::Color color_to_move, game::Symmetry sym) {
@@ -113,8 +124,12 @@ class PipelinedNNInterface final : public NNInterfaceBase {
   int last_wave_ = -1;  // Last wave run by the inference thread.
   std::atomic<bool> running_;
 
-  std::array<core::LRUCache<NNKey, NNInferResult>, constants::kMaxNumThreads>
-      thread_caches_;  // Per-thread cache.
+  // NN cache shared by all threads.
+  NNCache cache_;
+  // Per thread: the cache entry found by its last LoadEntry, returned by the
+  // matching FetchEntry (not looked up again: another thread may overwrite
+  // the slot in between).
+  std::vector<std::shared_ptr<const NNCache::Entry>> load_hits_;
 
   // Engines: one per wave.
   std::vector<std::unique_ptr<Engine>> engines_;

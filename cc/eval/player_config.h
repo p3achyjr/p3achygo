@@ -104,6 +104,9 @@ struct PlayerSearchConfig {
   float fork_depth_c = 0.8f;
   float fork_depth_p = 0.5f;
 
+  // GTP NN cache: 2^nn_cache_log2_size slots (pipelined interface).
+  int nn_cache_log2_size = 18;
+
   // Search mode: "concurrent" | "batch"
   std::string search_mode = "concurrent";
 
@@ -245,6 +248,8 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.fork_depth_c = std::stof(val);
     else if (key == "fork_depth_p")
       cfg.fork_depth_p = std::stof(val);
+    else if (key == "nn_cache_log2_size")
+      cfg.nn_cache_log2_size = std::stoi(val);
     else if (key == "search_mode")
       cfg.search_mode = val;
     else if (key == "descent_policy")
@@ -322,6 +327,7 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
   ROW(max_collision_retries, i_);
   ROW(fork_depth_c, f);
   ROW(fork_depth_p, f);
+  ROW(nn_cache_log2_size, i_);
   ROW(search_mode, s);
   ROW(descent_policy, s);
   ROW(max_o_ratio, f);

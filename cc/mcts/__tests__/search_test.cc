@@ -328,8 +328,9 @@ PipeSetup MakePipeSetup(int num_threads, bool pipelined,
     engines.push_back(std::make_unique<HashEngine>(rows, logit_scale));
     engines.push_back(std::make_unique<HashEngine>(rows, logit_scale));
     p.nn = std::make_unique<nn::PipelinedNNInterface>(
-        num_threads, std::numeric_limits<int64_t>::max(), 2 * 16384,
-        std::move(engines), NNInterface::SignalKind::kExplicit,
+        num_threads, std::numeric_limits<int64_t>::max(),
+        /*cache_log2_size=*/20, std::move(engines),
+        NNInterface::SignalKind::kExplicit,
         /*num_shared_search_tasks=*/1, wake);
     p.search = std::make_unique<Search>(p.nn->MakeSlot(0));
     p.search->SetPipelineSlot(p.nn->MakeSlot(rows));
@@ -478,13 +479,15 @@ TEST_CASE("ParallelSearch - real engine") {
 
 // Pipelined search stress: group sizes 2..32 (threads 4..64), both wakers,
 // MCTS and MCGS tables, stop by visit budget, by time, and by an external
-// StopSearch() from another thread (as ponder stop does). Checks that every
-// search returns (no deadlock) and the structural invariants.
+// StopSearch() from another thread (as ponder stop does). Each setup runs two
+// searches on the same interface (fresh tree each), so the second one hits the
+// shared NN cache and exercises immediate backup. Checks that every search
+// returns (no deadlock) and the structural invariants.
 TEST_CASE("ParallelSearch - pipeline stress") {
   const char* reps_env = std::getenv("P3_PIPE_REPS");
   const int reps = reps_env ? std::atoi(reps_env) : 2;
   int64_t searches = 0, total_visits = 0, total_aborted = 0,
-          vcat_mismatch_nodes = 0;
+          vcat_mismatch_nodes = 0, off_round_searches = 0;
   for (CollisionPolicyKind policy :
        {CollisionPolicyKind::kAbort, CollisionPolicyKind::kSmartRetry,
         CollisionPolicyKind::kSmartRetryDepth})
@@ -499,59 +502,69 @@ TEST_CASE("ParallelSearch - pipeline stress") {
               PipeSetup p =
                   MakePipeSetup(num_threads, /*pipelined=*/true, wake,
                                 /*logit_scale=*/rep % 2 ? 0.0f : 8.0f);
-              std::unique_ptr<NodeTable> node_table =
-                  mcgs ? std::unique_ptr<NodeTable>(
-                             std::make_unique<McgsNodeTable>())
-                       : std::unique_ptr<NodeTable>(
-                             std::make_unique<MctsNodeTable>());
-              Game game;
-              game::Color to_move;
-              RandomOpening(game, 10 + rep, 1000 * group + rep, &to_move);
-              core::Probability probability;
-              TreeNode* root =
-                  node_table->GetOrCreate(game.board().hash(), to_move, false);
-              const int budget = stop_mode == 0 ? 2000 + 37 * rep : (1 << 30);
-              Search::Params params = MakeParams(num_threads, budget);
-              params.total_visit_time_ms = stop_mode == 1 ? 20 : 0;
-              params.q_fn_kind = QFnKind::kVirtualLossSoft;
-              params.collision_policy_kind = policy;
-              params.fork_depth_c = 0.8f;  // kSmartRetryDepth only
-              params.fork_depth_p = 0.5f;
-              std::thread stopper;
-              if (stop_mode == 2) {
-                const int delay_us = (rep * 7919) % 20000;
-                stopper = std::thread([&p, delay_us]() {
-                  std::this_thread::sleep_for(
-                      std::chrono::microseconds(delay_us));
-                  p.search->StopSearch();
-                });
+              for (int pass = 0; pass < 2; ++pass) {
+                std::unique_ptr<NodeTable> node_table =
+                    mcgs ? std::unique_ptr<NodeTable>(
+                               std::make_unique<McgsNodeTable>())
+                         : std::unique_ptr<NodeTable>(
+                               std::make_unique<MctsNodeTable>());
+                Game game;
+                game::Color to_move;
+                RandomOpening(game, 10 + rep, 1000 * group + rep, &to_move);
+                core::Probability probability;
+                TreeNode* root = node_table->GetOrCreate(game.board().hash(),
+                                                         to_move, false);
+                const int budget = stop_mode == 0 ? 2000 + 37 * rep : (1 << 30);
+                Search::Params params = MakeParams(num_threads, budget);
+                params.total_visit_time_ms = stop_mode == 1 ? 20 : 0;
+                params.q_fn_kind = QFnKind::kVirtualLossSoft;
+                params.collision_policy_kind = policy;
+                params.fork_depth_c = 0.8f;  // kSmartRetryDepth only
+                params.fork_depth_p = 0.5f;
+                std::thread stopper;
+                if (stop_mode == 2) {
+                  const int delay_us = (rep * 7919) % 20000;
+                  stopper = std::thread([&p, delay_us]() {
+                    std::this_thread::sleep_for(
+                        std::chrono::microseconds(delay_us));
+                    p.search->StopSearch();
+                  });
+                }
+                Search::Result result = p.search->Run(
+                    probability, game, node_table.get(), root, to_move, params);
+                if (stopper.joinable()) stopper.join();
+                searches++;
+                total_visits += result.num_visits;
+                total_aborted += result.num_aborted;
+                // Without immediate backups every round submits each worker
+                // once (a visit or an abort); an immediate backup is a visit
+                // outside the rounds.
+                if ((result.num_visits + result.num_aborted) % group != 0) {
+                  off_round_searches++;
+                }
+                const TreeCheck tc = CheckTree(root, !mcgs);
+                INFO("policy=" << int(policy) << " group=" << group
+                               << " wake=" << int(wake) << " mcgs=" << mcgs
+                               << " stop_mode=" << stop_mode << " rep=" << rep
+                               << " pass=" << pass
+                               << " visits=" << result.num_visits
+                               << " aborted=" << result.num_aborted);
+                if (stop_mode != 2) CHECK(result.num_visits > 0);
+                CHECK(root->n == 1 + (int)result.num_visits);
+                if (stop_mode == 0) {
+                  CHECK(result.num_visits >= (size_t)budget);
+                  // Each worker may add one immediate backup past the budget
+                  // check, then one round descent.
+                  CHECK(result.num_visits < (size_t)(budget + 2 * num_threads));
+                }
+                CHECK(tc.bad_in_flight == 0);
+                CHECK(tc.bad_pending == 0);
+                CHECK(tc.bad_n == 0);
+                // Not CHECKed: UpdateVCategorial runs outside node->mu
+                // (tree.h), so concurrent backups can lose bucket increments
+                // with or without pipelining. Reported in PIPE_STRESS.
+                if (!mcgs) vcat_mismatch_nodes += tc.bad_vcat;
               }
-              Search::Result result = p.search->Run(
-                  probability, game, node_table.get(), root, to_move, params);
-              if (stopper.joinable()) stopper.join();
-              searches++;
-              total_visits += result.num_visits;
-              total_aborted += result.num_aborted;
-              const TreeCheck tc = CheckTree(root, !mcgs);
-              INFO("policy=" << int(policy) << " group=" << group
-                             << " wake=" << int(wake) << " mcgs=" << mcgs
-                             << " stop_mode=" << stop_mode << " rep=" << rep
-                             << " visits=" << result.num_visits
-                             << " aborted=" << result.num_aborted);
-              if (stop_mode != 2) CHECK(result.num_visits > 0);
-              CHECK((result.num_visits + result.num_aborted) % group == 0);
-              CHECK(root->n == 1 + (int)result.num_visits);
-              if (stop_mode == 0) {
-                CHECK(result.num_visits >= (size_t)budget);
-                CHECK(result.num_visits < (size_t)(budget + num_threads));
-              }
-              CHECK(tc.bad_in_flight == 0);
-              CHECK(tc.bad_pending == 0);
-              CHECK(tc.bad_n == 0);
-              // Not CHECKed: UpdateVCategorial runs outside node->mu (tree.h),
-              // so concurrent backups can lose bucket increments with or
-              // without pipelining. Reported in PIPE_STRESS.
-              if (!mcgs) vcat_mismatch_nodes += tc.bad_vcat;
             }
           }
         }
@@ -559,9 +572,11 @@ TEST_CASE("ParallelSearch - pipeline stress") {
     }
   fprintf(stderr,
           "PIPE_STRESS searches=%ld visits=%ld aborted=%ld "
-          "mcts_vcat_mismatch_nodes=%ld\n",
+          "off_round_searches=%ld mcts_vcat_mismatch_nodes=%ld\n",
           (long)searches, (long)total_visits, (long)total_aborted,
-          (long)vcat_mismatch_nodes);
+          (long)off_round_searches, (long)vcat_mismatch_nodes);
+  // Immediate backup ran (some search is not a whole number of rounds).
+  CHECK(off_round_searches > 0);
 }
 
 // Pipelined search accuracy: exact bottom-up recompute of every node after the
@@ -576,6 +591,9 @@ TEST_CASE("ParallelSearch - pipeline stat recompute") {
     int threads;
     bool pipelined;
     CollisionPolicyKind policy = CollisionPolicyKind::kAbort;
+    // Run one search on the same interface first (discarded), so the measured
+    // search hits the NN cache (immediate backup when pipelined).
+    bool warm = false;
   };
   for (const float logit_scale : {0.0f, 8.0f})
     for (const Cfg& cfg :
@@ -586,7 +604,10 @@ TEST_CASE("ParallelSearch - pipeline stat recompute") {
           Cfg{"pipe_2x16_depth", 32, true,
               CollisionPolicyKind::kSmartRetryDepth},
           Cfg{"base_t32_depth", 32, false,
-              CollisionPolicyKind::kSmartRetryDepth}}) {
+              CollisionPolicyKind::kSmartRetryDepth},
+          Cfg{"pipe_2x16_warm", 32, true, CollisionPolicyKind::kAbort, true},
+          Cfg{"pipe_2x16_depth_warm", 32, true,
+              CollisionPolicyKind::kSmartRetryDepth, true}}) {
       TreeCheck tot;
       int64_t visits = 0, aborted = 0;
       for (int pos = 0; pos < 8; ++pos) {
@@ -594,18 +615,25 @@ TEST_CASE("ParallelSearch - pipeline stat recompute") {
           PipeSetup p = MakePipeSetup(cfg.threads, cfg.pipelined,
                                       NNInterface::WakeStrategy::kGenCounter,
                                       logit_scale);
-          MctsNodeTable node_table;
           Game game;
           game::Color to_move;
           RandomOpening(game, 20 + 3 * pos, 77 + pos, &to_move);
           core::Probability probability;
-          TreeNode* root =
-              node_table.GetOrCreate(game.board().hash(), to_move, false);
           Search::Params params = MakeParams(cfg.threads, 4000);
           params.q_fn_kind = QFnKind::kVirtualLossSoft;
           params.collision_policy_kind = cfg.policy;
           params.fork_depth_c = 0.8f;  // kSmartRetryDepth only
           params.fork_depth_p = 0.5f;
+          if (cfg.warm) {
+            MctsNodeTable warm_table;
+            TreeNode* warm_root =
+                warm_table.GetOrCreate(game.board().hash(), to_move, false);
+            p.search->Run(probability, game, &warm_table, warm_root, to_move,
+                          params);
+          }
+          MctsNodeTable node_table;
+          TreeNode* root =
+              node_table.GetOrCreate(game.board().hash(), to_move, false);
           Search::Result result = p.search->Run(probability, game, &node_table,
                                                 root, to_move, params);
           visits += result.num_visits;

@@ -54,10 +54,11 @@ class LeafEvaluator final {
 
   int thread_id() const { return thread_id_; }
 
-  // Queues an example for evaluation.
-  inline void QueueEval(core::Probability& probability, const game::Game& game,
+  // Queues an example for evaluation. Returns true if it was a cache hit
+  // (FetchLeafEval then returns without waiting on inference).
+  inline bool QueueEval(core::Probability& probability, const game::Game& game,
                         game::Color color_to_move) {
-    slot_.LoadEntry(thread_id_, game, color_to_move, probability);
+    return slot_.LoadEntry(thread_id_, game, color_to_move, probability);
   }
 
   // Fetches queued example.

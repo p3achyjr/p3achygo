@@ -37,6 +37,8 @@ endif()
 add_library(nn_interface
     nn_interface_base.cc
     nn_interface_base.h
+    nn_cache.cc
+    nn_cache.h
     nn_interface.cc
     nn_interface.h
     pipelined_nn_interface.cc
@@ -70,6 +72,15 @@ if(BUILD_TESTS)
     )
     add_test(NAME nn_interface_sync_test COMMAND nn_interface_sync_test)
     set_tests_properties(nn_interface_sync_test PROPERTIES TIMEOUT 265)
+
+    add_executable(nn_cache_test __tests__/nn_cache_test.cc)
+    target_link_libraries(nn_cache_test PRIVATE
+        nn_interface
+        game
+        core_impl
+        core_doctest
+    )
+    add_test(NAME nn_cache_test COMMAND nn_cache_test)
 endif()
 
 if(BUILD_TESTS AND USE_TENSORFLOW)

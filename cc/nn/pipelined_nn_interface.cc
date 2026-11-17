@@ -12,7 +12,7 @@ using namespace ::game;
 }  // namespace
 
 PipelinedNNInterface::PipelinedNNInterface(
-    int num_threads, int64_t timeout, size_t cache_size,
+    int num_threads, int64_t timeout, int cache_log2_size,
     std::vector<std::unique_ptr<Engine>> wave_engines, SignalKind signal_kind,
     int num_shared_search_tasks, WakeStrategy wake_strategy)
     : num_threads_(num_threads),
@@ -22,6 +22,8 @@ PipelinedNNInterface::PipelinedNNInterface(
       timeout_(timeout),
       thread_info_(num_threads),
       running_(true),
+      cache_(cache_log2_size, kCacheLog2Mutexes),
+      load_hits_(num_threads),
       engines_(std::move(wave_engines)),
       symmetries_(num_threads),
       num_shared_search_tasks_(num_shared_search_tasks) {
@@ -30,10 +32,6 @@ PipelinedNNInterface::PipelinedNNInterface(
       << num_threads_ << " threads, " << num_waves_ << " waves";
   for (int w = 0; w < num_waves_; ++w) {
     wakers_.push_back(MakeWaker(wake_strategy));
-  }
-  for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
-    thread_caches_[thread_id] =
-        LRUCache<NNKey, NNInferResult>(cache_size / num_threads_);
   }
   infer_thread_ = std::thread(&PipelinedNNInterface::InferWavesLoop, this);
 
@@ -57,12 +55,12 @@ NNInferResult PipelinedNNInterface::LoadAndGetInference(
     Probability& probability) {
   NNKey cache_key = MakeKey(game, color_to_move);
 
-  if (thread_caches_[thread_id].Contains(cache_key)) {
+  if (std::shared_ptr<const NNCache::Entry> hit = cache_.Get(cache_key)) {
     // Cached. Immediately return result.
     absl::MutexLock l(&mu_);
     thread_info_[thread_id].res_cached = true;
 
-    return thread_caches_[thread_id].Get(cache_key).value();
+    return hit->second;
   }
 
   // Not cached. Load for inference.
@@ -75,7 +73,7 @@ NNInferResult PipelinedNNInterface::LoadAndGetInference(
   NNInferResult infer_result = GetBatch(thread_id, sym);
 
   // Cache this result.
-  thread_caches_[thread_id].Insert(cache_key, infer_result);
+  cache_.Insert(cache_key, infer_result);
   return infer_result;
 }
 
@@ -98,8 +96,9 @@ void PipelinedNNInterface::LoadEntry(int thread_id, int offset,
   const int canonical_tid = thread_id + offset;
   NNKey cache_key = MakeKey(game, color_to_move);
 
-  if (thread_caches_[canonical_tid].Contains(cache_key)) {
-    // Cached. Do not need to wait for this thread.
+  load_hits_[canonical_tid] = cache_.Get(cache_key);
+  if (load_hits_[canonical_tid] != nullptr) {
+    // Cached. Do not need to wait for this thread. FetchEntry returns the hit.
     absl::MutexLock l(&mu_);
     thread_info_[canonical_tid].res_cached = true;
     return;
@@ -129,11 +128,16 @@ NNInferResult PipelinedNNInterface::FetchEntry(int thread_id, int offset,
   NNKey cache_key = MakeKey(game, color_to_move);
 
   ThreadInfo& thread_info = thread_info_[canonical_tid];
-  if (thread_caches_[canonical_tid].Contains(cache_key)) {
-    // Cached. Return cache entry.
+  std::shared_ptr<const NNCache::Entry> hit =
+      std::move(load_hits_[canonical_tid]);
+  load_hits_[canonical_tid] = nullptr;
+  if (hit != nullptr) {
+    // Cached at LoadEntry. Return that entry (no second lookup: another thread
+    // may have overwritten the slot since).
+    CHECK(hit->first == cache_key);
     absl::MutexLock l(&mu_);
     thread_info.res_cached = false;
-    return thread_caches_[canonical_tid].Get(cache_key).value();
+    return hit->second;
   }
 
   wakers_[WaveOf(canonical_tid)]->Wait(thread_info.res_ready, mu_);
@@ -142,7 +146,7 @@ NNInferResult PipelinedNNInterface::FetchEntry(int thread_id, int offset,
       GetBatch(canonical_tid, symmetries_[canonical_tid]);
 
   // Cache this result.
-  thread_caches_[canonical_tid].Insert(cache_key, infer_result);
+  cache_.Insert(cache_key, infer_result);
   return infer_result;
 }
 

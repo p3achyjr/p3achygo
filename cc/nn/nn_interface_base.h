@@ -136,10 +136,13 @@ class NNInterfaceBase {
 
     SignalKind signal_kind() const { return nn_interface_->signal_kind(); }
 
-    void LoadEntry(int thread_id, const game::Game& game,
+    // Returns true if the interface reports the entry as a cache hit
+    // (LoadedFromCache): FetchEntry then returns without waiting on inference.
+    bool LoadEntry(int thread_id, const game::Game& game,
                    game::Color color_to_move, core::Probability& probability) {
       nn_interface_->LoadEntry(thread_id, task_offset_, game, color_to_move,
                                probability);
+      return nn_interface_->LoadedFromCache(thread_id, task_offset_);
     }
 
     NNInferResult FetchEntry(int thread_id, const game::Game& game,
@@ -191,6 +194,19 @@ class NNInterfaceBase {
                                    game::Color color_to_move) = 0;
   virtual void SignalReadyForInference(int wave) = 0;
   virtual void UnregisterSearchTask(int wave) = 0;
+  // Whether the thread's last LoadEntry was a cache hit that the interface
+  // holds for the matching FetchEntry. Interfaces that do not report hits
+  // return false.
+  virtual bool LoadedFromCache(int thread_id, int offset) const {
+    return false;
+  }
+  // NN cache lookups and hits since the last call, then resets both.
+  // Interfaces that do not count return {0, 0}.
+  struct CacheStats {
+    uint64_t lookups = 0;
+    uint64_t hits = 0;
+  };
+  virtual CacheStats TakeCacheStats() { return {}; }
 
   // Threads [w * wave_size(), (w + 1) * wave_size()) live in wave w.
   virtual int num_waves() const = 0;

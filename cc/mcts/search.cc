@@ -36,6 +36,10 @@ struct BackupCmp final {
 };
 using BackupPriorityQueue = core::Heap<BackupElem, BackupCmp>;
 
+// Pipelined search: most immediate backups (cache-hit descents backed up at
+// once, see SearchTask) per worker per round.
+constexpr int kMaxImmediateBackups = 64;
+
 void AssignBiasCacheEntry(BiasCache* bias_cache, const game::Game& game,
                           TreeNode* node) {
   if (!bias_cache) return;
@@ -99,7 +103,7 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
     const CollisionDetector& collision_detector, Game& game,
     NodeTable* node_table, TreeNode* const root, game::Color root_color,
     const float root_score_est, const SearchPath& path_prefix,
-    const bool block_on_leaf_eval = true) {
+    const bool block_on_leaf_eval = true, bool* ib_hit = nullptr) {
   const auto on_collision = [&](SearchPath& colliding_path)
       -> std::pair<SearchPath, std::optional<CollisionResult>> {
     // undo n_in_flight for every node on the path.
@@ -252,7 +256,17 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
   const bool needs_nn_eval =
       (leaf_state != TreeNodeState::kNnEvaluated) && !game.IsGameOver();
   if (needs_nn_eval) {
-    leaf_evaluator->QueueEval(prob, game, color_to_move);
+    const bool cache_hit = leaf_evaluator->QueueEval(prob, game, color_to_move);
+    // Immediate backup (ib_hit != nullptr): a cache-hit leaf is evaluated now
+    // and does not join the round (no submit / pending / signal); the caller
+    // backs it up and descends again.
+    if (ib_hit != nullptr && cache_hit) {
+      leaf_evaluator->FetchLeafEval(leaf, game, color_to_move, root_color,
+                                    root_score_est);
+      AssignBiasCacheEntry(global_state.bias_cache, game, leaf);
+      *ib_hit = true;
+      return {path, std::nullopt};
+    }
   }
 
   // Signal NN when all workers have finished descending (descent_remaining==0).
@@ -442,12 +456,34 @@ void SearchTask(const int worker_id, core::Probability& prob,
       global_state.pipe->WaitTurn(global_state.group);
     }
 
-    collision_policy.Reset();
-    Game search_game = game;
-    auto [search_path, collision_result] = Descend(
-        worker_id, prob, global_state, slot, &leaf_evaluator, descent_policy,
-        collision_policy, collision_detector, search_game, node_table, root,
-        color_to_move, root->init_score_est, {});
+    // Pipelined search, immediate backup: a descent whose leaf is an NN cache
+    // hit is backed up at once and the worker descends again, until a descent
+    // claims a leaf that needs the NN (or a terminal, or collides), the search
+    // stops, or kMaxImmediateBackups hits this round. That descent joins the
+    // round.
+    std::pair<SearchPath, std::optional<CollisionResult>> descent;
+    for (int num_ib = 0;; ++num_ib) {
+      collision_policy.Reset();
+      Game search_game = game;
+      const bool allow_ib =
+          global_state.pipe != nullptr && num_ib < kMaxImmediateBackups &&
+          !global_state.should_stop.load(std::memory_order_relaxed) &&
+          global_state.pipe->total_num_visits.load(std::memory_order_relaxed) <
+              global_state.visit_budget;
+      bool ib_hit = false;
+      descent = Descend(worker_id, prob, global_state, slot, &leaf_evaluator,
+                        descent_policy, collision_policy, collision_detector,
+                        search_game, node_table, root, color_to_move,
+                        root->init_score_est, {}, /*block_on_leaf_eval=*/true,
+                        allow_ib ? &ib_hit : nullptr);
+      if (!ib_hit) break;
+      Backup(worker_id, descent.first, global_state.bias_cache, puct_params,
+             global_state.group, /*pipelined=*/true);
+      global_state.total_num_visits.fetch_add(1, std::memory_order_relaxed);
+      global_state.pipe->total_num_visits.fetch_add(1,
+                                                    std::memory_order_relaxed);
+    }
+    auto& [search_path, collision_result] = descent;
     if (collision_result.has_value()) {
       global_state.total_num_collisions.fetch_add(1, std::memory_order_relaxed);
       while (collision_result.has_value()) {

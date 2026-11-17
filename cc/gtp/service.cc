@@ -665,6 +665,12 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
                 << "ms. Visits=" << res.num_visits
                 << " Aborted=" << res.num_aborted
                 << " Collisions=" << res.num_collisions << "\n";
+      const nn::NNInterfaceBase::CacheStats cs =
+          nn_interface_->TakeCacheStats();
+      std::cerr << "NNCache lookups=" << cs.lookups << " hits=" << cs.hits
+                << " hit_rate="
+                << (cs.lookups > 0 ? double(cs.hits) / cs.lookups : 0.0)
+                << "\n";
     }
     move = res.move;
   } else {
@@ -841,11 +847,12 @@ void ServiceImpl::Ponder(std::stop_token token) {
           nn::KindFromEnginePath(model_path), model_path, num_threads / 2,
           nn::GetVersionFromModelPath(model_path)));
     }
-    // Cache 2 x 16384: same per-thread cache size as two interfaces.
+    // NN cache: 2^nn_cache_log2_size slots shared by all threads.
     std::unique_ptr<nn::NNInterfaceBase> nn_interface =
         std::make_unique<nn::PipelinedNNInterface>(
-            num_threads, std::numeric_limits<int64_t>::max(), 2 * 16384,
-            std::move(engines), NNInterface::SignalKind::kExplicit, 1,
+            num_threads, std::numeric_limits<int64_t>::max(),
+            cfg.nn_cache_log2_size, std::move(engines),
+            NNInterface::SignalKind::kExplicit, 1,
             NNInterface::WakeStrategy::kGenCounter);
     return std::make_unique<ServiceImpl>(std::move(nn_interface), cfg, verbose);
   }
