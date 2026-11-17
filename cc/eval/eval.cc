@@ -121,7 +121,8 @@ void PlayEvalGame(size_t seed, int game_id, int total_num_workers,
   const eval::PlayerSearchConfig& cand_cfg = config.cand;
 
   // Setup eval game.
-  Game game;
+  Game game(Board(config.komi),
+            {kNoopMove, kNoopMove, kNoopMove, kNoopMove, kNoopMove}, 0);
   std::unique_ptr<NodeTable> node_table_b;
   if (black_cfg.use_mcgs) {
     node_table_b = std::make_unique<McgsNodeTable>();
@@ -249,6 +250,29 @@ void PlayEvalGame(size_t seed, int game_id, int total_num_workers,
                         .set_m3_prior_visits(active_cfg.m3_prior_visits)
                         .set_p_opt_weight(active_cfg.p_opt_weight)
                         .set_root_fpu(active_cfg.root_fpu)
+                        .set_root_p_opt_logit_weight(
+                            active_cfg.root_p_opt_logit_weight)
+                        .set_value_weight_exponent(
+                            active_cfg.value_weight_exponent)
+                        .set_enable_parent_var_scaling(
+                            active_cfg.enable_parent_var_scaling)
+                        .set_parent_var_lambda(active_cfg.parent_var_lambda)
+                        .set_parent_var_prior_visits(
+                            active_cfg.parent_var_prior_visits)
+                        .set_s_ref_default(active_cfg.s_ref_default)
+                        .set_s_ref(active_cfg.s_ref)
+                        .set_s_ref_poly(active_cfg.use_s_ref_poly,
+                                        active_cfg.s_ref_poly)
+                        .set_uncertainty_weight_coeff(
+                            active_cfg.uncertainty_weight_coeff)
+                        .set_uncertainty_max_weight(
+                            active_cfg.uncertainty_max_weight)
+                        .set_uncertainty_weight_scale(
+                            active_cfg.uncertainty_weight_scale)
+                        .set_child_var_shrink_k(active_cfg.child_var_shrink_k)
+                        .set_child_sd_norm(active_cfg.child_sd_norm_k,
+                                           active_cfg.child_sd_norm_nonroot_only,
+                                           active_cfg.child_sd_poly)
                         .build())
               : gumbel.SearchRoot(
                     probability, game, player_table, player_tree, color_to_move,
@@ -316,9 +340,15 @@ void PlayEvalGame(size_t seed, int game_id, int total_num_workers,
     game.PlayMove(move, color_to_move);
     color_to_move = OppositeColor(color_to_move);
 
-    // Advance to next roots.
-    TreeNode* next_player = player_tree->children[move];
-    TreeNode* next_opp = opp_tree->children[move];
+    // Advance to next roots. Without tree reuse, the next root is a fresh node
+    // and Reap below frees the old tree. color_to_move is now the opponent's.
+    const bool opp_tree_reuse =
+        (color_to_move == BLACK ? black_cfg : white_cfg).tree_reuse;
+    TreeNode* next_player = active_cfg.tree_reuse
+                                ? player_tree->children[move].load()
+                                : nullptr;
+    TreeNode* next_opp =
+        opp_tree_reuse ? opp_tree->children[move].load() : nullptr;
     if (!next_player) {
       // After the move, it's the opponent's turn (color_to_move was already
       // flipped)

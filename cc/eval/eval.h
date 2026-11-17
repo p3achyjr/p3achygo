@@ -19,6 +19,7 @@ enum class Winner : uint8_t {
 struct EvalConfig {
   eval::PlayerSearchConfig cur;
   eval::PlayerSearchConfig cand;
+  float komi = 7.5f;
 };
 
 struct EvalResult {
