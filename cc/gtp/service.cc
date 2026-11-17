@@ -657,7 +657,8 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
     }
     if (verbose_) {
       std::cerr << "Thought for " << res.time_ms
-                << "ms. Visits=" << res.num_visits << "\n";
+                << "ms. Visits=" << res.num_visits << " Aborted=" << res.num_aborted
+                << " Collisions=" << res.num_collisions << "\n";
     }
     move = res.move;
   } else {
@@ -825,7 +826,12 @@ void ServiceImpl::Ponder(std::stop_token token) {
       std::move(engine),
       uses_psearch ? NNInterface::SignalKind::kExplicit
                    : NNInterface::SignalKind::kAuto,
-      1, NNInterface::WakeStrategy::kMutex);
+      1,
+      // INST: P3_WAKE=gen selects the generation-counter waker.
+      (std::getenv("P3_WAKE") != nullptr &&
+       std::string(std::getenv("P3_WAKE")) == "gen")
+          ? NNInterface::WakeStrategy::kGenCounter
+          : NNInterface::WakeStrategy::kMutex);
   return std::make_unique<ServiceImpl>(std::move(nn_interface), cfg, verbose);
 }
 

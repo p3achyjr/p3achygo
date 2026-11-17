@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstring>
 #include <optional>
 
 #include "absl/synchronization/mutex.h"
@@ -41,8 +42,55 @@ enum class CollisionDetectorKind : uint8_t {
   kProduct = 3,
 };
 
+// INST: generation-counter barrier (selected with env P3_BARRIER=gen).
+//
+// Each thread reads `gen_` BEFORE decrementing `remaining_`, so the value it
+// waits on is always the pre-release generation (the release needs this
+// thread's own decrement). The last arriver runs `on_last`, re-arms
+// `remaining_`, then publishes with a release increment of `gen_` and wakes
+// everyone. Visibility: all arrivals are acq_rel RMWs on `remaining_` (one
+// release sequence), so every thread's pre-arrival writes happen-before the
+// last arriver's `on_last`; waiters acquire `gen_`, so `on_last` and all
+// pre-arrival writes happen-before every waiter's return. `remaining_` is
+// re-armed before the release, and no thread can arrive at the next use until
+// it has observed the release, so the next use always starts at n.
+class GenBarrier {
+ public:
+  void Init(int n) {
+    n_ = n;
+    remaining_.store(n, std::memory_order_relaxed);
+  }
+
+  template <typename F>
+  void ArriveAndWait(F&& on_last) {
+    const uint32_t g = gen_.load(std::memory_order_acquire);
+    if (remaining_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+      on_last();
+      remaining_.store(n_, std::memory_order_relaxed);
+      gen_.fetch_add(1, std::memory_order_release);
+      gen_.notify_all();
+      return;
+    }
+    // atomic::wait may return spuriously; loop until the generation changes.
+    while (gen_.load(std::memory_order_acquire) == g) {
+      gen_.wait(g, std::memory_order_acquire);
+    }
+  }
+
+ private:
+  int n_ = 0;
+  std::atomic<int> remaining_{0};
+  std::atomic<uint32_t> gen_{0};
+};
+
 struct GlobalSearchState {
   absl::Mutex mu;
+
+  // INST: gen-counter barriers (P3_BARRIER=gen), armed in Search::Run.
+  GenBarrier gen_b1, gen_b2;
+  // INST: per-round timestamps written without mu (CAS max) or by the last
+  // arriver of a gen barrier.
+  std::atomic<int64_t> inst_b1_max{0}, inst_b2_max{0}, inst_b1_release{0};
 
   // Per-round state; all guarded by mu.
   bool did_signal = false;
@@ -78,7 +126,28 @@ struct GlobalSearchState {
   // Optional bias cache
   BiasCache* bias_cache = nullptr;
 
+  // INST: per-round phase timestamps (steady_clock ns) and accumulators.
+  // All guarded by mu.
+  struct Inst {
+    int64_t round_start = 0, submit_max = 0, submit_sum = 0, submit_n = 0;
+    int64_t fetch_min = INT64_MAX, fetch_max = 0;
+    // accumulators (ns, summed over rounds)
+    int64_t rounds = 0, nn_rounds = 0, a_submit_mean = 0, a_submit_max = 0,
+            a_infer_start = 0, a_infer_end = 0, a_fetch_min = 0,
+            a_fetch_max = 0, a_b1_max = 0, a_b2_max = 0, a_end = 0;
+    // per-thread accumulators flushed each round (ns, summed over threads)
+    int64_t descents = 0, root_wait = 0, root_hold = 0, other_wait = 0,
+            other_hold = 0, table_wait = 0, queue = 0, fetch = 0, backup = 0,
+            b1_wait = 0, b2_wait = 0, root_pre = 0, root_puct = 0;
+  } inst;
+
   void reset() {
+    inst = Inst{};
+    inst_b1_max.store(0, std::memory_order_relaxed);
+    inst_b2_max.store(0, std::memory_order_relaxed);
+    inst_b1_release.store(0, std::memory_order_relaxed);
+    gen_b1.Init(0);
+    gen_b2.Init(0);
     did_signal = false;
     round_parity = false;
     num_workers = 0;
@@ -184,6 +253,34 @@ class DeterministicDescentPolicy final {
                          game::Color color, bool is_root = false) {
     const TopActions top_actions =
         puct_scorer_.TopScores(node, game, color, is_root);
+    return {game::AsLoc(top_actions[0].first), top_actions};
+  }
+
+  // INST split PUCT (see PuctScorer::Precompute).
+  using Precomp = typename PuctScorer<QFn, NFn>::Precomp;
+  static constexpr bool kSupportsSplit = true;
+  inline void Precompute(const TreeNode* node, bool is_root,
+                         Precomp* pre) const {
+    puct_scorer_.Precompute(node, is_root, pre);
+  }
+  // node->mu must be held. check: also run ComputeScores and CHECK bitwise
+  // equality.
+  inline DescentStep RunSplit(const Precomp& pre, const TreeNode* node,
+                              const game::Game& game, game::Color color,
+                              bool check) const {
+    const PuctScores pucts = puct_scorer_.Finalize(pre, node);
+    if (check) {
+      const PuctScores ref = puct_scorer_.ComputeScores(node, pre.is_root);
+      for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+        CHECK(ref[a].first == pucts[a].first &&
+              std::memcmp(&ref[a].second, &pucts[a].second, sizeof(float)) ==
+                  0)
+            << "split PUCT mismatch a=" << a << " ref=" << ref[a].second
+            << " split=" << pucts[a].second;
+      }
+    }
+    const TopActions top_actions =
+        puct_scorer_.TopScoresFrom(pucts, game, color);
     return {game::AsLoc(top_actions[0].first), top_actions};
   }
 

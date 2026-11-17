@@ -27,6 +27,9 @@ class Tensor;
 
 namespace nn {
 
+// INST: steady_clock ns of the last RunInference() start/end.
+inline std::atomic<int64_t> g_inst_infer_start{0}, g_inst_infer_end{0};
+
 // Helper predicate for absl::Condition used by MutexWaker.
 inline bool ResReadyTrue(std::atomic<bool>* r) {
   return r->load(std::memory_order_acquire);

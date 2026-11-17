@@ -2,6 +2,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <string>
 #include <future>
 #include <thread>
 #include <vector>
@@ -25,6 +28,99 @@ namespace mcts {
 namespace {
 using namespace ::game;
 using namespace ::nn;
+
+// INST: thread-local timing accumulators, flushed into global_state.inst at
+// Barrier 2 (under global mu).
+inline int64_t InstNow() {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+thread_local int64_t tl_descents = 0, tl_root_wait = 0, tl_root_hold = 0,
+                     tl_other_wait = 0, tl_other_hold = 0, tl_table_wait = 0,
+                     tl_queue = 0, tl_fetch = 0, tl_backup = 0, tl_b1_wait = 0,
+                     tl_b2_wait = 0, tl_root_pre = 0, tl_root_puct = 0;
+struct InstHoldTimer {
+  int64_t t0;
+  int64_t* acc;
+  ~InstHoldTimer() { *acc += InstNow() - t0; }
+};
+void InstRecordSubmit(GlobalSearchState& gs) {  // gs.mu held
+  const int64_t t = InstNow();
+  gs.inst.submit_max = std::max(gs.inst.submit_max, t);
+  gs.inst.submit_sum += t;
+  gs.inst.submit_n++;
+}
+void InstFlushThread(GlobalSearchState& gs) {  // gs.mu held
+  gs.inst.descents += tl_descents;
+  gs.inst.root_wait += tl_root_wait;
+  gs.inst.root_hold += tl_root_hold;
+  gs.inst.other_wait += tl_other_wait;
+  gs.inst.other_hold += tl_other_hold;
+  gs.inst.table_wait += tl_table_wait;
+  gs.inst.queue += tl_queue;
+  gs.inst.fetch += tl_fetch;
+  gs.inst.backup += tl_backup;
+  gs.inst.b1_wait += tl_b1_wait;
+  gs.inst.b2_wait += tl_b2_wait;
+  gs.inst.root_pre += tl_root_pre;
+  gs.inst.root_puct += tl_root_puct;
+  tl_descents = tl_root_wait = tl_root_hold = tl_other_wait = tl_other_hold =
+      tl_table_wait = tl_queue = tl_fetch = tl_backup = tl_b1_wait =
+          tl_b2_wait = tl_root_pre = tl_root_puct = 0;
+}
+void InstRoundEnd(GlobalSearchState& gs) {  // gs.mu held, last worker
+  auto& I = gs.inst;
+  const int64_t t = InstNow(), s = I.round_start;
+  I.rounds++;
+  if (I.submit_n > 0) {
+    I.a_submit_mean += I.submit_sum / I.submit_n - s;
+    I.a_submit_max += I.submit_max - s;
+  }
+  const int64_t is = nn::g_inst_infer_start.load(), ie = nn::g_inst_infer_end.load();
+  if (is >= s && I.fetch_max > 0) {
+    I.nn_rounds++;
+    I.a_infer_start += is - s;
+    I.a_infer_end += ie - s;
+    I.a_fetch_min += I.fetch_min - s;
+    I.a_fetch_max += I.fetch_max - s;
+  }
+  I.a_b1_max += gs.inst_b1_max.load(std::memory_order_relaxed) - s;
+  I.a_b2_max += gs.inst_b2_max.load(std::memory_order_relaxed) - s;
+  I.a_end += t - s;
+  I.round_start = t;
+  I.submit_max = I.submit_sum = I.submit_n = 0;
+  I.fetch_min = INT64_MAX;
+  I.fetch_max = 0;
+  gs.inst_b1_max.store(0, std::memory_order_relaxed);
+  gs.inst_b2_max.store(0, std::memory_order_relaxed);
+}
+void InstAtomicMax(std::atomic<int64_t>& a, int64_t v) {
+  int64_t cur = a.load(std::memory_order_relaxed);
+  while (cur < v &&
+         !a.compare_exchange_weak(cur, v, std::memory_order_relaxed)) {
+  }
+}
+// INST: P3_BARRIER=gen selects the generation-counter barriers in SearchTask.
+const bool kInstGenBarrier = [] {
+  const char* v = std::getenv("P3_BARRIER");
+  const bool gen = v != nullptr && std::string(v) == "gen";
+  fprintf(stderr, "INST barrier=%s\n", gen ? "gen" : "mutex");
+  return gen;
+}();
+// INST: P3_SPLIT_PUCT=1 scores the n_in_flight-free PUCT terms before taking
+// node->mu; =check also recomputes ComputeScores under the lock and CHECKs
+// bitwise equality.
+const int kInstSplitPuct = [] {
+  const char* v = std::getenv("P3_SPLIT_PUCT");
+  const int mode = v == nullptr                 ? 0
+                   : std::string(v) == "1"      ? 1
+                   : std::string(v) == "check"  ? 2
+                                                : 0;
+  fprintf(stderr, "INST split_puct=%s\n",
+          mode == 0 ? "off" : mode == 1 ? "on" : "check");
+  return mode;
+}();
 
 // Definitions for topological backprop. Keyed by (depth, node, action,
 // is_leaf).
@@ -56,9 +152,14 @@ void FetchLeafEval(GlobalSearchState& global_state,
                    Color color_to_move, Color root_color, float root_score_est,
                    bool needs_nn_eval) {
   if (needs_nn_eval) {
+    const int64_t tf0 = InstNow();
     leaf_evaluator->FetchLeafEval(leaf, game, color_to_move, root_color,
                                   root_score_est);
+    const int64_t tf1 = InstNow();
+    tl_fetch += tf1 - tf0;
     absl::MutexLock l(&global_state.mu);
+    global_state.inst.fetch_min = std::min(global_state.inst.fetch_min, tf1);
+    global_state.inst.fetch_max = std::max(global_state.inst.fetch_max, tf1);
     global_state.pending--;
   }
 
@@ -106,6 +207,7 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
   };
 
   CHECK(path_prefix.size() == 0 || std::get<0>(path_prefix[0]) == root);
+  tl_descents++;
   Color color_to_move = root_color;
   const int root_n_in_flight =
       root->n_in_flight.fetch_add(1, std::memory_order_release);
@@ -129,13 +231,44 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
     TopActions next_top_actions{};
     TreeNode* child = nullptr;
     {
+      const bool inst_is_root = cur_node == root;
+      const bool replay = path_index < path_prefix.size();
+      // INST split PUCT: n_in_flight-free terms are computed before locking.
+      constexpr bool kSplitOk = requires { DescentPolicy::kSupportsSplit; };
+      const bool split = kSplitOk && kInstSplitPuct != 0 && !replay;
+      auto* pre = [&]() {
+        if constexpr (kSplitOk) {
+          thread_local typename DescentPolicy::Precomp tl_pre;
+          if (split) {
+            const int64_t tp0 = InstNow();
+            descent_policy.Precompute(cur_node, inst_is_root, &tl_pre);
+            if (inst_is_root) tl_root_pre += InstNow() - tp0;
+          }
+          return &tl_pre;
+        } else {
+          return static_cast<void*>(nullptr);
+        }
+      }();
+      const int64_t tw0 = InstNow();
       absl::MutexLock node_lock(&cur_node->mu);
+      const int64_t tw1 = InstNow();
+      (inst_is_root ? tl_root_wait : tl_other_wait) += tw1 - tw0;
+      InstHoldTimer inst_hold{tw1, inst_is_root ? &tl_root_hold : &tl_other_hold};
+      const auto run_policy = [&]() -> DescentStep {
+        if constexpr (kSplitOk) {
+          if (split) {
+            return descent_policy.RunSplit(*pre, cur_node, game, color_to_move,
+                                           /*check=*/kInstSplitPuct == 2);
+          }
+        }
+        return descent_policy.Run(global_state, cur_node, game, color_to_move,
+                                  /*is_root=*/cur_node == root);
+      };
       auto descent_result =
-          path_index < path_prefix.size()
-              ? std::make_pair(std::get<1>(path_prefix[path_index]),
-                               std::get<2>(path_prefix[path_index]))
-              : descent_policy.Run(global_state, cur_node, game, color_to_move,
-                                   /*is_root=*/cur_node == root);
+          replay ? std::make_pair(std::get<1>(path_prefix[path_index]),
+                                  std::get<2>(path_prefix[path_index]))
+                 : run_policy();
+      if (inst_is_root && !replay) tl_root_puct += InstNow() - tw1;
       next_move = descent_result.first;
       next_top_actions = descent_result.second;
       CHECK(game.PlayMove(next_move, color_to_move))
@@ -152,8 +285,10 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
             child_n_in_flight, std::memory_order_release);
       } else {
         // leaf case.
+        const int64_t tt0 = InstNow();
         child = node_table->GetOrCreateGuarded(
             game.board().hash(), color_to_move, game.IsGameOver());
+        tl_table_wait += InstNow() - tt0;
         child_n_in_flight =
             child->n_in_flight.fetch_add(1, std::memory_order_acq_rel);
         child_sum_in_flights = child->sum_n_in_flights.fetch_add(
@@ -226,7 +361,9 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
   const bool needs_nn_eval =
       (leaf_state != TreeNodeState::kNnEvaluated) && !game.IsGameOver();
   if (needs_nn_eval) {
+    const int64_t tq0 = InstNow();
     leaf_evaluator->QueueEval(prob, game, color_to_move);
+    tl_queue += InstNow() - tq0;
   }
 
   // Signal NN when all workers have finished descending (descent_remaining==0).
@@ -234,6 +371,7 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
   // complete (pending==0).
   {
     absl::MutexLock l(&global_state.mu);
+    InstRecordSubmit(global_state);
     global_state.descent_remaining--;
     if (needs_nn_eval) global_state.pending++;
     if (global_state.descent_remaining == 0 && global_state.pending > 0 &&
@@ -372,8 +510,8 @@ void SearchTask(const int worker_id, core::Probability& prob,
     // Safe because a round cannot complete until all num_workers threads
     // participate — so the bit cannot flip twice before any stuck worker
     // observes the first flip.
-    bool this_parity;
-    {
+    bool this_parity = false;
+    if (!kInstGenBarrier) {
       absl::MutexLock l(&global_state.mu);
       this_parity = global_state.round_parity;
     }
@@ -390,6 +528,7 @@ void SearchTask(const int worker_id, core::Probability& prob,
         if (collision_result->action == CollisionResult::Action::kAbort) {
           {
             absl::MutexLock l(&global_state.mu);
+            InstRecordSubmit(global_state);
             global_state.total_num_aborted.fetch_add(1,
                                                      std::memory_order_relaxed);
             global_state.descent_remaining--;
@@ -421,20 +560,46 @@ void SearchTask(const int worker_id, core::Probability& prob,
     // Barrier 1: wait until all workers have finished descending and all
     // pending NN fetches are complete. Once this passes, all leaves are
     // evaluated and backprop can begin.
-    {
+    if (kInstGenBarrier) {
+      // INST: every worker reaches this point exactly once per round, and only
+      // after its own submit (descent_remaining--) and, if it queued an eval,
+      // its own fetch (pending--). So "all workers arrived" implies
+      // descent_remaining == 0 && pending == 0. Those counters are written
+      // under mu before arrival and next written by the Barrier 2 reset,
+      // which needs this thread's later arrival, so the reads below are
+      // ordered by the barrier.
+      global_state.gen_b1.ArriveAndWait([&global_state] {
+        global_state.inst_b1_release.store(InstNow(),
+                                           std::memory_order_relaxed);
+      });
+      CHECK_EQ(global_state.descent_remaining, 0);
+      CHECK_EQ(global_state.pending, 0);
+      const int64_t tb1 = InstNow();
+      tl_b1_wait +=
+          tb1 - global_state.inst_b1_release.load(std::memory_order_relaxed);
+      InstAtomicMax(global_state.inst_b1_max, tb1);
+    } else {
       absl::MutexLock l(&global_state.mu);
       global_state.mu.Await(absl::Condition(
           +[](GlobalSearchState* s) {
             return s->descent_remaining == 0 && s->pending == 0;
           },
           &global_state));
+      // INST: wake latency after the barrier condition became true.
+      const int64_t tb1 = InstNow();
+      const int64_t cond_t =
+          std::max(global_state.inst.fetch_max, global_state.inst.submit_max);
+      tl_b1_wait += tb1 - cond_t;
+      InstAtomicMax(global_state.inst_b1_max, tb1);
     }
 
     // Backprop now ready.
     if (!collision_result.has_value()) {
       // We must keep the invariant that all collisions retry until abort before
       // reaching here.
+      const int64_t tbk0 = InstNow();
       Backup(worker_id, search_path, global_state.bias_cache, puct_params);
+      tl_backup += InstNow() - tbk0;
     }
 
     // Count this descent as a visit only if we successfully reached a leaf.
@@ -446,10 +611,24 @@ void SearchTask(const int worker_id, core::Probability& prob,
     // resets per-round state and flips round_parity to wake all waiters.
     // Descent now ready. Reset the end-of-round barrier counter before
     // flipping parity so all threads see it zeroed once they exit the wait.
-    {
+    InstAtomicMax(global_state.inst_b2_max, InstNow());
+    if (kInstGenBarrier) {
+      // INST: the last arriver resets round state (under mu, as the mutex path
+      // does) before releasing; waiters read it after acquiring the release.
+      // should_stop_this_round and total_num_visits are therefore identical
+      // for every worker at the loop check, so all workers stop on the same
+      // round and no barrier is left waiting.
+      global_state.gen_b2.ArriveAndWait([&global_state] {
+        absl::MutexLock l(&global_state.mu);
+        InstRoundEnd(global_state);
+        UnsafeGlobalStateRoundReset(global_state);
+      });
+      tl_b2_wait += InstNow() - global_state.inst.round_start;
+    } else {
       absl::MutexLock l(&global_state.mu);
       if (--global_state.round_remaining == 0) {
         // Last worker through: reset for next round.
+        InstRoundEnd(global_state);
         UnsafeGlobalStateRoundReset(global_state);
       }
       // Wait for round_parity to flip (indicating the round has ended and
@@ -462,8 +641,13 @@ void SearchTask(const int worker_id, core::Probability& prob,
       global_state.mu.Await(absl::Condition(
           +[](PArg* a) { return a->s->round_parity != a->expected_parity; },
           &parg));
+      // INST: wake latency after the round reset.
+      tl_b2_wait += InstNow() - global_state.inst.round_start;
     }
   }
+  // INST: flush this thread's timing accumulators once, at exit.
+  absl::MutexLock l(&global_state.mu);
+  InstFlushThread(global_state);
 }
 
 // Launches `num_threads` worker threads, each with its own CollisionPolicy
@@ -783,6 +967,10 @@ Search::Result Search::Run(core::Probability& probability, Game& game,
     global_search_state.visit_budget = params.total_visit_budget;
     global_search_state.descent_remaining = params.num_threads;
     global_search_state.round_remaining = params.num_threads;
+    // INST: arm gen barriers before workers spawn (thread creation orders
+    // these writes before every worker's first arrival).
+    global_search_state.gen_b1.Init(params.num_threads);
+    global_search_state.gen_b2.Init(params.num_threads);
     global_search_state.max_pending_each_level = 100000;
     global_search_state.bias_cache = bias_cache_;
   }
@@ -801,6 +989,10 @@ Search::Result Search::Run(core::Probability& probability, Game& game,
     AssignBiasCacheEntry(global_search_state.bias_cache, game, root);
   }
 
+  {
+    absl::MutexLock l(&global_search_state.mu);
+    global_search_state.inst.round_start = InstNow();
+  }
   std::promise<void> done_promise;
   auto done_future = done_promise.get_future();
   std::thread timer([&, f = std::move(done_future)]() mutable {
@@ -843,6 +1035,36 @@ Search::Result Search::Run(core::Probability& probability, Game& game,
       global_search_state.total_num_aborted.load(std::memory_order_relaxed);
   const auto collision_count =
       global_search_state.total_num_collisions.load(std::memory_order_relaxed);
+  {
+    // INST: per-round phase means (ms, relative to round start) and
+    // per-descent / per-thread-round means (us).
+    absl::MutexLock l(&global_search_state.mu);
+    const auto& I = global_search_state.inst;
+    const double R = std::max<int64_t>(I.rounds, 1),
+                 NR = std::max<int64_t>(I.nn_rounds, 1),
+                 D = std::max<int64_t>(I.descents, 1),
+                 TR = std::max<int64_t>(I.rounds * params.num_threads, 1);
+    fprintf(stderr,
+            "PHASES rounds=%ld nn_rounds=%ld descents=%ld threads=%d "
+            "submit_mean_ms=%.3f submit_max_ms=%.3f infer_start_ms=%.3f "
+            "infer_end_ms=%.3f fetch_min_ms=%.3f fetch_max_ms=%.3f "
+            "b1_max_ms=%.3f b2_max_ms=%.3f end_ms=%.3f | per_descent_us "
+            "root_wait=%.2f root_hold=%.2f other_wait=%.2f other_hold=%.2f "
+            "table=%.2f | per_thread_round_us queue=%.2f fetch=%.2f "
+            "backup=%.2f b1_wake=%.2f b2_wake=%.2f | per_descent_us "
+            "root_pre=%.2f root_puct=%.2f\n",
+            (long)I.rounds, (long)I.nn_rounds, (long)I.descents,
+            params.num_threads, I.a_submit_mean / R / 1e6,
+            I.a_submit_max / R / 1e6, I.a_infer_start / NR / 1e6,
+            I.a_infer_end / NR / 1e6, I.a_fetch_min / NR / 1e6,
+            I.a_fetch_max / NR / 1e6, I.a_b1_max / R / 1e6,
+            I.a_b2_max / R / 1e6, I.a_end / R / 1e6, I.root_wait / D / 1e3,
+            I.root_hold / D / 1e3, I.other_wait / D / 1e3,
+            I.other_hold / D / 1e3, I.table_wait / D / 1e3,
+            I.queue / TR / 1e3, I.fetch / TR / 1e3, I.backup / TR / 1e3,
+            I.b1_wait / TR / 1e3, I.b2_wait / TR / 1e3, I.root_pre / D / 1e3,
+            I.root_puct / D / 1e3);
+  }
   global_search_state_.reset();
   return Search::Result{best_move, size_t(visit_count), size_t(abort_count),
                         size_t(collision_count), size_t(time_ms)};

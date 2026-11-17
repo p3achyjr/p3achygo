@@ -1,5 +1,7 @@
 #include "cc/nn/nn_interface.h"
 
+#include <chrono>
+
 #include <stdlib.h>
 
 #include <atomic>
@@ -360,7 +362,14 @@ void NNInterface::Infer() {
   }
 
   // Run Inference.
+  auto inst_ns = [] {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+  };
+  g_inst_infer_start.store(inst_ns());
   engine_->RunInference();
+  g_inst_infer_end.store(inst_ns());
   for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
     ThreadInfo& thread = thread_info_[thread_id];
     if (thread.registered && thread.loaded_for_inference) {

@@ -1,3 +1,4 @@
+#include <limits>
 // Define DOCTEST_CONFIG_IMPLEMENT so we can provide a custom main that parses
 // absl flags before running tests.
 #define DOCTEST_CONFIG_IMPLEMENT
@@ -257,6 +258,53 @@ TEST_CASE("ParallelSearch - real engine") {
   // Value should be in a plausible range for a real model.
   CHECK(root->v >= -1.5f);
   CHECK(root->v <= 1.5f);
+}
+
+// INST: stress for the barrier / wake experiments. Mirrors the GTP setup
+// (infinite batching timeout, 16384-entry cache, kExplicit, one search task),
+// sweeps thread counts, collision policies, wake strategies and stop modes.
+// Run with P3_BARRIER=gen and without. Invariants per search:
+//  - every round consumes exactly one slot per worker: (visits + aborted) % n == 0
+//  - every visit backs up through the root exactly once: root->n == 1 + visits
+//  - no virtual loss left behind: root->n_in_flight == 0
+TEST_CASE("ParallelSearch - INST barrier stress") {
+  for (int num_threads : {2, 7, 32, 48, 64}) {
+    for (auto wake : {NNInterface::WakeStrategy::kMutex,
+                      NNInterface::WakeStrategy::kGenCounter}) {
+      for (auto cp :
+           {CollisionPolicyKind::kAbort, CollisionPolicyKind::kSmartRetry}) {
+        for (int time_ms : {0, 30}) {
+          for (int rep = 0; rep < 2; ++rep) {
+            NNInterface nn_interface(
+                num_threads, std::numeric_limits<int64_t>::max(), 16384,
+                std::make_unique<NullEngine>(),
+                NNInterface::SignalKind::kExplicit,
+                /*num_shared_search_tasks=*/1, wake);
+            Search search(nn_interface.MakeSlot(/*task_offset=*/0));
+            MctsNodeTable node_table;
+            Game game;
+            core::Probability probability;
+            TreeNode* root = MakeEvaluatedRoot(node_table);
+            Search::Params params =
+                MakeParams(num_threads, time_ms > 0 ? (1 << 30) : 3000);
+            params.total_visit_time_ms = time_ms;
+            params.q_fn_kind = QFnKind::kVirtualLossSoft;
+            params.collision_policy_kind = cp;
+            Search::Result result = search.Run(probability, game, &node_table,
+                                               root, BLACK, params);
+            INFO("threads=" << num_threads << " wake=" << int(wake)
+                            << " cp=" << int(cp) << " time_ms=" << time_ms
+                            << " visits=" << result.num_visits
+                            << " aborted=" << result.num_aborted);
+            CHECK(result.num_visits > 0);
+            CHECK((result.num_visits + result.num_aborted) % num_threads == 0);
+            CHECK(root->n == 1 + (int)result.num_visits);
+            CHECK(root->n_in_flight.load() == 0);
+          }
+        }
+      }
+    }
+  }
 }
 
 }  // namespace mcts
