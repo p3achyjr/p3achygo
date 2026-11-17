@@ -75,6 +75,15 @@ ABSL_FLAG(float, fast_vfs_anchor_mult, 0.0f,
           "Variable fast search: fast moves use n = A - n_pre/2, A = "
           "round(mult * gumbel_default_n), n_pre = reused-tree visits; "
           "n_pre >= 2A samples the reused tree. 0 = fixed n.");
+ABSL_FLAG(float, nn_reeval_max_logit, 0.0f,
+          "If > 0, an NN eval whose max policy logit exceeds this is re-run "
+          "under other symmetries (see --nn_reeval_max_retries). 0 = off.");
+ABSL_FLAG(
+    float, nn_reeval_value_disagree, 0.0f,
+    "If > 0, an NN eval with |E[outcome] - E[mcts_value_dist]| (both in "
+    "[-1, 1]) above this is also re-run under other symmetries. 0 = off.");
+ABSL_FLAG(int, nn_reeval_max_retries, 2,
+          "Max extra symmetries tried for a degenerate NN eval.");
 ABSL_FLAG(bool, early_stopping_enabled, false,
           "Whether to enable stopping search early.");
 ABSL_FLAG(std::string, sgfpos_path, "",
@@ -250,6 +259,10 @@ int main(int argc, char** argv) {
   // history.
   nn_interface->SetNumCacheLastMoves(0);
   nn_interface->SetCacheKeyKo(true);
+  nn_interface->SetDegenerateReeval(
+      absl::GetFlag(FLAGS_nn_reeval_max_logit),
+      absl::GetFlag(FLAGS_nn_reeval_value_disagree),
+      absl::GetFlag(FLAGS_nn_reeval_max_retries));
 
   // initialize serialization objects.
   std::unique_ptr<recorder::GameRecorder> game_recorder =

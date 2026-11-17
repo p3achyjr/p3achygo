@@ -186,6 +186,8 @@ def loop(
             + (f" --sel_mult_calibration_file={calib_file}" if calib_file else "")
             + (f" --sgfpos_path={sgfpos_path}" if sgfpos_path else "")
             + f" --fast_vfs_anchor_mult={config.fast_vfs_anchor_mult}"
+            + f" --nn_reeval_max_logit={config.nn_reeval_max_logit}"
+            + f" --nn_reeval_value_disagree={config.nn_reeval_value_disagree}"
         )
 
         logging.info(f"Running Self-Play Command:\n'{cmd_str}'")

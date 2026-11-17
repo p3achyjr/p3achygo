@@ -70,6 +70,12 @@ class RunConfig(object):
     # Variable fast search anchor multiplier (selfplay --fast_vfs_anchor_mult).
     # 0 = fixed fast n.
     fast_vfs_anchor_mult: float = 0.0
+    # Re-run NN evals whose max policy logit exceeds this under other symmetries
+    # (selfplay --nn_reeval_max_logit). 0 = off.
+    nn_reeval_max_logit: float = 0.0
+    # Also re-run evals with |E[outcome] - E[mcts_value_dist]| above this
+    # (selfplay --nn_reeval_value_disagree). 0 = off.
+    nn_reeval_value_disagree: float = 0.0
 
 
 def parse(run_id: str) -> RunConfig:
@@ -135,6 +141,8 @@ def parse(run_id: str) -> RunConfig:
         muon_aurora = obj.get("muon_aurora", False)
         sgfpos_path = obj.get("sgfpos_path", "")
         fast_vfs_anchor_mult = obj.get("fast_vfs_anchor_mult", 0.0)
+        nn_reeval_max_logit = obj.get("nn_reeval_max_logit", 0.0)
+        nn_reeval_value_disagree = obj.get("nn_reeval_value_disagree", 0.0)
 
         return RunConfig(
             from_existing_run,
@@ -185,4 +193,6 @@ def parse(run_id: str) -> RunConfig:
             head_lr_factor=head_lr_factor,
             sgfpos_path=sgfpos_path,
             fast_vfs_anchor_mult=fast_vfs_anchor_mult,
+            nn_reeval_max_logit=nn_reeval_max_logit,
+            nn_reeval_value_disagree=nn_reeval_value_disagree,
         )

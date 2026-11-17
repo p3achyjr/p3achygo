@@ -2,7 +2,9 @@
 
 #include <stdlib.h>
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <thread>
 
 #include "absl/log/check.h"
@@ -127,6 +129,44 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
 
   NNInferResult infer_result = GetBatch(thread_id, sym);
 
+  if (reeval_max_logit_ > 0.0f || reeval_value_disagree_ > 0.0f) {
+    const int64_t n_evals = ++num_evals_;
+    float best;
+    if (IsDegenerate(infer_result, &best)) {
+      const int64_t n_degen = ++num_degenerate_evals_;
+      // Other symmetries in a random cyclic order (distinct from `sym`).
+      const int offset =
+          core::RandRange(probability.prng(), 0, game::kSymUpperBound - 1);
+      for (int r = 0; r < reeval_max_retries_ && r < game::kSymUpperBound - 1;
+           ++r) {
+        const Symmetry alt =
+            static_cast<Symmetry>((static_cast<int>(sym) + 1 +
+                                   (offset + r) % (game::kSymUpperBound - 1)) %
+                                  game::kSymUpperBound);
+        LoadBatch(thread_id, game, color_to_move, alt);
+        SignalLoadedAndBlockUntilReady(thread_id);
+        NNInferResult alt_result = GetBatch(thread_id, alt);
+        ++num_reeval_extra_evals_;
+        float alt_max;
+        if (!IsDegenerate(alt_result, &alt_max)) {
+          infer_result = alt_result;
+          ++num_reeval_rescued_;
+          break;
+        }
+        if (alt_max < best) {
+          best = alt_max;
+          infer_result = alt_result;
+        }
+      }
+      if (n_degen % 1000 == 1) {
+        LOG(INFO) << "NN re-eval: evals " << n_evals << ", degenerate "
+                  << n_degen << ", extra evals "
+                  << num_reeval_extra_evals_.load() << ", rescued "
+                  << num_reeval_rescued_.load();
+      }
+    }
+  }
+
   // Cache this result.
   CacheInsert(thread_id, cache_key, infer_result);
   return infer_result;
@@ -241,6 +281,22 @@ std::optional<NNInferResult> NNInterface::CacheGet(int thread_id,
 void NNInterface::CacheInsert(int thread_id, const NNKey& key,
                               const NNInferResult& result) {
   thread_caches_[thread_id].Insert(key, result);
+}
+
+bool NNInterface::IsDegenerate(const NNInferResult& r, float* max_logit) const {
+  *max_logit = *std::max_element(r.move_logits.begin(), r.move_logits.end());
+  if (reeval_max_logit_ > 0.0f && *max_logit > reeval_max_logit_) return true;
+  if (reeval_value_disagree_ > 0.0f) {
+    const float v = r.value_probs[1] - r.value_probs[0];
+    float mcts_v = 0.0f;
+    for (int i = 0; i < constants::kNumVBuckets; ++i) {
+      mcts_v +=
+          r.mcts_value_dist[i] *
+          (-1.0f + (2 * i + 1) / static_cast<float>(constants::kNumVBuckets));
+    }
+    if (std::abs(v - mcts_v) > reeval_value_disagree_) return true;
+  }
+  return false;
 }
 
 void NNInterface::LoadBatch(int thread_id, const game::Game& game,
