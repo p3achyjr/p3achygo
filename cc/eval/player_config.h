@@ -85,8 +85,8 @@ struct PlayerSearchConfig {
   // N function: "identity" | "virtual_visit"
   std::string n_fn = "virtual_visit";
 
-  // Collision policy: "abort" | "retry" | "smart_retry"
-  std::string collision_policy = "abort";
+  // Collision policy: "abort" | "retry" | "smart_retry" | "smart_retry_depth"
+  std::string collision_policy = "smart_retry_depth";
 
   // Collision detector: "noop" | "n_in_flight" | "level_saturation" | "product"
   std::string collision_detector = "noop";
@@ -98,6 +98,11 @@ struct PlayerSearchConfig {
   // Maximum number of collision retries before aborting. Used by "retry" and
   // "smart_retry" collision policies.
   int max_collision_retries = 4;
+
+  // "smart_retry_depth": fork at argmin gap / (i + 1 - c)^p over path index i
+  // (root = 0); i + 1 - c <= 0 is ineligible. c = p = 0 is "smart_retry".
+  float fork_depth_c = 0.8f;
+  float fork_depth_p = 0.5f;
 
   // Search mode: "concurrent" | "batch"
   std::string search_mode = "concurrent";
@@ -236,6 +241,10 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.vl_delta = std::stof(val);
     else if (key == "max_collision_retries")
       cfg.max_collision_retries = std::stoi(val);
+    else if (key == "fork_depth_c")
+      cfg.fork_depth_c = std::stof(val);
+    else if (key == "fork_depth_p")
+      cfg.fork_depth_p = std::stof(val);
     else if (key == "search_mode")
       cfg.search_mode = val;
     else if (key == "descent_policy")
@@ -311,6 +320,8 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
   ROW(collision_detector, s);
   ROW(vl_delta, f);
   ROW(max_collision_retries, i_);
+  ROW(fork_depth_c, f);
+  ROW(fork_depth_p, f);
   ROW(search_mode, s);
   ROW(descent_policy, s);
   ROW(max_o_ratio, f);

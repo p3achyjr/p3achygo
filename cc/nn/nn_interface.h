@@ -5,6 +5,7 @@
 #include <atomic>
 #include <optional>
 #include <thread>
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/inlined_vector.h"
@@ -104,7 +105,9 @@ class NNInterface final {
   // never have to pass it explicitly.
   struct Slot {
     Slot(NNInterface* nn_interface, int task_offset)
-        : nn_interface_(nn_interface), task_offset_(task_offset) {}
+        : nn_interface_(nn_interface),
+          task_offset_(task_offset),
+          wave_(nn_interface->WaveOf(task_offset)) {}
 
     SignalKind signal_kind() const { return nn_interface_->signal_kind(); }
 
@@ -128,12 +131,15 @@ class NNInterface final {
                                                 color_to_move, probability);
     }
 
-    void SignalReadyForInference() { nn_interface_->SignalReadyForInference(); }
-    void UnregisterSearchTask() { nn_interface_->UnregisterSearchTask(); }
+    void SignalReadyForInference() {
+      nn_interface_->SignalReadyForInference(wave_);
+    }
+    void UnregisterSearchTask() { nn_interface_->UnregisterSearchTask(wave_); }
 
    private:
     NNInterface* nn_interface_;
     int task_offset_;
+    int wave_;  // Shared interface: the buffer set this slot's rows live in.
   };
 
   Slot MakeSlot(int task_offset) { return Slot(this, task_offset); }
@@ -153,6 +159,15 @@ class NNInterface final {
               std::unique_ptr<Engine> engine, SignalKind signal_kind,
               int num_shared_search_tasks,
               WakeStrategy wake_strategy = WakeStrategy::kGenCounter);
+  // Shared interface (pipelined search): one interface, one engine (batch
+  // num_threads / W) per wave. Thread t lives in wave t / (num_threads / W),
+  // row t % (num_threads / W). Each wave has its own signal count and wake-up;
+  // one inference thread runs whichever wave is ready, with the engine call
+  // outside mu_ (never two waves at once).
+  NNInterface(int num_threads, int64_t timeout, size_t cache_size,
+              std::vector<std::unique_ptr<Engine>> wave_engines,
+              SignalKind signal_kind, int num_shared_search_tasks,
+              WakeStrategy wake_strategy);
   ~NNInterface();
 
   // Disable Copy
@@ -188,19 +203,22 @@ class NNInterface final {
       ABSL_LOCKS_EXCLUDED(mu_);
   NNInferResult FetchEntry(int thread_id, int offset, const game::Game& game,
                            game::Color color_to_move) ABSL_LOCKS_EXCLUDED(mu_);
-  inline void SignalReadyForInference() {
+  inline void SignalReadyForInference(int wave = 0) {
     {
       absl::MutexLock l(&mu_);
-      ++num_signaled_search_tasks_;
+      ++num_signaled_search_tasks_[wave];
     }
     if (num_threads_ == 1) {
       Infer();  // No infer_thread_ exists; run synchronously.
     }
   }
-  inline void UnregisterSearchTask() {
+  inline void UnregisterSearchTask(int wave = 0) {
     absl::MutexLock l(&mu_);
-    ++num_exited_search_tasks_;
+    ++num_exited_search_tasks_[wave];
   }
+  int num_waves() const { return num_waves_; }
+  int wave_size() const { return wave_size_; }
+  int WaveOf(int canonical_tid) const { return canonical_tid / wave_size_; }
 
  private:
   static constexpr int64_t kTimeoutUs = 400;
@@ -253,7 +271,7 @@ class NNInterface final {
   inline NNInferResult GetBatch(int thread_id, game::Symmetry sym)
       ABSL_LOCKS_EXCLUDED(mu_) {
     NNInferResult infer_result;
-    engine_->GetBatch(thread_id, infer_result);
+    engines_[WaveOf(thread_id)]->GetBatch(RowOf(thread_id), infer_result);
 
     // Clear res_ready without the lock. Safe because:
     // - engine_->GetBatch() completes before this store (release ordering).
@@ -295,7 +313,7 @@ class NNInterface final {
   inline void SignalLoadedAndBlockUntilReady(int thread_id)
       ABSL_LOCKS_EXCLUDED(mu_) {
     if (num_threads_ == 1) {
-      engine_->RunInference();
+      engines_[0]->RunInference();
       return;
     }
     ThreadInfo& thread_info = thread_info_[thread_id];
@@ -306,12 +324,14 @@ class NNInterface final {
       thread_info.res_cached = false;
     }
     // mu_ released before calling waker — same convention for both strategies.
-    waker_->Wait(thread_info.res_ready, mu_);
+    wakers_[WaveOf(thread_id)]->Wait(thread_info.res_ready, mu_);
   }
 
   inline void BlockUntilReady(int thread_id) ABSL_LOCKS_EXCLUDED(mu_) {
-    waker_->Wait(thread_info_[thread_id].res_ready, mu_);
+    wakers_[WaveOf(thread_id)]->Wait(thread_info_[thread_id].res_ready, mu_);
   }
+
+  int RowOf(int canonical_tid) const { return canonical_tid % wave_size_; }
 
   NNKey MakeKey(const game::Game& game, game::Color color_to_move) const;
 
@@ -319,6 +339,12 @@ class NNInterface final {
   void InferLoop();
   void Infer() ABSL_LOCKS_EXCLUDED(mu_);
   bool ShouldInfer() const;
+
+  // Shared interface: inference loop / step over the waves.
+  static bool AnyWaveReady(NNInterface* self);
+  bool WaveShouldInfer(int wave) const;
+  void InferWavesLoop();
+  void InferWaves() ABSL_LOCKS_EXCLUDED(mu_);
 
   std::string id_;
   int num_registered_threads_ ABSL_GUARDED_BY(mu_);
@@ -331,27 +357,32 @@ class NNInterface final {
   absl::Mutex mu_;
   absl::InlinedVector<ThreadInfo, constants::kMaxNumThreads> thread_info_;
 
-  // Inference thread. Runs inference until told to stop.
+  // Inference thread. Runs inference until told to stop (InferLoop, or
+  // InferWavesLoop for a shared interface).
   std::thread infer_thread_;
+  static constexpr int kMaxWaves = 2;
+  int num_waves_ = 1;
+  int wave_size_;       // num_threads_ / num_waves_.
+  int last_wave_ = -1;  // last wave run by the shared infer thread.
   std::atomic<bool> running_;
 
   std::array<core::LRUCache<NNKey, NNInferResult>, constants::kMaxNumThreads>
       thread_caches_;  // Per-thread cache.
   const int64_t timeout_;
 
-  // Engine.
-  std::unique_ptr<Engine> engine_;
+  // Engines: one per wave (one when not shared).
+  std::vector<std::unique_ptr<Engine>> engines_;
 
   // Per-thread symmetries.
   absl::InlinedVector<game::Symmetry, constants::kMaxNumThreads> symmetries_;
 
-  // Explicit signalling.
+  // Explicit signalling. Per wave; index 0 only when not shared.
   const int num_shared_search_tasks_;
-  int num_signaled_search_tasks_ = 0;
-  int num_exited_search_tasks_ = 0;
+  std::array<int, kMaxWaves> num_signaled_search_tasks_{};
+  std::array<int, kMaxWaves> num_exited_search_tasks_{};
 
-  // Wakeup strategy: owns the waiting/notification mechanism.
-  std::unique_ptr<Waker> waker_;
+  // Wakeup strategy: owns the waiting/notification mechanism. One per wave.
+  std::vector<std::unique_ptr<Waker>> wakers_;
 };
 
 }  // namespace nn
