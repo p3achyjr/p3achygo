@@ -4,6 +4,8 @@
 
 #include <sys/stat.h>
 
+#include <cctype>
+#include <cstring>
 #include <fstream>
 #include <sstream>
 #include <thread>
@@ -71,6 +73,9 @@ ABSL_FLAG(std::string, sel_mult_calibration_file, "",
           "hardcoded defaults in SelMultCalibration are used.");
 ABSL_FLAG(bool, early_stopping_enabled, false,
           "Whether to enable stopping search early.");
+ABSL_FLAG(std::string, sgfpos_path, "",
+          "Path to the sgfpos start positions (see LoadSgfPos). If empty, no "
+          "games start from sgfpos positions.");
 
 selfplay::SelMultCalibration ParseCalibrationFile(const std::string& path) {
   selfplay::SelMultCalibration calib;
@@ -131,6 +136,63 @@ void WaitForSignal() {
   LOG(INFO) << "Self-Play received shutdown signal. Shutting down...";
   selfplay::SignalStop();
 }
+
+namespace {
+// Loads sgfpos start positions. One position per line:
+//   TYPE ID KOMI MOVE...
+// TYPE is `blunder` or `osc`; MOVEs are GTP coordinates (or `pass`) played
+// from the empty board, Black first. Lines starting with '#' are ignored.
+std::vector<selfplay::SgfPos> LoadSgfPos(const std::string& path) {
+  static constexpr char kCols[] = "ABCDEFGHJKLMNOPQRST";
+  std::vector<selfplay::SgfPos> positions;
+  if (path.empty()) return positions;
+  std::ifstream f(path);
+  CHECK(f.is_open()) << "Could not open --sgfpos_path " << path;
+  std::string line;
+  while (std::getline(f, line)) {
+    if (line.empty() || line[0] == '#') continue;
+    std::istringstream ss(line);
+    std::string type, id, mv;
+    float komi;
+    CHECK(ss >> type >> id >> komi) << "Bad sgfpos line: " << line;
+    CHECK(type == "blunder" || type == "osc") << "Bad sgfpos type: " << line;
+    game::Board board(komi);
+    absl::InlinedVector<game::Move, constants::kNumLastMoves> last_moves(
+        constants::kNumLastMoves, game::kNoopMove);
+    game::Color color = BLACK;
+    int move_num = 0;
+    while (ss >> mv) {
+      game::Loc loc = game::kPassLoc;
+      if (mv != "pass") {
+        const char* col = std::strchr(kCols, std::toupper(mv[0]));
+        CHECK(col != nullptr && mv[0] != '\0')
+            << "Bad move " << mv << " in " << id;
+        const int row = std::stoi(mv.substr(1));
+        CHECK(row >= 1 && row <= BOARD_LEN)
+            << "Bad move " << mv << " in " << id;
+        loc = game::Loc{BOARD_LEN - row, static_cast<int>(col - kCols)};
+      }
+      CHECK(game::MoveOk(board.PlayMove(loc, color)))
+          << "Illegal move " << move_num << " (" << mv << ") in " << id;
+      last_moves.erase(last_moves.begin());
+      last_moves.emplace_back(game::Move{color, loc});
+      color = game::OppositeColor(color);
+      ++move_num;
+    }
+    const bool blunder = type == "blunder";
+    positions.push_back(selfplay::SgfPos{
+        blunder ? selfplay::SgfPos::Type::kBlunder
+                : selfplay::SgfPos::Type::kOsc,
+        id,
+        selfplay::InitState{board, last_moves, color, move_num,
+                            blunder
+                                ? selfplay::FirstMoveBehavior::kForceFullSearch
+                                : selfplay::FirstMoveBehavior::kPlay,
+                            selfplay::InitState::Kind::kSgfPos}});
+  }
+  return positions;
+}
+}  // namespace
 
 int main(int argc, char** argv) {
   absl::ParseCommandLine(argc, argv);
@@ -197,9 +259,11 @@ int main(int argc, char** argv) {
             << "  use_seen_state_prob="
             << absl::GetFlag(FLAGS_use_seen_state_prob);
 
-  const selfplay::ForkManager::Params fork_params =
-      selfplay::ForkManager::Params::ForReuse(
-          absl::GetFlag(FLAGS_use_seen_state_prob));
+  const selfplay::ForkManager::Params fork_params;
+  const std::vector<selfplay::SgfPos> sgfpos =
+      LoadSgfPos(absl::GetFlag(FLAGS_sgfpos_path));
+  LOG(INFO) << "Loaded " << sgfpos.size() << " sgfpos positions from '"
+            << absl::GetFlag(FLAGS_sgfpos_path) << "'";
 
   LOG(INFO) << "========== Self-Play Config ==========";
   LOG(INFO) << "  gumbel_selected: n=" << absl::GetFlag(FLAGS_gumbel_selected_n)
@@ -213,15 +277,15 @@ int main(int argc, char** argv) {
             << "  bias_cache_alpha=" << absl::GetFlag(FLAGS_bias_cache_alpha);
   LOG(INFO) << "  nonroot_var_scale_prior_visits="
             << absl::GetFlag(FLAGS_nonroot_var_scale_prior_visits);
-  LOG(INFO) << "  fork_probs (reuse="
-            << absl::GetFlag(FLAGS_use_seen_state_prob)
-            << "):  early=" << fork_params.early_fork_prob
+  LOG(INFO) << "  fork_probs (per fresh game):  early="
+            << fork_params.early_fork_prob
             << "  late=" << fork_params.late_fork_prob
             << "  sampleT1=" << fork_params.sample_policy_t1_prob
             << "  sampleT2=" << fork_params.sample_policy_t2_prob
             << "  sampleRandom=" << fork_params.sample_random_prob
             << "  regret=" << fork_params.regret_prob
-            << "  uniform=" << fork_params.uniform_prob;
+            << "  uniform=" << fork_params.uniform_prob
+            << (fork_params.uniform_enabled ? "" : " (disabled)");
   LOG(INFO) << "=======================================";
 
   std::vector<std::string> sink_names;
@@ -276,7 +340,7 @@ int main(int argc, char** argv) {
             absl::GetFlag(FLAGS_bias_cache_lambda),
             absl::GetFlag(FLAGS_bias_cache_alpha),
             absl::GetFlag(FLAGS_nonroot_var_scale_prior_visits), fork_params,
-            calibration, absl::GetFlag(FLAGS_early_stopping_enabled)});
+            calibration, absl::GetFlag(FLAGS_early_stopping_enabled), sgfpos});
     threads.emplace_back(std::move(thread));
   }
 

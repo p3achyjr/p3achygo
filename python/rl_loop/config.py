@@ -64,6 +64,8 @@ class RunConfig(object):
     # LR multiplier for policy/value head params (AdamW path), relative to the
     # global LR. None = heads use adam_lr_ratio like other AdamW params.
     head_lr_factor: Optional[float] = None
+    # Path to sgfpos start positions, relative to the repo root ("" = none).
+    sgfpos_path: str = ""
 
 
 def parse(run_id: str) -> RunConfig:
@@ -127,6 +129,7 @@ def parse(run_id: str) -> RunConfig:
         nonroot_var_scale_prior_visits = obj.get("nonroot_var_scale_prior_visits", 10)
         nn_timeout_us = obj.get("nn_timeout_us", 400)
         muon_aurora = obj.get("muon_aurora", False)
+        sgfpos_path = obj.get("sgfpos_path", "")
 
         return RunConfig(
             from_existing_run,
@@ -175,4 +178,5 @@ def parse(run_id: str) -> RunConfig:
             nn_timeout_us,
             muon_aurora=muon_aurora,
             head_lr_factor=head_lr_factor,
+            sgfpos_path=sgfpos_path,
         )

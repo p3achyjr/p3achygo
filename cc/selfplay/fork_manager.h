@@ -38,11 +38,10 @@ namespace selfplay {
 //   3. Call FinalizeGame() after the game loop (kRegret only).
 class ForkManager final {
  public:
-  // Conditional probabilities at baseline reuse_prob=0.2.
-  static constexpr float kBaseProbs[5] = {0.0f, 0.09f, 0.0f, 0.0f, 0.01f};
+  // Per-fresh-game probabilities of each fork kind (kEarly at KataGo's 4%).
+  static constexpr float kBaseProbs[5] = {0.04f, 0.09f, 0.0f, 0.0f, 0.01f};
   struct Params {
     // Probability of each fork kind. Must sum to 1.
-    // Tuned for reuse_chance=0.2 (conditional on being a fresh game).
     float early_fork_prob = kBaseProbs[0];
     float late_fork_prob = kBaseProbs[1];
     float sample_policy_t1_prob = kBaseProbs[2];  // absorbed into uniform.
@@ -51,44 +50,14 @@ class ForkManager final {
     float regret_prob = 0.0f;
     float uniform_prob = 1.0f - (kBaseProbs[0] + kBaseProbs[1] + kBaseProbs[2] +
                                  kBaseProbs[3] + kBaseProbs[4]);
+    // If false, kUniform games (a random position of the game) add nothing to
+    // the reuse buffer, so the buffer only holds fork positions.
+    bool uniform_enabled = false;
     // Post-fork probabilities (independent; need not sum to 1).
     float force_full_search_prob = 0.25f;
     float double_sample_prob = 0.5f;
 
     class Builder;
-
-    // Rescales fork probabilities so that the 5 active fork kinds maintain
-    // their effective per-game rates across different reuse fractions.
-    // Baseline: reuse_prob=0.2. Scales up/down from there.
-    static Params ForReuse(float reuse_prob) {
-      static constexpr float kBaseReuse = 0.2f;  // 1 - baseline reuse 0.2
-      const float scale = reuse_prob == 0 ? 0 : (kBaseReuse / reuse_prob);
-
-      Params p;
-      p.early_fork_prob = kBaseProbs[0] * scale;
-      p.late_fork_prob = kBaseProbs[1] * scale;
-      p.sample_policy_t1_prob = kBaseProbs[2] * scale;
-      p.sample_policy_t2_prob = kBaseProbs[3] * scale;
-      p.sample_random_prob = kBaseProbs[4] * scale;
-      float fork_sum = p.early_fork_prob + p.late_fork_prob +
-                       p.sample_policy_t1_prob + p.sample_policy_t2_prob +
-                       p.sample_random_prob;
-
-      if (fork_sum >= 1.0f) {
-        // Scale down to reserve at least 10% mass for regret/uniform.
-        const float scale_down = 0.9f / fork_sum;
-        p.early_fork_prob *= scale_down;
-        p.late_fork_prob *= scale_down;
-        p.sample_policy_t1_prob *= scale_down;
-        p.sample_policy_t2_prob *= scale_down;
-        p.sample_random_prob *= scale_down;
-        fork_sum = 0.9f;
-      }
-      const float remaining = 1.0f - fork_sum;
-      p.regret_prob = 0.0f;
-      p.uniform_prob = remaining;
-      return p;
-    }
   };
 
   // Per-move data passed to MaybeFork.
@@ -181,6 +150,7 @@ class ForkManager final {
 
     // kUniform: restart from the current position, optionally adjusting komi
     // to make the game score-neutral (70% probability of adjustment).
+    if (kind_ == ForkKind::kUniform && !params_.uniform_enabled) return;
     if (kind_ == ForkKind::kUniform) {
       constexpr float kSelectProb = 0.05f;
       const auto wr_atten_factor = [&]() {
