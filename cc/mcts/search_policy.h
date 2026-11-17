@@ -366,10 +366,215 @@ class PuctScorer final {
     return pucts;
   }
 
+  // INST split PUCT. Precompute() holds every ComputeScores() term that does
+  // not read n_in_flight; Finalize() adds the n_in_flight terms using the same
+  // float expressions, so Finalize(Precompute(x)) == ComputeScores(x) bitwise.
+  // Precompute() only dereferences children with child_visits > 0: those
+  // existed before this round, so their stats are not written during descent.
+  struct Precomp {
+    bool is_root;
+    int n;
+    float v;
+    float fpu;
+    float c_puct;
+    float c_puct_v_2;
+    std::array<int, constants::kMaxMovesPerPosition> child_visits;
+    std::array<float, constants::kMaxMovesPerPosition> move_probs;
+    std::array<float, constants::kMaxMovesPerPosition> qs;
+    // PUCT: c_puct_scaled * move_probs[a]. PUCT-V: move_probs[a] * stddev.
+    std::array<float, constants::kMaxMovesPerPosition> coef;
+    std::array<double, constants::kMaxMovesPerPosition> m3_bonus;
+  };
+
+  inline void Precompute(const TreeNode* node, bool is_root,
+                         Precomp* pre) const {
+    DCHECK(node->state != TreeNodeState::kNew);
+    const int n = node->n;
+    const float v = node->v;
+    const float v_var = node->v_var;
+    pre->is_root = is_root;
+    pre->n = n;
+    pre->v = v;
+    pre->child_visits = node->child_visits;
+    const auto& child_visits = pre->child_visits;
+    if (p_opt_weight_ == 0.0f) {
+      pre->move_probs = node->move_probs;
+    } else if (p_opt_weight_ == 1.0f) {
+      pre->move_probs = node->opt_probs;
+    } else {
+      for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+        pre->move_probs[a] =
+            node->move_probs[a] +
+            p_opt_weight_ * (node->opt_probs[a] - node->move_probs[a]);
+      }
+    }
+    const auto& move_probs = pre->move_probs;
+    auto& qs = pre->qs;
+    std::array<float, constants::kMaxMovesPerPosition> qvars;
+    std::array<double, constants::kMaxMovesPerPosition> q_m3s;
+    std::array<std::pair<float, float>, constants::kMaxMovesPerPosition>
+        q_up_down_stds{};
+    float q_std_weighted_sum = 0.0f;
+    double q_m3_std_weighted_sum = 0.0;
+    float q_std_down_weighted_sum = 0.0f;
+    float q_std_up_weighted_sum = 0.0f;
+    for (int a = 0; a < qs.size(); ++a) {
+      // Unvisited children add 0 to every weighted sum below and use the
+      // default up/down factor, so skipping them changes no value.
+      if (child_visits[a] == 0) continue;
+      TreeNode* child = node->child(a);
+      if (child == nullptr) continue;
+      qs[a] = -child->v;
+      if (child_visits[a] >= 3) {
+        qvars[a] = child->v_var;
+        q_m3s[a] = -child->v_m3;
+        q_std_weighted_sum += std::sqrt(qvars[a]) * child_visits[a];
+        q_m3_std_weighted_sum += std::cbrt(q_m3s[a]) * child_visits[a];
+      }
+      if (enable_v_cat_var_scaling_) {
+        const float q_std_down = std::sqrt(child->v_cat_var_down);
+        const float q_std_up = std::sqrt(child->v_cat_var_up);
+        q_up_down_stds[a] = {q_std_down, q_std_up};
+        q_std_down_weighted_sum += q_std_down * child_visits[a];
+        q_std_up_weighted_sum += q_std_up * child_visits[a];
+      }
+    }
+    const float q_std_mean = q_std_weighted_sum / n;
+    const double q_m3_std_mean = q_m3_std_weighted_sum / n;
+    const float q_std_down_mean = q_std_down_weighted_sum / n;
+    const float q_std_up_mean = q_std_up_weighted_sum / n;
+    pre->fpu = is_root ? root_fpu_ : kDefaultFPU;
+    const float c_puct = ScaleCPuct(c_puct_, c_puct_visit_scaling_, n);
+    pre->c_puct = c_puct;
+    pre->c_puct_v_2 = ScaleCPuct(c_puct_v_2_, c_puct_visit_scaling_, n);
+    for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+      const auto c_puct_var_child_scale_factor = [&]() {
+        const int child_n = child_visits[a];
+        if (child_n < 3 || q_std_mean == 0) {
+          return 1.0f;
+        }
+        const float prior_weight = static_cast<float>(var_scale_prior_visits_);
+        return (prior_weight + child_n * (std::sqrt(qvars[a]) / q_std_mean)) /
+               float(prior_weight + child_n);
+      };
+      const float c_puct_var_scale_factor =
+          enable_var_scaling_ ? c_puct_var_child_scale_factor() : 1.0f;
+      const auto compute_m3_bonus = [&]() -> double {
+        const float prior_weight = static_cast<float>(m3_prior_visits_);
+        const int child_n = child_visits[a];
+        if (child_n < 3) {
+          return 0.0f;
+        }
+        const double m3_child_std = std::cbrt(q_m3s[a]);
+        const double abs_bonus = m3_child_std - q_m3_std_mean;
+        return (prior_weight + abs_bonus) / double(prior_weight + child_n);
+      };
+      pre->m3_bonus[a] = enable_m3_bonus_ ? compute_m3_bonus() : 0.0;
+      const auto compute_q_std_up_down_factor = [&]() {
+        constexpr float kEps = 1e-6;
+        constexpr float kNormFactor = 0.0f;
+        if (child_visits[a] == 0) {
+          return 1.0f;
+        }
+        const auto [q_std_down, q_std_up] = q_up_down_stds[a];
+        if (q_std_up == 0 || q_std_down == 0) {
+          return 1.0f;
+        }
+        const auto down_factor =
+            (q_std_down + kNormFactor) / (q_std_down_mean + kNormFactor + kEps);
+        const auto up_factor =
+            (q_std_up + kNormFactor) / (q_std_up_mean + kNormFactor + kEps);
+        return (10 + child_visits[a] * up_factor) / (10 + child_visits[a]);
+      };
+      const float q_std_up_down_factor =
+          enable_v_cat_var_scaling_ ? compute_q_std_up_down_factor() : 1.0f;
+      if (use_puct_v_) {
+        float var = child_visits[a] < 3 ? (n < 3 ? 1.0f : v_var) : qvars[a];
+        float stddev = std::sqrt(var);
+        pre->coef[a] = move_probs[a] * stddev;
+      } else {
+        const float c_puct_scaled =
+            c_puct * c_puct_var_scale_factor * q_std_up_down_factor;
+        pre->coef[a] = c_puct_scaled * move_probs[a];
+      }
+    }
+  }
+
+  // Must be called with node->mu held (reads n_in_flight).
+  inline PuctScores Finalize(const Precomp& pre, const TreeNode* node) const {
+    std::array<int, constants::kMaxMovesPerPosition> child_visits_in_flight;
+    for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+      TreeNode* child = node->child(a);
+      child_visits_in_flight[a] =
+          child == nullptr ? 0
+                           : child->n_in_flight.load(std::memory_order_relaxed);
+    }
+    return FinalizeWith(pre, child_visits_in_flight);
+  }
+
+  // INST lc0-style root picks: Finalize() with explicit in-flight counts.
+  inline PuctScores FinalizeWith(
+      const Precomp& pre,
+      const std::array<int, constants::kMaxMovesPerPosition>&
+          child_visits_in_flight) const {
+    const auto& child_visits = pre.child_visits;
+    const auto& move_probs = pre.move_probs;
+    float p_explored = 0.0f;
+    for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+      if (child_visits[a] + child_visits_in_flight[a] > 0) {
+        p_explored += move_probs[a];
+      }
+    }
+    const float v_fpu = pre.v - pre.fpu * std::sqrt(p_explored);
+    float canonical_n = 1;
+    for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+      canonical_n += n_fn_(child_visits[a], child_visits_in_flight[a]);
+    }
+    PuctScores pucts{};
+    for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+      const float canonical_child_n =
+          n_fn_(child_visits[a], child_visits_in_flight[a]);
+      const float canonical_q =
+          q_fn_(child_visits[a] > 0 ? pre.qs[a] : v_fpu, child_visits[a],
+                child_visits_in_flight[a]);
+      float puct_explore_term;
+      if (use_puct_v_) {
+        float var_scale_term =
+            pre.coef[a] * (std::sqrt(canonical_n) / (1 + canonical_child_n));
+        float n_scale_term =
+            move_probs[a] * std::log(canonical_n) / (1 + canonical_child_n);
+        puct_explore_term =
+            pre.c_puct * var_scale_term + pre.c_puct_v_2 * n_scale_term;
+      } else {
+        puct_explore_term =
+            pre.coef[a] * (std::sqrt(canonical_n) / (1 + canonical_child_n));
+      }
+      pucts[a] = {a, puct_explore_term + canonical_q + pre.m3_bonus[a]};
+    }
+    return pucts;
+  }
+
   std::array<std::pair<int, float>, 4> TopScores(
       const TreeNode* node, const game::Game& game,
       const game::Color color_to_move, bool is_root = false) const {
-    PuctScores pucts = ComputeScores(node, is_root);
+    return TopScoresFrom(ComputeScores(node, is_root), game, color_to_move);
+  }
+
+  // `legal_memo` (INST root picks): optional per-move legality cache for
+  // repeated calls on the same game and color; -1 = unknown.
+  std::array<std::pair<int, float>, 4> TopScoresFrom(
+      const PuctScores& pucts, const game::Game& game,
+      const game::Color color_to_move,
+      std::array<int8_t, constants::kMaxMovesPerPosition>* legal_memo =
+          nullptr) const {
+    const auto is_valid = [&](int a) {
+      if (legal_memo == nullptr) {
+        return game.IsValidMove(game::AsLoc(a), color_to_move);
+      }
+      int8_t& m = (*legal_memo)[a];
+      if (m < 0) m = game.IsValidMove(game::AsLoc(a), color_to_move) ? 1 : 0;
+      return m == 1;
+    };
     std::array<std::pair<int, float>, 4> top_scores = {
         {{game::kNoopLoc, kMinPuctScore},
          {game::kNoopLoc, kMinPuctScore},
@@ -384,8 +589,7 @@ class PuctScorer final {
         ++a_ranking;
       }
 
-      if (a_ranking >= top_scores.size() ||
-          !game.IsValidMove(game::AsLoc(a), color_to_move)) {
+      if (a_ranking >= top_scores.size() || !is_valid(a)) {
         continue;
       }
 

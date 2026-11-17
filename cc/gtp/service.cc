@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <iomanip>
 #include <sstream>
@@ -85,6 +86,7 @@ std::string GtpBoardString(const Board& board) {
 class ServiceImpl final : public Service {
  public:
   ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
+              std::unique_ptr<NNInterface> nn_interface2,
               eval::PlayerSearchConfig cfg, bool verbose);
 
   Response<int> GtpProtocolVersion(std::optional<int> id) override;
@@ -153,6 +155,8 @@ class ServiceImpl final : public Service {
   float komi_ = 7.5f;
   Probability probability_;
   std::unique_ptr<NNInterface> nn_interface_;
+  // INST pipelined search (P3_PIPELINE=1): second thread group's interface.
+  std::unique_ptr<NNInterface> nn_interface2_;
   std::unique_ptr<GumbelEvaluator> gumbel_evaluator_;
   std::unique_ptr<Game> game_;
   std::unique_ptr<NodeTable> node_table_;
@@ -169,11 +173,13 @@ class ServiceImpl final : public Service {
 };
 
 ServiceImpl::ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
+                         std::unique_ptr<NNInterface> nn_interface2,
                          eval::PlayerSearchConfig cfg, bool verbose)
     : cfg_(cfg),
       time_control_(cfg.time_control_flags),
       verbose_(verbose),
       nn_interface_(std::move(nn_interface)),
+      nn_interface2_(std::move(nn_interface2)),
       game_(std::make_unique<Game>(false, game::Board::Scoring::kTrompTaylor)),
       node_table_(
           cfg.use_mcgs
@@ -616,6 +622,11 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
     CHECK(cfg_.sampling_num_moves == 0) << "Not Supported";
     BiasCache* bias_cache = bias_cache_.has_value() ? &*bias_cache_ : nullptr;
     Search s(nn_interface_->MakeSlot(0), bias_cache);
+    if (nn_interface2_) s.SetPipelineSlot(nn_interface2_->MakeSlot(0));
+    // EXP shared interface: group 1 uses the second wave's rows.
+    if (nn_interface_->num_waves() > 1) {
+      s.SetPipelineSlot(nn_interface_->MakeSlot(nn_interface_->wave_size()));
+    }
     const bool use_visit_budget = cfg_.time_ms == 0;
     const bool use_auto_time = cfg_.time_ms == -1;
     const auto [time_auto, time_metadata] =
@@ -657,7 +668,9 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
     }
     if (verbose_) {
       std::cerr << "Thought for " << res.time_ms
-                << "ms. Visits=" << res.num_visits << "\n";
+                << "ms. Visits=" << res.num_visits
+                << " Aborted=" << res.num_aborted
+                << " Collisions=" << res.num_collisions << "\n";
     }
     move = res.move;
   } else {
@@ -777,6 +790,11 @@ void ServiceImpl::StartPondering() {
 void ServiceImpl::Ponder(std::stop_token token) {
   BiasCache* bias_cache = bias_cache_.has_value() ? &*bias_cache_ : nullptr;
   Search s(nn_interface_->MakeSlot(0), bias_cache);
+  if (nn_interface2_) s.SetPipelineSlot(nn_interface2_->MakeSlot(0));
+  // EXP shared interface: group 1 uses the second wave's rows.
+  if (nn_interface_->num_waves() > 1) {
+    s.SetPipelineSlot(nn_interface_->MakeSlot(nn_interface_->wave_size()));
+  }
   // StopSearch() fires immediately when the jthread stop is requested.
   std::stop_callback stop_cb(token, [&s] { s.StopSearch(); });
 
@@ -817,16 +835,121 @@ void ServiceImpl::Ponder(std::stop_token token) {
     std::string model_path, eval::PlayerSearchConfig cfg, bool verbose) {
   const int num_threads = cfg.num_threads_per_game;
   const bool uses_psearch = num_threads > 1 || cfg.time_ms != 0;
-  std::unique_ptr<nn::Engine> engine =
-      nn::CreateEngine(nn::KindFromEnginePath(model_path), model_path,
-                       num_threads, nn::GetVersionFromModelPath(model_path));
-  std::unique_ptr<NNInterface> nn_interface = std::make_unique<NNInterface>(
-      num_threads, std::numeric_limits<int64_t>::max(), 16384,
-      std::move(engine),
-      uses_psearch ? NNInterface::SignalKind::kExplicit
-                   : NNInterface::SignalKind::kAuto,
-      1, NNInterface::WakeStrategy::kMutex);
-  return std::make_unique<ServiceImpl>(std::move(nn_interface), cfg, verbose);
+  // INST: generation-counter waker unless P3_WAKE=mutex.
+  const NNInterface::WakeStrategy wake =
+      (std::getenv("P3_WAKE") != nullptr &&
+       std::string(std::getenv("P3_WAKE")) == "mutex")
+          ? NNInterface::WakeStrategy::kMutex
+          : NNInterface::WakeStrategy::kGenCounter;
+  // INST pipelined search (P3_PIPELINE=1): two thread groups of
+  // num_threads / 2, each with its own engine (batch num_threads / 2, same
+  // model_path) and NNInterface.
+  const bool pipelined = uses_psearch && num_threads > 1 &&
+                         std::getenv("P3_PIPELINE") != nullptr &&
+                         std::string(std::getenv("P3_PIPELINE")) == "1";
+  if (pipelined) {
+    CHECK(num_threads % 2 == 0)
+        << "P3_PIPELINE=1 needs an even num_threads_per_game, got "
+        << num_threads;
+  }
+  const int iface_threads = pipelined ? num_threads / 2 : num_threads;
+  // EXP shared interface (P3_SHARED_NN=1, with P3_PIPELINE=1): one
+  // NNInterface for both groups, one engine (batch num_threads / 2) per group;
+  // P3_NN_INFER_THREADS=1 (default) or 2.
+  const bool shared_nn = pipelined && std::getenv("P3_SHARED_NN") != nullptr &&
+                         std::string(std::getenv("P3_SHARED_NN")) == "1";
+  const int nn_infer_threads =
+      std::getenv("P3_NN_INFER_THREADS") != nullptr
+          ? std::atoi(std::getenv("P3_NN_INFER_THREADS"))
+          : 1;
+  fprintf(stderr,
+          "INST wake=%s pipeline=%d iface_threads=%d shared_nn=%d "
+          "nn_infer_threads=%d\n",
+          wake == NNInterface::WakeStrategy::kMutex ? "mutex" : "gen",
+          pipelined ? 1 : 0, iface_threads, shared_nn ? 1 : 0,
+          shared_nn ? nn_infer_threads : 0);
+  // EXP NN cache key (P3_NN_KEY=hashko): color + position hash + simple-ko
+  // point, no last moves. P3_SHARED_CACHE=1 (round-free only): one cache for
+  // all workers behind a spin lock, same total size as the per-thread caches.
+  const bool key_hashko = std::getenv("P3_NN_KEY") != nullptr &&
+                          std::string(std::getenv("P3_NN_KEY")) == "hashko";
+  const bool shared_cache = std::getenv("P3_SHARED_CACHE") != nullptr &&
+                            std::string(std::getenv("P3_SHARED_CACHE")) == "1";
+  fprintf(stderr, "INST nn_key=%s shared_cache=%d\n",
+          key_hashko ? "hashko" : "last5", shared_cache ? 1 : 0);
+  const auto exp_cache_key = [&](NNInterface* nn) {
+    if (key_hashko) {
+      nn->SetNumCacheLastMoves(0);
+      nn->SetCacheKeyKo(true);
+    }
+  };
+  const auto make_interface = [&]() {
+    std::unique_ptr<nn::Engine> engine = nn::CreateEngine(
+        nn::KindFromEnginePath(model_path), model_path, iface_threads,
+        nn::GetVersionFromModelPath(model_path));
+    auto nn = std::make_unique<NNInterface>(
+        iface_threads, std::numeric_limits<int64_t>::max(), 16384,
+        std::move(engine),
+        uses_psearch ? NNInterface::SignalKind::kExplicit
+                     : NNInterface::SignalKind::kAuto,
+        1, wake);
+    exp_cache_key(nn.get());
+    return nn;
+  };
+  // EXP round-free search (P3_ROUNDFREE=1, not pipelined): one queue-mode
+  // NNInterface, num_threads workers, engine batch P3_RF_BATCH (default
+  // num_threads; model_path must be built for it), P3_RF_MIN_FILL (default 1:
+  // run as soon as anything is queued) and P3_RF_TIMEOUT_US.
+  const bool round_free = uses_psearch && num_threads > 1 && !pipelined &&
+                          std::getenv("P3_ROUNDFREE") != nullptr &&
+                          std::string(std::getenv("P3_ROUNDFREE")) == "1";
+  CHECK(!shared_cache || round_free)
+      << "P3_SHARED_CACHE=1 needs round-free search (P3_ROUNDFREE=1).";
+  if (round_free) {
+    const auto env_int = [](const char* k, int64_t dflt) {
+      const char* v = std::getenv(k);
+      return v != nullptr ? std::atoll(v) : dflt;
+    };
+    const int rf_batch = env_int("P3_RF_BATCH", num_threads);
+    const int rf_min_fill = env_int("P3_RF_MIN_FILL", 1);
+    const int64_t rf_timeout_us = env_int("P3_RF_TIMEOUT_US", 0);
+    fprintf(stderr,
+            "INST roundfree=1 threads=%d rf_batch=%d rf_min_fill=%d "
+            "rf_timeout_us=%ld\n",
+            num_threads, rf_batch, rf_min_fill, (long)rf_timeout_us);
+    std::unique_ptr<nn::Engine> engine =
+        nn::CreateEngine(nn::KindFromEnginePath(model_path), model_path,
+                         rf_batch, nn::GetVersionFromModelPath(model_path));
+    // Per-thread cache as base t32 (16384 / 32).
+    std::unique_ptr<NNInterface> nn_interface = std::make_unique<NNInterface>(
+        num_threads, 512 * num_threads, std::move(engine), rf_batch,
+        rf_min_fill, rf_timeout_us, wake);
+    exp_cache_key(nn_interface.get());
+    if (shared_cache) nn_interface->EnableSharedCache(512 * num_threads);
+    return std::make_unique<ServiceImpl>(std::move(nn_interface), nullptr, cfg,
+                                         verbose);
+  }
+  if (shared_nn) {
+    std::vector<std::unique_ptr<nn::Engine>> engines;
+    for (int w = 0; w < 2; ++w) {
+      engines.push_back(nn::CreateEngine(
+          nn::KindFromEnginePath(model_path), model_path, iface_threads,
+          nn::GetVersionFromModelPath(model_path)));
+    }
+    // Cache 2 x 16384: same per-thread cache size as two interfaces.
+    std::unique_ptr<NNInterface> nn_interface = std::make_unique<NNInterface>(
+        num_threads, std::numeric_limits<int64_t>::max(), 2 * 16384,
+        std::move(engines), NNInterface::SignalKind::kExplicit, 1, wake,
+        nn_infer_threads);
+    exp_cache_key(nn_interface.get());
+    return std::make_unique<ServiceImpl>(std::move(nn_interface), nullptr, cfg,
+                                         verbose);
+  }
+  std::unique_ptr<NNInterface> nn_interface = make_interface();
+  std::unique_ptr<NNInterface> nn_interface2 =
+      pipelined ? make_interface() : nullptr;
+  return std::make_unique<ServiceImpl>(std::move(nn_interface),
+                                       std::move(nn_interface2), cfg, verbose);
 }
 
 }  // namespace gtp
