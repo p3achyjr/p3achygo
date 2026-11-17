@@ -147,7 +147,7 @@ SearchResult RunSeededGumbel(GumbelEvaluator& evaluator, Game& game,
   sr.visits = result.visits;
   sr.v = root->v;
   sr.v_outcome = root->v_outcome;
-  sr.v_categorical = root->v_categorical;
+  sr.v_categorical = mcts::VCategorical(root);
   return sr;
 }
 
@@ -170,7 +170,7 @@ SearchResult RunNNOnly(nn::NNInterface* nn_interface, Game& game,
   sr.visits = 0;
   sr.v = root->init_outcome_est;
   sr.v_outcome = root->init_outcome_est;
-  sr.v_categorical = root->v_categorical;
+  sr.v_categorical = mcts::VCategorical(root);
   return sr;
 }
 

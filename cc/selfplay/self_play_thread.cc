@@ -769,7 +769,7 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
               .root_score(root_score)
               .kld(gumbel_res.kld)
               .root(log_mcts_trees ? root_node : nullptr)
-              .mcts_value_dist(root_node->v_categorical)
+              .mcts_value_dist(mcts::VCategorical(root_node))
               .move_stats(move_stats)
               .build();
       move_infos.push_back(move_info);

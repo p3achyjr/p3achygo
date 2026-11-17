@@ -58,8 +58,10 @@ void FetchLeafEval(GlobalSearchState& global_state,
   if (needs_nn_eval) {
     leaf_evaluator->FetchLeafEval(leaf, game, color_to_move, root_color,
                                   root_score_est);
-    absl::MutexLock l(&global_state.mu);
-    global_state.pending--;
+    if (!global_state.round_free) {
+      absl::MutexLock l(&global_state.mu);
+      global_state.pending--;
+    }
   }
 
   if (game.IsGameOver()) {
@@ -130,6 +132,16 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
     TreeNode* child = nullptr;
     {
       absl::MutexLock node_lock(&cur_node->mu);
+      // Round-free: another worker may have evaluated this node (state
+      // kNnEvaluated) without having backed up its visit yet (n == 0). Treat
+      // it as in flight, as the round barriers guarantee in round-based
+      // search. node->n is written under node->mu, so this read also orders
+      // the evaluating worker's writes before ours.
+      if (global_state.round_free && cur_node != root &&
+          path_index >= path_prefix.size() && cur_node->n == 0) {
+        path.push_back({cur_node, game::kNoopLoc, {}});
+        return on_collision(path);
+      }
       auto descent_result =
           path_index < path_prefix.size()
               ? std::make_pair(std::get<1>(path_prefix[path_index]),
@@ -231,8 +243,8 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
 
   // Signal NN when all workers have finished descending (descent_remaining==0).
   // Track pending NN fetches separately so Barrier 1 knows when all evals are
-  // complete (pending==0).
-  {
+  // complete (pending==0). Round-free search has no rounds.
+  if (!global_state.round_free) {
     absl::MutexLock l(&global_state.mu);
     global_state.descent_remaining--;
     if (needs_nn_eval) global_state.pending++;
@@ -466,6 +478,124 @@ void SearchTask(const int worker_id, core::Probability& prob,
   }
 }
 
+// Round-free backup step: every backup updates and recomputes every node on
+// its path, under node->mu (KataGo recomputes each node on the path per
+// playout). Workers enter and leave nodes at any time, so the round-based
+// "last arriver updates" rule does not apply. A parent's last recompute
+// follows (under the parent's mutex) every child update made by a worker that
+// passed through it, so the tree is exact once the search quiesces.
+void BackupStepRoundFree(TreeNode* node, game::Loc action, bool is_leaf,
+                         BiasCache* bias_cache, const PuctParams& puct_params,
+                         const float leaf_q_outcome) {
+  absl::MutexLock l(&node->mu);
+  node->n += 1;
+  if (!is_leaf) {
+    node->child_visits[game::AsIndex(action, BOARD_LEN)] += 1;
+  }
+  UpdateVCategorial(node, leaf_q_outcome);
+  node->n_in_flight.fetch_sub(1, std::memory_order_acq_rel);
+  // This path's leaf may already have children backed up by other workers
+  // (they descended through it after its evaluation).
+  bool leaf_has_children = false;
+  if (is_leaf) {
+    for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+      if (node->child_visits[a] > 0) {
+        leaf_has_children = true;
+        break;
+      }
+    }
+  }
+  if (is_leaf && !leaf_has_children) {
+    node->w = node->init_util_est;
+    node->w_outcome = node->init_outcome_est;
+    node->v = node->init_util_est;
+    node->v_outcome = node->init_outcome_est;
+    node->v_err = node->init_err_est;
+  } else {
+    RecomputeNodeStats(node, FetchObsBias(bias_cache, node));
+  }
+  RecomputeVCategoricalStats(node, puct_params.v_cat_var_scale_prior_visits);
+  node->is_pending_update.store(false, std::memory_order_release);
+}
+
+void BackupRoundFree(GlobalSearchState& global_state, SearchPath& search_path,
+                     const PuctParams puct_params) {
+  const float leaf_q_outcome = std::get<0>(search_path.back())->v_outcome;
+  const auto leaf_parity = (search_path.size() - 1) % 2;
+  for (int i = search_path.size() - 1; i >= 0; --i) {
+    auto& [node, action, _] = search_path[i];
+    const auto leaf_sign = i % 2 == leaf_parity ? 1 : -1;
+    BackupStepRoundFree(node, action, i == (int)search_path.size() - 1,
+                        global_state.bias_cache, puct_params,
+                        leaf_sign * leaf_q_outcome);
+  }
+  // Descend counted this leaf as pending at its level.
+  global_state.dec_pending_at_level(search_path.size() - 2);
+}
+
+// Round-free worker: descend (node locks as usual), wait for this worker's own
+// NN result, back up, repeat. No barriers: the NNInterface (kRoundFree) runs
+// queued rows as they arrive. A collision retries as the collision policy
+// says; after an abort the worker starts a new descent at once, and after
+// kBackoffAfter consecutive aborts it sleeps briefly (the colliding leaves are
+// waiting on the GPU or on another worker's backup).
+template <typename DescentPolicy, typename CollisionPolicy,
+          typename CollisionDetector>
+void SearchTaskRoundFree(const int worker_id, core::Probability& prob,
+                         GlobalSearchState& global_state,
+                         NNInterface::Slot slot, DescentPolicy& descent_policy,
+                         CollisionPolicy& collision_policy,
+                         const CollisionDetector& collision_detector,
+                         Game& game, NodeTable* node_table,
+                         TreeNode* const root, game::Color color_to_move,
+                         const ScoreUtilityParams score_util_params,
+                         const PuctParams puct_params) {
+  static constexpr int kBackoffAfter = 4;
+  static constexpr int kBackoffUs = 20;
+  LeafEvaluator leaf_evaluator(slot, worker_id, score_util_params);
+  int consecutive_aborts = 0;
+  while (!global_state.should_stop.load(std::memory_order_relaxed) &&
+         global_state.total_num_visits.load(std::memory_order_relaxed) <
+             global_state.visit_budget) {
+    collision_policy.Reset();
+    Game search_game = game;
+    auto [search_path, collision_result] = Descend(
+        worker_id, prob, global_state, slot, &leaf_evaluator, descent_policy,
+        collision_policy, collision_detector, search_game, node_table, root,
+        color_to_move, root->init_score_est, {});
+    if (collision_result.has_value()) {
+      global_state.total_num_collisions.fetch_add(1, std::memory_order_relaxed);
+      while (collision_result.has_value() &&
+             collision_result->action == CollisionResult::Action::kRetry) {
+        // Replay the retry path prefix onto a fresh game copy so the game
+        // state matches the prefix path before re-descending.
+        SearchPath retry_path_prefix =
+            collision_result->retry_path_prefix.has_value()
+                ? collision_result->retry_path_prefix.value()
+                : SearchPath{};
+        Game retry_game = game;
+        auto [retry_path, retry_collision] =
+            Descend(worker_id, prob, global_state, slot, &leaf_evaluator,
+                    descent_policy, collision_policy, collision_detector,
+                    retry_game, node_table, root, color_to_move,
+                    root->init_score_est, retry_path_prefix);
+        search_path = retry_path;
+        collision_result = retry_collision;
+      }
+      if (collision_result.has_value()) {
+        global_state.total_num_aborted.fetch_add(1, std::memory_order_relaxed);
+        if (++consecutive_aborts >= kBackoffAfter) {
+          std::this_thread::sleep_for(std::chrono::microseconds(kBackoffUs));
+        }
+        continue;
+      }
+    }
+    consecutive_aborts = 0;
+    BackupRoundFree(global_state, search_path, puct_params);
+    global_state.total_num_visits.fetch_add(1, std::memory_order_relaxed);
+  }
+}
+
 // Launches `num_threads` worker threads, each with its own CollisionPolicy
 // instance (so stateful policies are safe) and Probability source.
 // DescentPolicy is shared read-only across threads.
@@ -484,6 +614,12 @@ void SpawnSearchTasks(GlobalSearchState& global_state, NNInterface::Slot slot,
   for (int worker_id = 0; worker_id < num_threads; ++worker_id) {
     workers.emplace_back([&, worker_id, cp = collision_policy_proto]() mutable {
       core::Probability prob;
+      if (global_state.round_free) {
+        SearchTaskRoundFree(worker_id, prob, global_state, slot, descent_policy,
+                            cp, collision_detector, game, node_table, root,
+                            color_to_move, score_util_params, puct_params);
+        return;
+      }
       SearchTask(worker_id, prob, global_state, slot, descent_policy, cp,
                  collision_detector, game, node_table, root, color_to_move,
                  score_util_params, puct_params);
@@ -746,7 +882,8 @@ Search::Search(NNInterface::Slot slot) : Search(slot, nullptr) {}
 
 Search::Search(NNInterface::Slot slot, BiasCache* bias_cache)
     : slot_(slot), bias_cache_(bias_cache) {
-  CHECK(slot_.signal_kind() == NNInterface::SignalKind::kExplicit);
+  CHECK(slot_.signal_kind() == NNInterface::SignalKind::kExplicit ||
+        slot_.signal_kind() == NNInterface::SignalKind::kRoundFree);
 }
 
 Search::Result Search::Run(core::Probability& probability, Game& game,
@@ -785,7 +922,12 @@ Search::Result Search::Run(core::Probability& probability, Game& game,
     global_search_state.round_remaining = params.num_threads;
     global_search_state.max_pending_each_level = 100000;
     global_search_state.bias_cache = bias_cache_;
+    global_search_state.round_free =
+        slot_.signal_kind() == NNInterface::SignalKind::kRoundFree;
   }
+  CHECK(!global_search_state.round_free ||
+        params.mode == Search::Mode::kConcurrent)
+      << "round-free search supports Mode::kConcurrent only";
 
   if (game.IsGameOver()) {
     // not a well-defined search.
@@ -828,6 +970,13 @@ Search::Result Search::Run(core::Probability& probability, Game& game,
       RunWithDetector(
           global_search_state, slot_, game, node_table, root, color_to_move,
           SmartRetryCollisionPolicy(params.max_collision_retries), params);
+      break;
+    case CollisionPolicyKind::kSmartRetryDepth:
+      RunWithDetector(
+          global_search_state, slot_, game, node_table, root, color_to_move,
+          SmartRetryCollisionPolicy(params.max_collision_retries,
+                                    params.fork_depth_c, params.fork_depth_p),
+          params);
       break;
   }
   done_promise.set_value();

@@ -35,6 +35,8 @@ endif()
 
 # Full implementation with TensorFlow
 add_library(nn_interface
+    nn_cache.cc
+    nn_cache.h
     nn_interface.cc
     nn_interface.h
 )
@@ -48,6 +50,7 @@ target_link_libraries(nn_interface
     go_features
     absl::log
     absl::status
+    absl::hash
     absl::inlined_vector
 )
 
@@ -66,6 +69,26 @@ if(BUILD_TESTS)
     )
     add_test(NAME nn_interface_sync_test COMMAND nn_interface_sync_test)
     set_tests_properties(nn_interface_sync_test PROPERTIES TIMEOUT 265)
+
+    add_executable(nn_cache_test __tests__/nn_cache_test.cc)
+    target_link_libraries(nn_cache_test PRIVATE
+        nn_interface
+        game
+        core_impl
+        core_doctest
+    )
+    add_test(NAME nn_cache_test COMMAND nn_cache_test)
+
+    add_executable(nn_interface_round_free_test
+        __tests__/nn_interface_round_free_test.cc)
+    target_link_libraries(nn_interface_round_free_test PRIVATE
+        nn_interface
+        game
+        core_impl
+        core_doctest
+    )
+    add_test(NAME nn_interface_round_free_test
+        COMMAND nn_interface_round_free_test)
 endif()
 
 if(BUILD_TESTS AND USE_TENSORFLOW)

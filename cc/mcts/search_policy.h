@@ -178,8 +178,13 @@ class PuctScorer final {
     const int n_in_flight = node->n_in_flight.load(std::memory_order_relaxed);
     const float v = node->v;
     const float v_var = node->v_var;
-    const std::array<int, constants::kMaxMovesPerPosition> child_visits =
-        node->child_visits;
+    const std::array<int, constants::kMaxMovesPerPosition> child_visits = [&] {
+      std::array<int, constants::kMaxMovesPerPosition> visits;
+      for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+        visits[a] = node->child_visits[a];
+      }
+      return visits;
+    }();
     const std::array<float, constants::kMaxMovesPerPosition> move_probs = [&] {
       if (p_opt_weight_ == 0.0f) {
         return node->move_probs;
