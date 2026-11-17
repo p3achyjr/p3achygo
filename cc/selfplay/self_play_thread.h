@@ -79,6 +79,11 @@ struct SPConfig {
   const bool early_stopping_enabled;
   // Start positions for kSgfPos games. Empty disables kSgfPos.
   const std::vector<SgfPos> sgfpos = {};
+  // Variable fast search. If > 0, fast (non-training) moves use
+  // n = A - n_pre / 2 with A = round(fast_vfs_anchor_mult * default n) and
+  // n_pre = visits already in the reused tree; n_pre >= 2A samples the
+  // reused tree's improved policy without searching. 0 disables (fixed n).
+  const float fast_vfs_anchor_mult = 0.0f;
 };
 
 void Run(size_t seed, int thread_id, nn::NNInterface* nn_interface,

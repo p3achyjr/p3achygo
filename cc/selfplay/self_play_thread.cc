@@ -693,6 +693,15 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
           gumbel_k = trainable_gumbel_params.k;
         } else {
           gumbel_n = config.default_params.n;
+          if (config.fast_vfs_anchor_mult > 0.0f) {
+            // Variable fast search: n = A - n_pre / 2, 0 when n_pre >= 2A.
+            const int anchor = static_cast<int>(std::round(
+                config.fast_vfs_anchor_mult * config.default_params.n));
+            gumbel_n =
+                n_pre >= 2 * anchor
+                    ? 0
+                    : static_cast<int>(std::round(anchor - n_pre / 2.0f));
+          }
           gumbel_k = fast_move_gumbel_k;
           noise_scaling = fast_move_noise_scaling;
         }
@@ -773,6 +782,11 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
                                           color_to_move, opening_temp);
           }
           return res;
+        }
+        if (!is_move_selected_for_training && gumbel_n == 0) {
+          // Variable fast search with a large reused tree: no new visits.
+          return gumbel_evaluator.SampleFromTree(probability, game, root_node,
+                                                 color_to_move, tau);
         }
         return is_move_selected_for_training || !use_puct_fast_search
                    ? gumbel_evaluator.SearchRoot(

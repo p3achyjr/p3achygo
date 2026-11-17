@@ -71,6 +71,10 @@ ABSL_FLAG(std::string, sel_mult_calibration_file, "",
           "Path to key=value file with per-generation sel_mult thresholds. "
           "Written by the Python RL loop from .stats files. If empty, "
           "hardcoded defaults in SelMultCalibration are used.");
+ABSL_FLAG(float, fast_vfs_anchor_mult, 0.0f,
+          "Variable fast search: fast moves use n = A - n_pre/2, A = "
+          "round(mult * gumbel_default_n), n_pre = reused-tree visits; "
+          "n_pre >= 2A samples the reused tree. 0 = fixed n.");
 ABSL_FLAG(bool, early_stopping_enabled, false,
           "Whether to enable stopping search early.");
 ABSL_FLAG(std::string, sgfpos_path, "",
@@ -340,7 +344,8 @@ int main(int argc, char** argv) {
             absl::GetFlag(FLAGS_bias_cache_lambda),
             absl::GetFlag(FLAGS_bias_cache_alpha),
             absl::GetFlag(FLAGS_nonroot_var_scale_prior_visits), fork_params,
-            calibration, absl::GetFlag(FLAGS_early_stopping_enabled), sgfpos});
+            calibration, absl::GetFlag(FLAGS_early_stopping_enabled), sgfpos,
+            absl::GetFlag(FLAGS_fast_vfs_anchor_mult)});
     threads.emplace_back(std::move(thread));
   }
 

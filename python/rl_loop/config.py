@@ -67,6 +67,9 @@ class RunConfig(object):
     # Path to sgfpos start positions, relative to local_run_dir ("" = none).
     # The file is a self-play artifact synced from R2, not checked in.
     sgfpos_path: str = ""
+    # Variable fast search anchor multiplier (selfplay --fast_vfs_anchor_mult).
+    # 0 = fixed fast n.
+    fast_vfs_anchor_mult: float = 0.0
 
 
 def parse(run_id: str) -> RunConfig:
@@ -131,6 +134,7 @@ def parse(run_id: str) -> RunConfig:
         nn_timeout_us = obj.get("nn_timeout_us", 400)
         muon_aurora = obj.get("muon_aurora", False)
         sgfpos_path = obj.get("sgfpos_path", "")
+        fast_vfs_anchor_mult = obj.get("fast_vfs_anchor_mult", 0.0)
 
         return RunConfig(
             from_existing_run,
@@ -180,4 +184,5 @@ def parse(run_id: str) -> RunConfig:
             muon_aurora=muon_aurora,
             head_lr_factor=head_lr_factor,
             sgfpos_path=sgfpos_path,
+            fast_vfs_anchor_mult=fast_vfs_anchor_mult,
         )

@@ -123,6 +123,13 @@ class GumbelEvaluator final {
                       TreeNode* root, game::Color color_to_move,
                       float tau = 1.0f);
 
+  // 0-visit move: samples the completed-Q improved policy of the existing
+  // (reused) tree with temperature tau. Children with visits use their Q,
+  // the rest use v_mix. Does not add visits.
+  GumbelResult SampleFromTree(core::Probability& probability, game::Game& game,
+                              TreeNode* root, game::Color color_to_move,
+                              float tau);
+
   // Performs a full Gumbel root search. Returns a pair of the original move,
   // and the selected move.
   // If params.n == 1, we will sample a move directly from the policy.

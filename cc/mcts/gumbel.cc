@@ -279,6 +279,39 @@ GumbelResult GumbelEvaluator::Sample(core::Probability& probability,
                       /*child_stats=*/{}, /*kld=*/0, /*visits=*/0};
 }
 
+GumbelResult GumbelEvaluator::SampleFromTree(core::Probability& probability,
+                                             game::Game& game, TreeNode* root,
+                                             game::Color color_to_move,
+                                             float tau) {
+  if (root->state == TreeNodeState::kNew) {
+    leaf_evaluator_.EvaluateRoot(probability, game, root, color_to_move);
+    AssignBiasCacheEntry(game, root);
+  }
+
+  std::array<float, constants::kMaxMovesPerPosition> masked_logits;
+  absl::InlinedVector<int, 16> visited_actions;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    const bool valid = game.IsValidMove(a, color_to_move);
+    masked_logits[a] = valid ? root->move_logits[a] : kSmallLogit;
+    if (valid && NAction(root, a) > 0) visited_actions.push_back(a);
+  }
+  // Same Q weight form as SearchRoot (2 * ln(winner visits + 1)), with the
+  // most-visited child standing in for the theoretical winner.
+  const float visit_advantage =
+      2 * std::log(static_cast<float>(MaxN(root) + 1));
+  std::array<float, constants::kMaxMovesPerPosition> pi_improved =
+      ComputeRootImprovedPolicy(root, masked_logits, visited_actions,
+                                visit_advantage);
+  Loc mcts_move = game::AsLoc(
+      SampleFromPolicy(pi_improved, tau, probability, game.board()));
+  return GumbelResult{game::AsLoc(Argmax(root->move_logits)),
+                      mcts_move,
+                      pi_improved,
+                      /*child_stats=*/{},
+                      /*kld=*/0,
+                      /*visits=*/0};
+}
+
 // `n`: total number of simulations.
 // `k`: initial number of actions selected.
 // `n` must be >= `klogk`.

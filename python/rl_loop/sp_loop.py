@@ -185,6 +185,7 @@ def loop(
             + f" --nn_timeout_us={config.nn_timeout_us}"
             + (f" --sel_mult_calibration_file={calib_file}" if calib_file else "")
             + (f" --sgfpos_path={sgfpos_path}" if sgfpos_path else "")
+            + f" --fast_vfs_anchor_mult={config.fast_vfs_anchor_mult}"
         )
 
         logging.info(f"Running Self-Play Command:\n'{cmd_str}'")
