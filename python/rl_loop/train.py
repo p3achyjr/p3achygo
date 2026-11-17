@@ -138,6 +138,7 @@ def train_one_gen(
     if isinstance(inner_optimizer, backend_shim.ConvMuon):
         # observed severe overfitting for outcome head.
         loss_coeffs.w_outcome *= 0.4
+    loss_coeffs.w_val *= config.val_loss_scale
 
     logging.info(f"Loss Coefficients: {loss_coeffs}")
     old_batch_num = batch_num
