@@ -1,6 +1,9 @@
 #ifndef SELF_PLAY_THREAD_H_
 #define SELF_PLAY_THREAD_H_
 
+#include <string>
+#include <vector>
+
 #include "absl/container/flat_hash_map.h"
 #include "cc/nn/nn_interface.h"
 #include "cc/recorder/game_recorder.h"
@@ -35,6 +38,22 @@ struct SelMultCalibration {
   }
 };
 
+// A fixed start position mined from match games (see --sgfpos_path).
+struct SgfPos {
+  enum class Type : uint8_t {
+    // A move that loses a lot of winrate per both p3 and KataGo. The first
+    // move gets a full search.
+    kBlunder = 0,
+    // Start of a window where p3's root value oscillates. The game starts
+    // immediately; for the first kSgfPosOscPlies plies the down-bad reduction
+    // of full searches is off.
+    kOsc = 1,
+  };
+  Type type;
+  std::string id;
+  InitState state;
+};
+
 struct SPConfig {
   const int max_moves;
   const GumbelParams selected_params;
@@ -58,6 +77,8 @@ struct SPConfig {
   const SelMultCalibration calibration = {};
   // Whether early stopping is enabled for search.
   const bool early_stopping_enabled;
+  // Start positions for kSgfPos games. Empty disables kSgfPos.
+  const std::vector<SgfPos> sgfpos = {};
 };
 
 void Run(size_t seed, int thread_id, nn::NNInterface* nn_interface,

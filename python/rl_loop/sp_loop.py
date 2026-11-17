@@ -175,6 +175,11 @@ def loop(
             + f" --nonroot_var_scale_prior_visits={config.nonroot_var_scale_prior_visits}"
             + f" --nn_timeout_us={config.nn_timeout_us}"
             + (f" --sel_mult_calibration_file={calib_file}" if calib_file else "")
+            + (
+                f" --sgfpos_path={Path(Path(__file__).parent.parent.parent, config.sgfpos_path)}"
+                if config.sgfpos_path
+                else ""
+            )
         )
 
         logging.info(f"Running Self-Play Command:\n'{cmd_str}'")

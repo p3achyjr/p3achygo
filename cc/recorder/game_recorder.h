@@ -26,9 +26,12 @@ class GameRecorder {
   GameRecorder(GameRecorder&&) = delete;
   GameRecorder& operator=(GameRecorder&&) = delete;
 
+  // `start_note` (e.g. the self-play start kind) is written to the SGF as a
+  // comment on the first move.
   virtual void RecordGame(int thread_id, const game::Board& init_board,
                           const game::Game& game,
-                          const std::vector<MoveSearchRecord>& move_infos) = 0;
+                          const std::vector<MoveSearchRecord>& move_infos,
+                          std::string start_note = "") = 0;
 
   virtual void RecordEvalGame(int thread_id, const game::Game& game,
                               const std::string& b_name,

@@ -31,6 +31,7 @@ struct InitState {
     kGoExploit = 3,
     kRegret = 4,
     kCorner = 5,
+    kSgfPos = 6,
   };
   game::Board board;
   absl::InlinedVector<game::Move, constants::kNumLastMoves> last_moves;
@@ -39,6 +40,8 @@ struct InitState {
   FirstMoveBehavior first_move_behavior = FirstMoveBehavior::kSample;
   Kind kind = Kind::kEmpty;
   std::optional<ForkKind> fork_kind = std::nullopt;
+  // Index into SPConfig::sgfpos for kSgfPos starts, else -1.
+  int sgfpos_index = -1;
 };
 
 enum class BufferType { kGoExploit, kRegret, kComposite };

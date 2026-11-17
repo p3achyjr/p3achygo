@@ -143,6 +143,20 @@ class SgfWMoveProp final : public SgfProp {
   game::Loc move_;
 };
 
+// Setup stones (AB / AW), e.g. for games that start from a non-empty board.
+class SgfSetupProp final : public SgfProp {
+ public:
+  SgfSetupProp(game::Color color, std::vector<game::Loc> locs)
+      : color_(color), locs_(std::move(locs)) {}
+  void Accept(SgfVisitor* visitor) const override { visitor->Visit(this); }
+  std::string tag() const { return color_ == BLACK ? "AB" : "AW"; }
+  const std::vector<game::Loc>& locs() const { return locs_; }
+
+ private:
+  game::Color color_;
+  std::vector<game::Loc> locs_;
+};
+
 class SgfNode final : public SgfVisitable {
  public:
   void Accept(SgfVisitor* visitor) const override { visitor->Visit(this); }
