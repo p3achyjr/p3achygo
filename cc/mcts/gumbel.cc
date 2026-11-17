@@ -71,12 +71,14 @@ float QTransform(float q, float max_b) {
 // with the raw network value instead of v_mix.
 float VMixed(const TreeNode* node) {
   double weighted_visited_q = 0;
+  double visit_weighted_q = 0;
   double visited_prob = 0;
   double visited_n = 0;
   for (int action = 0; action < constants::kMaxMovesPerPosition; ++action) {
     const float n_a = NAction(node, action);
     if (n_a > 0) {
       weighted_visited_q += (node->move_probs[action] * Q(node, action));
+      visit_weighted_q += n_a * Q(node, action);
       visited_prob += node->move_probs[action];
       visited_n += n_a;
     }
@@ -85,8 +87,12 @@ float VMixed(const TreeNode* node) {
     return node->init_util_est;
   }
 
-  double interpolated_q =
-      (weighted_visited_q * visited_n / visited_prob + node->init_util_est);
+  // If every visited child has prior exactly 0 (extreme logits underflow),
+  // the prior-weighted mean is 0/0; use the visit-weighted mean Q instead.
+  double interpolated_q = visited_prob > 0
+                              ? (weighted_visited_q * visited_n / visited_prob +
+                                 node->init_util_est)
+                              : (visit_weighted_q + node->init_util_est);
 
   return interpolated_q / (1 + visited_n);
 }
