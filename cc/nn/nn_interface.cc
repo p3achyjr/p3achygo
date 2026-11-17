@@ -19,16 +19,6 @@ namespace {
 using namespace ::core;
 using namespace ::game;
 
-std::unique_ptr<Waker> MakeWaker(NNInterface::WakeStrategy strategy) {
-  switch (strategy) {
-    case NNInterface::WakeStrategy::kMutex:
-      return std::make_unique<MutexWaker>();
-    case NNInterface::WakeStrategy::kGenCounter:
-    default:
-      return std::make_unique<GenCounterWaker>();
-  }
-}
-
 // 2 ** 20. Inference Result is 6kb, so this will be about ~6GB of RAM.
 static constexpr char kSavedModelTagServe[] = "serve";
 
@@ -63,49 +53,20 @@ NNInterface::NNInterface(int num_threads, int64_t timeout, size_t cache_size,
       thread_info_(num_threads_),
       running_(true),
       timeout_(timeout),
+      engine_(std::move(engine)),
       symmetries_(num_threads_),
       signal_kind_(signal_kind),
-      num_shared_search_tasks_(num_shared_search_tasks) {
-  num_waves_ = 1;
-  wave_size_ = num_threads_;
-  engines_.push_back(std::move(engine));
-  wakers_.push_back(MakeWaker(wake_strategy));
+      num_shared_search_tasks_(num_shared_search_tasks),
+      num_signaled_search_tasks_(0),
+      num_exited_search_tasks_(0),
+      waker_(MakeWaker(wake_strategy)) {
   InitializeCache(cache_size);
   if (num_threads_ > 1) {
     infer_thread_ = std::thread(&NNInterface::InferLoop, this);
   }
 
   LOG(INFO) << "NNInterface Initialized. Engine Type: `"
-            << KindToString(engines_[0]->kind()) << "`";
-}
-
-NNInterface::NNInterface(int num_threads, int64_t timeout, size_t cache_size,
-                         std::vector<std::unique_ptr<Engine>> wave_engines,
-                         SignalKind signal_kind, int num_shared_search_tasks,
-                         WakeStrategy wake_strategy)
-    : num_registered_threads_(num_threads),
-      num_threads_(num_threads),
-      thread_info_(num_threads_),
-      running_(true),
-      timeout_(timeout),
-      symmetries_(num_threads_),
-      signal_kind_(signal_kind),
-      num_shared_search_tasks_(num_shared_search_tasks) {
-  num_waves_ = static_cast<int>(wave_engines.size());
-  CHECK(num_waves_ >= 2 && num_waves_ <= kMaxWaves) << num_waves_;
-  CHECK(num_threads_ % num_waves_ == 0 && num_threads_ / num_waves_ > 1)
-      << num_threads_ << " threads, " << num_waves_ << " waves";
-  wave_size_ = num_threads_ / num_waves_;
-  engines_ = std::move(wave_engines);
-  for (int w = 0; w < num_waves_; ++w) {
-    wakers_.push_back(MakeWaker(wake_strategy));
-  }
-  InitializeCache(cache_size);
-  infer_thread_ = std::thread(&NNInterface::InferWavesLoop, this);
-
-  LOG(INFO) << "NNInterface Initialized (shared, " << num_waves_
-            << " waves). Engine Type: `" << KindToString(engines_[0]->kind())
-            << "`";
+            << KindToString(engine_->kind()) << "`";
 }
 
 NNInterface::~NNInterface() {
@@ -118,20 +79,9 @@ NNInterface::~NNInterface() {
   }
 }
 
-NNInterface::NNKey NNInterface::MakeKey(const game::Game& game,
-                                        game::Color color_to_move) const {
-  const int num_moves = game.num_moves();
-  std::array<game::Loc, constants::kNumLastMoves> last_moves;
-  last_moves.fill(kNoopLoc);
-  for (int i = 0; i < num_cache_last_moves_; ++i) {
-    const int off = num_moves - num_cache_last_moves_ + i;
-    if (off >= 0) {
-      last_moves[constants::kNumLastMoves - num_cache_last_moves_ + i] =
-          game.move(off).loc;
-    }
-  }
-  return NNKey{color_to_move, game.board().hash(), last_moves, game.komi(),
-               cache_key_ko_ ? game.board().ko_loc() : kNoopLoc};
+NNKey NNInterface::MakeKey(const game::Game& game,
+                           game::Color color_to_move) const {
+  return MakeNNKey(game, color_to_move, num_cache_last_moves_, cache_key_ko_);
 }
 
 NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
@@ -168,7 +118,7 @@ std::array<float, constants::kNumBoardLocs> NNInterface::LoadAndGetOwnership(
 
   // Inference result is now ready.
   std::array<float, constants::kNumBoardLocs> ownership;
-  engines_[WaveOf(thread_id)]->GetOwnership(RowOf(thread_id), ownership);
+  engine_->GetOwnership(thread_id, ownership);
   return ownership;
 }
 
@@ -241,7 +191,7 @@ NNInferResult NNInterface::FetchEntry(int thread_id, int offset,
     return CacheGet(canonical_tid, cache_key).value();
   }
 
-  wakers_[WaveOf(canonical_tid)]->Wait(thread_info.res_ready, mu_);
+  waker_->Wait(thread_info.res_ready, mu_);
 
   NNInferResult infer_result =
       GetBatch(canonical_tid, symmetries_[canonical_tid]);
@@ -274,36 +224,7 @@ void NNInterface::CacheInsert(int thread_id, const NNKey& key,
 
 void NNInterface::LoadBatch(int thread_id, const game::Game& game,
                             game::Color color_to_move, game::Symmetry sym) {
-  GoFeatures input_features;
-  input_features.bsize = BOARD_LEN;
-  input_features.color = color_to_move;
-
-  int num_moves = game.num_moves();
-  for (int i = 0; i < constants::kNumLastMoves; ++i) {
-    int mv_offset = num_moves - constants::kNumLastMoves + i;
-    if (mv_offset < 0) {
-      input_features.last_moves[i] = kNoopLoc;
-      continue;
-    } else if (game.move(mv_offset).loc == kPassLoc) {
-      input_features.last_moves[i] = kPassLoc;
-      continue;
-    }
-    input_features.last_moves[i] =
-        ApplySymmetry(sym, game.move(mv_offset).loc, BOARD_LEN);
-  }
-
-  input_features.board = ApplySymmetry(sym, game.board().position(), BOARD_LEN);
-  input_features.stones_atari =
-      ApplySymmetry(sym, game.board().GetStonesInAtari(), BOARD_LEN);
-  input_features.stones_two_liberties =
-      ApplySymmetry(sym, game.board().GetStonesWithLiberties(2), BOARD_LEN);
-  input_features.stones_three_liberties =
-      ApplySymmetry(sym, game.board().GetStonesWithLiberties(3), BOARD_LEN);
-  input_features.stones_laddered =
-      ApplySymmetry(sym, game.board().GetLadderedStones(), BOARD_LEN);
-  input_features.komi = game.komi();
-
-  engines_[WaveOf(thread_id)]->LoadBatch(RowOf(thread_id), input_features);
+  engine_->LoadBatch(thread_id, MakeGoFeatures(game, color_to_move, sym));
 }
 
 void NNInterface::InferLoop() {
@@ -327,7 +248,7 @@ void NNInterface::Infer() {
     RAIIFlagReset() = delete;
     RAIIFlagReset(NNInterface* self, absl::Mutex* mu) : self(self), mu(mu) {};
     ~RAIIFlagReset() {
-      self->num_signaled_search_tasks_[0] = 0;
+      self->num_signaled_search_tasks_ = 0;
       mu->Unlock();
     }
   };
@@ -389,7 +310,7 @@ void NNInterface::Infer() {
   }
 
   // Run Inference.
-  engines_[0]->RunInference();
+  engine_->RunInference();
   for (int thread_id = 0; thread_id < num_threads_; ++thread_id) {
     ThreadInfo& thread = thread_info_[thread_id];
     if (thread.registered && thread.loaded_for_inference) {
@@ -411,7 +332,7 @@ void NNInterface::Infer() {
   // Notify all waiting workers. mu_ is still held here; MutexWaker is a no-op
   // (unlock below triggers Await re-evaluation); GenCounterWaker bumps the
   // generation counter and calls notify_all() — one FUTEX_WAKE for all.
-  wakers_[0]->NotifyAll();
+  waker_->NotifyAll();
 }
 
 bool NNInterface::ShouldInfer() const {
@@ -420,10 +341,9 @@ bool NNInterface::ShouldInfer() const {
   }
 
   if (signal_kind_ == SignalKind::kExplicit) {
-    const int remaining =
-        num_shared_search_tasks_ - num_exited_search_tasks_[0];
+    const int remaining = num_shared_search_tasks_ - num_exited_search_tasks_;
     if (remaining <= 0) return false;  // All tasks done; wait for destructor.
-    return num_signaled_search_tasks_[0] == remaining;
+    return num_signaled_search_tasks_ == remaining;
   }
 
   // Only return true if at least one leaf evaluation is pending.
@@ -439,110 +359,6 @@ bool NNInterface::ShouldInfer() const {
   }
 
   return exists_pending;
-}
-
-// Shared interface. Same per-wave readiness rule as ShouldInfer().
-bool NNInterface::WaveShouldInfer(int wave) const {
-  if (signal_kind_ == SignalKind::kExplicit) {
-    const int remaining =
-        num_shared_search_tasks_ - num_exited_search_tasks_[wave];
-    if (remaining <= 0) return false;
-    return num_signaled_search_tasks_[wave] == remaining;
-  }
-  bool exists_pending = false;
-  for (int t = wave * wave_size_; t < (wave + 1) * wave_size_; ++t) {
-    const auto& thread = thread_info_[t];
-    if (!thread.registered) continue;
-    if (!thread.res_cached && !thread.loaded_for_inference) return false;
-    if (!thread.res_cached) exists_pending = true;
-  }
-  return exists_pending;
-}
-
-/* static */ bool NNInterface::AnyWaveReady(NNInterface* self) {
-  if (!self->running_.load(std::memory_order_acquire)) return true;
-  for (int w = 0; w < self->num_waves_; ++w) {
-    if (self->WaveShouldInfer(w)) return true;
-  }
-  return false;
-}
-
-void NNInterface::InferWavesLoop() {
-  while (running_.load(std::memory_order_acquire)) {
-    InferWaves();
-  }
-}
-
-// Shared interface: one inference of one wave. Picks a ready wave
-// (round-robin from the wave after the last one run), resets its signal count
-// in the same mu_ hold as the readiness check (see Infer()), snapshots its
-// loaded rows, and runs the engine with mu_ released so the other wave can
-// load and signal meanwhile. Rows loaded during the run are not in the
-// snapshot and wait for the next inference of their wave. On timeout, a wave
-// with loaded rows runs without its signal (as Infer()).
-void NNInterface::InferWaves() {
-  bool ready = true;
-  if (timeout_ > 0) {
-    ready = mu_.LockWhenWithTimeout(absl::Condition(&AnyWaveReady, this),
-                                    absl::Microseconds(timeout_));
-  } else {
-    mu_.LockWhen(absl::Condition(&AnyWaveReady, this));
-  }
-  if (!running_.load(std::memory_order_acquire) ||
-      num_registered_threads_ == 0) {
-    mu_.Unlock();
-    return;
-  }
-  const auto wave_loaded = [&](int w) {
-    for (int t = w * wave_size_; t < (w + 1) * wave_size_; ++t) {
-      if (thread_info_[t].registered && thread_info_[t].loaded_for_inference) {
-        return true;
-      }
-    }
-    return false;
-  };
-  int wave = -1;
-  for (int i = 1; i <= num_waves_ && wave < 0; ++i) {
-    const int w = (last_wave_ + i + num_waves_) % num_waves_;
-    if (ready ? WaveShouldInfer(w) : wave_loaded(w)) wave = w;
-  }
-  if (wave < 0) {
-    mu_.Unlock();
-    return;
-  }
-  num_signaled_search_tasks_[wave] = 0;
-  const int t_begin = wave * wave_size_, t_end = (wave + 1) * wave_size_;
-  // Do not overwrite results this wave's workers have not read (Infer()).
-  for (int t = t_begin; t < t_end; ++t) {
-    if (thread_info_[t].res_ready.load(std::memory_order_acquire)) {
-      mu_.Unlock();
-      return;
-    }
-  }
-  absl::InlinedVector<int, constants::kMaxNumThreads> rows;
-  for (int t = t_begin; t < t_end; ++t) {
-    if (thread_info_[t].registered && thread_info_[t].loaded_for_inference) {
-      rows.push_back(t);
-    }
-  }
-  if (rows.empty()) {
-    mu_.Unlock();
-    return;
-  }
-  last_wave_ = wave;
-  mu_.Unlock();
-
-  engines_[wave]->RunInference();
-
-  absl::MutexLock l(&mu_);
-  for (int t : rows) {
-    thread_info_[t].res_ready.store(true, std::memory_order_release);
-    thread_info_[t].loaded_for_inference = false;
-  }
-  for (int t = t_begin; t < t_end; ++t) {
-    thread_info_[t].res_cached = false;
-  }
-  wakers_[wave]->NotifyAll();
 }
 
 }  // namespace nn

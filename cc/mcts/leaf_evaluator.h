@@ -22,7 +22,7 @@ struct ScoreUtilityParams {
 class LeafEvaluator final {
  public:
   // Convenience constructors use default ScoreUtilityParams.
-  LeafEvaluator(nn::NNInterface* nn_interface, int thread_id);
+  LeafEvaluator(nn::NNInterfaceBase* nn_interface, int thread_id);
   LeafEvaluator(nn::NNInterface::Slot slot, int thread_id);
   LeafEvaluator(nn::NNInterface::Slot slot, int thread_id,
                 ScoreUtilityParams score_params);

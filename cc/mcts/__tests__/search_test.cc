@@ -28,6 +28,7 @@
 #include "cc/nn/engine/engine_factory.h"
 #include "cc/nn/engine/go_features.h"
 #include "cc/nn/nn_interface.h"
+#include "cc/nn/pipelined_nn_interface.h"
 #include "doctest/doctest.h"
 
 // Filters to a single test case by name, e.g.:
@@ -311,11 +312,11 @@ void RandomOpening(Game& game, int num_moves, uint32_t seed,
 }
 
 struct PipeSetup {
-  std::unique_ptr<NNInterface> nn;
+  std::unique_ptr<nn::NNInterfaceBase> nn;
   std::unique_ptr<Search> search;
 };
 
-// pipelined: one shared NNInterface with two waves of num_threads / 2 rows,
+// pipelined: one PipelinedNNInterface with two waves of num_threads / 2 rows,
 // as the GTP service builds it; otherwise one interface of num_threads rows.
 PipeSetup MakePipeSetup(int num_threads, bool pipelined,
                         NNInterface::WakeStrategy wake,
@@ -326,7 +327,7 @@ PipeSetup MakePipeSetup(int num_threads, bool pipelined,
     std::vector<std::unique_ptr<nn::Engine>> engines;
     engines.push_back(std::make_unique<HashEngine>(rows, logit_scale));
     engines.push_back(std::make_unique<HashEngine>(rows, logit_scale));
-    p.nn = std::make_unique<NNInterface>(
+    p.nn = std::make_unique<nn::PipelinedNNInterface>(
         num_threads, std::numeric_limits<int64_t>::max(), 2 * 16384,
         std::move(engines), NNInterface::SignalKind::kExplicit,
         /*num_shared_search_tasks=*/1, wake);

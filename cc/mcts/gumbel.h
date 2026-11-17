@@ -102,13 +102,13 @@ class GumbelSearchParams::Builder {
  */
 class GumbelEvaluator final {
  public:
-  GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id);
-  GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id,
+  GumbelEvaluator(nn::NNInterfaceBase* nn_interface, int thread_id);
+  GumbelEvaluator(nn::NNInterfaceBase* nn_interface, int thread_id,
                   ScoreUtilityParams score_params);
-  GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id,
+  GumbelEvaluator(nn::NNInterfaceBase* nn_interface, int thread_id,
                   ScoreUtilityParams score_params, BiasCache* bias_cache);
   // Convenience ctor for self-play: no custom ScoreUtilityParams needed.
-  GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id,
+  GumbelEvaluator(nn::NNInterfaceBase* nn_interface, int thread_id,
                   BiasCache* bias_cache);
   ~GumbelEvaluator() = default;
 
