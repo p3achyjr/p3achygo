@@ -50,51 +50,51 @@ bool IsResult(const NNInferResult& r, float v) {
 
 }  // namespace
 
-TEST_CASE("NNCache: sizes round down to a power of two") {
-  CHECK(NNCache(0).num_entries() == 0);
-  CHECK(NNCache(1).num_entries() == 1);
-  CHECK(NNCache(3).num_entries() == 2);
-  CHECK(NNCache(1024).num_entries() == 1024);
-  CHECK(NNCache(1500).num_entries() == 1024);
-  CHECK(NNCache(size_t{1} << 20).num_entries() == (size_t{1} << 20));
+TEST_CASE("SharedNNCache: sizes round down to a power of two") {
+  CHECK(SharedNNCache(0).num_entries() == 0);
+  CHECK(SharedNNCache(1).num_entries() == 1);
+  CHECK(SharedNNCache(3).num_entries() == 2);
+  CHECK(SharedNNCache(1024).num_entries() == 1024);
+  CHECK(SharedNNCache(1500).num_entries() == 1024);
+  CHECK(SharedNNCache(size_t{1} << 20).num_entries() == (size_t{1} << 20));
   // Mutex pool: 2^16 by default, at most one per slot.
-  CHECK(NNCache(size_t{1} << 20).num_mutexes() == (size_t{1} << 16));
-  CHECK(NNCache(1024).num_mutexes() == 1024);
-  CHECK(NNCache(1024, /*log2_mutexes=*/4).num_mutexes() == 16);
+  CHECK(SharedNNCache(size_t{1} << 20).num_mutexes() == (size_t{1} << 16));
+  CHECK(SharedNNCache(1024).num_mutexes() == 1024);
+  CHECK(SharedNNCache(1024, /*log2_mutexes=*/4).num_mutexes() == 16);
 }
 
-TEST_CASE("NNCache: disabled cache never hits") {
-  NNCache cache(0);
-  cache.Insert(Key(1), Result(1.0f));
-  CHECK(!cache.Get(Key(1)).has_value());
+TEST_CASE("SharedNNCache: disabled cache never hits") {
+  SharedNNCache cache(0);
+  cache.Insert(0, Key(1), Result(1.0f));
+  CHECK(!cache.Get(0, Key(1)).has_value());
 }
 
-TEST_CASE("NNCache: get after insert, full-key compare") {
-  NNCache cache(1024);
-  CHECK(!cache.Get(Key(7)).has_value());
-  cache.Insert(Key(7), Result(3.0f));
-  std::optional<NNInferResult> hit = cache.Get(Key(7));
+TEST_CASE("SharedNNCache: get after insert, full-key compare") {
+  SharedNNCache cache(1024);
+  CHECK(!cache.Get(0, Key(7)).has_value());
+  cache.Insert(0, Key(7), Result(3.0f));
+  std::optional<NNInferResult> hit = cache.Get(0, Key(7));
   REQUIRE(hit.has_value());
   CHECK(IsResult(*hit, 3.0f));
   // Same board hash, different key fields: misses.
-  CHECK(!cache.Get(Key(7, WHITE)).has_value());
-  CHECK(!cache.Get(Key(7, BLACK, 6.5f)).has_value());
+  CHECK(!cache.Get(0, Key(7, WHITE)).has_value());
+  CHECK(!cache.Get(0, Key(7, BLACK, 6.5f)).has_value());
   NNKey ko = Key(7);
   ko.ko = game::Loc{3, 3};
-  CHECK(!cache.Get(ko).has_value());
+  CHECK(!cache.Get(0, ko).has_value());
   // Overwrite.
-  cache.Insert(Key(7), Result(4.0f));
-  hit = cache.Get(Key(7));
+  cache.Insert(0, Key(7), Result(4.0f));
+  hit = cache.Get(0, Key(7));
   REQUIRE(hit.has_value());
   CHECK(IsResult(*hit, 4.0f));
 }
 
-TEST_CASE("NNCache: lookup / hit counters") {
-  NNCache cache(1024);
-  CHECK(!cache.Get(Key(1)).has_value());
-  cache.Insert(Key(1), Result(1.0f));
-  CHECK(cache.Get(Key(1)).has_value());
-  CHECK(cache.Get(Key(1)).has_value());
+TEST_CASE("SharedNNCache: lookup / hit counters") {
+  SharedNNCache cache(1024);
+  CHECK(!cache.Get(0, Key(1)).has_value());
+  cache.Insert(0, Key(1), Result(1.0f));
+  CHECK(cache.Get(0, Key(1)).has_value());
+  CHECK(cache.Get(0, Key(1)).has_value());
   NNCache::Counters c = cache.TakeCounters();
   CHECK(c.lookups == 3);
   CHECK(c.hits == 2);
@@ -103,23 +103,23 @@ TEST_CASE("NNCache: lookup / hit counters") {
   CHECK(c.hits == 0);
 }
 
-TEST_CASE("NNCache: one slot, inserts overwrite") {
-  NNCache cache(1);
-  cache.Insert(Key(1), Result(1.0f));
-  cache.Insert(Key(2), Result(2.0f));
-  CHECK(!cache.Get(Key(1)).has_value());
-  std::optional<NNInferResult> hit = cache.Get(Key(2));
+TEST_CASE("SharedNNCache: one slot, inserts overwrite") {
+  SharedNNCache cache(1);
+  cache.Insert(0, Key(1), Result(1.0f));
+  cache.Insert(0, Key(2), Result(2.0f));
+  CHECK(!cache.Get(0, Key(1)).has_value());
+  std::optional<NNInferResult> hit = cache.Get(0, Key(2));
   REQUIRE(hit.has_value());
   CHECK(IsResult(*hit, 2.0f));
 }
 
 // Many threads insert and look up overlapping keys in a small table (heavy
 // slot contention and eviction). Every hit must be the result for its key.
-TEST_CASE("NNCache: concurrent get / insert stress") {
+TEST_CASE("SharedNNCache: concurrent get / insert stress") {
   static constexpr int kThreads = 32;
   static constexpr int kKeys = 512;
   static constexpr int kIters = 20000;
-  NNCache cache(64, /*log2_mutexes=*/3);
+  SharedNNCache cache(64, /*log2_mutexes=*/3);
   std::atomic<int> bad{0};
   std::atomic<int64_t> hits{0};
   std::vector<std::thread> threads;
@@ -131,11 +131,11 @@ TEST_CASE("NNCache: concurrent get / insert stress") {
         s ^= s >> 7;
         s ^= s << 17;
         const int k = static_cast<int>(s % kKeys);
-        if (std::optional<NNInferResult> hit = cache.Get(Key(k))) {
+        if (std::optional<NNInferResult> hit = cache.Get(0, Key(k))) {
           hits.fetch_add(1, std::memory_order_relaxed);
           if (!IsResult(*hit, static_cast<float>(k))) bad.fetch_add(1);
         } else {
-          cache.Insert(Key(k), Result(static_cast<float>(k)));
+          cache.Insert(0, Key(k), Result(static_cast<float>(k)));
         }
       }
     });
@@ -143,6 +143,22 @@ TEST_CASE("NNCache: concurrent get / insert stress") {
   for (auto& th : threads) th.join();
   CHECK(bad.load() == 0);
   CHECK(hits.load() > 0);
+}
+
+TEST_CASE("PerThreadNNCache: per-thread entries, LRU eviction, counters") {
+  PerThreadNNCache cache(/*num_threads=*/2, /*total_size=*/4);  // 2 per thread
+  cache.Insert(0, Key(1), Result(1.0f));
+  CHECK(cache.Get(0, Key(1)).has_value());
+  CHECK(!cache.Get(1, Key(1)).has_value());  // thread 1 has its own cache.
+  cache.Insert(0, Key(2), Result(2.0f));
+  CHECK(cache.Get(0, Key(1)).has_value());  // 1 is now most recently used.
+  cache.Insert(0, Key(3), Result(3.0f));    // evicts 2.
+  CHECK(cache.Get(0, Key(1)).has_value());
+  CHECK(!cache.Get(0, Key(2)).has_value());
+  CHECK(cache.Get(0, Key(3)).has_value());
+  NNCache::Counters c = cache.TakeCounters();
+  CHECK(c.lookups == 6);
+  CHECK(c.hits == 4);
 }
 
 }  // namespace nn

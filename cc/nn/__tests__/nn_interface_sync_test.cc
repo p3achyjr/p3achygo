@@ -24,7 +24,7 @@
 //
 // Environment variables:
 //   TEST_SECONDS=N   — test duration (default 120)
-//   TEST_CACHE_SIZE=N — per-interface shared NN cache size (default 0)
+//   TEST_CACHE_SIZE=N — per-interface cache size (default 0)
 
 #include <atomic>
 #include <chrono>
@@ -186,9 +186,6 @@ void RunSyncTest(NNInterface::WakeStrategy strategy) {
 
   auto worker = [&](int tid) {
     game::Game game;
-    // The NN cache is shared by all threads: give each thread its own key so
-    // a cache hit is this thread's own result.
-    game.SetKomi(static_cast<float>(tid));
     core::Probability prob(static_cast<uint64_t>(tid));
     const int expected = SlotFn(tid);
 
@@ -288,9 +285,6 @@ void RunDualInterfaceTest(NNInterface::WakeStrategy strategy) {
   // eval alternates between black_nn and white_nn.
   auto game_worker = [&](int game_id) {
     game::Game game;
-    // The NN cache is shared by all threads: give each game its own key so a
-    // cache hit is this game's own result.
-    game.SetKomi(static_cast<float>(game_id));
     core::Probability prob(static_cast<uint64_t>(game_id));
     const int expected = SlotFn(game_id);
 

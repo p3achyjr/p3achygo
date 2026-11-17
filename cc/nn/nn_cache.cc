@@ -6,7 +6,25 @@
 
 namespace nn {
 
-NNCache::NNCache(size_t num_entries, int log2_mutexes) {
+PerThreadNNCache::PerThreadNNCache(int num_threads, size_t total_size) {
+  CHECK(num_threads > 0) << num_threads;
+  caches_.reserve(num_threads);
+  for (int t = 0; t < num_threads; ++t) {
+    caches_.emplace_back(total_size / num_threads);
+  }
+}
+
+std::optional<NNInferResult> PerThreadNNCache::GetImpl(int thread_id,
+                                                       const NNKey& key) {
+  return caches_[thread_id].Get(key);
+}
+
+void PerThreadNNCache::Insert(int thread_id, const NNKey& key,
+                              const NNInferResult& result) {
+  caches_[thread_id].Insert(key, result);
+}
+
+SharedNNCache::SharedNNCache(size_t num_entries, int log2_mutexes) {
   CHECK(log2_mutexes >= 0 && log2_mutexes <= 31) << log2_mutexes;
   if (num_entries == 0) return;
   int log2_size = 0;
@@ -18,9 +36,9 @@ NNCache::NNCache(size_t num_entries, int log2_mutexes) {
   mutex_mask_ = (uint64_t{1} << log2_mutexes) - 1;
 }
 
-std::optional<NNInferResult> NNCache::Get(const NNKey& key) const {
+std::optional<NNInferResult> SharedNNCache::GetImpl(int /*thread_id*/,
+                                                    const NNKey& key) {
   if (entries_ == nullptr) return std::nullopt;
-  lookups_.fetch_add(1, std::memory_order_relaxed);
   const uint64_t slot = SlotOf(key);
   Entry entry;
   {
@@ -30,16 +48,11 @@ std::optional<NNInferResult> NNCache::Get(const NNKey& key) const {
     }
   }
   if (entry == nullptr) return std::nullopt;
-  hits_.fetch_add(1, std::memory_order_relaxed);
   return entry->second;
 }
 
-NNCache::Counters NNCache::TakeCounters() {
-  return Counters{lookups_.exchange(0, std::memory_order_relaxed),
-                  hits_.exchange(0, std::memory_order_relaxed)};
-}
-
-void NNCache::Insert(const NNKey& key, const NNInferResult& result) {
+void SharedNNCache::Insert(int /*thread_id*/, const NNKey& key,
+                           const NNInferResult& result) {
   if (entries_ == nullptr) return;
   Entry entry =
       std::make_shared<const std::pair<NNKey, NNInferResult>>(key, result);

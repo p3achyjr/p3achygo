@@ -8,9 +8,11 @@
 #include <mutex>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include "absl/hash/hash.h"
 #include "cc/constants/constants.h"
+#include "cc/core/lru_cache.h"
 #include "cc/game/color.h"
 #include "cc/game/loc.h"
 #include "cc/game/zobrist.h"
@@ -45,6 +47,64 @@ struct NNKey {
 };
 
 /*
+ * NN result cache used by NNInterface. `thread_id` is the caller's canonical
+ * thread id; implementations may ignore it. Get also counts lookups and hits.
+ */
+class NNCache {
+ public:
+  struct Counters {
+    int64_t lookups = 0;
+    int64_t hits = 0;
+  };
+
+  virtual ~NNCache() = default;
+
+  std::optional<NNInferResult> Get(int thread_id, const NNKey& key) {
+    std::optional<NNInferResult> hit = GetImpl(thread_id, key);
+    lookups_.fetch_add(1, std::memory_order_relaxed);
+    if (hit.has_value()) hits_.fetch_add(1, std::memory_order_relaxed);
+    return hit;
+  }
+  virtual void Insert(int thread_id, const NNKey& key,
+                      const NNInferResult& result) = 0;
+
+  // Lookup / hit counts since the last call (relaxed; for stats only), then
+  // resets them.
+  Counters TakeCounters() {
+    return Counters{lookups_.exchange(0, std::memory_order_relaxed),
+                    hits_.exchange(0, std::memory_order_relaxed)};
+  }
+
+ protected:
+  virtual std::optional<NNInferResult> GetImpl(int thread_id,
+                                               const NNKey& key) = 0;
+
+ private:
+  std::atomic<int64_t> lookups_{0};
+  std::atomic<int64_t> hits_{0};
+};
+
+/*
+ * One LRU cache per thread, each of `total_size / num_threads` entries. A
+ * thread only sees its own entries; thread `t` must only be used by one thread
+ * at a time.
+ */
+class PerThreadNNCache final : public NNCache {
+ public:
+  PerThreadNNCache(int num_threads, size_t total_size);
+
+  void Insert(int thread_id, const NNKey& key,
+              const NNInferResult& result) override;
+
+ protected:
+  std::optional<NNInferResult> GetImpl(int thread_id,
+                                       const NNKey& key) override;
+
+ private:
+  std::vector<core::LRUCache<NNKey, NNInferResult>> caches_;
+};
+
+/*
  * Thread-safe NN result cache, shared by every thread of an NNInterface.
  *
  * KataGo's NNCacheTable design (neuralnet/nneval.cpp): a direct-mapped table
@@ -57,33 +117,29 @@ struct NNKey {
  * after unlocking, and inserts build the entry before locking and free the
  * replaced entry after unlocking.
  */
-class NNCache final {
+class SharedNNCache final : public NNCache {
  public:
   static constexpr int kDefaultLog2Mutexes = 16;
 
   // `num_entries` is rounded down to a power of two; 0 disables the cache.
   // The mutex pool has 2^log2_mutexes mutexes, at most one per slot.
-  explicit NNCache(size_t num_entries, int log2_mutexes = kDefaultLog2Mutexes);
-  ~NNCache() = default;
+  explicit SharedNNCache(size_t num_entries,
+                         int log2_mutexes = kDefaultLog2Mutexes);
 
-  NNCache(NNCache const&) = delete;
-  NNCache& operator=(NNCache const&) = delete;
+  SharedNNCache(SharedNNCache const&) = delete;
+  SharedNNCache& operator=(SharedNNCache const&) = delete;
 
-  std::optional<NNInferResult> Get(const NNKey& key) const;
-  void Insert(const NNKey& key, const NNInferResult& result);
-
-  // Lookup / hit counts since the last call (relaxed; for stats only), then
-  // resets them.
-  struct Counters {
-    int64_t lookups = 0;
-    int64_t hits = 0;
-  };
-  Counters TakeCounters();
+  void Insert(int thread_id, const NNKey& key,
+              const NNInferResult& result) override;
 
   size_t num_entries() const { return entries_ == nullptr ? 0 : mask_ + 1; }
   size_t num_mutexes() const {
     return mutexes_ == nullptr ? 0 : mutex_mask_ + 1;
   }
+
+ protected:
+  std::optional<NNInferResult> GetImpl(int thread_id,
+                                       const NNKey& key) override;
 
  private:
   using Entry = std::shared_ptr<const std::pair<NNKey, NNInferResult>>;
@@ -92,10 +148,8 @@ class NNCache final {
 
   std::unique_ptr<Entry[]> entries_;
   uint64_t mask_ = 0;
-  mutable std::unique_ptr<std::mutex[]> mutexes_;
+  std::unique_ptr<std::mutex[]> mutexes_;
   uint64_t mutex_mask_ = 0;
-  mutable std::atomic<int64_t> lookups_{0};
-  mutable std::atomic<int64_t> hits_{0};
 };
 
 }  // namespace nn

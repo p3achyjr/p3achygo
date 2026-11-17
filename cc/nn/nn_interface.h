@@ -182,7 +182,7 @@ class NNInterface final {
   void SetCacheKeyKo(bool b) { cache_key_ko_ = b; }
 
   // NN cache lookup / hit counts since the last call, then resets them.
-  NNCache::Counters TakeCacheCounters() { return cache_.TakeCounters(); }
+  NNCache::Counters TakeCacheCounters() { return cache_->TakeCounters(); }
 
   // Blocks until result is ready.
   NNInferResult LoadAndGetInference(int thread_id, const game::Game& game,
@@ -228,7 +228,7 @@ class NNInterface final {
     bool res_cached = false;  // Whether the cache key is cached. Also toggles
                               // whether to cache the NN inference result.
     // Owner thread only: LoadEntry found its key in the cache and holds the
-    // result in held_hits_ for the matching FetchEntry (the shared cache may
+    // result in held_hits_ for the matching FetchEntry (a shared cache may
     // evict the entry in between).
     bool hit_held = false;
     // kRoundFree: copy this row's ownership out after inference.
@@ -337,7 +337,8 @@ class NNInterface final {
   std::thread infer_thread_;
   std::atomic<bool> running_;
 
-  NNCache cache_;  // Shared by all threads.
+  // Per-thread LRU caches, or one shared cache in round-free mode.
+  std::unique_ptr<NNCache> cache_;
   // Per-thread cache hits held between LoadEntry and FetchEntry.
   std::vector<NNInferResult> held_hits_;
   const int64_t timeout_;

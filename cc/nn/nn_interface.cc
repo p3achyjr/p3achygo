@@ -61,7 +61,7 @@ NNInterface::NNInterface(int num_threads, int64_t timeout, size_t cache_size,
       num_threads_(num_threads),
       thread_info_(num_threads_),
       running_(true),
-      cache_(cache_size),
+      cache_(std::make_unique<PerThreadNNCache>(num_threads, cache_size)),
       held_hits_(num_threads),
       timeout_(timeout),
       engine_(std::move(engine)),
@@ -87,7 +87,7 @@ NNInterface::NNInterface(int num_threads, size_t cache_size,
       signal_kind_(SignalKind::kRoundFree),
       thread_info_(num_threads),
       running_(true),
-      cache_(cache_size),
+      cache_(std::make_unique<SharedNNCache>(cache_size)),
       held_hits_(num_threads),
       timeout_(0),
       engine_(std::move(engine)),
@@ -141,7 +141,7 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
                                                Probability& probability) {
   NNKey cache_key = MakeKey(game, color_to_move);
 
-  if (std::optional<NNInferResult> hit = cache_.Get(cache_key)) {
+  if (std::optional<NNInferResult> hit = cache_->Get(thread_id, cache_key)) {
     // Cached. Immediately return result.
     absl::MutexLock l(&mu_);
     thread_info_[thread_id].res_cached = true;
@@ -159,7 +159,7 @@ NNInferResult NNInterface::LoadAndGetInference(int thread_id, const Game& game,
   NNInferResult infer_result = GetBatch(thread_id, sym);
 
   // Cache this result.
-  cache_.Insert(cache_key, infer_result);
+  cache_->Insert(thread_id, cache_key, infer_result);
   return infer_result;
 }
 
@@ -214,9 +214,10 @@ void NNInterface::LoadEntry(int thread_id, int offset, const game::Game& game,
   const int canonical_tid = thread_id + offset;
   NNKey cache_key = MakeKey(game, color_to_move);
 
-  if (std::optional<NNInferResult> hit = cache_.Get(cache_key)) {
+  if (std::optional<NNInferResult> hit =
+          cache_->Get(canonical_tid, cache_key)) {
     // Cached. Do not need to wait for this thread. Hold the result for
-    // FetchEntry: the shared cache may evict the entry before then.
+    // FetchEntry: a shared cache may evict the entry before then.
     held_hits_[canonical_tid] = *hit;
     thread_info_[canonical_tid].hit_held = true;
     absl::MutexLock l(&mu_);
@@ -265,7 +266,7 @@ NNInferResult NNInterface::FetchEntry(int thread_id, int offset,
       GetBatch(canonical_tid, symmetries_[canonical_tid]);
 
   // Cache this result.
-  cache_.Insert(cache_key, infer_result);
+  cache_->Insert(canonical_tid, cache_key, infer_result);
   return infer_result;
 }
 
