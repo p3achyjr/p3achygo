@@ -22,7 +22,7 @@ struct ScoreUtilityParams {
 class LeafEvaluator final {
  public:
   // Convenience constructors use default ScoreUtilityParams.
-  LeafEvaluator(nn::NNInterface* nn_interface, int thread_id);
+  LeafEvaluator(nn::NNInterfaceBase* nn_interface, int thread_id);
   LeafEvaluator(nn::NNInterface::Slot slot, int thread_id);
   LeafEvaluator(nn::NNInterface::Slot slot, int thread_id,
                 ScoreUtilityParams score_params);
@@ -54,10 +54,11 @@ class LeafEvaluator final {
 
   int thread_id() const { return thread_id_; }
 
-  // Queues an example for evaluation.
-  inline void QueueEval(core::Probability& probability, const game::Game& game,
+  // Queues an example for evaluation. Returns true if it was a cache hit
+  // (FetchLeafEval then returns without waiting on inference).
+  inline bool QueueEval(core::Probability& probability, const game::Game& game,
                         game::Color color_to_move) {
-    slot_.LoadEntry(thread_id_, game, color_to_move, probability);
+    return slot_.LoadEntry(thread_id_, game, color_to_move, probability);
   }
 
   // Fetches queued example.

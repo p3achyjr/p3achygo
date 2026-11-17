@@ -241,21 +241,22 @@ Loc GumbelNonRootSearchPolicy::SelectNextAction(const TreeNode* node,
   return game::AsLoc(selected_action);
 }
 
-GumbelEvaluator::GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id)
+GumbelEvaluator::GumbelEvaluator(nn::NNInterfaceBase* nn_interface,
+                                 int thread_id)
     : leaf_evaluator_(nn_interface, thread_id) {}
 
-GumbelEvaluator::GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id,
-                                 ScoreUtilityParams score_params)
+GumbelEvaluator::GumbelEvaluator(nn::NNInterfaceBase* nn_interface,
+                                 int thread_id, ScoreUtilityParams score_params)
     : leaf_evaluator_(nn_interface->MakeSlot(0), thread_id, score_params) {}
 
-GumbelEvaluator::GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id,
-                                 ScoreUtilityParams score_params,
+GumbelEvaluator::GumbelEvaluator(nn::NNInterfaceBase* nn_interface,
+                                 int thread_id, ScoreUtilityParams score_params,
                                  BiasCache* bias_cache)
     : leaf_evaluator_(nn_interface->MakeSlot(0), thread_id, score_params),
       bias_cache_(bias_cache) {}
 
-GumbelEvaluator::GumbelEvaluator(nn::NNInterface* nn_interface, int thread_id,
-                                 BiasCache* bias_cache)
+GumbelEvaluator::GumbelEvaluator(nn::NNInterfaceBase* nn_interface,
+                                 int thread_id, BiasCache* bias_cache)
     : leaf_evaluator_(nn_interface, thread_id), bias_cache_(bias_cache) {}
 
 GumbelResult GumbelEvaluator::Sample(core::Probability& probability,

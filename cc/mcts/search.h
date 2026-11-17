@@ -32,6 +32,7 @@ enum class CollisionPolicyKind : uint8_t {
   kAbort = 0,
   kRetry = 1,
   kSmartRetry = 2,
+  kSmartRetryDepth = 3,
 };
 
 enum class CollisionDetectorKind : uint8_t {
@@ -41,8 +42,57 @@ enum class CollisionDetectorKind : uint8_t {
   kProduct = 3,
 };
 
+// Pipelined search: state shared by the two thread groups. Each group owns a
+// GlobalSearchState (its own round and barriers) and a wave of the shared
+// NNInterface; the groups take turns descending: a group waits for the token
+// at the start of each round and hands it to the other group once all its
+// workers have submitted (descent_remaining hits 0). A group that has exited
+// no longer blocks the other.
+struct PipeShared {
+  std::atomic<int> token{0};
+  std::array<std::atomic<bool>, 2> exited{};
+  std::atomic<uint32_t> gen{0};
+  // Visits of both groups, for the visit budget (checked once per round by
+  // each group's round reset, so all workers of a group stop together).
+  std::atomic<int> total_num_visits{0};
+
+  void Reset() {
+    token.store(0, std::memory_order_relaxed);
+    exited[0].store(false, std::memory_order_relaxed);
+    exited[1].store(false, std::memory_order_relaxed);
+    total_num_visits.store(0, std::memory_order_relaxed);
+  }
+  void Notify() {
+    gen.fetch_add(1, std::memory_order_release);
+    gen.notify_all();
+  }
+  void Pass(int to) {
+    token.store(to, std::memory_order_release);
+    Notify();
+  }
+  void Exit(int g) {
+    exited[g].store(true, std::memory_order_release);
+    Notify();
+  }
+  void WaitTurn(int g) {
+    while (true) {
+      const uint32_t cur = gen.load(std::memory_order_acquire);
+      if (token.load(std::memory_order_acquire) == g ||
+          exited[1 - g].load(std::memory_order_acquire)) {
+        return;
+      }
+      gen.wait(cur, std::memory_order_acquire);
+    }
+  }
+};
+
 struct GlobalSearchState {
   absl::Mutex mu;
+
+  // Pipelined search: group index (0 when not pipelined) and the shared
+  // pipeline state (nullptr when not pipelined).
+  int group = 0;
+  PipeShared* pipe = nullptr;
 
   // Per-round state; all guarded by mu.
   bool did_signal = false;
@@ -96,6 +146,8 @@ struct GlobalSearchState {
     should_stop.store(false, std::memory_order_relaxed);
     should_stop_this_round = false;
     bias_cache = nullptr;
+    group = 0;
+    pipe = nullptr;
   }
 };
 
@@ -117,6 +169,8 @@ class Search final {
     CollisionDetectorKind collision_detector_kind;
     float vl_delta = -1.5f;
     int max_collision_retries = 4;
+    float fork_depth_c = 0.0f;  // kSmartRetryDepth
+    float fork_depth_p = 0.0f;
     float max_o_ratio = 0.8f;
     Mode mode = Search::Mode::kConcurrent;
     ScoreUtilityParams score_util_params;
@@ -140,12 +194,22 @@ class Search final {
   Result Run(core::Probability& probability, game::Game& game,
              NodeTable* node_table, TreeNode* const root,
              game::Color color_to_move, Params params);
-  void StopSearch() { global_search_state_.should_stop = true; }
+  void StopSearch() {
+    global_search_state_.should_stop = true;
+    global_search_state2_.should_stop = true;
+  }
+  // Pipelined search: a second NNInterface slot. When set, Run() in
+  // concurrent mode splits num_threads into two groups of num_threads / 2,
+  // group 0 on `slot_`, group 1 on `slot2`.
+  void SetPipelineSlot(nn::NNInterface::Slot slot2) { slot2_.emplace(slot2); }
 
  private:
   nn::NNInterface::Slot slot_;
   BiasCache* bias_cache_ = nullptr;
   GlobalSearchState global_search_state_{};
+  std::optional<nn::NNInterface::Slot> slot2_;
+  GlobalSearchState global_search_state2_{};
+  PipeShared pipe_{};
 };
 
 /*
@@ -315,8 +379,16 @@ class RetryCollisionPolicy final {
  */
 class SmartRetryCollisionPolicy final {
  public:
-  SmartRetryCollisionPolicy(const int max_num_retries)
-      : max_num_retries_(max_num_retries) {};
+  // depth_c / depth_p (kSmartRetryDepth) fork at the lowest
+  // gap / (i + 1 - depth_c)^depth_p over path index i (root = 0). Indices with
+  // i + 1 - depth_c <= 0 are not forked; if no other index is, retry from the
+  // root. depth_c = depth_p = 0 is plain smart retry.
+  SmartRetryCollisionPolicy(const int max_num_retries,
+                            const float depth_c = 0.0f,
+                            const float depth_p = 0.0f)
+      : max_num_retries_(max_num_retries),
+        depth_c_(depth_c),
+        depth_p_(depth_p) {};
   ~SmartRetryCollisionPolicy() = default;
   inline CollisionResult Handle(const GlobalSearchState& global_search_state,
                                 const SearchPath& search_path) {
@@ -329,15 +401,22 @@ class SmartRetryCollisionPolicy final {
     }
 
     int min_index = -1;
+    bool skipped_eligible = false;
     float min_diff = std::numeric_limits<float>::max();
     for (int i = 0; i < search_path.size(); ++i) {
       const auto& [node, move, top_actions] = search_path[i];
       if (move == game::kNoopLoc || top_actions[1].first < 0) {
         continue;
       }
+      const float base = i + 1 - depth_c_;
+      if (base <= 0) {
+        skipped_eligible = true;
+        continue;
+      }
 
       const float diff =
-          std::abs(top_actions[0].second - top_actions[1].second);
+          std::abs(top_actions[0].second - top_actions[1].second) /
+          (depth_p_ == 0.0f ? 1.0f : std::pow(base, depth_p_));
       if (diff < min_diff) {
         min_index = i;
         min_diff = diff;
@@ -345,6 +424,9 @@ class SmartRetryCollisionPolicy final {
     }
 
     if (min_index == -1) {
+      if (skipped_eligible) {
+        return {CollisionResult::Action::kRetry, std::nullopt};
+      }
       // out of paths to retry.
       return {CollisionResult::Action::kAbort, std::nullopt};
     }
@@ -369,6 +451,8 @@ class SmartRetryCollisionPolicy final {
 
  private:
   const int max_num_retries_;
+  const float depth_c_;
+  const float depth_p_;
   int num_retries_ = 0;
 };
 

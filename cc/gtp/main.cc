@@ -64,6 +64,7 @@ void LogConfig(const eval::PlayerSearchConfig& cfg) {
     std::cerr << "  search_mode:          " << cfg.search_mode << "\n";
     std::cerr << "  descent_policy:       " << cfg.descent_policy << "\n";
     std::cerr << "  max_o_ratio:          " << cfg.max_o_ratio << "\n";
+    std::cerr << "  nn_cache_log2_size:   " << cfg.nn_cache_log2_size << "\n";
   }
 }
 

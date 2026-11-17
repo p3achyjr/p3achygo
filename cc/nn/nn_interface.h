@@ -19,6 +19,7 @@
 #include "cc/game/game.h"
 #include "cc/game/symmetry.h"
 #include "cc/nn/engine/engine.h"
+#include "cc/nn/nn_interface_base.h"
 
 namespace tensorflow {
 class GraphDef;
@@ -27,54 +28,6 @@ class Tensor;
 
 namespace nn {
 
-// Helper predicate for absl::Condition used by MutexWaker.
-inline bool ResReadyTrue(std::atomic<bool>* r) {
-  return r->load(std::memory_order_acquire);
-}
-
-// Abstract wakeup helper. Workers call Wait() after releasing mu_; Infer()
-// calls NotifyAll() before releasing mu_.
-class Waker {
- public:
-  virtual ~Waker() = default;
-  // Called WITHOUT mu held. Blocks until res_ready is true.
-  virtual void Wait(std::atomic<bool>& res_ready, absl::Mutex& mu) = 0;
-  // Called with mu HELD (before Infer() unlocks mu). Signals all waiters.
-  virtual void NotifyAll() = 0;
-};
-
-// MutexWaker: uses absl::Mutex::LockWhen. Good when #threads ≤ hw_concurrency
-// (absl spins rather than sleeping, ~0.6 µs/thread wakeup overhead).
-class MutexWaker : public Waker {
- public:
-  void Wait(std::atomic<bool>& res_ready, absl::Mutex& mu) override {
-    mu.LockWhen(absl::Condition(ResReadyTrue, &res_ready));
-    mu.Unlock();
-  }
-  // No-op: absl wakes LockWhen waiters when mu is unlocked with res_ready set.
-  void NotifyAll() override {}
-};
-
-// GenCounterWaker: uses an atomic generation counter + notify_all. Good when
-// #threads >> hw_concurrency (one FUTEX_WAKE unblocks all threads at once).
-class GenCounterWaker : public Waker {
- public:
-  void Wait(std::atomic<bool>& res_ready, absl::Mutex& /*mu*/) override {
-    uint64_t gen = gen_.load(std::memory_order_acquire);
-    while (!res_ready.load(std::memory_order_acquire)) {
-      gen_.wait(gen);
-      gen = gen_.load(std::memory_order_acquire);
-    }
-  }
-  void NotifyAll() override {
-    gen_.fetch_add(1, std::memory_order_release);
-    gen_.notify_all();
-  }
-
- private:
-  std::atomic<uint64_t> gen_{0};
-};
-
 /*
  * Bridge between `Board` and other game objects to NN evaluation.
  *
@@ -82,62 +35,8 @@ class GenCounterWaker : public Waker {
  * slot in the neural network batch, and when the batch is full, inference will
  * be performed.
  */
-class NNInterface final {
+class NNInterface final : public NNInterfaceBase {
  public:
-  enum class SignalKind : uint8_t {
-    kAuto = 0,
-    kExplicit = 1,
-  };
-
-  // How workers are notified when inference completes.
-  //   kMutex:      absl::Mutex::Await — best when #threads ≤ hw_concurrency
-  //                (absl spins rather than sleeping; ~0.6 µs/thread wakeup).
-  //   kGenCounter: atomic generation counter + notify_all — best when
-  //                #threads >> hw_concurrency (one FUTEX_WAKE for all).
-  enum class WakeStrategy : uint8_t {
-    kMutex = 0,
-    kGenCounter = 1,
-  };
-
-  // Lightweight view of a contiguous slice of thread slots within an
-  // NNInterface. Bakes in `task_offset` so callers (Search, LeafEvaluator)
-  // never have to pass it explicitly.
-  struct Slot {
-    Slot(NNInterface* nn_interface, int task_offset)
-        : nn_interface_(nn_interface), task_offset_(task_offset) {}
-
-    SignalKind signal_kind() const { return nn_interface_->signal_kind(); }
-
-    void LoadEntry(int thread_id, const game::Game& game,
-                   game::Color color_to_move, core::Probability& probability) {
-      nn_interface_->LoadEntry(thread_id, task_offset_, game, color_to_move,
-                               probability);
-    }
-
-    NNInferResult FetchEntry(int thread_id, const game::Game& game,
-                             game::Color color_to_move) {
-      return nn_interface_->FetchEntry(thread_id, task_offset_, game,
-                                       color_to_move);
-    }
-
-    // Routes through canonical_tid = thread_id + task_offset.
-    NNInferResult LoadAndGetInference(int thread_id, const game::Game& game,
-                                      game::Color color_to_move,
-                                      core::Probability& probability) {
-      return nn_interface_->LoadAndGetInference(thread_id + task_offset_, game,
-                                                color_to_move, probability);
-    }
-
-    void SignalReadyForInference() { nn_interface_->SignalReadyForInference(); }
-    void UnregisterSearchTask() { nn_interface_->UnregisterSearchTask(); }
-
-   private:
-    NNInterface* nn_interface_;
-    int task_offset_;
-  };
-
-  Slot MakeSlot(int task_offset) { return Slot(this, task_offset); }
-
   NNInterface(int num_threads, std::unique_ptr<Engine> engine);
   NNInterface(int num_threads, int64_t timeout, size_t cache_size,
               std::unique_ptr<Engine> engine);
@@ -153,13 +52,13 @@ class NNInterface final {
               std::unique_ptr<Engine> engine, SignalKind signal_kind,
               int num_shared_search_tasks,
               WakeStrategy wake_strategy = WakeStrategy::kGenCounter);
-  ~NNInterface();
+  ~NNInterface() override;
 
   // Disable Copy
   NNInterface(NNInterface const&) = delete;
   NNInterface& operator=(NNInterface const&) = delete;
 
-  SignalKind signal_kind() const { return signal_kind_; }
+  SignalKind signal_kind() const override { return signal_kind_; }
 
   // Controls how many of the most-recent moves are included in the NN cache
   // key. Range [0, kNumLastMoves]. Default: kNumLastMoves (5).
@@ -172,12 +71,12 @@ class NNInterface final {
   NNInferResult LoadAndGetInference(int thread_id, const game::Game& game,
                                     game::Color color_to_move,
                                     core::Probability& probability)
-      ABSL_LOCKS_EXCLUDED(mu_);
+      ABSL_LOCKS_EXCLUDED(mu_) override;
 
   // Just get ownership.
   std::array<float, constants::kNumBoardLocs> LoadAndGetOwnership(
       int thread_id, const game::Game& game, game::Color color_to_move)
-      ABSL_LOCKS_EXCLUDED(mu_);
+      ABSL_LOCKS_EXCLUDED(mu_) override;
 
   void RegisterThread(int thread_id) ABSL_LOCKS_EXCLUDED(mu_);
   void UnregisterThread(int thread_id) ABSL_LOCKS_EXCLUDED(mu_);
@@ -185,10 +84,12 @@ class NNInterface final {
   // async API
   void LoadEntry(int thread_id, int offset, const game::Game& game,
                  game::Color color_to_move, core::Probability& probability)
-      ABSL_LOCKS_EXCLUDED(mu_);
+      ABSL_LOCKS_EXCLUDED(mu_) override;
   NNInferResult FetchEntry(int thread_id, int offset, const game::Game& game,
-                           game::Color color_to_move) ABSL_LOCKS_EXCLUDED(mu_);
-  inline void SignalReadyForInference() {
+                           game::Color color_to_move)
+      ABSL_LOCKS_EXCLUDED(mu_) override;
+  // One wave: `wave` is always 0.
+  inline void SignalReadyForInference(int wave = 0) override {
     {
       absl::MutexLock l(&mu_);
       ++num_signaled_search_tasks_;
@@ -197,37 +98,15 @@ class NNInterface final {
       Infer();  // No infer_thread_ exists; run synchronously.
     }
   }
-  inline void UnregisterSearchTask() {
+  inline void UnregisterSearchTask(int wave = 0) override {
     absl::MutexLock l(&mu_);
     ++num_exited_search_tasks_;
   }
+  int num_waves() const override { return 1; }
+  int wave_size() const override { return num_threads_; }
 
  private:
   static constexpr int64_t kTimeoutUs = 400;
-  struct NNKey {
-    game::Color color_to_move;
-    game::Zobrist::Hash board_hash;
-    // [oldest, ..., most recent]; unused leading slots are kNoopLoc.
-    std::array<game::Loc, constants::kNumLastMoves> last_moves;
-    float komi;
-    game::Loc ko;  // kNoopLoc unless cache_key_ko_.
-
-    friend bool operator==(const NNKey& c0, const NNKey& c1) {
-      return c0.color_to_move == c1.color_to_move &&
-             c0.board_hash == c1.board_hash && c0.last_moves == c1.last_moves &&
-             c0.komi == c1.komi && c0.ko == c1.ko;
-    }
-
-    template <typename H>
-    friend H AbslHashValue(H h, const NNKey& c) {
-      h = H::combine(std::move(h), c.color_to_move, c.board_hash);
-      for (const game::Loc& loc : c.last_moves) {
-        h = H::combine(std::move(h), loc);
-      }
-      h = H::combine(std::move(h), c.komi, c.ko);
-      return h;
-    }
-  };
 
   struct ThreadInfo {
     bool registered = true;  // If this thread is registered.
@@ -262,32 +141,7 @@ class NNInterface final {
     // buffer.
     thread_info_[thread_id].res_ready.store(false, std::memory_order_release);
 
-    // Unapply symmetry.
-    std::array<float, constants::kNumBoardLocs> grid_logits_sym;
-    std::array<float, constants::kNumBoardLocs> grid_probs_sym;
-    std::array<float, constants::kNumBoardLocs> grid_probs_opt_sym;
-    std::copy(infer_result.move_logits.begin(),
-              infer_result.move_logits.begin() + constants::kNumBoardLocs,
-              grid_logits_sym.begin());
-    std::copy(infer_result.move_probs.begin(),
-              infer_result.move_probs.begin() + constants::kNumBoardLocs,
-              grid_probs_sym.begin());
-    std::copy(infer_result.opt_move_probs.begin(),
-              infer_result.opt_move_probs.begin() + constants::kNumBoardLocs,
-              grid_probs_opt_sym.begin());
-    std::array<float, constants::kNumBoardLocs> grid_logits =
-        ApplyInverse(sym, grid_logits_sym, BOARD_LEN);
-    std::array<float, constants::kNumBoardLocs> grid_probs =
-        ApplyInverse(sym, grid_probs_sym, BOARD_LEN);
-    std::array<float, constants::kNumBoardLocs> grid_probs_opt =
-        ApplyInverse(sym, grid_probs_opt_sym, BOARD_LEN);
-    std::copy(grid_logits.begin(), grid_logits.end(),
-              infer_result.move_logits.begin());
-    std::copy(grid_probs.begin(), grid_probs.end(),
-              infer_result.move_probs.begin());
-    std::copy(grid_probs_opt.begin(), grid_probs_opt.end(),
-              infer_result.opt_move_probs.begin());
-
+    UnapplySymmetry(sym, infer_result);
     return infer_result;
   }
 

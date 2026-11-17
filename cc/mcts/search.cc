@@ -36,6 +36,10 @@ struct BackupCmp final {
 };
 using BackupPriorityQueue = core::Heap<BackupElem, BackupCmp>;
 
+// Pipelined search: most immediate backups (cache-hit descents backed up at
+// once, see SearchTask) per worker per round.
+constexpr int kMaxImmediateBackups = 64;
+
 void AssignBiasCacheEntry(BiasCache* bias_cache, const game::Game& game,
                           TreeNode* node) {
   if (!bias_cache) return;
@@ -70,6 +74,13 @@ void FetchLeafEval(GlobalSearchState& global_state,
 }
 
 void UnsafeGlobalStateRoundReset(GlobalSearchState& global_state) {
+  // Pipelined search: the visit budget counts both groups. Decided once per
+  // round here (the last arriver), so all workers of this group stop on the
+  // same round even while the other group keeps adding visits.
+  const bool pipe_budget_done =
+      global_state.pipe != nullptr &&
+      global_state.pipe->total_num_visits.load(std::memory_order_relaxed) >=
+          global_state.visit_budget;
   global_state.descent_remaining = global_state.num_workers;
   global_state.did_signal = false;
   for (auto& p : global_state.pending_each_level) {
@@ -78,7 +89,8 @@ void UnsafeGlobalStateRoundReset(GlobalSearchState& global_state) {
   global_state.round_remaining = global_state.num_workers;
   global_state.round_parity = !global_state.round_parity;
   global_state.should_stop_this_round =
-      global_state.should_stop.load(std::memory_order_relaxed);
+      global_state.should_stop.load(std::memory_order_relaxed) ||
+      pipe_budget_done;
 }
 
 template <typename DescentPolicy, typename CollisionPolicy,
@@ -91,13 +103,15 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
     const CollisionDetector& collision_detector, Game& game,
     NodeTable* node_table, TreeNode* const root, game::Color root_color,
     const float root_score_est, const SearchPath& path_prefix,
-    const bool block_on_leaf_eval = true) {
+    const bool block_on_leaf_eval = true, bool* ib_hit = nullptr) {
   const auto on_collision = [&](SearchPath& colliding_path)
       -> std::pair<SearchPath, std::optional<CollisionResult>> {
     // undo n_in_flight for every node on the path.
     for (auto& [node, loc, actions] : colliding_path) {
       const float old_n_in_flight =
           node->n_in_flight.fetch_sub(1, std::memory_order_release);
+      node->n_in_flight_group[global_state.group].fetch_sub(
+          1, std::memory_order_release);
       node->sum_n_in_flights.fetch_sub(old_n_in_flight - 1,
                                        std::memory_order_release);
     }
@@ -109,6 +123,8 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
   Color color_to_move = root_color;
   const int root_n_in_flight =
       root->n_in_flight.fetch_add(1, std::memory_order_release);
+  root->n_in_flight_group[global_state.group].fetch_add(
+      1, std::memory_order_release);
   const int root_total_n_in_flight = root->sum_n_in_flights.fetch_add(
       root_n_in_flight, std::memory_order_release);
 
@@ -130,6 +146,16 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
     TreeNode* child = nullptr;
     {
       absl::MutexLock node_lock(&cur_node->mu);
+      // Pipelined search: the other group may have evaluated this node (state
+      // kNnEvaluated) without having backed up its visit yet (n == 0). Treat
+      // it as in flight, as the round barriers guarantee without pipelining.
+      // node->n is written under node->mu, so this read also orders the
+      // evaluating thread's writes before ours.
+      if (global_state.pipe != nullptr && cur_node != root &&
+          path_index >= path_prefix.size() && cur_node->n == 0) {
+        path.push_back({cur_node, game::kNoopLoc, {}});
+        return on_collision(path);
+      }
       auto descent_result =
           path_index < path_prefix.size()
               ? std::make_pair(std::get<1>(path_prefix[path_index]),
@@ -148,6 +174,8 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
       if (child != nullptr) {
         child_n_in_flight =
             child->n_in_flight.fetch_add(1, std::memory_order_acq_rel);
+        child->n_in_flight_group[global_state.group].fetch_add(
+            1, std::memory_order_acq_rel);
         child_sum_in_flights = child->sum_n_in_flights.fetch_add(
             child_n_in_flight, std::memory_order_release);
       } else {
@@ -156,6 +184,8 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
             game.board().hash(), color_to_move, game.IsGameOver());
         child_n_in_flight =
             child->n_in_flight.fetch_add(1, std::memory_order_acq_rel);
+        child->n_in_flight_group[global_state.group].fetch_add(
+            1, std::memory_order_acq_rel);
         child_sum_in_flights = child->sum_n_in_flights.fetch_add(
             child_n_in_flight, std::memory_order_release);
         cur_node->children[next_move].store(child, std::memory_order_relaxed);
@@ -226,7 +256,17 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
   const bool needs_nn_eval =
       (leaf_state != TreeNodeState::kNnEvaluated) && !game.IsGameOver();
   if (needs_nn_eval) {
-    leaf_evaluator->QueueEval(prob, game, color_to_move);
+    const bool cache_hit = leaf_evaluator->QueueEval(prob, game, color_to_move);
+    // Immediate backup (ib_hit != nullptr): a cache-hit leaf is evaluated now
+    // and does not join the round (no submit / pending / signal); the caller
+    // backs it up and descends again.
+    if (ib_hit != nullptr && cache_hit) {
+      leaf_evaluator->FetchLeafEval(leaf, game, color_to_move, root_color,
+                                    root_score_est);
+      AssignBiasCacheEntry(global_state.bias_cache, game, leaf);
+      *ib_hit = true;
+      return {path, std::nullopt};
+    }
   }
 
   // Signal NN when all workers have finished descending (descent_remaining==0).
@@ -236,6 +276,11 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
     absl::MutexLock l(&global_state.mu);
     global_state.descent_remaining--;
     if (needs_nn_eval) global_state.pending++;
+    // Pipelined search: the group's last submit hands the descent token to the
+    // other group.
+    if (global_state.descent_remaining == 0 && global_state.pipe != nullptr) {
+      global_state.pipe->Pass(1 - global_state.group);
+    }
     if (global_state.descent_remaining == 0 && global_state.pending > 0 &&
         !global_state.did_signal) {
       slot.SignalReadyForInference();
@@ -267,6 +312,7 @@ void TopologicalBackup(BackupPriorityQueue& backup_pq, BiasCache* bias_cache) {
     }
     const int old_n_in_flight =
         node->n_in_flight.fetch_sub(1, std::memory_order_acq_rel);
+    node->n_in_flight_group[0].fetch_sub(1, std::memory_order_acq_rel);
     if (old_n_in_flight == 1) {
       if (is_leaf) {
         node->w = node->init_util_est;
@@ -284,7 +330,8 @@ void TopologicalBackup(BackupPriorityQueue& backup_pq, BiasCache* bias_cache) {
 
 void BackupStep(int worker_id, TreeNode* node, game::Loc action, bool is_leaf,
                 BiasCache* bias_cache, const PuctParams& puct_params,
-                const float leaf_q_outcome) {
+                const float leaf_q_outcome, const int group,
+                const bool pipelined) {
   // While running backup, we want to preserve the following invariant:
   // - When updating the stats for any node, that node's children are fully
   // updated.
@@ -311,9 +358,28 @@ void BackupStep(int worker_id, TreeNode* node, game::Loc action, bool is_leaf,
   const int old_in_flight =
       node->n_in_flight.fetch_sub(1, std::memory_order_acq_rel);
   DCHECK(old_in_flight > 0);
-  if (old_in_flight == 1) {
+  // Pipelined search: the last arriver is per group (the other group may have
+  // paths in flight through this node at any time).
+  const int old_group_in_flight =
+      node->n_in_flight_group[group].fetch_sub(1, std::memory_order_acq_rel);
+  DCHECK(old_group_in_flight > 0);
+  if ((pipelined ? old_group_in_flight : old_in_flight) == 1) {
     // last thread to arrive. responsible for update.
-    if (is_leaf) {
+    // Pipelined search: recompute under node->mu so the two groups never
+    // recompute the same node concurrently.
+    std::optional<absl::MutexLock> recompute_lock;
+    if (pipelined) recompute_lock.emplace(&node->mu);
+    // Pipelined search: the other group may already have backed up a visit
+    // through this leaf's children (it descended through the leaf after its
+    // evaluation, see Descend); then the leaf values would drop them.
+    const bool leaf_has_children = [&]() {
+      if (!pipelined || !is_leaf) return false;
+      for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+        if (node->child_visits[a] > 0) return true;
+      }
+      return false;
+    }();
+    if (is_leaf && !leaf_has_children) {
       node->w = node->init_util_est;
       node->w_outcome = node->init_outcome_est;
       node->v = node->init_util_est;
@@ -329,7 +395,8 @@ void BackupStep(int worker_id, TreeNode* node, game::Loc action, bool is_leaf,
 }
 
 void Backup(int worker_id, SearchPath& search_path, BiasCache* bias_cache,
-            const PuctParams puct_params) {
+            const PuctParams puct_params, const int group,
+            const bool pipelined) {
   // Can ignore the last node in the path because it is either a leaf or
   // terminal, from the perspective of this path.
   const float leaf_q_outcome = std::get<0>(search_path.back())->v_outcome;
@@ -339,7 +406,8 @@ void Backup(int worker_id, SearchPath& search_path, BiasCache* bias_cache,
     const auto parity = i % 2;
     const auto leaf_sign = parity == leaf_parity ? 1 : -1;
     BackupStep(worker_id, node, action, i == (int)search_path.size() - 1,
-               bias_cache, puct_params, leaf_sign * leaf_q_outcome);
+               bias_cache, puct_params, leaf_sign * leaf_q_outcome, group,
+               pipelined);
   }
 }
 
@@ -358,6 +426,11 @@ void SearchTask(const int worker_id, core::Probability& prob,
   const auto should_stop = [&global_state]() {
     if (global_state.should_stop_this_round) {
       return true;
+    }
+    // Pipelined search: the visit budget is folded into
+    // should_stop_this_round by the round reset (shared visit counter).
+    if (global_state.pipe != nullptr) {
+      return false;
     }
 
     const int num_visits_so_far =
@@ -378,12 +451,39 @@ void SearchTask(const int worker_id, core::Probability& prob,
       this_parity = global_state.round_parity;
     }
 
-    collision_policy.Reset();
-    Game search_game = game;
-    auto [search_path, collision_result] = Descend(
-        worker_id, prob, global_state, slot, &leaf_evaluator, descent_policy,
-        collision_policy, collision_detector, search_game, node_table, root,
-        color_to_move, root->init_score_est, {});
+    // Pipelined search: wait for this group's turn to descend.
+    if (global_state.pipe != nullptr) {
+      global_state.pipe->WaitTurn(global_state.group);
+    }
+
+    // Pipelined search, immediate backup: a descent whose leaf is an NN cache
+    // hit is backed up at once and the worker descends again, until a descent
+    // claims a leaf that needs the NN (or a terminal, or collides), the search
+    // stops, or kMaxImmediateBackups hits this round. That descent joins the
+    // round.
+    std::pair<SearchPath, std::optional<CollisionResult>> descent;
+    for (int num_ib = 0;; ++num_ib) {
+      collision_policy.Reset();
+      Game search_game = game;
+      const bool allow_ib =
+          global_state.pipe != nullptr && num_ib < kMaxImmediateBackups &&
+          !global_state.should_stop.load(std::memory_order_relaxed) &&
+          global_state.pipe->total_num_visits.load(std::memory_order_relaxed) <
+              global_state.visit_budget;
+      bool ib_hit = false;
+      descent = Descend(worker_id, prob, global_state, slot, &leaf_evaluator,
+                        descent_policy, collision_policy, collision_detector,
+                        search_game, node_table, root, color_to_move,
+                        root->init_score_est, {}, /*block_on_leaf_eval=*/true,
+                        allow_ib ? &ib_hit : nullptr);
+      if (!ib_hit) break;
+      Backup(worker_id, descent.first, global_state.bias_cache, puct_params,
+             global_state.group, /*pipelined=*/true);
+      global_state.total_num_visits.fetch_add(1, std::memory_order_relaxed);
+      global_state.pipe->total_num_visits.fetch_add(1,
+                                                    std::memory_order_relaxed);
+    }
+    auto& [search_path, collision_result] = descent;
     if (collision_result.has_value()) {
       global_state.total_num_collisions.fetch_add(1, std::memory_order_relaxed);
       while (collision_result.has_value()) {
@@ -397,6 +497,10 @@ void SearchTask(const int worker_id, core::Probability& prob,
                 global_state.pending > 0 && !global_state.did_signal) {
               slot.SignalReadyForInference();
               global_state.did_signal = true;
+            }
+            if (global_state.descent_remaining == 0 &&
+                global_state.pipe != nullptr) {
+              global_state.pipe->Pass(1 - global_state.group);
             }
           }
           break;
@@ -434,12 +538,17 @@ void SearchTask(const int worker_id, core::Probability& prob,
     if (!collision_result.has_value()) {
       // We must keep the invariant that all collisions retry until abort before
       // reaching here.
-      Backup(worker_id, search_path, global_state.bias_cache, puct_params);
+      Backup(worker_id, search_path, global_state.bias_cache, puct_params,
+             global_state.group, global_state.pipe != nullptr);
     }
 
     // Count this descent as a visit only if we successfully reached a leaf.
     if (!collision_result.has_value()) {
       global_state.total_num_visits.fetch_add(1, std::memory_order_relaxed);
+      if (global_state.pipe != nullptr) {
+        global_state.pipe->total_num_visits.fetch_add(
+            1, std::memory_order_relaxed);
+      }
     }
 
     // Barrier 2: wait for all workers to finish backprop. The last worker
@@ -463,6 +572,10 @@ void SearchTask(const int worker_id, core::Probability& prob,
           +[](PArg* a) { return a->s->round_parity != a->expected_parity; },
           &parg));
     }
+  }
+  // Pipelined search: this group no longer blocks the other.
+  if (global_state.pipe != nullptr) {
+    global_state.pipe->Exit(global_state.group);
   }
 }
 
@@ -776,16 +889,36 @@ Search::Result Search::Run(core::Probability& probability, Game& game,
 
   const auto search_begin = std::chrono::steady_clock::now();
   GlobalSearchState& global_search_state = global_search_state_;
-  {
-    global_search_state.did_signal = false;
-    global_search_state.round_parity = false;
-    global_search_state.num_workers = params.num_threads;
-    global_search_state.visit_budget = params.total_visit_budget;
-    global_search_state.descent_remaining = params.num_threads;
-    global_search_state.round_remaining = params.num_threads;
-    global_search_state.max_pending_each_level = 100000;
-    global_search_state.bias_cache = bias_cache_;
+  // Pipelined search: two groups of num_threads / 2 workers, each with its own
+  // GlobalSearchState and NNInterface slot, taking turns descending.
+  const bool pipelined = slot2_.has_value() &&
+                         params.mode == Search::Mode::kConcurrent &&
+                         params.num_threads > 1;
+  if (pipelined) {
+    CHECK(params.num_threads % 2 == 0)
+        << "pipelined search needs an even num_threads, got "
+        << params.num_threads;
   }
+  const int num_groups = pipelined ? 2 : 1;
+  const int group_threads =
+      pipelined ? params.num_threads / 2 : params.num_threads;
+  GlobalSearchState* const states[2] = {&global_search_state_,
+                                        &global_search_state2_};
+  const NNInterface::Slot slots[2] = {slot_, pipelined ? *slot2_ : slot_};
+  for (int g = 0; g < num_groups; ++g) {
+    GlobalSearchState& gs = *states[g];
+    gs.did_signal = false;
+    gs.round_parity = false;
+    gs.num_workers = group_threads;
+    gs.visit_budget = params.total_visit_budget;
+    gs.descent_remaining = group_threads;
+    gs.round_remaining = group_threads;
+    gs.max_pending_each_level = 100000;
+    gs.bias_cache = bias_cache_;
+    gs.group = g;
+    gs.pipe = pipelined ? &pipe_ : nullptr;
+  }
+  if (pipelined) pipe_.Reset();
 
   if (game.IsGameOver()) {
     // not a well-defined search.
@@ -810,25 +943,45 @@ Search::Result Search::Run(core::Probability& probability, Game& game,
 
     if (f.wait_for(std::chrono::milliseconds(params.total_visit_time_ms)) ==
         std::future_status::timeout) {
-      global_search_state.should_stop.store(true, std::memory_order_relaxed);
+      for (int g = 0; g < num_groups; ++g) {
+        states[g]->should_stop.store(true, std::memory_order_relaxed);
+      }
     }
   });
 
-  switch (params.collision_policy_kind) {
-    case CollisionPolicyKind::kAbort:
-      RunWithDetector(global_search_state, slot_, game, node_table, root,
-                      color_to_move, AbortCollisionPolicy{}, params);
-      break;
-    case CollisionPolicyKind::kRetry:
-      RunWithDetector(
-          global_search_state, slot_, game, node_table, root, color_to_move,
-          RetryCollisionPolicy(params.max_collision_retries), params);
-      break;
-    case CollisionPolicyKind::kSmartRetry:
-      RunWithDetector(
-          global_search_state, slot_, game, node_table, root, color_to_move,
-          SmartRetryCollisionPolicy(params.max_collision_retries), params);
-      break;
+  const auto run_group = [&](GlobalSearchState& gs, NNInterface::Slot slot,
+                             const Search::Params& p) {
+    switch (p.collision_policy_kind) {
+      case CollisionPolicyKind::kAbort:
+        RunWithDetector(gs, slot, game, node_table, root, color_to_move,
+                        AbortCollisionPolicy{}, p);
+        break;
+      case CollisionPolicyKind::kRetry:
+        RunWithDetector(gs, slot, game, node_table, root, color_to_move,
+                        RetryCollisionPolicy(p.max_collision_retries), p);
+        break;
+      case CollisionPolicyKind::kSmartRetry:
+        RunWithDetector(gs, slot, game, node_table, root, color_to_move,
+                        SmartRetryCollisionPolicy(p.max_collision_retries), p);
+        break;
+      case CollisionPolicyKind::kSmartRetryDepth:
+        RunWithDetector(
+            gs, slot, game, node_table, root, color_to_move,
+            SmartRetryCollisionPolicy(p.max_collision_retries, p.fork_depth_c,
+                                      p.fork_depth_p),
+            p);
+        break;
+    }
+  };
+  if (pipelined) {
+    Search::Params group_params = params;
+    group_params.num_threads = group_threads;
+    std::thread group1(
+        [&]() { run_group(*states[1], slots[1], group_params); });
+    run_group(*states[0], slots[0], group_params);
+    group1.join();
+  } else {
+    run_group(global_search_state, slot_, params);
   }
   done_promise.set_value();
   timer.join();
@@ -837,13 +990,15 @@ Search::Result Search::Run(core::Probability& probability, Game& game,
                            search_end - search_begin)
                            .count();
   const auto best_move = best_lcb_move(root);
-  const auto visit_count =
-      global_search_state.total_num_visits.load(std::memory_order_relaxed);
-  const auto abort_count =
-      global_search_state.total_num_aborted.load(std::memory_order_relaxed);
-  const auto collision_count =
-      global_search_state.total_num_collisions.load(std::memory_order_relaxed);
+  int64_t visit_count = 0, abort_count = 0, collision_count = 0;
+  for (int g = 0; g < num_groups; ++g) {
+    visit_count += states[g]->total_num_visits.load(std::memory_order_relaxed);
+    abort_count += states[g]->total_num_aborted.load(std::memory_order_relaxed);
+    collision_count +=
+        states[g]->total_num_collisions.load(std::memory_order_relaxed);
+  }
   global_search_state_.reset();
+  global_search_state2_.reset();
   return Search::Result{best_move, size_t(visit_count), size_t(abort_count),
                         size_t(collision_count), size_t(time_ms)};
 }

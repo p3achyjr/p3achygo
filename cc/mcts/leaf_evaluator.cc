@@ -116,7 +116,7 @@ inline void InitFields(const nn::NNInferResult& infer_result, TreeNode* node,
 }
 }  // namespace
 
-LeafEvaluator::LeafEvaluator(nn::NNInterface* nn_interface, int thread_id)
+LeafEvaluator::LeafEvaluator(nn::NNInterfaceBase* nn_interface, int thread_id)
     : LeafEvaluator(nn_interface->MakeSlot(0), thread_id) {}
 
 LeafEvaluator::LeafEvaluator(nn::NNInterface::Slot slot, int thread_id)
