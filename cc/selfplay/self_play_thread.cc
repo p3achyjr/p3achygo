@@ -104,11 +104,14 @@ static constexpr int kSgfPosOscPlies = 20;
 // kLightOpeningProb of them choose each opening move with a light search
 // (kLightOpeningN visits, kLightOpeningK candidates), sampling a searched move
 // by WinrateWeight of its winrate. The rest sample the raw policy at a
-// temperature decaying linearly from kOpeningTempStart to 1.
+// temperature decaying linearly to 1. The starting temperature depends on the
+// opening length: kOpeningTempStartMax for 0 plies down to
+// kOpeningTempStartMin for kMaxNumRawPolicyMoves plies.
 static constexpr float kLightOpeningProb = 0.80f;
 static constexpr int kLightOpeningN = 80;
 static constexpr int kLightOpeningK = 8;
-static constexpr float kOpeningTempStart = 1.5f;
+static constexpr float kOpeningTempStartMax = 2.0f;
+static constexpr float kOpeningTempStartMin = 1.5f;
 
 // Whether the thread should continue running.
 static std::atomic<bool> running = true;
@@ -478,6 +481,13 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         num_moves_raw_policy == 0 ? 1.0f : 1.0f / (2 * num_moves_raw_policy);
     const auto tau_opening =
         1.0f + probability.Uniform() * max_opening_tau_width;
+    // Starting temperature of a temperature-sampled new opening: longer
+    // openings start cooler.
+    const float opening_temp_start =
+        kOpeningTempStartMax +
+        (kOpeningTempStartMin - kOpeningTempStartMax) *
+            std::min(num_moves_raw_policy, kMaxNumRawPolicyMoves) /
+            static_cast<float>(kMaxNumRawPolicyMoves);
     LOG_TO_SINK(INFO, sink)
         << "\nNEW GAME  Kind=" << ToString(init_state.kind)
         << "  StartMove=" << init_state.move_num
@@ -487,6 +497,9 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         << "  Tau Opening=" << tau_opening
         << (new_opening ? (light_opening ? "  Opening=light" : "  Opening=temp")
                         : "")
+        << (new_opening && !light_opening
+                ? "  Opening Temp Start=" + std::to_string(opening_temp_start)
+                : "")
         << (init_state.sgfpos_index >= 0
                 ? "  SgfPos=" + config.sgfpos[init_state.sgfpos_index].id
                 : "")
@@ -756,10 +769,10 @@ void Run(size_t seed, int thread_id, NNInterface* nn_interface,
         }
         if (sampling_raw_policy) {
           // Empty/corner games: temperature decays linearly from
-          // kOpeningTempStart on the first opening ply to 1 on the last.
+          // opening_temp_start on the first opening ply to 1 on the last.
           const float opening_temp =
-              new_opening ? kOpeningTempStart +
-                                (1.0f - kOpeningTempStart) * game.num_moves() /
+              new_opening ? opening_temp_start +
+                                (1.0f - opening_temp_start) * game.num_moves() /
                                     std::max(num_moves_raw_policy - 1, 1)
                           : tau_opening;
           GumbelResult res = gumbel_evaluator.Sample(
