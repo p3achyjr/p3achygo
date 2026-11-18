@@ -18,11 +18,17 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from backend_torch.model_layers_common import (
+    MISH_GAIN,
+    NORM_BN,
+    NORM_FIXSCALEONENORM,
+    NORM_KINDS,
     ConvPreActivation,
+    init_weights_katago,
     make_bn,
     make_conv,
     make_conv_block,
     make_dense,
+    make_norm,
     mish,
 )
 from backend_torch.model_transformer import TransformerResidualBlock
@@ -50,9 +56,9 @@ class GlobalPoolBias(nn.Module):
     Returns (x_biased, g_pooled) where g_pooled is shape (N, 2C).
     """
 
-    def __init__(self, channels: int):
+    def __init__(self, channels: int, norm_kind: str = NORM_BN):
         super().__init__()
-        self.bn = make_bn(channels)  # applied to g before pooling
+        self.bn = make_norm(channels, norm_kind)  # applied to g before pooling
         self.pool = GlobalPool()
         self.dense = make_dense(2 * channels, channels)
 
@@ -112,12 +118,22 @@ class ClassicResidualBlock(nn.Module):
         conv_size: int,
         use_se: bool = False,
         use_spatial_attn: bool = False,
+        norm_kind: str = NORM_BN,
     ):
         super().__init__()
         layers = []
         for i in range(num_layers):
             ch_in = in_channels if i == 0 else out_channels
-            layers.append(ConvPreActivation(ch_in, out_channels, conv_size))
+            # KataGo ResBlock: only the last norm of a residual branch has gamma.
+            layers.append(
+                ConvPreActivation(
+                    ch_in,
+                    out_channels,
+                    conv_size,
+                    norm_kind=norm_kind,
+                    use_gamma=(i == num_layers - 1),
+                )
+            )
         self.layers = nn.ModuleList(layers)
         self.se = SqueezeExcitation(out_channels) if use_se else None
         self.spatial_attn = SpatialAttention() if use_spatial_attn else None
@@ -127,6 +143,12 @@ class ClassicResidualBlock(nn.Module):
             if in_channels != out_channels
             else None
         )
+
+    def init_fixscale(self, fixup_scale: float) -> None:
+        """KataGo ResBlock.initialize for fixscale: first norm takes the
+        scale, later norms stay at 1."""
+        for i, layer in enumerate(self.layers):
+            layer.init_fixscale(fixup_scale if i == 0 else 1.0)
 
     def forward(self, x: torch.Tensor, training: bool = False) -> torch.Tensor:
         residual = x if self.proj is None else self.proj(x)
@@ -200,12 +222,13 @@ class NestedAttnBottleneckBlock(nn.Module):
         num_heads: int,
         pos_len: int,
         rope_learnable: bool = True,
+        norm_kind: str = NORM_BN,
     ):
         super().__init__()
-        self.reduce_bn = make_bn(channels)
+        self.reduce_bn = make_norm(channels, norm_kind)
         self.reduce_conv = make_conv(channels, bottleneck_channels, 1, use_bias=False)
         self.res0 = ClassicResidualBlock(
-            bottleneck_channels, bottleneck_channels, 2, conv_size
+            bottleneck_channels, bottleneck_channels, 2, conv_size, norm_kind=norm_kind
         )
         self.tfmr0 = TransformerResidualBlock(
             bottleneck_channels, num_heads, pos_len, rope_learnable=rope_learnable
@@ -214,10 +237,23 @@ class NestedAttnBottleneckBlock(nn.Module):
             bottleneck_channels, num_heads, pos_len, rope_learnable=rope_learnable
         )
         self.res1 = ClassicResidualBlock(
-            bottleneck_channels, bottleneck_channels, 2, conv_size
+            bottleneck_channels, bottleneck_channels, 2, conv_size, norm_kind=norm_kind
         )
-        self.expand_bn = make_bn(bottleneck_channels)
+        self.expand_bn = make_norm(bottleneck_channels, norm_kind, use_gamma=True)
         self.expand_conv = make_conv(bottleneck_channels, channels, 1, use_bias=False)
+
+    def init_fixscale(self, fixup_scale: float) -> None:
+        """KataGo NestedBottleneckResBlock.initialize for fixscale. The inner
+        stream has four residual units (res0, tfmr0, tfmr1, res1); unit j's
+        first norm is scaled by 1/sqrt(j+1) and the expand norm by
+        1/sqrt(4+1). The transformer layers normalize their own input
+        (RMSNorm), so they take no scale."""
+        self.reduce_bn.set_scale(fixup_scale)
+        init_weights_katago(self.reduce_conv.weight, MISH_GAIN, 1.0)
+        self.res0.init_fixscale(1.0)
+        self.res1.init_fixscale(1.0 / math.sqrt(4.0))
+        self.expand_bn.set_scale(1.0 / math.sqrt(5.0))
+        init_weights_katago(self.expand_conv.weight, MISH_GAIN, 1.0)
 
     def forward(self, x: torch.Tensor, training: bool = False) -> torch.Tensor:
         residual = x
@@ -278,9 +314,14 @@ def _build_trunk_from_generic_arch(
     )
 
     blocks = []
+    norm_kind = generic_arch.get("norm_kind", NORM_BN)
     # Track running trunk channel count so transformer_btl knows its input.
     trunk_ch = None
     for block_type, cfg in generic_arch["trunk"]:
+        if norm_kind != NORM_BN and block_type != "nbt_attn":
+            raise ValueError(
+                f"norm_kind {norm_kind!r} is only implemented for nbt_attn blocks"
+            )
         if block_type == "transformer":
             ed = cfg["embed_dim"]
             nh = cfg["num_heads"]
@@ -328,6 +369,7 @@ def _build_trunk_from_generic_arch(
                     cfg["num_heads"],
                     board_len,
                     rope_learnable=cfg.get("rope_learnable", True),
+                    norm_kind=norm_kind,
                 )
             )
         elif block_type == "broadcast":
@@ -358,12 +400,18 @@ class PolicyHead(nn.Module):
       opt   = conv(48→1)(p) ++ dense(96→1)(g_pooled) - 3
     """
 
-    def __init__(self, in_channels: int, head_channels: int, board_len: int = 19):
+    def __init__(
+        self,
+        in_channels: int,
+        head_channels: int,
+        board_len: int = 19,
+        norm_kind: str = NORM_BN,
+    ):
         super().__init__()
         self.board_len = board_len
         self.conv_p = make_conv(in_channels, head_channels, 1, use_bias=False)
         self.conv_g = make_conv(in_channels, head_channels, 1, use_bias=False)
-        self.gpool = GlobalPoolBias(head_channels)
+        self.gpool = GlobalPoolBias(head_channels, norm_kind)
         # main policy output (conv has no bias; pass dense has bias — matches keras)
         self.output_moves = make_conv(head_channels, 2, 1, use_bias=False)
         self.output_pass = make_dense(2 * head_channels, 2)
@@ -638,8 +686,32 @@ class P3achyGoModel(nn.Module):
                 )
             )
 
+        # Norm kind lives in generic_arch (absent = BatchNorm everywhere, which
+        # is every checkpoint saved before fixscaleonenorm existed).
+        norm_kind = (generic_arch or {}).get("norm_kind", NORM_BN)
+        if norm_kind not in NORM_KINDS:
+            raise ValueError(f"Unknown norm_kind: {norm_kind!r}")
+        # fixscaleonenorm: the net's single BatchNorm, at the end of the trunk
+        # (KataGo norm_trunkfinal), followed by mish.
+        self.trunk_final_bn = None
+        if norm_kind == NORM_FIXSCALEONENORM:
+            self.trunk_final_bn = make_bn(num_channels)
+            with torch.no_grad():
+                # KataGo: conv_spatial scale 0.8, linear_global scale 0.6, identity gain.
+                init_weights_katago(self.init_board_conv.weight, 1.0, 0.8)
+                init_weights_katago(self.init_game_layer.weight, 1.0, 0.6)
+                for i, block in enumerate(self.blocks):
+                    block.init_fixscale(1.0 / math.sqrt(i + 1.0))
+                # KataGo norm_trunkfinal.set_scale(1/sqrt(num_blocks+1)), folded
+                # into the BatchNorm's initial gamma.
+                self.trunk_final_bn.weight.fill_(
+                    1.0 / math.sqrt(len(self.blocks) + 1.0)
+                )
+
         # Heads
-        self.policy_head = PolicyHead(num_channels, num_policy_head_channels, board_len)
+        self.policy_head = PolicyHead(
+            num_channels, num_policy_head_channels, board_len, norm_kind=norm_kind
+        )
         self.value_head = ValueHead(
             num_channels, num_value_head_channels, c_val, board_len
         )
@@ -683,6 +755,8 @@ class P3achyGoModel(nn.Module):
         # Trunk
         for block in self.blocks:
             x = block(x, training)
+        if self.trunk_final_bn is not None:
+            x = mish(self.trunk_final_bn(x))
 
         # Heads (policy head pools internally; value head uses the same game state)
         ph = self.policy_head(x)
