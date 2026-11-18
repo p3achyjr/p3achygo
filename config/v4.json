@@ -158,7 +158,7 @@
   "optimizer": "muon",
   "lr_transition_window": 10,
   "use_seen_state_prob": 0.05,
-  "sgfpos_path": "sgfpos/current.txt",
+  "sgfpos_path": "",
   "fast_vfs_anchor_mult": 1.6,
   "reuse_buffer_type": "goexploit",
   "sel_mult_base": 0.0,
