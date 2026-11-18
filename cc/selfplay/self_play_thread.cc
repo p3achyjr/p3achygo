@@ -105,7 +105,7 @@ static constexpr int kSgfPosOscPlies = 20;
 // (kLightOpeningN visits, kLightOpeningK candidates), sampling a searched move
 // by WinrateWeight of its winrate. The rest sample the raw policy at a
 // temperature decaying linearly from kOpeningTempStart to 1.
-static constexpr float kLightOpeningProb = 0.25f;
+static constexpr float kLightOpeningProb = 0.80f;
 static constexpr int kLightOpeningN = 80;
 static constexpr int kLightOpeningK = 8;
 static constexpr float kOpeningTempStart = 1.5f;
