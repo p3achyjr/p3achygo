@@ -220,6 +220,23 @@ class FixScaleNorm(nn.Module):
         return x * mul + self.beta[None, :, None, None]
 
 
+class FixScaleBatchNorm(nn.BatchNorm2d):
+    """KataGo `norm_trunkfinal` for fixscaleonenorm: BatchNorm with no learnable
+    gamma (fixup_use_gamma=False). y = BN(x) * scale + beta, with `scale` a fixed
+    buffer set at init and `beta` learnable. Same eps/momentum as `make_bn`."""
+
+    def __init__(self, num_features: int):
+        super().__init__(num_features, momentum=0.01, eps=1e-3, affine=False)
+        self.beta = nn.Parameter(torch.zeros(num_features))
+        self.register_buffer("scale", torch.tensor(1.0))
+
+    def set_scale(self, scale: float) -> None:
+        self.scale.fill_(scale)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return super().forward(x) * self.scale + self.beta[None, :, None, None]
+
+
 def make_norm(
     num_features: int, norm_kind: str = NORM_BN, use_gamma: bool = False
 ) -> nn.Module:

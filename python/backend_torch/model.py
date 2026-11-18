@@ -20,6 +20,7 @@ import torch.nn.functional as F
 from backend_torch.model_layers_common import (
     MISH_GAIN,
     NORM_BN,
+    FixScaleBatchNorm,
     NORM_FIXSCALEONENORM,
     NORM_KINDS,
     ConvPreActivation,
@@ -695,18 +696,15 @@ class P3achyGoModel(nn.Module):
         # (KataGo norm_trunkfinal), followed by mish.
         self.trunk_final_bn = None
         if norm_kind == NORM_FIXSCALEONENORM:
-            self.trunk_final_bn = make_bn(num_channels)
+            self.trunk_final_bn = FixScaleBatchNorm(num_channels)
             with torch.no_grad():
                 # KataGo: conv_spatial scale 0.8, linear_global scale 0.6, identity gain.
                 init_weights_katago(self.init_board_conv.weight, 1.0, 0.8)
                 init_weights_katago(self.init_game_layer.weight, 1.0, 0.6)
                 for i, block in enumerate(self.blocks):
                     block.init_fixscale(1.0 / math.sqrt(i + 1.0))
-                # KataGo norm_trunkfinal.set_scale(1/sqrt(num_blocks+1)), folded
-                # into the BatchNorm's initial gamma.
-                self.trunk_final_bn.weight.fill_(
-                    1.0 / math.sqrt(len(self.blocks) + 1.0)
-                )
+                # KataGo norm_trunkfinal.set_scale(1/sqrt(num_blocks+1)); fixed, no gamma.
+                self.trunk_final_bn.set_scale(1.0 / math.sqrt(len(self.blocks) + 1.0))
 
         # Heads
         self.policy_head = PolicyHead(
