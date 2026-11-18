@@ -7,7 +7,7 @@ A separate builder (`replay_build_goldens.py`) writes temporary goldens
 index order. This loop trains one epoch on each, in order, and differs from
 `train_loop.py` in three ways:
 
-  - LR follows KataGo's sample-keyed schedule (`lr_scale_auto2` attenuation and
+  - LR follows KataGo's sample-keyed schedule (`lr_scale_auto` long-run decay and
     the 2M-sample warmup from katago/python/train.py), rescaled so the first
     stage is --base_lr.
   - SWA is decoupled from golden boundaries: the live weights are folded into
@@ -70,30 +70,24 @@ _KATAGO_WARMUP = [
     (1_750_000, 1 / 2),
     (2_000_000, 1 / 1.4),
 ]
-_KATAGO_LR_SCALE_AUTO2 = [
-    (20e6, 12.0),
-    (40e6, 9.0),
-    (70e6, 6.0),
-    (100e6, 4.0),
-    (140e6, 3.0),
-    (180e6, 2.0),
-    (220e6, 1.5),
-    (260e6, 1.0),
-    (300e6, 0.7),
-    (350e6, 0.5),
-    (400e6, 0.35),
-    (450e6, 0.25),
-    (500e6, 0.18),
-    (550e6, 0.12),
-    (600e6, 0.08),
+# katago/python/train.py lr_scale_auto (long runs): (global_step_samples upper bound, factor).
+_KATAGO_LR_SCALE_AUTO = [
+    (550e6, 8.0),
+    (1.4e9, 6.0),
+    (2.5e9, 4.0),
+    (3.4e9, 3.0),
+    (4.2e9, 2.0),
+    (4.9e9, 1.5),
+    (5.5e9, 1.0),
+    (6.4e9, 0.7),
 ]
-_KATAGO_LR_SCALE_AUTO2_FINAL = 0.05
+_KATAGO_LR_SCALE_AUTO_FINAL = 0.5
 
 
 def katago_lr(samples: float, base_lr: float) -> float:
-    """KataGo lr_scale_auto2 x warmup, rescaled so the first stage is `base_lr`."""
-    factor = _KATAGO_LR_SCALE_AUTO2_FINAL
-    for bound, f in _KATAGO_LR_SCALE_AUTO2:
+    """KataGo lr_scale_auto x warmup, rescaled so the first stage is `base_lr`."""
+    factor = _KATAGO_LR_SCALE_AUTO_FINAL
+    for bound, f in _KATAGO_LR_SCALE_AUTO:
         if samples < bound:
             factor = f
             break
@@ -102,7 +96,7 @@ def katago_lr(samples: float, base_lr: float) -> float:
         if samples < bound:
             warmup = w
             break
-    return base_lr * (factor / _KATAGO_LR_SCALE_AUTO2[0][1]) * warmup
+    return base_lr * (factor / _KATAGO_LR_SCALE_AUTO[0][1]) * warmup
 
 
 class _SampleKeyedLR:
@@ -119,7 +113,7 @@ class _SampleKeyedLR:
         return katago_lr(batch * self.batch_size, self.base_lr)
 
     def info(self) -> str:
-        return f"KataGo auto2, base {self.base_lr}, now {self():.3g}"
+        return f"KataGo auto, base {self.base_lr}, now {self():.3g}"
 
 
 def _wait_for_golden(golden_dir: Path, idx: int):
