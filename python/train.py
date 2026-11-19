@@ -925,6 +925,13 @@ def val(
     losses_val = LossTracker()
     metrics_val = ValMetrics()
 
+    # Layers ignore `training=False`; BatchNorm follows `module.training`. Switch
+    # to eval so val uses the running statistics (as inference does) and does not
+    # update them, then restore the caller's mode.
+    was_training = getattr(model, "training", False)
+    if was_training:
+        model.eval()
+
     for i, batch_data in enumerate(val_ds):
         if i >= num_batches:
             break
@@ -1013,6 +1020,9 @@ def val(
         targets,
         model,
     )
+
+    if was_training:
+        model.train()
 
 
 def log_val(
