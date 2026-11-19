@@ -56,6 +56,12 @@ flags.DEFINE_string("val_ds_path", "", "Path to validation dataset.")
 flags.DEFINE_string("state_path", "", "JSON file with trainer progress.")
 flags.DEFINE_float("base_lr", 1e-4, "LR of the first schedule stage.")
 flags.DEFINE_integer("swa_period_batches", 1000, "Batches between SWA updates.")
+flags.DEFINE_string(
+    "lr_gen_schedule",
+    "",
+    "If set, 'GEN:LR,GEN:LR,...': LR keyed on the golden's window-end generation "
+    "(times the KataGo sample warmup) instead of the KataGo sample-keyed decay.",
+)
 
 POLL_INTERVAL_S = 30
 
@@ -91,29 +97,45 @@ def katago_lr(samples: float, base_lr: float) -> float:
         if samples < bound:
             factor = f
             break
-    warmup = 1.0
+    return base_lr * (factor / _KATAGO_LR_SCALE_AUTO[0][1]) * _warmup(samples)
+
+
+def _warmup(samples: float) -> float:
     for bound, w in _KATAGO_WARMUP:
         if samples < bound:
-            warmup = w
-            break
-    return base_lr * (factor / _KATAGO_LR_SCALE_AUTO[0][1]) * warmup
+            return w
+    return 1.0
 
 
 class _SampleKeyedLR:
     """LR callable for the optimizer (called with its own step counter).
     `batch_num0` is the run's batch counter when optimizer step `opt_step0` runs."""
 
-    def __init__(self, base_lr, batch_size, batch_num0, opt_step0):
+    def __init__(self, base_lr, batch_size, batch_num0, opt_step0, gen_lr=None):
         self.base_lr, self.batch_size = base_lr, batch_size
         self.batch_num0, self.opt_step0 = batch_num0, opt_step0
+        self.gen_lr = gen_lr  # if set: constant stage LR (x warmup) for this golden
 
     def __call__(self, opt_step=None):
         step = self.opt_step0 if opt_step is None else opt_step
         batch = self.batch_num0 + (step - self.opt_step0)
+        if self.gen_lr is not None:
+            return self.gen_lr * _warmup(batch * self.batch_size)
         return katago_lr(batch * self.batch_size, self.base_lr)
 
     def info(self) -> str:
+        if self.gen_lr is not None:
+            return f"gen-keyed {self.gen_lr:.3g} x warmup, now {self():.3g}"
         return f"KataGo auto, base {self.base_lr}, now {self():.3g}"
+
+
+def _gen_lr(end_gen: int) -> float:
+    lr = None
+    for item in FLAGS.lr_gen_schedule.split(","):
+        gen, val = item.split(":")
+        if end_gen >= int(gen):
+            lr = float(val)
+    return lr
 
 
 def _wait_for_golden(golden_dir: Path, idx: int):
@@ -179,6 +201,7 @@ def _train_loop():
             config.batch_size,
             batch_num,
             getattr(inner, "_global_step", 0),
+            _gen_lr(manifest["end_gen"]) if FLAGS.lr_gen_schedule else None,
         )
         optimizer = backend_shim.make_optimizer(
             live_model, config, lr_schedule, True, loaded_state=optimizer
