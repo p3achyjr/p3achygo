@@ -63,6 +63,17 @@ flags.DEFINE_string(
     "(times the KataGo sample warmup) instead of the KataGo sample-keyed decay.",
 )
 
+flags.DEFINE_float(
+    "lr_wsd_total_samples",
+    0,
+    "If > 0: warmup-stable-decay (Hagele et al. 2024): KataGo sample warmup, hold "
+    "--base_lr, then decay to 0 over the last --lr_wsd_decay_frac of this many samples.",
+)
+flags.DEFINE_float(
+    "lr_wsd_decay_frac", 0.2, "WSD: fraction of total samples spent decaying."
+)
+flags.DEFINE_enum("lr_wsd_shape", "1-sqrt", ["1-sqrt", "linear"], "WSD cooldown shape.")
+
 POLL_INTERVAL_S = 30
 
 # katago/python/train.py: (global_step_samples upper bound, factor).
@@ -100,6 +111,16 @@ def katago_lr(samples: float, base_lr: float) -> float:
     return base_lr * (factor / _KATAGO_LR_SCALE_AUTO[0][1]) * _warmup(samples)
 
 
+def wsd_lr(
+    samples: float, base_lr: float, total: float, frac: float, shape: str
+) -> float:
+    """Warmup-stable-decay: KataGo warmup x base_lr, then decay to 0 over the last `frac` of `total`."""
+    start = total * (1 - frac)
+    x = min(max((samples - start) / (total - start), 0.0), 1.0)
+    decay = 1 - x**0.5 if shape == "1-sqrt" else 1 - x
+    return base_lr * decay * _warmup(samples)
+
+
 def _warmup(samples: float) -> float:
     for bound, w in _KATAGO_WARMUP:
         if samples < bound:
@@ -121,11 +142,24 @@ class _SampleKeyedLR:
         batch = self.batch_num0 + (step - self.opt_step0)
         if self.gen_lr is not None:
             return self.gen_lr * _warmup(batch * self.batch_size)
+        if FLAGS.lr_wsd_total_samples > 0:
+            return wsd_lr(
+                batch * self.batch_size,
+                self.base_lr,
+                FLAGS.lr_wsd_total_samples,
+                FLAGS.lr_wsd_decay_frac,
+                FLAGS.lr_wsd_shape,
+            )
         return katago_lr(batch * self.batch_size, self.base_lr)
 
     def info(self) -> str:
         if self.gen_lr is not None:
             return f"gen-keyed {self.gen_lr:.3g} x warmup, now {self():.3g}"
+        if FLAGS.lr_wsd_total_samples > 0:
+            return (
+                f"WSD {FLAGS.lr_wsd_shape} base {self.base_lr} total "
+                f"{FLAGS.lr_wsd_total_samples:.4g} decay frac {FLAGS.lr_wsd_decay_frac}, now {self():.3g}"
+            )
         return f"KataGo auto, base {self.base_lr}, now {self():.3g}"
 
 
