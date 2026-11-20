@@ -22,6 +22,7 @@ from backend_torch.model_layers_common import (
     NORM_BN,
     FixScaleBatchNorm,
     NORM_FIXSCALEONENORM,
+    NORM_FIXSCALE_FOLDED,
     NORM_KINDS,
     ConvPreActivation,
     init_weights_katago,
@@ -707,8 +708,10 @@ class P3achyGoModel(nn.Module):
                 self.trunk_final_bn.set_scale(1.0 / math.sqrt(len(self.blocks) + 1.0))
 
         # Heads
+        # fixscalefolded converts the trunk only; the heads keep BatchNorm.
+        head_norm_kind = NORM_BN if norm_kind == NORM_FIXSCALE_FOLDED else norm_kind
         self.policy_head = PolicyHead(
-            num_channels, num_policy_head_channels, board_len, norm_kind=norm_kind
+            num_channels, num_policy_head_channels, board_len, norm_kind=head_norm_kind
         )
         self.value_head = ValueHead(
             num_channels, num_value_head_channels, c_val, board_len
