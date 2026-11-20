@@ -186,7 +186,11 @@ def set_bn_eps(module: nn.Module, eps: float, opt_state=None) -> int:
 
 NORM_BN = "bnorm"  # BatchNorm everywhere (every net trained before 2026-11-18)
 NORM_FIXSCALEONENORM = "fixscaleonenorm"
-NORM_KINDS = (NORM_BN, NORM_FIXSCALEONENORM)
+# A BatchNorm net converted after training (scripts/fold_bn_to_fixscale.py): every
+# trunk norm is a fixed-scale norm WITH per-channel gamma (so the eval-mode BN
+# affine folds into it exactly), no trunk-final BN, heads keep BatchNorm.
+NORM_FIXSCALE_FOLDED = "fixscalefolded"
+NORM_KINDS = (NORM_BN, NORM_FIXSCALEONENORM, NORM_FIXSCALE_FOLDED)
 
 # KataGo `compute_gain("mish")`: std gain that keeps activations at unit variance
 # through mish for a variance-preserving linear layer.
@@ -247,6 +251,8 @@ def make_norm(
         return make_bn(num_features)
     if norm_kind == NORM_FIXSCALEONENORM:
         return FixScaleNorm(num_features, use_gamma=use_gamma)
+    if norm_kind == NORM_FIXSCALE_FOLDED:
+        return FixScaleNorm(num_features, use_gamma=True)
     raise ValueError(f"Unknown norm_kind: {norm_kind!r}")
 
 
