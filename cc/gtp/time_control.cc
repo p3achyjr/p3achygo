@@ -19,8 +19,7 @@ void TimeControl::SetTimeSettings(int main_time_secs, int byoyomi_time_secs,
   byoyomi_time_left_secs_ = byoyomi_time_secs;
   byoyomi_periods_left_ = byoyomi_periods;
   in_byoyomi_ = false;
-  stddev_ema_ = 0;
-  stddev_ema_count_ = 0;
+  stddev_ema_ = 0;  // per game; otherwise the previous game's end seeds it
 
   enabled_ = (main_time_secs > 0 || byoyomi_time_secs > 0);
 }
@@ -36,21 +35,35 @@ void TimeControl::SetTimeLeft(int main_time_left_secs,
 
 std::pair<int, TimeControl::Metadata> TimeControl::ComputeMoveTimeMs(
     const game::Game& game, const mcts::TreeNode* root) {
-  // Below this many root visits, root stddev mostly reflects tree size (it
-  // grows with visits up to ~512, then is flat), so the stddev factor is not
-  // applied and the EMA is not updated.
-  constexpr int kMinStddevVisits = 1000;
-  const auto update_stddev_ema = [&]() {
+  // Root stddev grows with root visits up to ~1000 (then nearly flat), so a
+  // small tree's stddev is normalized to its 1000-visit equivalent.
+  // S(n) = 0.0666 + 0.0213 log2(n): mean root sqrt(v_var) vs root visits, fit
+  // on 718 roots with n in [2, 2048) from v4 3-min self-play logs (2026-11-21).
+  // Roots with < 2 visits carry no variance information: returns 0.
+  const auto normalized_root_stddev = [&]() {
     if (root == nullptr || root->state == mcts::TreeNodeState::kNew ||
-        root->n < kMinStddevVisits) {
+        root->n < 2) {
+      return 0.0f;
+    }
+    constexpr int kRefVisits = 1000;
+    const auto s_of_n = [](float n) {
+      return 0.0666f + 0.0213f * std::log2(n);
+    };
+    const float stddev = std::sqrt(root->v_var);
+    if (root->n >= kRefVisits) return stddev;
+    return stddev * s_of_n(kRefVisits) / s_of_n(root->n);
+  };
+  const auto update_stddev_ema = [&]() {
+    const float stddev = normalized_root_stddev();
+    if (stddev == 0.0f) {
       return;
     }
 
-    // Plain mean over the first 4 samples, then EMA with weight 0.25.
-    const float stddev = std::sqrt(root->v_var);
-    ++stddev_ema_count_;
-    const float w = std::max(0.25f, 1.0f / stddev_ema_count_);
-    stddev_ema_ = (1.0f - w) * stddev_ema_ + w * stddev;
+    if (stddev_ema_ == 0) {
+      stddev_ema_ = stddev;
+      return;
+    }
+    stddev_ema_ = 0.75 * stddev_ema_ + 0.25 * stddev;
   };
 
   if (!enabled_) {
@@ -76,14 +89,9 @@ std::pair<int, TimeControl::Metadata> TimeControl::ComputeMoveTimeMs(
     if (root == nullptr || root->state == mcts::TreeNodeState::kNew) {
       return appx_moves_left_from_move_num;
     }
-    // Fit on 17,683 positions from 192 nbt800 vs s5095 games (2026-11-21,
-    // eval/movesleft_1121): log(plies + 5) ~ |V|, |V|^2, ply, ply^2, |V|*ply.
-    // ply clamped to the fit data range (max 351); output floored at 0.
-    const float a = std::abs(root->v);
-    const float p = std::min(game.num_moves(), 350) / 100.0f;
-    const float log_plies = 5.4298f + 0.9175f * a - 2.1007f * a * a -
-                            0.8566f * p + 0.087f * p * p - 0.052f * a * p;
-    const float appx_moves_left = std::max(std::exp(log_plies) - 5.0f, 0.0f);
+    // experimentally derived from eval games.
+    const float appx_moves_left =
+        std::pow((std::abs(root->v) - 1.2525) / -0.1800, 1 / 0.3386) - 1;
 
     // a little bump. try not to lose by time ;)
     return static_cast<int>(std::round(appx_moves_left) + 10);
@@ -131,17 +139,25 @@ std::pair<int, TimeControl::Metadata> TimeControl::ComputeMoveTimeMs(
       return 1.0f + 0.5f * (kMaxScale - 1.0f);
     }
 
-    if (root->n < kMinStddevVisits) {
-      return 1.0f;
-    }
-
-    const float stddev = std::sqrt(root->v_var);
+    const float stddev = normalized_root_stddev();
     if (stddev == 0.0f || stddev_ema_ == 0.0f) {
       // how does this happen?
       return 1.0f;
     }
 
     return std::clamp(stddev / stddev_ema_, kMinScale, kMaxScale);
+  }();
+  // Low-root bonus: a near-empty root (excluding the first move of the game)
+  // means the opponent played a move our search barely considered. 1.5 at 0
+  // root visits, quadratic down to 1.0 at kBonusVisits: 1 + 0.5 (1 - t^2).
+  const auto low_root_bonus = [&]() {
+    constexpr float kBonusVisits = 400.0f;
+    constexpr float kMaxBonus = 0.5f;
+    if (game.num_moves() <= 1) return 1.0f;
+    const float n = root == nullptr ? 0.0f : static_cast<float>(root->n);
+    if (n >= kBonusVisits) return 1.0f;
+    const float t = n / kBonusVisits;
+    return 1.0f + kMaxBonus * (1.0f - t * t);
   }();
   const auto middlegame_factor = [&]() {
     // Linear baseline: 1.0 until move 150, then ramps down to 0.8 at move 399.
@@ -195,40 +211,32 @@ std::pair<int, TimeControl::Metadata> TimeControl::ComputeMoveTimeMs(
 
   // Main time: divide remaining time evenly over estimated remaining moves,
   // then scale by all three factors.
-  const int interpolated_appx_moves_left = flags_ & kWinrateFactor
-                                               ? appx_moves_left_from_q
-                                               : appx_moves_left_from_move_num;
-  const int appx_moves_left_us = std::max(
-      static_cast<int>(std::round(float(interpolated_appx_moves_left) / 2)), 1);
-
-  // Never budget the last kReserveMs (covers per-move server/network overhead,
-  // measured ~60 ms/move on CGOS). Below the reserve, play at kMinMoveMs.
-  // No single move may take more than 1/kMaxFracDenom of the usable time.
-  constexpr float kReserveMs = 20000.0f;
-  constexpr float kMinMoveMs = 200.0f;
-  constexpr float kMaxFracDenom = 20.0f;
-  const float usable_ms = main_time_left_secs_ * 1000.0f - kReserveMs;
+  const int interpolated_appx_moves_left =
+      flags_ & kWinrateFactor
+          ? static_cast<int>(std::round(0.75f * appx_moves_left_from_q +
+                                        0.25f * appx_moves_left_from_move_num))
+          : appx_moves_left_from_move_num;
+  const int appx_moves_left_us =
+      std::max(std::round(float(interpolated_appx_moves_left) / 2), 10.0f);
 
   update_stddev_ema();
   float base_ms =
       (main_time_left_secs_ * 1000.0f) / (appx_moves_left_from_move_num / 2.0f);
-  float ms = usable_ms <= 0 ? kMinMoveMs : usable_ms / appx_moves_left_us;
-  if (usable_ms > 0) {
-    if (flags_ & kObviousMoveFactor) ms *= obvious_move_factor;
-    if (flags_ & kStddevFactor) ms *= stddev_factor;
-    if (flags_ & kMiddleGameFactor) ms *= middlegame_factor;
-    if (flags_ & kWinningAttenuator) ms *= winning_attenuator;
-    ms = std::min(ms, usable_ms / kMaxFracDenom);
-  }
+  float ms = (main_time_left_secs_ * 1000.0f) / appx_moves_left_us;
+  if (flags_ & kObviousMoveFactor) ms *= obvious_move_factor;
+  if (flags_ & kStddevFactor) ms *= stddev_factor;
+  if (flags_ & kMiddleGameFactor) ms *= middlegame_factor;
+  if (flags_ & kWinningAttenuator) ms *= winning_attenuator;
+  ms *= low_root_bonus;
   // The floor is load-bearing: GenMoveCommon passes this straight to
   // Search::Params::total_visit_time_ms, and Run() treats <= 0 as "no timer",
   // falling back to a 1<<20 visit budget. A literal 0 would search forever.
-  return {std::max(static_cast<int>(ms), 1),
-          Metadata{base_ms, appx_moves_left_from_move_num,
-                   appx_moves_left_from_q, obvious_move_factor, stddev_factor,
-                   middlegame_factor, winning_attenuator, pre_search_winrate,
-                   root ? std::sqrt(root->v_var) : -1.0f, stddev_ema_,
-                   usable_ms, main_time_left_secs_}};
+  return {
+      std::max(static_cast<int>(ms), 1),
+      Metadata{base_ms, appx_moves_left_from_move_num, appx_moves_left_from_q,
+               obvious_move_factor, stddev_factor, middlegame_factor,
+               winning_attenuator, pre_search_winrate, normalized_root_stddev(),
+               stddev_ema_, low_root_bonus, main_time_left_secs_}};
 }
 
 }  // namespace gtp

@@ -677,7 +677,7 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
                   << "  root_n=" << (current_root() ? current_root()->n : -1)
                   << "  root_stddev=" << time_metadata.root_stddev
                   << "  stddev_ema=" << time_metadata.stddev_ema
-                  << "  usable_ms=" << time_metadata.usable_ms
+                  << "  low_root_bonus=" << time_metadata.low_root_bonus
                   << "  clock_left_s=" << time_metadata.main_time_left_secs
                   << "\n";
       }
