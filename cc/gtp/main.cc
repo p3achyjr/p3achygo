@@ -44,6 +44,11 @@ void LogConfig(const eval::PlayerSearchConfig& cfg) {
   }
   std::cerr << "  use_lcb:              " << b(cfg.use_lcb) << "\n";
   std::cerr << "  p_opt_weight:         " << cfg.p_opt_weight << "\n";
+  std::cerr << "  root_p_opt_weight:    " << cfg.root_p_opt_weight << "\n";
+  std::cerr << "  p_opt_geometric:      " << cfg.p_opt_geometric << "\n";
+  std::cerr << "  value_weight_exponent:" << cfg.value_weight_exponent << "\n";
+  std::cerr << "  root_fpu:             " << cfg.root_fpu << "\n";
+  std::cerr << "  round_free:           " << cfg.round_free << "\n";
   std::cerr << "  use_bias_cache:       " << b(cfg.use_bias_cache) << "\n";
   if (cfg.use_bias_cache) {
     std::cerr << "  bias_cache_alpha:     " << cfg.bias_cache_alpha << "\n";

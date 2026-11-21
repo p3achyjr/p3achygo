@@ -1,5 +1,7 @@
 #include "cc/gtp/service.h"
 
+#include <unistd.h>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -787,9 +789,24 @@ void ServiceImpl::Ponder(std::stop_token token) {
     std::cerr << "Beginning Ponder...\n";
   }
 
+  // Tree size limit: min(4 GiB, half of physical RAM) worth of TreeNodes. Each
+  // visit adds at most one node and the tree outside current_root() is reaped
+  // on every move, so root visits bound the tree's node count.
+  static const int kPonderMaxRootVisits = [] {
+    const int64_t ram = static_cast<int64_t>(sysconf(_SC_PHYS_PAGES)) *
+                        static_cast<int64_t>(sysconf(_SC_PAGE_SIZE));
+    const int64_t bytes = std::min<int64_t>(int64_t{4} << 30, ram / 2);
+    return static_cast<int>(bytes / static_cast<int64_t>(sizeof(TreeNode)));
+  }();
   Search::Params params = search_params_;
-  params.total_visit_budget = 1 << 17;
+  params.total_visit_budget =
+      std::max(0, kPonderMaxRootVisits - current_root()->n);
   params.total_visit_time_ms = -1;
+  if (verbose_) {
+    std::cerr << "Ponder tree limit " << kPonderMaxRootVisits
+              << " root visits (sizeof(TreeNode)=" << sizeof(TreeNode)
+              << "), budget " << params.total_visit_budget << ".\n";
+  }
   {
     ponder_trace::SearchScope scope(
         "PONDER",
