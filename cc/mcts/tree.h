@@ -175,6 +175,10 @@ inline float ChildScore(const TreeNode* node, int action) {
 float Lcb(const TreeNode* node, int action);
 float Ucb(const TreeNode* node, int action);
 float Lcb(const TreeNode* node, int action, float alpha);
+// Lower 95% (two-sided t) bound of the outcome winrate in [0, 1] of child
+// `action`, parent's perspective: (QOutcome - t * sqrt(QOutcomeVar / N) + 1)
+// / 2. 0 when the child has fewer than 2 visits.
+float OutcomeWinrateLcb(const TreeNode* node, int action);
 float Ucb(const TreeNode* node, int action, float alpha);
 
 inline void AdvanceState(TreeNode* node) {

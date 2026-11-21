@@ -64,6 +64,14 @@ float Lcb(const TreeNode* node, int action, float alpha) {
   return ConfidenceInterval(node, action, alpha).first;
 }
 
+float OutcomeWinrateLcb(const TreeNode* node, int action) {
+  const float n = NAction(node, action);
+  if (!node->child(action) || n < 2) return 0.0f;
+  const float stddev = std::sqrt(QOutcomeVar(node, action) / n);
+  const float lcb = QOutcome(node, action) - CachedQuantile(n - 1) * stddev;
+  return std::clamp((lcb + 1.0f) / 2.0f, 0.0f, 1.0f);
+}
+
 float Ucb(const TreeNode* node, int action, float alpha) {
   return ConfidenceInterval(node, action, alpha).second;
 }

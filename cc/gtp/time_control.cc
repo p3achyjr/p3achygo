@@ -152,19 +152,29 @@ std::pair<int, TimeControl::Metadata> TimeControl::ComputeMoveTimeMs(
   // on the ponder tree instead. Guards the adversarial case where a losing
   // opponent declines to resign and drags the game out hundreds of plies -- the
   // engine used to burn its whole clock while up 40+ points and lose on time.
-  // 1.0 at <=80% winrate, quadratic down to 0.0 at >=95%.
+  // Driven by the outcome-winrate LCB of the most-visited root child, and only
+  // once the root has > kMinRootVisits visits (a small tree's LCB is not
+  // trusted): 1.0 at LCB <= 90%, quadratic down to 0.0 at LCB >= 98%.
   float pre_search_winrate = -1.0f;
   const auto winning_attenuator = [&]() {
-    constexpr float kLo = 0.80f;
-    constexpr float kHi = 0.95f;
+    constexpr float kLo = 0.90f;
+    constexpr float kHi = 0.98f;
+    constexpr int kMinRootVisits = 2000;
     if (root == nullptr || root->state == mcts::TreeNodeState::kNew) {
       return 1.0f;
     }
-    // v_outcome is the pure game outcome in [-1, 1]. root->v is utility
-    // (outcome + score utility) and can exceed 1, so it is not a winrate.
-    const float winrate = (root->v_outcome + 1.0f) / 2.0f;
-    pre_search_winrate = winrate;
-    const float t = std::clamp((winrate - kLo) / (kHi - kLo), 0.0f, 1.0f);
+    int best = -1;
+    for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+      if (root->child_visits[a] > 0 &&
+          (best == -1 || root->child_visits[a] > root->child_visits[best])) {
+        best = a;
+      }
+    }
+    if (best == -1) return 1.0f;
+    const float lcb = mcts::OutcomeWinrateLcb(root, best);
+    pre_search_winrate = lcb;
+    if (root->n <= kMinRootVisits) return 1.0f;
+    const float t = std::clamp((lcb - kLo) / (kHi - kLo), 0.0f, 1.0f);
     return 1.0f - t * t;
   }();
 
