@@ -429,6 +429,8 @@ std::string ServiceImpl::BuildExplainComment() {
     float qstd;
     float prior;
     float opt_prior;
+    float wr;
+    float wr_lcb;
   };
 
   std::vector<ChildInfo> visited_children;
@@ -442,6 +444,8 @@ std::string ServiceImpl::BuildExplainComment() {
         std::sqrt(QVar(root, a)),
         root->move_probs[a],
         root->opt_probs[a],
+        (QOutcome(root, a) + 1.0f) / 2.0f,
+        OutcomeWinrateLcb(root, a),
     });
   }
 
@@ -452,11 +456,13 @@ std::string ServiceImpl::BuildExplainComment() {
   static constexpr int kNumTopMoves = 8;
   int num_to_show = std::min((int)visited_children.size(), kNumTopMoves);
   ss << "Top Moves (by LCB):\n";
+  ss << std::defaultfloat << std::setprecision(3);
   for (int i = 0; i < num_to_show; ++i) {
     const auto& c = visited_children[i];
     ss << "  " << GtpValueString(AsLoc(c.action)) << "  n=" << c.n
        << "  q=" << c.q << "  qstd=" << c.qstd << "  lcb=" << c.lcb
-       << "  prior=" << c.prior << "  opt_prior=" << c.opt_prior << "\n";
+       << "  wr=" << c.wr << "  wr_lcb=" << c.wr_lcb << "  p=" << c.prior
+       << "  p_opt=" << c.opt_prior << "\n";
   }
 
   return ss.str();
