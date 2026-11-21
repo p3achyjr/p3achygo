@@ -78,6 +78,8 @@ class TimeControl {
 
   // track stddev ema. Reset per game in SetTimeSettings.
   float stddev_ema_ = 0;
+  int stddev_samples_ = 0;   // qualifying roots seen this game
+  int moves_this_game_ = 0;  // ComputeMoveTimeMs calls (main time) this game
 };
 
 }  // namespace gtp

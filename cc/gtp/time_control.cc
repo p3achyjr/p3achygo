@@ -20,6 +20,8 @@ void TimeControl::SetTimeSettings(int main_time_secs, int byoyomi_time_secs,
   byoyomi_periods_left_ = byoyomi_periods;
   in_byoyomi_ = false;
   stddev_ema_ = 0;  // per game; otherwise the previous game's end seeds it
+  stddev_samples_ = 0;
+  moves_this_game_ = 0;
 
   enabled_ = (main_time_secs > 0 || byoyomi_time_secs > 0);
 }
@@ -56,6 +58,11 @@ std::pair<int, TimeControl::Metadata> TimeControl::ComputeMoveTimeMs(
   const auto update_stddev_ema = [&]() {
     const float stddev = normalized_root_stddev();
     if (stddev == 0.0f) {
+      return;
+    }
+    // The first qualifying root (an early-opening position) has much lower
+    // stddev than anything after it and would pin the factor at its cap.
+    if (++stddev_samples_ == 1) {
       return;
     }
 
@@ -145,7 +152,11 @@ std::pair<int, TimeControl::Metadata> TimeControl::ComputeMoveTimeMs(
       return 1.0f;
     }
 
-    return std::clamp(stddev / stddev_ema_, kMinScale, kMaxScale);
+    // Ramp the factor in from 1.0 over our first kRampMoves moves of the game.
+    constexpr float kRampMoves = 8.0f;
+    const float w = std::min(moves_this_game_ / kRampMoves, 1.0f);
+    const float raw = std::clamp(stddev / stddev_ema_, kMinScale, kMaxScale);
+    return 1.0f + w * (raw - 1.0f);
   }();
   // Low-root bonus: a near-empty root (excluding the first move of the game)
   // means the opponent played a move our search barely considered. 1.5 at 0
@@ -220,6 +231,7 @@ std::pair<int, TimeControl::Metadata> TimeControl::ComputeMoveTimeMs(
       std::max(std::round(float(interpolated_appx_moves_left) / 2), 10.0f);
 
   update_stddev_ema();
+  ++moves_this_game_;
   float base_ms =
       (main_time_left_secs_ * 1000.0f) / (appx_moves_left_from_move_num / 2.0f);
   float ms = (main_time_left_secs_ * 1000.0f) / appx_moves_left_us;
