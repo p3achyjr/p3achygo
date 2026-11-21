@@ -19,9 +19,7 @@ void TimeControl::SetTimeSettings(int main_time_secs, int byoyomi_time_secs,
   byoyomi_time_left_secs_ = byoyomi_time_secs;
   byoyomi_periods_left_ = byoyomi_periods;
   in_byoyomi_ = false;
-  stddev_ema_ = 0;  // per game; otherwise the previous game's end seeds it
-  stddev_samples_ = 0;
-  moves_this_game_ = 0;
+  ResetGame();
 
   enabled_ = (main_time_secs > 0 || byoyomi_time_secs > 0);
 }

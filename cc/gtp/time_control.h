@@ -58,6 +58,15 @@ class TimeControl {
   std::pair<int, Metadata> ComputeMoveTimeMs(const game::Game& game,
                                              const mcts::TreeNode* root);
 
+  // Clears per-game heuristic state (not the clock or time settings).
+  // Called on clear_board and time_settings; otherwise the previous game's
+  // endgame stddev seeds the next game's EMA.
+  void ResetGame() {
+    stddev_ema_ = 0;
+    stddev_samples_ = 0;
+    moves_this_game_ = 0;
+  }
+
   void Enable(bool enable) { enabled_ = enable; }
   bool IsEnabled() const { return enabled_; }
 

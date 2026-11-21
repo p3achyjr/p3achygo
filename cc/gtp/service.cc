@@ -801,6 +801,7 @@ void ServiceImpl::ClearBoard() {
   node_table_->Reap(current_root_);
   if (bias_cache_) bias_cache_->PruneUnused();
   game_in_progress_ = false;
+  time_control_.ResetGame();
 }
 
 void ServiceImpl::PausePondering() {
