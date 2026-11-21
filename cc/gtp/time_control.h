@@ -32,6 +32,11 @@ class TimeControl {
     // What the attenuator actually saw pre-search. -1 means the root was null
     // or unevaluated, in which case the attenuator is skipped.
     float pre_search_winrate;
+    // Logging only.
+    float root_stddev;  // sqrt(root->v_var) pre-search; -1 if no root.
+    float stddev_ema;   // after this move's update.
+    float usable_ms;    // main time left minus reserve.
+    int main_time_left_secs;
   };
   TimeControl(uint32_t flags) : flags_(flags) {}
 
@@ -71,8 +76,9 @@ class TimeControl {
   bool enabled_ = false;
   const uint32_t flags_;
 
-  // track stddev ema
+  // track stddev ema. Reset per game in SetTimeSettings.
   float stddev_ema_ = 0;
+  int stddev_ema_count_ = 0;
 };
 
 }  // namespace gtp

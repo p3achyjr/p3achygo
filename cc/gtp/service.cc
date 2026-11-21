@@ -168,6 +168,9 @@ class ServiceImpl final : public Service {
   std::thread analysis_thread_;
 
   std::jthread ponder_thread_;
+  // True once a move has been played since the last clear_board, until we
+  // resign. Only read/written on the command thread. Gates pondering.
+  bool game_in_progress_ = false;
 };
 
 ServiceImpl::ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
@@ -191,7 +194,7 @@ ServiceImpl::ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
       nn_interface_.get(), 0, MakeScoreUtilityParams(cfg_),
       bias_cache_ ? &*bias_cache_ : nullptr);
   current_root_ = node_table_->GetOrCreate(game_->board().hash(), BLACK, false);
-  StartPondering();
+  // No pondering until a game is in progress (see game_in_progress_).
 }
 
 Response<int> ServiceImpl::GtpProtocolVersion(std::optional<int> id) {
@@ -258,6 +261,7 @@ Response<> ServiceImpl::GtpPlay(std::optional<int> id, Move move) {
 Response<Loc> ServiceImpl::GtpGenMove(std::optional<int> id, Color color) {
   const auto mcts_move = GenMoveCommon(color);
   if (V(current_root()) < -0.96f && game_->num_moves() > 50) {
+    game_in_progress_ = false;  // resigning
     return MakeResponse(id, kNoopLoc);
   }
 
@@ -359,6 +363,7 @@ game::Loc ServiceImpl::GtpCgosGenmoveAnalyze(game::Color color,
                                              std::string* analysis_json) {
   const auto mcts_move = GenMoveCommon(color);
   if (V(current_root()) < -0.96f && game_->num_moves() > 50) {
+    game_in_progress_ = false;  // resigning
     return kNoopLoc;
   }
 
@@ -453,8 +458,29 @@ std::string ServiceImpl::BuildExplainComment() {
       visited_children.begin(), visited_children.end(),
       [](const ChildInfo& x, const ChildInfo& y) { return x.lcb > y.lcb; });
 
-  static constexpr int kNumTopMoves = 8;
+  static constexpr int kNumTopMoves = 10;
   int num_to_show = std::min((int)visited_children.size(), kNumTopMoves);
+  ss << "Root n=" << root->n << "\n";
+  if (!visited_children.empty()) {
+    // PV: the top-LCB move, then the most-visited child at each level.
+    static constexpr int kMaxPvDepth = 10;
+    ss << "PV:";
+    int a = visited_children[0].action;
+    const TreeNode* node = root;
+    for (int d = 0; d < kMaxPvDepth && a >= 0; ++d) {
+      ss << " " << GtpValueString(AsLoc(a));
+      node = node->children[a];
+      if (node == nullptr) break;
+      a = -1;
+      for (int b = 0; b < constants::kMaxMovesPerPosition; ++b) {
+        if (node->child_visits[b] > 0 &&
+            (a == -1 || node->child_visits[b] > node->child_visits[a])) {
+          a = b;
+        }
+      }
+    }
+    ss << "\n";
+  }
   ss << "Top Moves (by LCB):\n";
   ss << std::defaultfloat << std::setprecision(3);
   for (int i = 0; i < num_to_show; ++i) {
@@ -649,6 +675,10 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
                   << "  pre_search_best_lcb="
                   << time_metadata.pre_search_winrate
                   << "  root_n=" << (current_root() ? current_root()->n : -1)
+                  << "  root_stddev=" << time_metadata.root_stddev
+                  << "  stddev_ema=" << time_metadata.stddev_ema
+                  << "  usable_ms=" << time_metadata.usable_ms
+                  << "  clock_left_s=" << time_metadata.main_time_left_secs
                   << "\n";
       }
     }
@@ -669,6 +699,23 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
                 << "ms. Visits=" << res.num_visits << "\n";
     }
     move = res.move;
+    if (verbose_) {
+      // One grep-friendly line per move.
+      TreeNode* root = current_root();
+      const int a = move;
+      const bool has_child = a >= 0 && a < constants::kMaxMovesPerPosition &&
+                             root->child_visits[a] > 0;
+      std::cerr << std::defaultfloat << std::setprecision(4)
+                << "MOVE_SUMMARY ply=" << game_->num_moves() + 1
+                << " color=" << (color == BLACK ? "B" : "W")
+                << " move=" << GtpValueString(move) << " target_ms=" << time_ms
+                << " ms=" << res.time_ms << " visits=" << res.num_visits
+                << " root_n=" << root->n << " V=" << V(root) << " wr="
+                << (has_child ? (QOutcome(root, a) + 1.0f) / 2.0f : -1)
+                << " wr_lcb=" << (has_child ? OutcomeWinrateLcb(root, a) : -1)
+                << " clock_left_s=" << time_metadata.main_time_left_secs
+                << "\n";
+    }
   } else {
     CHECK(cfg_.use_puct || cfg_.sampling_num_moves == 0) << "Not Supported";
     GumbelResult res = [&]() {
@@ -719,6 +766,7 @@ void ServiceImpl::MakeMove(Color color, Loc loc) {
                         " moves=" + std::to_string(game_->num_moves()));
   game_->PlayMove(loc, color);
   current_color_ = game::OppositeColor(color);
+  game_in_progress_ = true;
 
   TreeNode* next_root = current_root_->children[loc];
   if (!next_root) {
@@ -752,6 +800,7 @@ void ServiceImpl::ClearBoard() {
   current_root_ = node_table_->GetOrCreate(game_->board().hash(), BLACK, false);
   node_table_->Reap(current_root_);
   if (bias_cache_) bias_cache_->PruneUnused();
+  game_in_progress_ = false;
 }
 
 void ServiceImpl::PausePondering() {
@@ -763,6 +812,10 @@ void ServiceImpl::EnsurePondering() {
   // Nothing to think about once the game is finished. Search::Run() would
   // return immediately anyway; this just avoids spawning a thread per command.
   if (game_->IsGameOver()) return;
+  // Do not ponder between games (after startup, clear_board, or our resign).
+  // GTP has no game-over signal, so an opponent resignation is not seen here;
+  // that ponder stays bounded by the tree-size limit.
+  if (!game_in_progress_) return;
   StartPondering();
 }
 
