@@ -680,6 +680,20 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
                   << "  low_root_bonus=" << time_metadata.low_root_bonus
                   << "  clock_left_s=" << time_metadata.main_time_left_secs
                   << "\n";
+        const auto loc_str = [](int a) -> std::string {
+          if (a < 0) return "-";
+          return GtpValueString(AsLoc(a));
+        };
+        std::cerr << "OBV z=" << time_metadata.obv_z
+                  << "  root_n_ema=" << time_metadata.root_n_ema
+                  << "  best=" << loc_str(time_metadata.obv_a1)
+                  << " q=" << time_metadata.obv_q1
+                  << " lcb=" << time_metadata.obv_lcb1
+                  << " n=" << time_metadata.obv_n1
+                  << "  second=" << loc_str(time_metadata.obv_a2)
+                  << " q=" << time_metadata.obv_q2
+                  << " sd=" << time_metadata.obv_sd2
+                  << " n=" << time_metadata.obv_n2 << "\n";
       }
     }
     Search::Params search_params = search_params_;

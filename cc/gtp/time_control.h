@@ -37,6 +37,13 @@ class TimeControl {
     float stddev_ema;      // after this move's update.
     float low_root_bonus;  // 1.5 at root n = 0 -> 1.0 at n >= 400.
     int main_time_left_secs;
+    // Obvious-move inputs (logging; filled by builds that compute them).
+    // z = (Lcb(best) - Q(second)) / sqrt(QVar(second)), best/second by Q.
+    float obv_z = 0;
+    float root_n_ema = 0;  // EMA of pre-search root n, before this move.
+    int obv_a1 = -1, obv_a2 = -1;
+    float obv_q1 = 0, obv_lcb1 = 0, obv_q2 = 0, obv_sd2 = 0;
+    int obv_n1 = 0, obv_n2 = 0;
   };
   TimeControl(uint32_t flags) : flags_(flags) {}
 
@@ -65,6 +72,7 @@ class TimeControl {
     stddev_ema_ = 0;
     stddev_samples_ = 0;
     moves_this_game_ = 0;
+    root_n_ema_ = 0;
   }
 
   void Enable(bool enable) { enabled_ = enable; }
@@ -89,6 +97,7 @@ class TimeControl {
   float stddev_ema_ = 0;
   int stddev_samples_ = 0;   // qualifying roots seen this game
   int moves_this_game_ = 0;  // ComputeMoveTimeMs calls (main time) this game
+  float root_n_ema_ = 0;     // EMA of pre-search root n (v3r-om obvious move)
 };
 
 }  // namespace gtp
