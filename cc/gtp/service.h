@@ -80,10 +80,13 @@ class Service {
   // NN thread ids [task_offset, task_offset + cfg.num_threads_per_game). In
   // the serial (kAuto) case it registers its thread id only while searching,
   // so idle games never hold up a batch. `nn_interface` must outlive the
-  // service.
+  // service. `log_tag` (e.g. "BatchGame 12") is printed on its own line
+  // before each verbose post-move block, so log readers can tell the
+  // interleaved games apart.
   static std::unique_ptr<Service> CreateSharedService(
       nn::NNInterface* nn_interface, int task_offset,
-      eval::PlayerSearchConfig cfg, bool verbose = false);
+      eval::PlayerSearchConfig cfg, bool verbose = false,
+      std::string log_tag = "");
 
  protected:
   Service() = default;

@@ -89,7 +89,8 @@ class ServiceImpl final : public Service {
   // `task_offset`.
   ServiceImpl(std::unique_ptr<NNInterface> owned_nn_interface,
               NNInterface* nn_interface, int task_offset,
-              eval::PlayerSearchConfig cfg, bool verbose);
+              eval::PlayerSearchConfig cfg, bool verbose,
+              std::string log_tag = "");
 
   Response<int> GtpProtocolVersion(std::optional<int> id) override;
   Response<std::string> GtpName(std::optional<int> id) override;
@@ -176,6 +177,7 @@ class ServiceImpl final : public Service {
   const eval::PlayerSearchConfig cfg_;
   TimeControl time_control_;
   bool verbose_;
+  const std::string log_tag_;
   float komi_ = 7.5f;
   Probability probability_;
   std::unique_ptr<NNInterface> owned_nn_interface_;
@@ -198,10 +200,12 @@ class ServiceImpl final : public Service {
 
 ServiceImpl::ServiceImpl(std::unique_ptr<NNInterface> owned_nn_interface,
                          NNInterface* nn_interface, int task_offset,
-                         eval::PlayerSearchConfig cfg, bool verbose)
+                         eval::PlayerSearchConfig cfg, bool verbose,
+                         std::string log_tag)
     : cfg_(cfg),
       time_control_(cfg.time_control_flags),
       verbose_(verbose),
+      log_tag_(std::move(log_tag)),
       owned_nn_interface_(std::move(owned_nn_interface)),
       nn_interface_(nn_interface),
       task_offset_(task_offset),
@@ -292,8 +296,12 @@ Response<Loc> ServiceImpl::GtpGenMove(std::optional<int> id, Color color) {
 
   MakeMove(color, mcts_move);
   if (verbose_) {
-    std::cerr << last_explain_comment_ << "\n"
-              << GtpBoardString(game_->board()) << "\n";
+    // One write, so in batch mode another game's output cannot land between
+    // the tag, the explain block and the board.
+    std::cerr << ((log_tag_.empty() ? "" : log_tag_ + "\n") +
+                  last_explain_comment_ + "\n" +
+                  GtpBoardString(game_->board()) + "\n")
+              << std::flush;
   }
 
   return MakeResponse(id, mcts_move);
@@ -402,8 +410,12 @@ game::Loc ServiceImpl::GtpCgosGenmoveAnalyze(game::Color color,
 
   MakeMove(color, mcts_move);
   if (verbose_) {
-    std::cerr << last_explain_comment_ << "\n"
-              << GtpBoardString(game_->board()) << "\n";
+    // One write, so in batch mode another game's output cannot land between
+    // the tag, the explain block and the board.
+    std::cerr << ((log_tag_.empty() ? "" : log_tag_ + "\n") +
+                  last_explain_comment_ + "\n" +
+                  GtpBoardString(game_->board()) + "\n")
+              << std::flush;
   }
   return mcts_move;
 }
@@ -903,9 +915,9 @@ void ServiceImpl::Ponder(std::stop_token token) {
 
 /* static */ std::unique_ptr<Service> Service::CreateSharedService(
     nn::NNInterface* nn_interface, int task_offset,
-    eval::PlayerSearchConfig cfg, bool verbose) {
+    eval::PlayerSearchConfig cfg, bool verbose, std::string log_tag) {
   return std::make_unique<ServiceImpl>(nullptr, nn_interface, task_offset, cfg,
-                                       verbose);
+                                       verbose, std::move(log_tag));
 }
 
 }  // namespace gtp

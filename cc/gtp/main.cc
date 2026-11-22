@@ -229,10 +229,10 @@ int BatchLoop(const std::string& model_path, eval::PlayerSearchConfig cfg,
       g.slot = free_slots.back();
       free_slots.pop_back();
       g.client = std::make_unique<gtp::Client>();
-      g.client->Start(
-          gtp::Service::CreateSharedService(
-              nn_interface.get(), g.slot * threads_per_game, cfg, verbose),
-          sink);
+      g.client->Start(gtp::Service::CreateSharedService(
+                          nn_interface.get(), g.slot * threads_per_game, cfg,
+                          verbose, "BatchGame " + id_str),
+                      sink);
       it = games.emplace(id, std::move(g)).first;
     }
     gtp::InputLoopStatus status =
