@@ -149,7 +149,9 @@ inline float QOutcomeVar(const TreeNode* node, int action) {
 }
 
 inline float Score(const TreeNode* node) {
-  return node == nullptr ? 0 : node->score;
+  // 0.0f, not 0: RelaxedAtomic's ctor is explicit, so `? 0 :` makes the
+  // conditional int and truncates the score.
+  return node == nullptr ? 0.0f : node->score;
 }
 
 inline float MaxN(const TreeNode* node) {

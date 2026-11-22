@@ -266,7 +266,7 @@ Response<Loc> ServiceImpl::GtpGenMove(std::optional<int> id, Color color) {
   }
 
   MakeMove(color, mcts_move);
-  if (verbose_) {
+  if (verbose_ && cfg_.log_board) {
     std::cerr << last_explain_comment_ << "\n"
               << GtpBoardString(game_->board()) << "\n";
   }
@@ -367,17 +367,72 @@ game::Loc ServiceImpl::GtpCgosGenmoveAnalyze(game::Color color,
     return kNoopLoc;
   }
 
+  // Runs on the command thread: pondering is paused for the whole command and
+  // GenMoveCommon's search workers have been joined, so nothing else touches
+  // the tree or the NN interface here.
   TreeNode* root = current_root();
   float winrate = (VOutcome(root) + 1.0f) / 2.0f;
   float score = Score(root);
 
+  // Top 10 root children by visits; values are from the mover's view.
+  static constexpr int kNumMoves = 10;
+  static constexpr int kMaxPvDepth = 10;
+  std::vector<int> actions;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    if (root->child_visits[a] > 0) actions.push_back(a);
+  }
+  std::sort(actions.begin(), actions.end(), [root](int x, int y) {
+    return root->child_visits[x] > root->child_visits[y];
+  });
+  if (actions.size() > kNumMoves) actions.resize(kNumMoves);
+
   std::stringstream ss;
   ss << std::fixed << std::setprecision(4);
-  ss << "{\"winrate\":" << winrate << ",\"score\":" << score << "}";
+  ss << "{\"winrate\":" << winrate << ",\"score\":" << score
+     << ",\"visits\":" << root->n << ",\"moves\":[";
+  for (size_t i = 0; i < actions.size(); ++i) {
+    const int a = actions[i];
+    // PV: this move, then the most-visited child at each level.
+    std::string pv = GtpValueString(AsLoc(a));
+    const TreeNode* node = root->children[a];
+    for (int d = 1; d < kMaxPvDepth && node != nullptr; ++d) {
+      int best = -1;
+      for (int b = 0; b < constants::kMaxMovesPerPosition; ++b) {
+        if (node->child_visits[b] > 0 &&
+            (best == -1 || node->child_visits[b] > node->child_visits[best])) {
+          best = b;
+        }
+      }
+      if (best == -1) break;
+      pv += " " + GtpValueString(AsLoc(best));
+      node = node->children[best];
+    }
+    ss << (i ? "," : "") << "{\"move\":\"" << GtpValueString(AsLoc(a))
+       << "\",\"visits\":" << root->child_visits[a]
+       << ",\"winrate\":" << (QOutcome(root, a) + 1.0f) / 2.0f
+       << ",\"score\":" << ChildScore(root, a)
+       << ",\"prior\":" << root->move_probs[a] << ",\"pv\":\"" << pv << "\"}";
+  }
+  ss << "]";
+
+  if (cfg_.cgos_ownership) {
+    // Network ownership at the root, mover's view (positive = mover owns),
+    // row-major from A19. CGOS encoding: CHARS[round((o + 1) / 2 * 62)].
+    static constexpr char kChars[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const auto own = nn_interface_->LoadAndGetOwnership(0, *game_, color);
+    std::string enc(own.size(), 'A');
+    for (size_t i = 0; i < own.size(); ++i) {
+      const float x = std::clamp((own[i] + 1.0f) / 2.0f, 0.0f, 1.0f);
+      enc[i] = kChars[static_cast<int>(std::lround(x * 62))];
+    }
+    ss << ",\"ownership\":\"" << enc << "\"";
+  }
+  ss << "}";
   *analysis_json = ss.str();
 
   MakeMove(color, mcts_move);
-  if (verbose_) {
+  if (verbose_ && cfg_.log_board) {
     std::cerr << last_explain_comment_ << "\n"
               << GtpBoardString(game_->board()) << "\n";
   }
@@ -680,20 +735,6 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
                   << "  low_root_bonus=" << time_metadata.low_root_bonus
                   << "  clock_left_s=" << time_metadata.main_time_left_secs
                   << "\n";
-        const auto loc_str = [](int a) -> std::string {
-          if (a < 0) return "-";
-          return GtpValueString(AsLoc(a));
-        };
-        std::cerr << "OBV z=" << time_metadata.obv_z
-                  << "  root_n_ema=" << time_metadata.root_n_ema
-                  << "  best=" << loc_str(time_metadata.obv_a1)
-                  << " q=" << time_metadata.obv_q1
-                  << " lcb=" << time_metadata.obv_lcb1
-                  << " n=" << time_metadata.obv_n1
-                  << "  second=" << loc_str(time_metadata.obv_a2)
-                  << " q=" << time_metadata.obv_q2
-                  << " sd=" << time_metadata.obv_sd2
-                  << " n=" << time_metadata.obv_n2 << "\n";
       }
     }
     Search::Params search_params = search_params_;
@@ -877,11 +918,6 @@ void ServiceImpl::Ponder(std::stop_token token) {
   params.total_visit_budget =
       std::max(0, kPonderMaxRootVisits - current_root()->n);
   params.total_visit_time_ms = -1;
-  if (verbose_) {
-    std::cerr << "Ponder tree limit " << kPonderMaxRootVisits
-              << " root visits (sizeof(TreeNode)=" << sizeof(TreeNode)
-              << "), budget " << params.total_visit_budget << ".\n";
-  }
   {
     ponder_trace::SearchScope scope(
         "PONDER",

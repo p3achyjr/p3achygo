@@ -369,7 +369,13 @@ void TrtEngineImpl::GetBatch(int batch_id, NNInferResult& result) {
 
 void TrtEngineImpl::GetOwnership(
     int batch_id, std::array<float, constants::kNumBoardLocs>& own) {
-  LOG(ERROR) << "Ownership Not Supported on TRT.";
+  // "04:own" is (N, 19, 19) tanh, copied to host in RunInference.
+  float* own_buf =
+      static_cast<float*>(buf_map_[nn::trt::output::kOwnershipName].host_buf);
+  float* own_row = own_buf + constants::kNumBoardLocs * batch_id;
+  for (int i = 0; i < constants::kNumBoardLocs; ++i) {
+    own[i] = own_row[i];
+  }
 }
 
 }  // namespace
