@@ -163,6 +163,10 @@ class ServiceImpl final : public Service {
   Color current_color_;
   Search::Params search_params_;
   std::string last_explain_comment_;
+  // Pondering stops at this many root visits. Each visit adds at most one
+  // node and the tree outside current_root() is reaped on every move, so root
+  // visits bound the tree's node count.
+  int ponder_max_root_visits_;
 
   std::atomic<bool> analysis_running_;
   std::thread analysis_thread_;
@@ -172,6 +176,43 @@ class ServiceImpl final : public Service {
   // resign. Only read/written on the command thread. Gates pondering.
   bool game_in_progress_ = false;
 };
+
+// Root-visit cap for pondering. ponder_max_tree_mb > 0 sets the tree budget
+// directly; 0 sizes it so that tree + NN cache (at its maximum) take at most
+// min(3/4 of physical RAM, RAM - 4 GiB).
+int PonderMaxRootVisits(const eval::PlayerSearchConfig& cfg) {
+  static constexpr int64_t kMiB = int64_t{1} << 20;
+  static constexpr int64_t kGiB = int64_t{1} << 30;
+  int64_t tree_bytes;
+  if (cfg.ponder_max_tree_mb > 0) {
+    tree_bytes = int64_t{cfg.ponder_max_tree_mb} * kMiB;
+  } else {
+    const int64_t ram = static_cast<int64_t>(sysconf(_SC_PHYS_PAGES)) *
+                        static_cast<int64_t>(sysconf(_SC_PAGE_SIZE));
+    // Mirrors the cache sizes chosen in NewGtpService.
+    const int64_t cache_entries =
+        cfg.round_free && cfg.num_threads_per_game > 1
+            ? (cfg.nn_cache_log2_size == 0
+                   ? 0
+                   : int64_t{1} << cfg.nn_cache_log2_size)
+            : 16384;
+    // Entry payload + shared_ptr control block + slot.
+    const int64_t cache_bytes =
+        cache_entries *
+        static_cast<int64_t>(sizeof(std::pair<nn::NNKey, nn::NNInferResult>) +
+                             2 * sizeof(std::shared_ptr<int>));
+    tree_bytes = std::max<int64_t>(
+        0, std::min(ram / 4 * 3, ram - 4 * kGiB) - cache_bytes);
+    LOG(INFO) << "Ponder tree budget (auto): RAM " << ram / kMiB
+              << " MiB, NN cache max " << cache_bytes / kMiB << " MiB";
+  }
+  const int64_t visits = std::min<int64_t>(std::numeric_limits<int>::max(),
+                                           tree_bytes / sizeof(TreeNode));
+  LOG(INFO) << "Ponder tree budget: " << tree_bytes / kMiB
+            << " MiB = " << visits << " root visits (" << sizeof(TreeNode)
+            << " B per node)";
+  return static_cast<int>(visits);
+}
 
 ServiceImpl::ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
                          eval::PlayerSearchConfig cfg, bool verbose)
@@ -186,6 +227,7 @@ ServiceImpl::ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
               : std::unique_ptr<NodeTable>(std::make_unique<MctsNodeTable>())),
       current_color_(BLACK),
       search_params_(MakeSearchParams(cfg)),
+      ponder_max_root_visits_(PonderMaxRootVisits(cfg)),
       analysis_running_(false) {
   if (cfg_.use_bias_cache) {
     bias_cache_.emplace(cfg_.bias_cache_alpha, cfg_.bias_cache_lambda);
@@ -905,18 +947,9 @@ void ServiceImpl::Ponder(std::stop_token token) {
     std::cerr << "Beginning Ponder...\n";
   }
 
-  // Tree size limit: min(4 GiB, half of physical RAM) worth of TreeNodes. Each
-  // visit adds at most one node and the tree outside current_root() is reaped
-  // on every move, so root visits bound the tree's node count.
-  static const int kPonderMaxRootVisits = [] {
-    const int64_t ram = static_cast<int64_t>(sysconf(_SC_PHYS_PAGES)) *
-                        static_cast<int64_t>(sysconf(_SC_PAGE_SIZE));
-    const int64_t bytes = std::min<int64_t>(int64_t{4} << 30, ram / 2);
-    return static_cast<int>(bytes / static_cast<int64_t>(sizeof(TreeNode)));
-  }();
   Search::Params params = search_params_;
   params.total_visit_budget =
-      std::max(0, kPonderMaxRootVisits - current_root()->n);
+      std::max(0, ponder_max_root_visits_ - current_root()->n);
   params.total_visit_time_ms = -1;
   {
     ponder_trace::SearchScope scope(

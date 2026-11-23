@@ -137,6 +137,11 @@ struct PlayerSearchConfig {
   // GTP round-free search: the shared NN cache has 2^nn_cache_log2_size slots
   // (0 disables it).
   int nn_cache_log2_size = 18;
+
+  // GTP only: pondering stops once the tree holds this many MB of nodes.
+  // 0 = auto: min(3/4 of physical RAM, RAM - 4 GiB) minus the NN cache's
+  // maximum size.
+  int ponder_max_tree_mb = 0;
 };
 
 namespace internal {
@@ -226,6 +231,8 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.nn_batch_size = std::stoi(val);
     else if (key == "nn_cache_log2_size")
       cfg.nn_cache_log2_size = std::stoi(val);
+    else if (key == "ponder_max_tree_mb")
+      cfg.ponder_max_tree_mb = std::stoi(val);
     else if (key == "use_bias_cache")
       cfg.use_bias_cache = internal::ParseBool(val);
     else if (key == "bias_cache_alpha")
@@ -377,6 +384,7 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
   ROW(round_free, b);
   ROW(nn_batch_size, i_);
   ROW(nn_cache_log2_size, i_);
+  ROW(ponder_max_tree_mb, i_);
 #undef ROW
 
   // Compute column widths.
