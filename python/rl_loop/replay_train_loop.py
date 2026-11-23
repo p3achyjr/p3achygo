@@ -20,6 +20,7 @@ index order. This loop trains one epoch on each, in order, and differs from
 from __future__ import annotations
 
 import json
+import math
 import multiprocessing
 import sys
 import time
@@ -73,6 +74,14 @@ flags.DEFINE_float(
     "lr_wsd_decay_frac", 0.2, "WSD: fraction of total samples spent decaying."
 )
 flags.DEFINE_enum("lr_wsd_shape", "1-sqrt", ["1-sqrt", "linear"], "WSD cooldown shape.")
+flags.DEFINE_integer(
+    "lr_ramp_start_golden",
+    -1,
+    "If >= 0: from this golden index on, cosine-ramp the LR from the schedule's value "
+    "there to --lr_ramp_to over --lr_ramp_goldens goldens (per batch), then hold it.",
+)
+flags.DEFINE_integer("lr_ramp_goldens", 2, "Goldens the cosine ramp spans.")
+flags.DEFINE_float("lr_ramp_to", 5e-5, "LR at the end of the ramp (held after).")
 
 POLL_INTERVAL_S = 30
 
@@ -132,13 +141,28 @@ class _SampleKeyedLR:
     """LR callable for the optimizer (called with its own step counter).
     `batch_num0` is the run's batch counter when optimizer step `opt_step0` runs."""
 
-    def __init__(self, base_lr, batch_size, batch_num0, opt_step0, gen_lr=None):
+    def __init__(
+        self, base_lr, batch_size, batch_num0, opt_step0, gen_lr=None, ramp=None
+    ):
         self.base_lr, self.batch_size = base_lr, batch_size
         self.batch_num0, self.opt_step0 = batch_num0, opt_step0
         self.gen_lr = gen_lr  # if set: constant stage LR (x warmup) for this golden
+        # if set: (goldens since ramp start, batches in this golden)
+        self.ramp = ramp
 
     def __call__(self, opt_step=None):
         step = self.opt_step0 if opt_step is None else opt_step
+        lr = self._schedule(step)
+        if self.ramp is None:
+            return lr
+        k, num_batches = self.ramp
+        t = min(
+            1.0,
+            (k + (step - self.opt_step0) / max(num_batches, 1)) / FLAGS.lr_ramp_goldens,
+        )
+        return lr + (FLAGS.lr_ramp_to - lr) * 0.5 * (1.0 - math.cos(math.pi * t))
+
+    def _schedule(self, step):
         batch = self.batch_num0 + (step - self.opt_step0)
         if self.gen_lr is not None:
             return self.gen_lr * _warmup(batch * self.batch_size)
@@ -153,6 +177,12 @@ class _SampleKeyedLR:
         return katago_lr(batch * self.batch_size, self.base_lr)
 
     def info(self) -> str:
+        if self.ramp is not None:
+            k, n = self.ramp
+            return (
+                f"cosine ramp golden {k}/{FLAGS.lr_ramp_goldens} ({n} batches) from "
+                f"{self._schedule(self.opt_step0):.3g} to {FLAGS.lr_ramp_to:.3g}, now {self():.3g}"
+            )
         if self.gen_lr is not None:
             return f"gen-keyed {self.gen_lr:.3g} x warmup, now {self():.3g}"
         if FLAGS.lr_wsd_total_samples > 0:
@@ -236,6 +266,11 @@ def _train_loop():
             batch_num,
             getattr(inner, "_global_step", 0),
             _gen_lr(manifest["end_gen"]) if FLAGS.lr_gen_schedule else None,
+            (
+                (state["next_golden"] - FLAGS.lr_ramp_start_golden, num_batches)
+                if 0 <= FLAGS.lr_ramp_start_golden <= state["next_golden"]
+                else None
+            ),
         )
         optimizer = backend_shim.make_optimizer(
             live_model, config, lr_schedule, True, loaded_state=optimizer
