@@ -162,7 +162,7 @@ inline float QOutcomeVar(const TreeNode* node, int action) {
 }
 
 inline float Score(const TreeNode* node) {
-  return node == nullptr ? 0 : node->score;
+  return node == nullptr ? 0.0f : node->score;
 }
 
 inline float MaxN(const TreeNode* node) {
