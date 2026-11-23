@@ -48,3 +48,13 @@ if(BUILD_BINARIES)
     )
     set_target_properties(eval_main PROPERTIES OUTPUT_NAME "eval")
 endif()
+
+# Tests
+if(BUILD_TESTS)
+    add_executable(eval_player_config_test __tests__/player_config_test.cc)
+    target_link_libraries(eval_player_config_test PRIVATE
+        player_config
+        core_doctest
+    )
+    add_test(NAME eval_player_config_test COMMAND eval_player_config_test)
+endif()

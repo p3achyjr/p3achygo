@@ -26,6 +26,16 @@ target_link_libraries(gtp PUBLIC
     absl::status
 )
 
+# Tests
+if(BUILD_TESTS)
+    add_executable(gtp_time_control_test __tests__/time_control_test.cc)
+    target_link_libraries(gtp_time_control_test PRIVATE
+        gtp
+        core_doctest
+    )
+    add_test(NAME gtp_time_control_test COMMAND gtp_time_control_test)
+endif()
+
 # GTP binary
 option(BUILD_BINARIES "Build binary executables" ON)
 if(BUILD_BINARIES)

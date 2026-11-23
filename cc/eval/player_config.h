@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -172,6 +173,15 @@ inline bool ParseBool(const std::string& val) {
  * Unknown keys are silently ignored.
  * The `name` field is never set from the file; callers set it after parsing.
  */
+// New playouts for a fixed-visit move: cfg.n, or with n_counts_reused_visits
+// enough to bring a root with `root_n` visits to cfg.n (at least 1, so the
+// search always produces fresh visit counts). An unevaluated root (n = 0) gains
+// 1 visit from its own evaluation, so it counts as 1.
+inline int NewPlayouts(const PlayerSearchConfig& cfg, const int root_n) {
+  if (!cfg.n_counts_reused_visits) return cfg.n;
+  return std::max(1, cfg.n - std::max(root_n, 1));
+}
+
 inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
   std::ifstream f(path);
   if (!f.is_open()) {

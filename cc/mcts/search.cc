@@ -23,10 +23,6 @@
 
 namespace mcts {
 namespace {
-constexpr float kLcbGatedOut = -1e7f;
-}  // namespace
-
-namespace {
 using namespace ::game;
 using namespace ::nn;
 
@@ -898,30 +894,10 @@ Search::Result Search::Run(core::Probability& probability, Game& game,
                            Color color_to_move, Params params) {
   // TODO: centralize.
   const auto best_lcb_move = [&](const TreeNode* node) {
-    std::array<std::pair<int, float>, constants::kMaxMovesPerPosition>
-        move_lcbs;
-    float max_n = 0.0f;
-    for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
-      max_n = std::max(max_n, NAction(node, a));
-    }
-    const float min_n = params.puct_params.lcb_min_visit_frac * max_n;
-    for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
-      const float n_a = NAction(node, a);
-      move_lcbs[a] = {a, n_a >= min_n ? Lcb(node, a) : kLcbGatedOut + n_a};
-    }
-
-    std::sort(
-        move_lcbs.begin(), move_lcbs.end(),
-        [](const auto& p0, const auto& p1) { return p1.second < p0.second; });
-
-    for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
-      auto [a, _] = move_lcbs[i];
-      if (game.IsValidMove(a, color_to_move)) {
-        return game::AsLoc(a);
-      }
-    }
-
-    return game::kPassLoc;
+    const int a = BestLcbAction(
+        node, params.puct_params.lcb_min_visit_frac,
+        [&](int a) { return game.IsValidMove(a, color_to_move); });
+    return a < 0 ? game::kPassLoc : game::AsLoc(a);
   };
 
   const auto search_begin = std::chrono::steady_clock::now();
