@@ -133,6 +133,32 @@ def enable_batch_renorm(
     return n
 
 
+@torch.no_grad()
+def set_bn_eps(module: nn.Module, eps: float, opt_state=None) -> int:
+    """Set eps of every BatchNorm2d under `module` to `eps` without changing
+    the eval function: gamma *= s, s = sqrt((var + eps) / (var + eps_old)).
+    The training-time normalized input scales by 1/s, so the gamma gradient
+    scales by 1/s; `opt_state` (optimizer.state, keyed by param) gets its
+    gamma moments rescaled to match (adam path m /= s, v /= s^2; muon buf /= s).
+    Returns the number of BNs whose eps changed."""
+    n = 0
+    for m in module.modules():
+        if isinstance(m, nn.BatchNorm2d) and m.eps != eps:
+            s = ((m.running_var + eps) / (m.running_var + m.eps)).sqrt()
+            m.weight.mul_(s)
+            st = opt_state.get(m.weight) if opt_state is not None else None
+            if st:
+                if "m" in st:
+                    st["m"].div_(s)
+                if "v" in st:
+                    st["v"].div_(s * s)
+                if "buf" in st:
+                    st["buf"].div_(s)
+            m.eps = eps
+            n += 1
+    return n
+
+
 # ---------------------------------------------------------------------------
 # ConvBlock (abstract)
 # ---------------------------------------------------------------------------

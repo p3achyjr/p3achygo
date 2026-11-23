@@ -295,7 +295,16 @@ def _model_from_config(config: Dict) -> P3achyGoModel:
         c["num_value_head_channels"] = c.get("c_val", 64)
     c.pop("name", None)  # P3achyGoModel doesn't take 'name' as kwarg
     c.pop("is_transformer", None)
-    return P3achyGoModel(**c)
+    trunk_bn_eps = c.pop("trunk_bn_eps", None)
+    model = P3achyGoModel(**c)
+    if trunk_bn_eps is not None:
+        # Trunk BN eps saved by train_one_gen --trunk_bn_eps (gammas already
+        # rescaled in the checkpoint); round-trips through config_dict().
+        for m in model.blocks.modules():
+            if isinstance(m, torch.nn.BatchNorm2d):
+                m.eps = float(trunk_bn_eps)
+        model._config["trunk_bn_eps"] = float(trunk_bn_eps)
+    return model
 
 
 # Weight migration helpers (`migrate_from_keras` and friends) used to live

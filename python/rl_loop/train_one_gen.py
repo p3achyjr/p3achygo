@@ -5,6 +5,7 @@ Trains a model for one generation and writes it back to disk.
 from __future__ import annotations
 
 import sys
+import torch
 import gcs_utils as gcs
 from dataset import ChunkDataset
 from backend_shim import (
@@ -51,6 +52,12 @@ flags.DEFINE_float("brn_rmax", 3.0, "Batch Renorm r clip.")
 flags.DEFINE_float("brn_dmax", 5.0, "Batch Renorm d clip.")
 flags.DEFINE_integer(
     "brn_ramp_batches", 0, "Ramp rmax/dmax from 1/0 over this many batches."
+)
+flags.DEFINE_float(
+    "trunk_bn_eps",
+    0.0,
+    "If > 0, set every trunk BN eps to this value (function-preserving gamma "
+    "and optimizer-moment rescale; saved in the checkpoint config). 0 = keep.",
 )
 
 
@@ -117,6 +124,32 @@ def main(_):
         )
     # Apply backend-specific training-time transforms (no-op on TF).
     live_model = compile_for_training(live_model)
+    if FLAGS.trunk_bn_eps > 0 and any(
+        m.eps != FLAGS.trunk_bn_eps
+        for m in live_model.blocks.modules()
+        if isinstance(m, torch.nn.BatchNorm2d)
+    ):
+        from backend_torch.model_layers_common import set_bn_eps
+        from backend_shim import make_optimizer
+
+        # Build the optimizer now (train_one_gen accepts the object) so the
+        # gamma moments can be rescaled together with gamma.
+        optimizer = make_optimizer(
+            live_model,
+            config,
+            ConstantLRSchedule(rl_loop.train.get_lr(config, FLAGS.gen)),
+            is_gpu,
+            loaded_state=optimizer,
+        )
+        inner = getattr(optimizer, "inner_optimizer", optimizer)
+        n_live = set_bn_eps(live_model.blocks, FLAGS.trunk_bn_eps, inner.state)
+        n_swa = set_bn_eps(swa_model.blocks, FLAGS.trunk_bn_eps)
+        live_model._config["trunk_bn_eps"] = FLAGS.trunk_bn_eps
+        swa_model._config["trunk_bn_eps"] = FLAGS.trunk_bn_eps
+        logging.info(
+            f"Trunk BN eps -> {FLAGS.trunk_bn_eps}: {n_live} live / {n_swa} SWA BNs "
+            "(gamma + optimizer moments rescaled)"
+        )
     logging.info(f"Using Train Dataset: {FLAGS.chunk_path}")
     logging.info(f"Using Val Dataset: {FLAGS.val_ds_path}")
     logging.info(f"Using Model Checkpoint: {live_model_path}")
