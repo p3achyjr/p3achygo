@@ -38,6 +38,11 @@ flags.DEFINE_string("work_dir", "", "Local dir; uses <work_dir>/chunks and /gold
 flags.DEFINE_integer("start_gen", 200, "Window end of step 0.")
 flags.DEFINE_integer("gens_per_step", 5, "Generations the window end moves per step.")
 flags.DEFINE_float("reuse", 2.0, "Training samples per new data row.")
+flags.DEFINE_integer(
+    "max_end_gen",
+    -1,
+    "Stop (write DONE) before any step whose window end exceeds this; -1 = off.",
+)
 flags.DEFINE_integer("initial_samples", 1_000_000, "Samples for step 0.")
 flags.DEFINE_integer(
     "max_golden_rows", 2_000_000, "Rows per golden (shuffler cap 2.048M)."
@@ -114,6 +119,12 @@ def main(_):
     while True:
         t = state["step"]
         end_gen = FLAGS.start_gen + t * FLAGS.gens_per_step
+        if FLAGS.max_end_gen >= 0 and end_gen > FLAGS.max_end_gen:
+            logging.info(
+                f"Window end {end_gen} > --max_end_gen {FLAGS.max_end_gen}; done."
+            )
+            (golden_dir / "DONE").touch()
+            return
         # The newest generation at the source may still be filling.
         if end_gen > max(c[0] for c in chunks) - 1:
             chunks = list_chunks()
