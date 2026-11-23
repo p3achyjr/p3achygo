@@ -22,6 +22,11 @@ struct PlayerSearchConfig {
 
   // Gumbel
   int n = 128;
+  // GTP only: if true, `n` is the root's total visit count after the search
+  // (visits reused from the previous move's tree count, like KataGo's
+  // maxVisits); each move searches max(1, n - root visits) new playouts.
+  // If false, each move searches `n` new playouts (KataGo's maxPlayouts).
+  bool n_counts_reused_visits = false;
   int k = 8;
   float noise_scaling = 1.0f;
   bool early_stopping_for_gumbel = false;
@@ -188,6 +193,8 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
     // Gumbel
     if (key == "n")
       cfg.n = std::stoi(val);
+    else if (key == "n_counts_reused_visits")
+      cfg.n_counts_reused_visits = internal::ParseBool(val);
     else if (key == "k")
       cfg.k = std::stoi(val);
     else if (key == "noise_scaling")
@@ -378,6 +385,7 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
   ROW(nn_batch_size, i_);
   ROW(nn_cache_log2_size, i_);
   ROW(ponder_max_tree_mb, i_);
+  ROW(n_counts_reused_visits, b);
 #undef ROW
 
   // Compute column widths.

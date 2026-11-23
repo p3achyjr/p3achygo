@@ -178,6 +178,16 @@ class ServiceImpl final : public Service {
   bool game_in_progress_ = false;
 };
 
+// New playouts for a fixed-visit move: cfg.n, or with n_counts_reused_visits
+// enough to bring the root to cfg.n visits (at least 1, so the search always
+// produces fresh visit counts). An unevaluated root gains 1 visit from its own
+// evaluation, so it counts as 1.
+int NewPlayouts(const eval::PlayerSearchConfig& cfg, const TreeNode* root) {
+  if (!cfg.n_counts_reused_visits) return cfg.n;
+  const int root_n = root == nullptr ? 0 : static_cast<int>(root->n);
+  return std::max(1, cfg.n - std::max(root_n, 1));
+}
+
 // Physical RAM, or the container's cgroup memory limit if lower. sysconf
 // reports the host's RAM inside a container.
 int64_t AvailableRamBytes() {
@@ -794,7 +804,8 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
       }
     }
     Search::Params search_params = search_params_;
-    search_params.total_visit_budget = use_visit_budget ? cfg_.n : 1 << 20;
+    search_params.total_visit_budget =
+        use_visit_budget ? NewPlayouts(cfg_, current_root()) : 1 << 20;
     search_params.total_visit_time_ms = time_ms;
     Search::Result res;
     {
@@ -843,7 +854,7 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
 
       return gumbel_evaluator_->SearchRootPuct(
           probability_, *game_, node_table_.get(), current_root(), color,
-          cfg_.n, puct_params);
+          NewPlayouts(cfg_, current_root()), puct_params);
     }();
     move = res.mcts_move;
   }
