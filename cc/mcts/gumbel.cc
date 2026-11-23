@@ -21,6 +21,10 @@
 
 namespace mcts {
 namespace {
+constexpr float kLcbGatedOut = -1e7f;
+}  // namespace
+
+namespace {
 using ::game::Color;
 using ::game::Game;
 using ::game::Loc;
@@ -604,8 +608,14 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
   auto best_lcb_move = [&](const TreeNode* node) {
     std::array<std::pair<int, float>, constants::kMaxMovesPerPosition>
         move_lcbs;
+    float max_n = 0.0f;
     for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
-      move_lcbs[a] = {a, Lcb(node, a)};
+      max_n = std::max(max_n, NAction(node, a));
+    }
+    const float min_n = puct_params.lcb_min_visit_frac * max_n;
+    for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+      const float n_a = NAction(node, a);
+      move_lcbs[a] = {a, n_a >= min_n ? Lcb(node, a) : kLcbGatedOut + n_a};
     }
 
     std::sort(

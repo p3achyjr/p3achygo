@@ -46,6 +46,9 @@ struct PuctParams {
   float value_weight_exponent = 0.0f;
   // FPU reduction at the root. Set to 0 to disable root FPU (KataGo style).
   float root_fpu = kDefaultFPU;
+  // Root LCB move pick only considers moves with at least this fraction of
+  // the most-visited move's visits. 0 = no gate.
+  float lcb_min_visit_frac = 0.0f;
   // Distribution variance scaling knobs.
   bool enable_v_cat_var_scaling = false;
   int v_cat_var_scale_prior_visits = 10;
@@ -99,6 +102,10 @@ class PuctParams::Builder {
   }
   Builder& set_p_opt_weight(float v) {
     p_.p_opt_weight = v;
+    return *this;
+  }
+  Builder& set_lcb_min_visit_frac(float v) {
+    p_.lcb_min_visit_frac = v;
     return *this;
   }
   Builder& set_root_fpu(float v) {

@@ -64,6 +64,7 @@ struct PlayerSearchConfig {
   bool p_opt_geometric = false;
   float value_weight_exponent = 0.0f;  // KataGo valueWeightExponent; 0: off
   float root_fpu = 0.1f;
+  float lcb_min_visit_frac = 0.0f;
   int sampling_num_moves = 0;
   float sampling_temperature = 0.0f;
 
@@ -251,6 +252,8 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.p_opt_geometric = internal::ParseBool(val);
     else if (key == "value_weight_exponent")
       cfg.value_weight_exponent = std::stof(val);
+    else if (key == "lcb_min_visit_frac")
+      cfg.lcb_min_visit_frac = std::stof(val);
     else if (key == "sampling_temperature")
       cfg.sampling_temperature = std::stof(val);
     else if (key == "sampling_num_moves")
@@ -351,6 +354,7 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
   ROW(root_p_opt_weight, f);
   ROW(p_opt_geometric, b);
   ROW(value_weight_exponent, f);
+  ROW(lcb_min_visit_frac, f);
   ROW(sampling_temperature, f);
   ROW(sampling_num_moves, i_);
   ROW(num_threads_per_game, i_);
