@@ -195,51 +195,40 @@ inline double TDist3Cdf(const double t) {
 }
 
 // KataGo's value weighting (Search::downweightBadChildrenAndNormalizeWeight):
-// scales each visited child's weight by p^exponent, where p is the t3 CDF of
-// how far the child's utility (parent's perspective) sits from the weighted
-// mean of the children, in units of a visit-based stdev. Weights are then
-// rescaled to their original sum.
-inline void DownweightBadChildren(
-    const TreeNode* node, const float value_weight_exponent,
-    std::array<float, constants::kMaxMovesPerPosition>& child_weights) {
-  double total_weight = 0.0, weighted_utility = 0.0;
-  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
-    if (child_weights[a] == 0) continue;
-    total_weight += child_weights[a];
-    weighted_utility += child_weights[a] * -node->child(a)->v;
-  }
-  if (total_weight <= 0.0) return;
+// a child's weight is its edge visits scaled by p^exponent, where p is the t3
+// CDF of how far the child's utility (parent's perspective) sits from
+// `mean_util`, the visit-weighted mean child utility, in units of a visit-based
+// stdev. The caller rescales the weights to the visits' total.
+inline float ValueWeight(const float visits, const float child_util,
+                         const double mean_util, const float exponent) {
+  const double precision = 1.5 * std::sqrt(visits);
+  const double stdev = std::sqrt(0.00000001 + 1.0 / precision);
+  const double z = (child_util - mean_util) / stdev;
+  return visits * std::pow(TDist3Cdf(z) + 0.0001, exponent);
+}
 
-  const double simple_value = weighted_utility / total_weight;
-  double new_total_weight = 0.0;
+// Visit-weighted mean utility of the visited children, parent's perspective.
+inline double MeanChildUtility(const TreeNode* node) {
+  double total_visits = 0.0, weighted_utility = 0.0;
   for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
-    if (child_weights[a] == 0) continue;
-    const double precision = 1.5 * std::sqrt(child_weights[a]);
-    const double stdev = std::sqrt(0.00000001 + 1.0 / precision);
-    const double z = (-node->child(a)->v - simple_value) / stdev;
-    const double p = TDist3Cdf(z) + 0.0001;
-    child_weights[a] *= std::pow(p, value_weight_exponent);
-    new_total_weight += child_weights[a];
+    const TreeNode* child = node->child(a);
+    if (child == nullptr || node->child_visits[a] == 0) continue;
+    total_visits += node->child_visits[a];
+    weighted_utility += node->child_visits[a] * -child->v;
   }
-
-  const double factor = total_weight / new_total_weight;
-  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
-    child_weights[a] *= factor;
-  }
+  return total_visits > 0.0 ? weighted_utility / total_visits : 0.0;
 }
 
 inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f,
                                const float value_weight_exponent = 0.0f) {
-  // Weight of each child in the aggregate stats: its edge visits, value
-  // weighted (sum preserved) when value_weight_exponent > 0.
-  std::array<float, constants::kMaxMovesPerPosition> child_weights{};
-  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
-    if (node->child(a) == nullptr) continue;
-    child_weights[a] = node->child_visits[a];
-  }
-  if (value_weight_exponent > 0.0f) {
-    DownweightBadChildren(node, value_weight_exponent, child_weights);
-  }
+  // Children are weighted by their edge visits. With value_weight_exponent > 0
+  // they are weighted by ValueWeight() instead, rescaled to the same total.
+  // That needs the mean child utility first (one extra pass); the weights are
+  // computed in the accumulation loop and the rescale applied to the sums.
+  const bool value_weighted = value_weight_exponent > 0.0f;
+  const double mean_child_util = value_weighted ? MeanChildUtility(node) : 0.0;
+  std::array<float, constants::kMaxMovesPerPosition> weights;  // if weighted
+  float visit_sum = 0.0f, weight_sum = 0.0f;
 
   const float adj_init_util_est = node->init_util_est - obs_bias;
   float w = adj_init_util_est, w_outcome = node->init_outcome_est,
@@ -251,12 +240,30 @@ inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f,
     if (child == nullptr) {
       continue;
     }
-    w -= (child_weights[a] * child->v);
-    w_outcome -= (child_weights[a] * child->v_outcome);
-    total_score -= (child_weights[a] * child->score);
+    float n_a = node->child_visits[a];
+    if (value_weighted && n_a > 0) {
+      visit_sum += n_a;
+      n_a = ValueWeight(n_a, -child->v, mean_child_util, value_weight_exponent);
+      weight_sum += n_a;
+      weights[a] = n_a;
+    }
+    w -= (n_a * child->v);
+    w_outcome -= (n_a * child->v_outcome);
+    total_score -= (n_a * child->score);
     max_child_n = node->child_visits[a] > max_child_n ? node->child_visits[a]
                                                       : max_child_n;
-    w_err += child_weights[a] * child->v_err;
+    w_err += n_a * child->v_err;
+  }
+  // Rescale the children's part of each sum so the weights total the visits.
+  const float weight_scale =
+      value_weighted && weight_sum > 0.0f ? visit_sum / weight_sum : 1.0f;
+  if (weight_scale != 1.0f) {
+    w = adj_init_util_est + weight_scale * (w - adj_init_util_est);
+    w_outcome = node->init_outcome_est +
+                weight_scale * (w_outcome - node->init_outcome_est);
+    total_score = node->init_score_est +
+                  weight_scale * (total_score - node->init_score_est);
+    w_err = node->init_err_est + weight_scale * (w_err - node->init_err_est);
   }
   float v = w / node->n;
   float v_outcome = w_outcome / node->n;
@@ -280,7 +287,8 @@ inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f,
       continue;
     }
 
-    const float n_a = child_weights[a];
+    const float n_a =
+        value_weighted ? weights[a] * weight_scale : node->child_visits[a];
     const TreeNode* child = node->child(a);
     const float dv = -child->v - v;
     const float dv_outcome = -child->v_outcome - v_outcome;
