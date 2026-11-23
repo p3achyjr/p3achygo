@@ -72,6 +72,67 @@ def make_bn(num_features: int) -> nn.BatchNorm2d:
     return nn.BatchNorm2d(num_features, momentum=0.01, eps=1e-3)
 
 
+class BatchRenorm2d(nn.BatchNorm2d):
+    """Batch Renormalization (Ioffe 2017). Same parameters, buffers,
+    state_dict and eval forward as nn.BatchNorm2d; only the training forward
+    differs: y = gamma * ((x - mu_B) / sigma_B * r + d) + beta with
+    r = sg(sigma_B / sigma) clipped to [1/rmax, rmax] and
+    d = sg((mu_B - mu) / sigma) clipped to [-dmax, dmax], so the loss sees the
+    running-stat function while gradients still flow through batch stats.
+    rmax / dmax ramp linearly from 1 / 0 over `ramp_batches` training
+    forwards (0 = no ramp). Created only by `enable_batch_renorm`.
+    """
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # momentum None = cumulative stat recompute (SWA BN recompute): plain BN.
+        if not self.training or self.momentum is None:
+            return super().forward(x)
+        xf = x.float()
+        mean = xf.mean((0, 2, 3))
+        var = xf.var((0, 2, 3), unbiased=False)
+        std = (var + self.eps).sqrt()
+        with torch.no_grad():
+            rstd = (self.running_var + self.eps).sqrt()
+            self.brn_t.add_(1.0)
+            a = (
+                (self.brn_t / self.ramp_batches).clamp(max=1.0)
+                if self.ramp_batches > 0
+                else torch.ones_like(self.brn_t)
+            )
+            rmax = 1.0 + (self.rmax - 1.0) * a
+            dmax = self.dmax * a
+            r = torch.minimum(torch.maximum(std / rstd, 1.0 / rmax), rmax)
+            d = torch.minimum(
+                torch.maximum((mean - self.running_mean) / rstd, -dmax), dmax
+            )
+            n = x.numel() / x.shape[1]
+            self.running_mean.lerp_(mean, self.momentum)
+            self.running_var.lerp_(var * n / (n - 1), self.momentum)
+            self.num_batches_tracked.add_(1)
+        scale = self.weight * r / std
+        shift = self.bias + self.weight * (d - mean * r / std)
+        return (xf * scale[None, :, None, None] + shift[None, :, None, None]).to(
+            x.dtype
+        )
+
+
+def enable_batch_renorm(
+    module: nn.Module, rmax: float, dmax: float, ramp_batches: int
+) -> int:
+    """Switch every nn.BatchNorm2d under `module` to BatchRenorm2d in place.
+    Checkpoint-compatible: no new persistent state. Returns the count."""
+    n = 0
+    for m in module.modules():
+        if type(m) is nn.BatchNorm2d:
+            m.__class__ = BatchRenorm2d
+            m.rmax, m.dmax, m.ramp_batches = float(rmax), float(dmax), int(ramp_batches)
+            m.register_buffer(
+                "brn_t", torch.zeros((), device=m.running_mean.device), persistent=False
+            )
+            n += 1
+    return n
+
+
 # ---------------------------------------------------------------------------
 # ConvBlock (abstract)
 # ---------------------------------------------------------------------------

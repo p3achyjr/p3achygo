@@ -44,6 +44,14 @@ flags.DEFINE_string("val_ds_path", "", "Path to val ds")
 flags.DEFINE_string("batch_num_path", "", "File storing batch counter.")
 flags.DEFINE_boolean("save_trt", True, "Whether to save TRT converted model.")
 flags.DEFINE_string("trt_convert_path", "", "Path to TRT convert binary.")
+flags.DEFINE_boolean(
+    "batch_renorm", False, "Train trunk BNs with Batch Renorm (torch only)."
+)
+flags.DEFINE_float("brn_rmax", 3.0, "Batch Renorm r clip.")
+flags.DEFINE_float("brn_dmax", 5.0, "Batch Renorm d clip.")
+flags.DEFINE_integer(
+    "brn_ramp_batches", 0, "Ramp rmax/dmax from 1/0 over this many batches."
+)
 
 
 def get_model_path(models_dir: str, gen: int) -> Tuple[str, int]:
@@ -97,6 +105,16 @@ def main(_):
             "This should only happen for model_0000."
         )
     swa_model = load_model(swa_model_path)
+    if FLAGS.batch_renorm:
+        from backend_torch.model_layers_common import enable_batch_renorm
+
+        n = enable_batch_renorm(
+            live_model.blocks, FLAGS.brn_rmax, FLAGS.brn_dmax, FLAGS.brn_ramp_batches
+        )
+        logging.info(
+            f"Batch Renorm on {n} trunk BNs: rmax={FLAGS.brn_rmax} "
+            f"dmax={FLAGS.brn_dmax} ramp_batches={FLAGS.brn_ramp_batches}"
+        )
     # Apply backend-specific training-time transforms (no-op on TF).
     live_model = compile_for_training(live_model)
     logging.info(f"Using Train Dataset: {FLAGS.chunk_path}")
