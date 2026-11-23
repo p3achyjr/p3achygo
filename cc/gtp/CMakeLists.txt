@@ -37,5 +37,5 @@ if(BUILD_BINARIES)
         m
         dl
     )
-    set_target_properties(gtp_main PROPERTIES OUTPUT_NAME "gtp")
+    set_target_properties(gtp_main PROPERTIES OUTPUT_NAME "p3achygo")
 endif()
