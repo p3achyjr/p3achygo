@@ -7,6 +7,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <fstream>
 #include <iomanip>
 #include <sstream>
 #include <stop_token>
@@ -177,6 +178,22 @@ class ServiceImpl final : public Service {
   bool game_in_progress_ = false;
 };
 
+// Physical RAM, or the container's cgroup memory limit if lower. sysconf
+// reports the host's RAM inside a container.
+int64_t AvailableRamBytes() {
+  int64_t ram = static_cast<int64_t>(sysconf(_SC_PHYS_PAGES)) *
+                static_cast<int64_t>(sysconf(_SC_PAGE_SIZE));
+  // cgroup v2, then v1. v2 writes "max" when unlimited; v1 writes a huge
+  // number. Either way the min() below keeps the physical RAM.
+  for (const char* path : {"/sys/fs/cgroup/memory.max",
+                           "/sys/fs/cgroup/memory/memory.limit_in_bytes"}) {
+    std::ifstream f(path);
+    int64_t limit;
+    if (f >> limit && limit > 0) ram = std::min(ram, limit);
+  }
+  return ram;
+}
+
 // Root-visit cap for pondering. ponder_max_tree_mb > 0 sets the tree budget
 // directly; 0 sizes it so that tree + NN cache (at its maximum) take at most
 // min(3/4 of physical RAM, RAM - 4 GiB).
@@ -187,8 +204,7 @@ int PonderMaxRootVisits(const eval::PlayerSearchConfig& cfg) {
   if (cfg.ponder_max_tree_mb > 0) {
     tree_bytes = int64_t{cfg.ponder_max_tree_mb} * kMiB;
   } else {
-    const int64_t ram = static_cast<int64_t>(sysconf(_SC_PHYS_PAGES)) *
-                        static_cast<int64_t>(sysconf(_SC_PAGE_SIZE));
+    const int64_t ram = AvailableRamBytes();
     // Mirrors the cache sizes chosen in NewGtpService.
     const int64_t cache_entries =
         cfg.round_free && cfg.num_threads_per_game > 1
@@ -308,7 +324,7 @@ Response<Loc> ServiceImpl::GtpGenMove(std::optional<int> id, Color color) {
   }
 
   MakeMove(color, mcts_move);
-  if (verbose_ && cfg_.log_board) {
+  if (verbose_) {
     std::cerr << last_explain_comment_ << "\n"
               << GtpBoardString(game_->board()) << "\n";
   }
@@ -474,7 +490,7 @@ game::Loc ServiceImpl::GtpCgosGenmoveAnalyze(game::Color color,
   *analysis_json = ss.str();
 
   MakeMove(color, mcts_move);
-  if (verbose_ && cfg_.log_board) {
+  if (verbose_) {
     std::cerr << last_explain_comment_ << "\n"
               << GtpBoardString(game_->board()) << "\n";
   }
@@ -772,9 +788,7 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
                   << "  pre_search_best_lcb="
                   << time_metadata.pre_search_winrate
                   << "  root_n=" << (current_root() ? current_root()->n : -1)
-                  << "  root_stddev=" << time_metadata.root_stddev
                   << "  stddev_ema=" << time_metadata.stddev_ema
-                  << "  low_root_bonus=" << time_metadata.low_root_bonus
                   << "  clock_left_s=" << time_metadata.main_time_left_secs
                   << "\n";
       }

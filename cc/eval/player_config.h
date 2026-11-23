@@ -83,10 +83,6 @@ struct PlayerSearchConfig {
   // extra NN eval per move, after the search).
   bool cgos_ownership = false;
 
-  // Verbose mode: print the explain block (top moves) and the board after each
-  // genmove. The batch-GTP analysis tools parse these; CGOS can turn it off.
-  bool log_board = true;
-
   // TimeControl::Flags bitmask. 0 = all factors disabled (fixed-visit mode).
   // Pass an integer literal or "all" (= ~0u, all flags on).
   uint32_t time_control_flags = 0;
@@ -139,8 +135,8 @@ struct PlayerSearchConfig {
   int nn_cache_log2_size = 18;
 
   // GTP only: pondering stops once the tree holds this many MB of nodes.
-  // 0 = auto: min(3/4 of physical RAM, RAM - 4 GiB) minus the NN cache's
-  // maximum size.
+  // 0 = auto: min(3/4 of RAM, RAM - 4 GiB) minus the NN cache's maximum size,
+  // where RAM is physical RAM or the cgroup memory limit if lower.
   int ponder_max_tree_mb = 0;
 };
 
@@ -274,8 +270,6 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.enable_pondering = internal::ParseBool(val);
     else if (key == "cgos_ownership")
       cfg.cgos_ownership = internal::ParseBool(val);
-    else if (key == "log_board")
-      cfg.log_board = internal::ParseBool(val);
     else if (key == "time_control_flags")
       cfg.time_control_flags =
           (val == "all") ? ~0u : static_cast<uint32_t>(std::stoul(val));
@@ -368,7 +362,6 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
   ROW(time_ms, i_);
   ROW(enable_pondering, b);
   ROW(cgos_ownership, b);
-  ROW(log_board, b);
   ROW(time_control_flags, i_);
   ROW(q_fn, s);
   ROW(n_fn, s);

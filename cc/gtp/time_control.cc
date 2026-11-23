@@ -19,7 +19,7 @@ void TimeControl::SetTimeSettings(int main_time_secs, int byoyomi_time_secs,
   byoyomi_time_left_secs_ = byoyomi_time_secs;
   byoyomi_periods_left_ = byoyomi_periods;
   in_byoyomi_ = false;
-  ResetGame();  // v3r: per-game reset (also called from ClearBoard)
+  ResetGame();  // also called from clear_board
 
   enabled_ = (main_time_secs > 0 || byoyomi_time_secs > 0);
 }
@@ -78,16 +78,15 @@ std::pair<int, TimeControl::Metadata> TimeControl::ComputeMoveTimeMs(
     // a little bump. try not to lose by time ;)
     return static_cast<int>(std::round(appx_moves_left) + 10);
   }();
-  // v3r-om (2026-11-21, user): insta-move only when the pre-search root is
+  // Insta-move only when the pre-search root is
   // large relative to this game's history AND the best move is clearly ahead:
   // root n >= 1.2 * EMA(pre-search root n) and z >= 3, where
   // z = (Lcb(best) - Q(second)) / sqrt(QVar(second)), best/second by Q.
   // Otherwise full time (no partial cut). EMA (0.75/0.25, seeded by the first
   // root) is read before this move's update; reset per game.
-  int obv_a1 = -1, obv_a2 = -1;
-  float obv_z = 0;
   const float root_n_ema_before = root_n_ema_;
   const auto obvious_move_factor = [&]() {
+    int obv_a1 = -1, obv_a2 = -1;
     if (root == nullptr || root->state == mcts::TreeNodeState::kNew) {
       return 1.0f;
     }
@@ -103,7 +102,7 @@ std::pair<int, TimeControl::Metadata> TimeControl::ComputeMoveTimeMs(
       }
     }
     if (obv_a1 == -1 || obv_a2 == -1) return 1.0f;
-    obv_z =
+    const float obv_z =
         (Lcb(root, obv_a1) - Q(root, obv_a2)) / std::sqrt(QVar(root, obv_a2));
     constexpr float kRootRatio = 1.2f;
     constexpr float kZInsta = 3.0f;
@@ -138,7 +137,7 @@ std::pair<int, TimeControl::Metadata> TimeControl::ComputeMoveTimeMs(
     return std::clamp(stddev / stddev_ema_, kMinScale, kMaxScale);
   }();
   const auto middlegame_factor = [&]() {
-    // 2026-11-21 (v3r-om-ghd): grow-hold-decay. 0.7 at ply 0 -> 1.5 at ply 100
+    // Grow-hold-decay: 0.7 at ply 0 -> 1.5 at ply 100
     // (linear), hold 1.5 until ply 200, linear down to 0.8 at ply 280, then
     // 0.8.
     constexpr float kStart = 0.7f, kPeak = 1.5f, kFloor = 0.8f;
@@ -156,13 +155,13 @@ std::pair<int, TimeControl::Metadata> TimeControl::ComputeMoveTimeMs(
   // opponent declines to resign and drags the game out hundreds of plies -- the
   // engine used to burn its whole clock while up 40+ points and lose on time.
   // Driven by the outcome-winrate LCB of the most-visited root child, and only
-  // once the root has > kMinRootVisits visits (a small tree's LCB is not
-  // trusted): 1.0 at LCB <= 90%, quadratic down to 0.0 at LCB >= 98%.
+  // once the pre-search root has >= kMinRootVisits visits (a small tree's LCB
+  // is not trusted): 1.0 at LCB <= 90%, quadratic down to 0.0 at LCB >= 98%.
   float pre_search_winrate = -1.0f;
   const auto winning_attenuator = [&]() {
     constexpr float kLo = 0.90f;
     constexpr float kHi = 0.98f;
-    constexpr int kMinRootVisits = 2000;
+    constexpr int kMinRootVisits = 400;
     if (root == nullptr || root->state == mcts::TreeNodeState::kNew) {
       return 1.0f;
     }
@@ -176,7 +175,7 @@ std::pair<int, TimeControl::Metadata> TimeControl::ComputeMoveTimeMs(
     if (best == -1) return 1.0f;
     const float lcb = mcts::OutcomeWinrateLcb(root, best);
     pre_search_winrate = lcb;
-    if (root->n <= kMinRootVisits) return 1.0f;
+    if (root->n < kMinRootVisits) return 1.0f;
     const float t = std::clamp((lcb - kLo) / (kHi - kLo), 0.0f, 1.0f);
     return 1.0f - t * t;
   }();
@@ -221,30 +220,11 @@ std::pair<int, TimeControl::Metadata> TimeControl::ComputeMoveTimeMs(
   // The floor is load-bearing: GenMoveCommon passes this straight to
   // Search::Params::total_visit_time_ms, and Run() treats <= 0 as "no timer",
   // falling back to a 1<<20 visit budget. A literal 0 would search forever.
-  return {
-      std::max(static_cast<int>(ms), 1),
-      Metadata{base_ms,
-               appx_moves_left_from_move_num,
-               appx_moves_left_from_q,
-               obvious_move_factor,
-               stddev_factor,
-               middlegame_factor,
-               winning_attenuator,
-               pre_search_winrate,
-               /*root_stddev=*/0,
-               stddev_ema_,
-               /*low_root_bonus=*/1,
-               main_time_left_secs_,
-               obv_z,
-               root_n_ema_before,
-               obv_a1,
-               obv_a2,
-               obv_a1 >= 0 ? Q(root, obv_a1) : 0,
-               obv_a1 >= 0 ? Lcb(root, obv_a1) : 0,
-               obv_a2 >= 0 ? Q(root, obv_a2) : 0,
-               obv_a2 >= 0 ? std::sqrt(QVar(root, obv_a2)) : 0,
-               obv_a1 >= 0 ? static_cast<int>(root->child_visits[obv_a1]) : 0,
-               obv_a2 >= 0 ? static_cast<int>(root->child_visits[obv_a2]) : 0}};
+  return {std::max(static_cast<int>(ms), 1),
+          Metadata{base_ms, appx_moves_left_from_move_num,
+                   appx_moves_left_from_q, obvious_move_factor, stddev_factor,
+                   middlegame_factor, winning_attenuator, pre_search_winrate,
+                   stddev_ema_, main_time_left_secs_}};
 }
 
 }  // namespace gtp
