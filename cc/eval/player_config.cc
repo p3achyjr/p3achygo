@@ -1,13 +1,18 @@
 #include "cc/eval/player_config.h"
 
+#include "absl/log/check.h"
+
 namespace eval {
 mcts::ScoreUtilityParams MakeScoreUtilityParams(
     const eval::PlayerSearchConfig& cfg) {
+  CHECK(!(cfg.score_recenter && cfg.use_mcgs))
+      << "score_recenter supports trees only (use_mcgs: false)";
   mcts::ScoreUtilityMode mode = cfg.score_utility_mode == "integral"
                                     ? mcts::ScoreUtilityMode::kIntegral
                                     : mcts::ScoreUtilityMode::kDirect;
   return mcts::ScoreUtilityParams{.score_weight = cfg.score_weight,
-                                  .mode = mode};
+                                  .mode = mode,
+                                  .searched_score_center = cfg.score_recenter};
 }
 
 mcts::PuctParams MakePuctParams(const eval::PlayerSearchConfig& cfg) {

@@ -126,13 +126,19 @@ LeafEvaluator::LeafEvaluator(nn::NNInterface::Slot slot, int thread_id,
                              ScoreUtilityParams score_params)
     : slot_(slot), thread_id_(thread_id), score_params_(score_params) {}
 
+float ScoreUtility(const ScoreUtilityParams& params, float score_est,
+                   float score_stddev, float center) {
+  if (params.mode == ScoreUtilityMode::kIntegral) {
+    return ScoreTransformIntegral(params.score_weight, score_est, score_stddev,
+                                  center);
+  }
+  return ScoreTransform(params.score_weight, score_est, center);
+}
+
 float LeafEvaluator::ScoreUtility(float score_est, float score_stddev,
                                   float root_score_est) const {
-  if (score_params_.mode == ScoreUtilityMode::kIntegral) {
-    return ScoreTransformIntegral(score_params_.score_weight, score_est,
-                                  score_stddev, root_score_est);
-  }
-  return ScoreTransform(score_params_.score_weight, score_est, root_score_est);
+  return ::mcts::ScoreUtility(score_params_, score_est, score_stddev,
+                              root_score_est);
 }
 
 void LeafEvaluator::EvaluateRoot(core::Probability& probability,

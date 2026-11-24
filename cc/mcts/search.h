@@ -63,6 +63,9 @@ struct GlobalSearchState {
   bool round_free = false;
   int num_workers = 0;
   int visit_budget = 0;
+  // Score utility center for this search (root player's view). Fixed for the
+  // whole search; see ScoreUtilityParams::searched_score_center.
+  float score_center = 0;
   std::array<std::atomic<int>, 8> pending_each_level = {};
   int max_pending_each_level = 0;
 
@@ -113,6 +116,16 @@ struct GlobalSearchState {
   }
 };
 
+// KataGo recursivelyRecomputeStats: recomputes every visited node's utility
+// against `center` (root player's view) and rebuilds its stats, children before
+// parents, using `num_threads` threads. Trees only (MCGS nodes can be shared
+// between subtrees). Must not run concurrently with search. Returns the number
+// of nodes recentered.
+size_t RecenterTree(TreeNode* root, game::Color root_color, float center,
+                    const ScoreUtilityParams& score_params,
+                    BiasCache* bias_cache, float value_weight_exponent,
+                    int num_threads);
+
 class Search final {
  public:
   enum class Mode {
@@ -143,6 +156,9 @@ class Search final {
     size_t num_aborted;
     size_t num_collisions;
     size_t time_ms;
+    // Score-utility recentering of the reused tree (0 if not run).
+    size_t recenter_nodes = 0;
+    size_t recenter_us = 0;
   };
   explicit Search(nn::NNInterface::Slot slot);
   explicit Search(nn::NNInterface::Slot slot, BiasCache* bias_cache);

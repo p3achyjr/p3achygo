@@ -105,6 +105,15 @@ if(BUILD_TESTS)
     )
     add_test(NAME mcts_search_test COMMAND mcts_search_test)
 
+    add_executable(mcts_recenter_test __tests__/recenter_test.cc)
+    target_link_libraries(mcts_recenter_test PRIVATE
+        gumbel
+        core_impl
+        engine_factory
+        doctest::doctest
+    )
+    add_test(NAME mcts_recenter_test COMMAND mcts_recenter_test)
+
     add_executable(mcts_tree_test __tests__/tree_test.cc)
     target_link_libraries(mcts_tree_test PRIVATE
         mcts_tree

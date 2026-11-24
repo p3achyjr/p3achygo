@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <future>
+#include <queue>
 #include <thread>
 #include <vector>
 
@@ -398,7 +399,7 @@ void SearchTask(const int worker_id, core::Probability& prob,
     auto [search_path, collision_result] = Descend(
         worker_id, prob, global_state, slot, &leaf_evaluator, descent_policy,
         collision_policy, collision_detector, search_game, node_table, root,
-        color_to_move, root->init_score_est, {});
+        color_to_move, global_state.score_center, {});
     if (collision_result.has_value()) {
       global_state.total_num_collisions.fetch_add(1, std::memory_order_relaxed);
       while (collision_result.has_value()) {
@@ -427,7 +428,7 @@ void SearchTask(const int worker_id, core::Probability& prob,
             Descend(worker_id, prob, global_state, slot, &leaf_evaluator,
                     descent_policy, collision_policy, collision_detector,
                     retry_game, node_table, root, color_to_move,
-                    root->init_score_est, retry_path_prefix);
+                    global_state.score_center, retry_path_prefix);
         search_path = retry_path;
         collision_result = retry_collision;
       }
@@ -567,7 +568,7 @@ void SearchTaskRoundFree(const int worker_id, core::Probability& prob,
     auto [search_path, collision_result] = Descend(
         worker_id, prob, global_state, slot, &leaf_evaluator, descent_policy,
         collision_policy, collision_detector, search_game, node_table, root,
-        color_to_move, root->init_score_est, {});
+        color_to_move, global_state.score_center, {});
     if (collision_result.has_value()) {
       global_state.total_num_collisions.fetch_add(1, std::memory_order_relaxed);
       while (collision_result.has_value() &&
@@ -583,7 +584,7 @@ void SearchTaskRoundFree(const int worker_id, core::Probability& prob,
             Descend(worker_id, prob, global_state, slot, &leaf_evaluator,
                     descent_policy, collision_policy, collision_detector,
                     retry_game, node_table, root, color_to_move,
-                    root->init_score_est, retry_path_prefix);
+                    global_state.score_center, retry_path_prefix);
         search_path = retry_path;
         collision_result = retry_collision;
       }
@@ -702,7 +703,7 @@ void BatchSearch(GlobalSearchState& global_state, NNInterface::Slot slot,
       auto [search_path, collision_result] = Descend(
           worker_id, prob, global_state, slot, &leaf_evaluator, descent_policy,
           collision_policy, collision_detector, search_game, node_table, root,
-          color_to_move, root->init_score_est, search_prefix,
+          color_to_move, global_state.score_center, search_prefix,
           /*block_on_leaf_eval=*/false);
       worker_games[worker_id] = search_game;
       if (collision_result.has_value()) {
@@ -766,7 +767,7 @@ void BatchSearch(GlobalSearchState& global_state, NNInterface::Slot slot,
                              ? root_color
                              : game::OppositeColor(root_color);
       FetchLeafEval(global_state, &leaf_evaluator, leaf, game, leaf_color,
-                    root_color, root->init_score_est, needs_nn_eval);
+                    root_color, global_state.score_center, needs_nn_eval);
       global_state.total_num_visits.fetch_add(1, std::memory_order_relaxed);
     }
 
@@ -882,7 +883,106 @@ void RunWithDetector(GlobalSearchState& global_state, NNInterface::Slot slot,
   }
 }
 
+// Recomputes `node`'s own utility against `center` (root player's view) and
+// rebuilds its stats from its children, which must already be recentered.
+void RecenterNode(TreeNode* node, bool is_root, Color root_color, float center,
+                  const ScoreUtilityParams& score_params, BiasCache* bias_cache,
+                  float value_weight_exponent) {
+  // Matches EvaluateRoot/FetchRootEval (root: no score term), FetchLeafEval and
+  // EvaluateTerminal (terminal: final score, stddev 0).
+  if (is_root) {
+    node->init_util_est = node->init_outcome_est;
+  } else {
+    const float c = node->color_to_move == root_color ? center : -center;
+    const float stddev =
+        node->is_terminal ? 0.0f : std::sqrt(node->init_score_var);
+    node->init_util_est =
+        node->init_outcome_est +
+        ScoreUtility(score_params, node->init_score_est, stddev, c);
+  }
+
+  bool has_children = false;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    if (node->child_visits[a] > 0) {
+      has_children = true;
+      break;
+    }
+  }
+  // Same as the leaf / interior updates in BackupStep.
+  if (!has_children) {
+    node->w = node->init_util_est;
+    node->v = node->init_util_est;
+  } else {
+    RecomputeNodeStats(node, FetchObsBias(bias_cache, node),
+                       value_weight_exponent);
+  }
+}
+
+// Post-order recenter of the subtree under `node`. Returns nodes recentered.
+size_t RecenterSubtree(TreeNode* node, TreeNode* root, Color root_color,
+                       float center, const ScoreUtilityParams& score_params,
+                       BiasCache* bias_cache, float value_weight_exponent) {
+  size_t count = 1;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    TreeNode* child = node->child(a);
+    if (child == nullptr || node->child_visits[a] == 0) continue;
+    count += RecenterSubtree(child, root, root_color, center, score_params,
+                             bias_cache, value_weight_exponent);
+  }
+  RecenterNode(node, node == root, root_color, center, score_params, bias_cache,
+               value_weight_exponent);
+  return count;
+}
+
 }  // namespace
+
+// Splits the tree into disjoint subtrees by repeatedly expanding the largest
+// one, recenters those in parallel, then the expanded nodes above them, deepest
+// first.
+size_t RecenterTree(TreeNode* root, Color root_color, float center,
+                    const ScoreUtilityParams& score_params,
+                    BiasCache* bias_cache, float value_weight_exponent,
+                    int num_threads) {
+  constexpr int kMinSplitVisits = 64;
+  const auto by_visits = [](TreeNode* a, TreeNode* b) { return a->n < b->n; };
+  std::priority_queue<TreeNode*, std::vector<TreeNode*>, decltype(by_visits)>
+      pq(by_visits);
+  std::vector<TreeNode*> expanded;  // parents before children
+  pq.push(root);
+  while (!pq.empty() && pq.size() < size_t(8 * num_threads) &&
+         pq.top()->n >= kMinSplitVisits) {
+    TreeNode* node = pq.top();
+    pq.pop();
+    expanded.push_back(node);
+    for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+      TreeNode* child = node->child(a);
+      if (child != nullptr && node->child_visits[a] > 0) pq.push(child);
+    }
+  }
+  std::vector<TreeNode*> tasks;
+  while (!pq.empty()) {
+    tasks.push_back(pq.top());
+    pq.pop();
+  }
+
+  std::atomic<size_t> next_task = 0, count = 0;
+  std::vector<std::thread> threads;
+  for (int i = 0; i < std::max(1, num_threads); ++i) {
+    threads.emplace_back([&]() {
+      for (size_t t = next_task++; t < tasks.size(); t = next_task++) {
+        count +=
+            RecenterSubtree(tasks[t], root, root_color, center, score_params,
+                            bias_cache, value_weight_exponent);
+      }
+    });
+  }
+  for (auto& t : threads) t.join();
+  for (auto it = expanded.rbegin(); it != expanded.rend(); ++it) {
+    RecenterNode(*it, *it == root, root_color, center, score_params, bias_cache,
+                 value_weight_exponent);
+  }
+  return count + expanded.size();
+}
 
 Search::Search(NNInterface::Slot slot) : Search(slot, nullptr) {}
 
@@ -935,6 +1035,28 @@ Search::Result Search::Run(core::Probability& probability, Game& game,
     AssignBiasCacheEntry(global_search_state.bias_cache, game, root);
   }
 
+  // Score utility center. With searched_score_center, use the root's searched
+  // score and recompute the reused tree against it (KataGo recentScoreCenter);
+  // otherwise the root's NN score, with reused nodes keeping old centers.
+  size_t recenter_nodes = 0, recenter_us = 0;
+  if (params.score_util_params.searched_score_center) {
+    global_search_state.score_center = root->score;
+    if (root->n > 1) {
+      const auto t0 = std::chrono::steady_clock::now();
+      recenter_nodes = RecenterTree(root, color_to_move, root->score,
+                                    params.score_util_params, bias_cache_,
+                                    params.puct_params.value_weight_exponent,
+                                    params.num_threads);
+      recenter_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - t0)
+                        .count();
+      // Rebuilding the root can move its searched score; the center stays
+      // fixed for the rest of the search.
+    }
+  } else {
+    global_search_state.score_center = root->init_score_est;
+  }
+
   std::promise<void> done_promise;
   auto done_future = done_promise.get_future();
   std::thread timer([&, f = std::move(done_future)]() mutable {
@@ -985,8 +1107,10 @@ Search::Result Search::Run(core::Probability& probability, Game& game,
   const auto collision_count =
       global_search_state.total_num_collisions.load(std::memory_order_relaxed);
   global_search_state_.reset();
-  return Search::Result{best_move, size_t(visit_count), size_t(abort_count),
-                        size_t(collision_count), size_t(time_ms)};
+  return Search::Result{best_move,           size_t(visit_count),
+                        size_t(abort_count), size_t(collision_count),
+                        size_t(time_ms),     recenter_nodes,
+                        recenter_us};
 }
 }  // namespace mcts
 

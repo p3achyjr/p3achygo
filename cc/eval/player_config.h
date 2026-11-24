@@ -54,6 +54,7 @@ struct PlayerSearchConfig {
   float score_weight = mcts::kDefaultScoreWeight;
   // "direct" | "integral"
   std::string score_utility_mode = "direct";
+  bool score_recenter = false;
 
   // Other
   bool use_mcgs = false;
@@ -235,6 +236,8 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.score_weight = std::stof(val);
     else if (key == "score_utility_mode")
       cfg.score_utility_mode = val;
+    else if (key == "score_recenter")
+      cfg.score_recenter = internal::ParseBool(val);
     // Other
     else if (key == "use_mcgs")
       cfg.use_mcgs = internal::ParseBool(val);
@@ -358,6 +361,7 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
   ROW(use_lcb, b);
   ROW(score_weight, f);
   ROW(score_utility_mode, s);
+  ROW(score_recenter, b);
   ROW(use_mcgs, b);
   ROW(use_bias_cache, b);
   ROW(bias_cache_alpha, f);

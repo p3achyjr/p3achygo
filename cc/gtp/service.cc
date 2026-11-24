@@ -809,6 +809,10 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
     if (verbose_) {
       std::cerr << "Thought for " << res.time_ms
                 << "ms. Visits=" << res.num_visits << "\n";
+      if (res.recenter_nodes > 0) {
+        std::cerr << "Recentered " << res.recenter_nodes << " nodes in "
+                  << res.recenter_us << "us\n";
+      }
     }
     move = res.move;
     if (verbose_) {

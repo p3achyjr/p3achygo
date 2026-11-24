@@ -14,7 +14,16 @@ enum class ScoreUtilityMode : uint8_t { kDirect = 0, kIntegral = 1 };
 struct ScoreUtilityParams {
   float score_weight = kDefaultScoreWeight;
   ScoreUtilityMode mode = ScoreUtilityMode::kDirect;
+  // KataGo-style dynamic center: center the score utility on the root's
+  // searched score (instead of its NN score) and, before each search, recompute
+  // every reused node's utility against it.
+  bool searched_score_center = false;
 };
+
+// Score utility of `score_est` (stddev `score_stddev`) relative to `center`,
+// all from the same player's view.
+float ScoreUtility(const ScoreUtilityParams& params, float score_est,
+                   float score_stddev, float center);
 
 /*
  * Wrapper Class for Leaf Evaluation. Mainly useful for testing.
