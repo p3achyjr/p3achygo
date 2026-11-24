@@ -89,6 +89,10 @@ struct PlayerSearchConfig {
   // extra NN eval per move, after the search).
   bool cgos_ownership = false;
 
+  // GTP `komi` is territory komi (e.g. Japanese 6.5). The net is area-trained,
+  // so search with the area equivalent, komi + 1 (6.5 -> 7.5).
+  bool territory_komi = false;
+
   // TimeControl::Flags bitmask. 0 = all factors disabled (fixed-visit mode).
   // Pass an integer literal or "all" (= ~0u, all flags on).
   uint32_t time_control_flags = 0;
@@ -180,6 +184,11 @@ inline bool ParseBool(const std::string& val) {
 inline int NewPlayouts(const PlayerSearchConfig& cfg, const int root_n) {
   if (!cfg.n_counts_reused_visits) return cfg.n;
   return std::max(1, cfg.n - std::max(root_n, 1));
+}
+
+// Komi the search uses for a GTP `komi` value.
+inline float SearchKomi(const PlayerSearchConfig& cfg, const float komi) {
+  return cfg.territory_komi ? komi + 1.0f : komi;
 }
 
 inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
@@ -287,6 +296,8 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.enable_pondering = internal::ParseBool(val);
     else if (key == "cgos_ownership")
       cfg.cgos_ownership = internal::ParseBool(val);
+    else if (key == "territory_komi")
+      cfg.territory_komi = internal::ParseBool(val);
     else if (key == "time_control_flags")
       cfg.time_control_flags =
           (val == "all") ? ~0u : static_cast<uint32_t>(std::stoul(val));
@@ -379,6 +390,7 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
   ROW(time_ms, i_);
   ROW(enable_pondering, b);
   ROW(cgos_ownership, b);
+  ROW(territory_komi, b);
   ROW(time_control_flags, i_);
   ROW(q_fn, s);
   ROW(n_fn, s);

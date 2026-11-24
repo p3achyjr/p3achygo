@@ -28,5 +28,20 @@ TEST_CASE("NewPlayouts") {
   }
 }
 
+TEST_CASE("SearchKomi") {
+  PlayerSearchConfig cfg;
+
+  SUBCASE("default: komi is used as given") {
+    CHECK(SearchKomi(cfg, 7.5f) == 7.5f);
+    CHECK(SearchKomi(cfg, 6.5f) == 6.5f);
+  }
+
+  SUBCASE("territory_komi: territory komi + 1 = area komi") {
+    cfg.territory_komi = true;
+    CHECK(SearchKomi(cfg, 6.5f) == 7.5f);
+    CHECK(SearchKomi(cfg, 0.5f) == 1.5f);
+  }
+}
+
 }  // namespace
 }  // namespace eval
