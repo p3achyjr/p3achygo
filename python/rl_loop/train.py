@@ -29,10 +29,59 @@ def get_ss_timestamps(num_batches):
     return [(i + 1) * interval for i in range(num_snapshots)]
 
 
+# KataGo train.py warmup: (samples below, LR multiplier).
+_KATAGO_WARMUP = (
+    (250_000, 1.0 / 20.0),
+    (500_000, 1.0 / 14.0),
+    (750_000, 1.0 / 10.0),
+    (1_000_000, 1.0 / 7.0),
+    (1_250_000, 1.0 / 5.0),
+    (1_500_000, 1.0 / 3.0),
+    (1_750_000, 1.0 / 2.0),
+    (2_000_000, 1.0 / 1.4),
+)
+
+
+def katago_warmup_scale(samples: int) -> float:
+    for limit, scale in _KATAGO_WARMUP:
+        if samples < limit:
+            return scale
+    return 1.0
+
+
+class KataGoWarmupLRSchedule:
+    """LR = base_lr x katago_warmup_scale(samples trained so far).
+
+    The optimizer calls the schedule with its own step counter, which does not
+    survive a restart, so samples are counted from the global `batch_num` at
+    the start of this gen plus the steps taken since `step0` (the optimizer's
+    counter at that point; set after the optimizer exists)."""
+
+    def __init__(self, base_lr: float, batch_num: int, batch_size: int):
+        self.base_lr = base_lr
+        self.batch_num = batch_num
+        self.batch_size = batch_size
+        self.step0 = None
+
+    def __call__(self, step=None):
+        local = 0 if self.step0 is None or step is None else max(0, step - self.step0)
+        samples = (self.batch_num + local) * self.batch_size
+        return self.base_lr * katago_warmup_scale(samples)
+
+    def info(self) -> str:
+        return (
+            f"KataGo warmup x base {self.base_lr} from batch {self.batch_num} "
+            f"(now x{katago_warmup_scale(self.batch_num * self.batch_size):.4g})"
+        )
+
+
 def get_lr(config: RunConfig, model_gen: int) -> float:
-    warmup_t = min(
-        1.0, max(0.0, (model_gen - config.start_gen) / config.lr_growth_window)
-    )
+    if config.katago_lr_warmup or config.lr_growth_window <= 0:
+        warmup_t = 1.0  # no per-gen growth window
+    else:
+        warmup_t = min(
+            1.0, max(0.0, (model_gen - config.start_gen) / config.lr_growth_window)
+        )
     lr_scale = 0.1 + 0.9 * warmup_t
 
     lr = config.lr
@@ -82,7 +131,12 @@ def train_one_gen(
         return [(i + 1) * interval for i in range(num_snapshots)]
 
     batch_size = config.batch_size
-    lr_schedule = ConstantLRSchedule(get_lr(config, model_gen))
+    if config.katago_lr_warmup:
+        lr_schedule = KataGoWarmupLRSchedule(
+            get_lr(config, model_gen), batch_num, batch_size
+        )
+    else:
+        lr_schedule = ConstantLRSchedule(get_lr(config, model_gen))
 
     # `num_workers=0` would block the GPU on single-threaded tfrecord
     # decompression — 60% of step time on b8c128tfmr / RTX 5090. Empirically
@@ -103,6 +157,8 @@ def train_one_gen(
         live_model, config, lr_schedule, is_gpu, loaded_state=optimizer
     )
     inner_optimizer = getattr(optimizer, "inner_optimizer", optimizer)
+    if isinstance(lr_schedule, KataGoWarmupLRSchedule):
+        lr_schedule.step0 = inner_optimizer._global_step
     if isinstance(inner_optimizer, backend_shim.ConvMuon):
         logging.info(
             f"Using ConvMuon Optimizer"

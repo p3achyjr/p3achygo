@@ -66,6 +66,9 @@ class RunConfig(object):
     head_lr_factor: Optional[float] = None
     # Path to sgfpos start positions, relative to the repo root ("" = none).
     sgfpos_path: str = ""
+    # KataGo's LR warmup (train.py): LR x 1/20 .. 1/1.4 over the first 2M
+    # training samples, stepped per 250k. Replaces the per-gen growth window.
+    katago_lr_warmup: bool = False
 
 
 def parse(run_id: str) -> RunConfig:
@@ -130,6 +133,7 @@ def parse(run_id: str) -> RunConfig:
         nn_timeout_us = obj.get("nn_timeout_us", 400)
         muon_aurora = obj.get("muon_aurora", False)
         sgfpos_path = obj.get("sgfpos_path", "")
+        katago_lr_warmup = obj.get("katago_lr_warmup", False)
 
         return RunConfig(
             from_existing_run,
@@ -179,4 +183,5 @@ def parse(run_id: str) -> RunConfig:
             muon_aurora=muon_aurora,
             head_lr_factor=head_lr_factor,
             sgfpos_path=sgfpos_path,
+            katago_lr_warmup=katago_lr_warmup,
         )

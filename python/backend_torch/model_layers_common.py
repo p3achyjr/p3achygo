@@ -80,7 +80,10 @@ class BatchRenorm2d(nn.BatchNorm2d):
     d = sg((mu_B - mu) / sigma) clipped to [-dmax, dmax], so the loss sees the
     running-stat function while gradients still flow through batch stats.
     rmax / dmax ramp linearly from 1 / 0 over `ramp_batches` training
-    forwards (0 = no ramp). Created only by `enable_batch_renorm`.
+    forwards (0 = no ramp); with `ramp_exp` they instead approach their targets
+    as 1 - exp(-t / ramp_batches) (KataGo train.py brenorm adjustment).
+    `brn_t` counts training forwards; `set_brn_step` resets it, e.g. to the
+    global batch number on restart. Created only by `enable_batch_renorm`.
     """
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -94,11 +97,12 @@ class BatchRenorm2d(nn.BatchNorm2d):
         with torch.no_grad():
             rstd = (self.running_var + self.eps).sqrt()
             self.brn_t.add_(1.0)
-            a = (
-                (self.brn_t / self.ramp_batches).clamp(max=1.0)
-                if self.ramp_batches > 0
-                else torch.ones_like(self.brn_t)
-            )
+            if self.ramp_batches <= 0:
+                a = torch.ones_like(self.brn_t)
+            elif self.ramp_exp:
+                a = 1.0 - torch.exp(-self.brn_t / self.ramp_batches)
+            else:
+                a = (self.brn_t / self.ramp_batches).clamp(max=1.0)
             rmax = 1.0 + (self.rmax - 1.0) * a
             dmax = self.dmax * a
             r = torch.minimum(torch.maximum(std / rstd, 1.0 / rmax), rmax)
@@ -117,7 +121,11 @@ class BatchRenorm2d(nn.BatchNorm2d):
 
 
 def enable_batch_renorm(
-    module: nn.Module, rmax: float, dmax: float, ramp_batches: int
+    module: nn.Module,
+    rmax: float,
+    dmax: float,
+    ramp_batches: int,
+    ramp_exp: bool = False,
 ) -> int:
     """Switch every nn.BatchNorm2d under `module` to BatchRenorm2d in place.
     Checkpoint-compatible: no new persistent state. Returns the count."""
@@ -126,9 +134,22 @@ def enable_batch_renorm(
         if type(m) is nn.BatchNorm2d:
             m.__class__ = BatchRenorm2d
             m.rmax, m.dmax, m.ramp_batches = float(rmax), float(dmax), int(ramp_batches)
+            m.ramp_exp = bool(ramp_exp)
             m.register_buffer(
                 "brn_t", torch.zeros((), device=m.running_mean.device), persistent=False
             )
+            n += 1
+    return n
+
+
+@torch.no_grad()
+def set_brn_step(module: nn.Module, step: int) -> int:
+    """Set the ramp counter of every BatchRenorm2d under `module` to `step`
+    (in place, so compiled graphs keep reading the same buffer)."""
+    n = 0
+    for m in module.modules():
+        if isinstance(m, BatchRenorm2d):
+            m.brn_t.fill_(float(step))
             n += 1
     return n
 

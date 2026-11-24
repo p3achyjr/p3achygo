@@ -8,6 +8,7 @@ indefinitely — avoiding the grappler re-tracing cost on every generation.
 
 from __future__ import annotations
 
+import json
 import multiprocessing
 import os
 import subprocess
@@ -49,9 +50,117 @@ flags.DEFINE_integer("max_gens", 0, "Number of generations to train (0 = run for
 flags.DEFINE_string(
     "source_run_id", "", "Run ID to fetch golden chunks from (defaults to run_id)."
 )
+flags.DEFINE_boolean("batch_renorm", False, "Batch Renorm on the trunk BNs.")
+flags.DEFINE_float("brn_rmax", 3.0, "Batch Renorm r clip target.")
+flags.DEFINE_float("brn_dmax", 5.0, "Batch Renorm d clip target.")
+flags.DEFINE_float(
+    "brn_ramp_samples",
+    0.0,
+    "Ramp rmax/dmax from 1/0 toward their targets over this many training "
+    "samples, as 1 - exp(-samples / brn_ramp_samples) (KataGo). 0 = no ramp.",
+)
+flags.DEFINE_float(
+    "trunk_bn_eps", 0.0, "If > 0, trunk BN eps (function-preserving). 0 = keep."
+)
+flags.DEFINE_string(
+    "adaptive_wd_baseline_path",
+    "",
+    "If set, KataGo adaptive WD on the trunk weight matrices: decay x "
+    "2^(2 tanh(3 ln(norm / baseline))). JSON {'norm': x}; written from the "
+    "starting live model if missing.",
+)
+flags.DEFINE_float(
+    "gamma_center1_wd_factor",
+    0.0,
+    "If > 0, trunk BN gammas decay toward 1 at this factor x the muon WD "
+    "(KataGo gamma_weight_decay_center_1; KataGo uses 0.25 with Muon).",
+)
+flags.DEFINE_boolean(
+    "trunk_beta_noreg", False, "No weight decay on trunk BN betas (KataGo noreg)."
+)
 RCLONE_REMOTE = "r2"
 R2_BUCKET = "p3achygo"
 POLL_INTERVAL_S = 60
+
+
+def _trunk_bns(model) -> list:
+    import torch
+
+    return [m for m in model.blocks.modules() if isinstance(m, torch.nn.BatchNorm2d)]
+
+
+def _trunk_weight_params(model) -> list:
+    """Trunk weight matrices (ndim >= 2): the set whose norm adaptive WD holds."""
+    return [p for p in model.blocks.parameters() if p.requires_grad and p.ndim >= 2]
+
+
+def _norm_control_on() -> bool:
+    return bool(
+        FLAGS.adaptive_wd_baseline_path
+        or FLAGS.gamma_center1_wd_factor > 0
+        or FLAGS.trunk_beta_noreg
+    )
+
+
+def _configure_norm_control(live_model, optimizer, config, model_gen, batch_num):
+    """Build the optimizer up front (so its norm control is set before the
+    first step) and configure adaptive WD / center-1 gamma WD / beta noreg."""
+    from backend_shim import make_optimizer
+
+    optimizer = make_optimizer(
+        live_model,
+        config,
+        rl_loop.train.get_lr(config, model_gen),
+        True,
+        loaded_state=optimizer,
+    )
+    inner = getattr(optimizer, "inner_optimizer", optimizer)
+    weights, baseline = _trunk_weight_params(live_model), None
+    if FLAGS.adaptive_wd_baseline_path:
+        bp = Path(FLAGS.adaptive_wd_baseline_path)
+        if not bp.exists():
+            bp.write_text(
+                json.dumps(
+                    {
+                        "norm": inner.params_norm(weights),
+                        "gen": model_gen,
+                        "batch_num": batch_num,
+                    }
+                )
+            )
+        baseline = float(json.loads(bp.read_text())["norm"])
+    bns = _trunk_bns(live_model)
+    gammas = [m.weight for m in bns] if FLAGS.gamma_center1_wd_factor > 0 else []
+    betas = [m.bias for m in bns] if FLAGS.trunk_beta_noreg else []
+    inner.configure_norm_control(
+        adaptive_params=weights if baseline else (),
+        baseline_norm=baseline,
+        center1_params=gammas,
+        center1_wd_factor=FLAGS.gamma_center1_wd_factor,
+        noreg_params=betas,
+    )
+    logging.info(
+        f"Norm control: adaptive WD on {len(weights) if baseline else 0} trunk "
+        f"weights (baseline {baseline}, norm now {inner.params_norm(weights):.4f}); "
+        f"center-1 WD x{FLAGS.gamma_center1_wd_factor} on {len(gammas)} trunk "
+        f"gammas; noreg on {len(betas)} trunk betas"
+    )
+    return optimizer
+
+
+def _log_norms(live_model, optimizer, gen):
+    import torch
+
+    inner = getattr(optimizer, "inner_optimizer", optimizer)
+    g = torch.cat([m.weight.detach().flatten() for m in _trunk_bns(live_model)])
+    b = torch.cat([m.bias.detach().flatten() for m in _trunk_bns(live_model)])
+    logging.info(
+        f"Norm control end of gen {gen}: trunk weight norm "
+        f"{inner.params_norm(_trunk_weight_params(live_model)):.4f} "
+        f"(ratio {inner.last_norm_ratio}, adaptive scale {inner._adaptive_scale:.4f}); "
+        f"trunk gamma median {g.median():.4f} mean {g.mean():.4f}; "
+        f"beta |median| {b.abs().median():.4f}; lr {inner.learning_rate:.4g}"
+    )
 
 
 def _get_starting_gen(models_dir: str, start_gen: int) -> tuple[str, int]:
@@ -131,6 +240,12 @@ def _train_loop():
         live_model = model_utils.new_model(
             "p3achygo", config.model_config, config.optimizer
         )
+        if FLAGS.trunk_bn_eps > 0:
+            from backend_torch.model_layers_common import set_bn_eps
+
+            n = set_bn_eps(live_model.blocks, FLAGS.trunk_bn_eps)
+            live_model._config["trunk_bn_eps"] = FLAGS.trunk_bn_eps
+            logging.info(f"Trunk BN eps -> {FLAGS.trunk_bn_eps} on {n} BNs")
         save_model(live_model, live_model_path)
 
     if not Path(swa_model_path).exists():
@@ -143,12 +258,35 @@ def _train_loop():
             "This should only happen for model_0000."
         )
     swa_model = load_model(swa_model_path)
+    if FLAGS.trunk_bn_eps > 0:
+        bad = [m.eps for m in _trunk_bns(live_model) if m.eps != FLAGS.trunk_bn_eps]
+        assert not bad, f"live model trunk BN eps {set(bad)} != {FLAGS.trunk_bn_eps}"
+    brn_ramp_batches = 0
+    if FLAGS.batch_renorm:
+        from backend_torch.model_layers_common import enable_batch_renorm
+
+        brn_ramp_batches = int(round(FLAGS.brn_ramp_samples / config.batch_size))
+        n = enable_batch_renorm(
+            live_model.blocks,
+            FLAGS.brn_rmax,
+            FLAGS.brn_dmax,
+            brn_ramp_batches,
+            ramp_exp=True,
+        )
+        logging.info(
+            f"Batch Renorm on {n} trunk BNs: rmax {FLAGS.brn_rmax} dmax "
+            f"{FLAGS.brn_dmax}, exp ramp {brn_ramp_batches} batches"
+        )
 
     summary(live_model)
 
     # Apply backend-specific training-time transforms (fp16 + channels_last
     # + torch.compile reduce-overhead for torch; no-op for TF).
     live_model = compile_for_training(live_model)
+    if _norm_control_on():
+        optimizer = _configure_norm_control(
+            live_model, optimizer, config, model_gen, batch_num
+        )
 
     max_gens = FLAGS.max_gens
     gens_trained = 0
@@ -173,6 +311,10 @@ def _train_loop():
                 _fetch_chunk, FLAGS.chunk_dir, source_run_id, next_gen + 1
             )
         logging.info(f"Training generation {next_gen} on {chunk_path}")
+        if FLAGS.batch_renorm:
+            from backend_torch.model_layers_common import set_brn_step
+
+            set_brn_step(live_model.blocks, batch_num)
 
         batch_num, live_model, swa_model, optimizer = rl_loop.train.train_one_gen(
             live_model,
@@ -185,6 +327,9 @@ def _train_loop():
             is_gpu=True,
             batch_num=batch_num,
         )
+
+        if _norm_control_on():
+            _log_norms(live_model, optimizer, next_gen)
 
         if chunk_downloaded:
             logging.info(f"Deleting local chunk {chunk_path}")

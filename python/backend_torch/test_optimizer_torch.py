@@ -12,7 +12,10 @@ import unittest.mock
 # Patch torch.compile to a no-op before importing optimizer_torch
 import torch
 
-unittest.mock.patch("torch.compile", lambda fn, **kw: fn).start()
+# Handles both @torch.compile and @torch.compile(mode=...).
+unittest.mock.patch(
+    "torch.compile", lambda fn=None, **kw: fn if fn is not None else (lambda f: f)
+).start()
 
 sys.path.insert(0, os.path.dirname(__file__))
 from backend_torch.optimizer import (
@@ -358,6 +361,52 @@ def test_multistep():
     return all_ok
 
 
+# ------------------------------------------------------------------ #
+# Test 7: KataGo-style norm control (center-1 gamma WD, beta noreg)   #
+# ------------------------------------------------------------------ #
+
+
+def test_norm_control_center1_wd_and_noreg():
+    print("\nTest 7: center-1 gamma WD + adaptive scale, beta noreg")
+    WD_MUON, LR, RATIO = 0.1, 1e-2, 0.5
+    named = [
+        ("trunk.conv.kernel", torch.nn.Parameter(torch.randn(3, 3, 8, 8))),
+        ("trunk.bn.gamma", torch.nn.Parameter(torch.full((8,), 1.5))),
+        ("trunk.bn.beta", torch.nn.Parameter(torch.full((8,), 0.3))),
+    ]
+    kernel, gamma, beta = (p for _, p in named)
+    opt = _make_opt(
+        named,
+        lr=LR,
+        adam_lr_ratio=RATIO,
+        weight_decay=WD_MUON,
+        global_clipnorm=None,
+    )
+    baseline = opt.params_norm([kernel]) / 2.0  # ratio 2
+    opt.configure_norm_control(
+        adaptive_params=[kernel],
+        baseline_norm=baseline,
+        center1_params=[gamma],
+        center1_wd_factor=0.25,
+        noreg_params=[beta],
+    )
+    for p in (kernel, gamma, beta):
+        p.grad = torch.zeros_like(p)  # isolate the decay
+    opt.step()
+    scale = 2.0 ** (2.0 * math.tanh(3.0 * math.log(2.0)))
+    x = LR * RATIO * WD_MUON * 0.25 * scale
+    ok = check(
+        "gamma -> 1 + (g - 1)(1 - lr*wd*adaptive)",
+        gamma.data,
+        torch.full((8,), 1.0 + 0.5 * (1.0 - x)),
+        atol=1e-7,
+    )
+    ok &= check("beta unchanged (noreg)", beta.data, torch.full((8,), 0.3), atol=0)
+    ok &= abs(opt._adaptive_scale - scale) < 1e-6
+    assert ok
+    return ok
+
+
 if __name__ == "__main__":
     results = [
         test_ns_singular_values(),
@@ -366,6 +415,7 @@ if __name__ == "__main__":
         test_wd_lr_scaling(),
         test_wd_categories(),
         test_multistep(),
+        test_norm_control_center1_wd_and_noreg(),
     ]
     results = [r for r in results if r is not None]
     print(f"\n{'All targeted tests passed.' if all(results) else 'Some tests FAILED.'}")

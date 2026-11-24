@@ -438,6 +438,7 @@ class ConvMuon(Optimizer):
         self._center1_params: list = []
         self._center1_ids: set = set()
         self._center1_rate = 0.0
+        self._center1_wd = False
 
         # Default any unmapped param to ("muon", 1.0) so out-of-band uses
         # (e.g. unit tests that pass a single Parameter without going through
@@ -453,7 +454,7 @@ class ConvMuon(Optimizer):
     # ------------------------------------------------------------------ #
 
     def _wd_for(self, param: Tensor) -> float:
-        if id(param) in self._center1_ids:
+        if id(param) in self._center1_ids and not self._center1_wd:
             return 0.0  # replaced by the pull toward 1 in step()
         kind, factor = self._wd_factors[id(param)]
         base = self._base_muon_wd if kind == "muon" else self._base_adam_wd
@@ -469,6 +470,8 @@ class ConvMuon(Optimizer):
         every: int = 50,
         center1_params=(),
         center1_rate: float = 0.0,
+        center1_wd_factor: float = 0.0,
+        noreg_params=(),
     ):
         """KataGo-style norm control (both parts off unless given).
 
@@ -478,6 +481,14 @@ class ConvMuon(Optimizer):
 
         Center-1 pull: after each step, p -= center1_rate * (p - 1) for
         `center1_params`, whose ordinary (toward-0) decay is turned off.
+
+        center1_wd_factor > 0 replaces the fixed pull with KataGo's
+        gamma_weight_decay_center_1: `center1_params` (AdamW path only) get the
+        ordinary decoupled decay at `center1_wd_factor` x the muon base WD,
+        with the same LR scaling and, when adaptive WD is on, the same adaptive
+        multiplier, but decaying (p - 1) instead of p.
+
+        noreg_params get zero weight decay (KataGo's "noreg" group).
         """
         self._adaptive_params = list(adaptive_params)
         self._adaptive_ids = {id(p) for p in self._adaptive_params}
@@ -487,6 +498,22 @@ class ConvMuon(Optimizer):
         self._center1_params = list(center1_params)
         self._center1_ids = {id(p) for p in self._center1_params}
         self._center1_rate = float(center1_rate)
+        self._center1_wd = center1_wd_factor > 0
+        if self._center1_wd:
+            muon_ids = {
+                id(p)
+                for g in self.param_groups
+                if g["group"] == "muon"
+                for p in g["params"]
+            }
+            assert not (self._center1_ids & muon_ids), "center-1 WD is AdamW-path only"
+            self._center1_rate = 0.0
+            for p in self._center1_params:
+                self._wd_factors[id(p)] = ("muon", float(center1_wd_factor))
+            if baseline_norm:
+                self._adaptive_ids |= self._center1_ids
+        for p in noreg_params:
+            self._wd_factors[id(p)] = (self._wd_factors[id(p)][0], 0.0)
 
     @torch.no_grad()
     def params_norm(self, params) -> float:
@@ -831,6 +858,15 @@ class ConvMuon(Optimizer):
         # param *= (1 - lr * wd)  per-param scalar
         wd_factors_list = [self._wd_for(p) * lr_scale for p in params]
         torch._foreach_mul_(params, [1.0 - lr * wd for wd in wd_factors_list])
+        if self._center1_wd:
+            # p * (1 - x) + x == 1 + (p - 1) * (1 - x): decay toward 1.
+            c1 = [
+                (p, lr * wd)
+                for p, wd in zip(params, wd_factors_list)
+                if id(p) in self._center1_ids
+            ]
+            if c1:
+                torch._foreach_add_([p for p, _ in c1], [x for _, x in c1])
 
         # param += -lr * bias_corr * m / (sqrt(v) + eps)
         denom = torch._foreach_sqrt(vs)
