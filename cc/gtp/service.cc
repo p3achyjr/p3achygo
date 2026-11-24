@@ -300,8 +300,11 @@ Response<> ServiceImpl::GtpClearBoard(std::optional<int> id) {
 }
 
 Response<> ServiceImpl::GtpKomi(std::optional<int> id, float komi) {
-  komi_ = komi;
-  game_->SetKomi(komi);
+  komi_ = eval::SearchKomi(cfg_, komi);
+  if (komi_ != komi) {
+    LOG(INFO) << "komi " << komi << " (territory) -> " << komi_ << " (area)";
+  }
+  game_->SetKomi(komi_);
   return MakeResponse(id);
 }
 

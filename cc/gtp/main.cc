@@ -41,6 +41,10 @@ Flags:
                   num_threads_per_game: <int>
                   enable_pondering: true | false
                   ponder_max_tree_mb: <int> 0 = size to fit in RAM
+                  territory_komi: true | false
+                                            true: GTP `komi` is territory
+                                            komi; search with komi + 1
+                                            (Japanese 6.5 -> area 7.5)
   --n           Visit budget per move; overrides `n` in the config.
   --verbose     Log the config at startup, and each move's search
                 details, to stderr.
