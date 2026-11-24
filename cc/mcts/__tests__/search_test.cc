@@ -4,6 +4,7 @@
 #include "cc/mcts/search.h"
 
 #include <filesystem>
+#include <limits>
 #include <random>
 #include <thread>
 #include <unordered_map>
@@ -17,6 +18,8 @@
 #include "cc/game/color.h"
 #include "cc/game/game.h"
 #include "cc/game/loc.h"
+#include "cc/mcts/bias_cache.h"
+#include "cc/mcts/gumbel.h"
 #include "cc/mcts/node_table.h"
 #include "cc/mcts/search_policy.h"
 #include "cc/mcts/tree.h"
@@ -566,6 +569,35 @@ TEST_CASE("RoundFreeSearch - exact stat recompute") {
           CHECK(c.max_de == 0.0);
         }
       }
+    }
+  }
+}
+
+// Single-threaded PUCT search (GumbelEvaluator): every node's backed-up score
+// equals the bottom-up recompute, with incremental updates (no bias cache) and
+// with idempotent recompute (bias cache on, as in self-play and GTP).
+TEST_CASE("SearchRootPuct - score recompute") {
+  for (const bool bias : {false, true}) {
+    for (int pos = 0; pos < 4; ++pos) {
+      NNInterface nn_interface(1, std::numeric_limits<int64_t>::max(),
+                               /*cache_size=*/4096,
+                               std::make_unique<HashEngine>(1, 8.0f));
+      BiasCache bias_cache(0.85f, 0.45f);
+      GumbelEvaluator gumbel(&nn_interface, 0, bias ? &bias_cache : nullptr);
+      MctsNodeTable node_table;
+      Game game;
+      game::Color to_move;
+      RandomOpening(game, 20 + 3 * pos, 91 + pos, &to_move);
+      core::Probability probability;
+      TreeNode* root =
+          node_table.GetOrCreate(game.board().hash(), to_move, false);
+      gumbel.SearchRootPuct(probability, game, &node_table, root, to_move, 800,
+                            PuctParams{});
+      const TreeCheck c = CheckTree(root, /*mcts=*/true);
+      INFO("bias=" << bias << " pos=" << pos << " nodes=" << c.nodes
+                   << " max_ds=" << c.max_ds);
+      CHECK(c.stat_nodes > 0);
+      CHECK(c.max_ds < 1e-3);
     }
   }
 }

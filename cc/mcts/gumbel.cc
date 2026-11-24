@@ -785,6 +785,7 @@ void GumbelEvaluator::SingleBackup(TreeNode* node, game::Loc action,
     node->w_outcome = node->init_outcome_est;
     node->v = node->init_util_est;
     node->v_outcome = node->init_outcome_est;
+    node->score = node->init_score_est;
     UpdateVCategorial(node, leaf_q_outcome);
     RecomputeVCategoricalStats(node, puct_params.v_cat_var_scale_prior_visits);
     return;

@@ -149,6 +149,7 @@ void LeafEvaluator::EvaluateRoot(core::Probability& probability,
   node->v = node->init_util_est;
   node->v_outcome = node->init_outcome_est;
   node->v_err = node->init_err_est;
+  node->score = node->init_score_est;
   int v_bucket = std::clamp(
       static_cast<int>((node->init_outcome_est + 1.0f) / kBucketRange), 0,
       kNumVBuckets - 1);
