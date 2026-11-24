@@ -286,6 +286,7 @@ void TopologicalBackup(BackupPriorityQueue& backup_pq, BiasCache* bias_cache,
         node->w_outcome = node->init_outcome_est;
         node->v = node->init_util_est;
         node->v_outcome = node->init_outcome_est;
+        node->score = node->init_score_est;
       } else {
         const float obs_bias = FetchObsBias(bias_cache, node);
         RecomputeNodeStats(node, obs_bias, value_weight_exponent);
@@ -332,6 +333,7 @@ void BackupStep(int worker_id, TreeNode* node, game::Loc action, bool is_leaf,
       node->v = node->init_util_est;
       node->v_outcome = node->init_outcome_est;
       node->v_err = node->init_err_est;
+      node->score = node->init_score_est;
     } else {
       const float obs_bias = FetchObsBias(bias_cache, node);
       RecomputeNodeStats(node, obs_bias, puct_params.value_weight_exponent);
@@ -512,6 +514,7 @@ void BackupStepRoundFree(TreeNode* node, game::Loc action, bool is_leaf,
     node->v = node->init_util_est;
     node->v_outcome = node->init_outcome_est;
     node->v_err = node->init_err_est;
+    node->score = node->init_score_est;
   } else {
     RecomputeNodeStats(node, FetchObsBias(bias_cache, node),
                        puct_params.value_weight_exponent);

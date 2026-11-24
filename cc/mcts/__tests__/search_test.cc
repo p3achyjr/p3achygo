@@ -247,8 +247,8 @@ TreeCheck CheckTree(TreeNode* root, bool mcts) {
     }
     Exp e;
     if (sum_cv == 0) {
-      // The leaf backup branch does not write `score` (stays 0).
-      e = {node->init_util_est, node->init_outcome_est, 0.0f,
+      // Leaf backup: every stat is the node's own NN estimate.
+      e = {node->init_util_est, node->init_outcome_est, node->init_score_est,
            node->init_err_est};
     } else {
       float w = node->init_util_est, w_outcome = node->init_outcome_est,
