@@ -428,6 +428,16 @@ class ConvMuon(Optimizer):
         self._global_step = 0
         self._lr_schedule = None
         self.last_grad_norm: float = 0.0
+        # Norm control, off by default; see configure_norm_control().
+        self._adaptive_params: list = []
+        self._adaptive_ids: set = set()
+        self._adaptive_baseline: Optional[float] = None
+        self._adaptive_every = 50
+        self._adaptive_scale = 1.0
+        self.last_norm_ratio: Optional[float] = None
+        self._center1_params: list = []
+        self._center1_ids: set = set()
+        self._center1_rate = 0.0
 
         # Default any unmapped param to ("muon", 1.0) so out-of-band uses
         # (e.g. unit tests that pass a single Parameter without going through
@@ -443,9 +453,46 @@ class ConvMuon(Optimizer):
     # ------------------------------------------------------------------ #
 
     def _wd_for(self, param: Tensor) -> float:
+        if id(param) in self._center1_ids:
+            return 0.0  # replaced by the pull toward 1 in step()
         kind, factor = self._wd_factors[id(param)]
         base = self._base_muon_wd if kind == "muon" else self._base_adam_wd
-        return base * factor
+        wd = base * factor
+        if id(param) in self._adaptive_ids:
+            wd *= self._adaptive_scale
+        return wd
+
+    def configure_norm_control(
+        self,
+        adaptive_params=(),
+        baseline_norm: Optional[float] = None,
+        every: int = 50,
+        center1_params=(),
+        center1_rate: float = 0.0,
+    ):
+        """KataGo-style norm control (both parts off unless given).
+
+        Adaptive WD: every `every` steps, ratio = ||adaptive_params|| / baseline_norm
+        and the decay of those params is multiplied by 2^(2 tanh(3 ln ratio))
+        (KataGo train.py get_weight_decay), pulling the norm back to the baseline.
+
+        Center-1 pull: after each step, p -= center1_rate * (p - 1) for
+        `center1_params`, whose ordinary (toward-0) decay is turned off.
+        """
+        self._adaptive_params = list(adaptive_params)
+        self._adaptive_ids = {id(p) for p in self._adaptive_params}
+        self._adaptive_baseline = baseline_norm
+        self._adaptive_every = max(1, int(every))
+        self._adaptive_scale = 1.0
+        self._center1_params = list(center1_params)
+        self._center1_ids = {id(p) for p in self._center1_params}
+        self._center1_rate = float(center1_rate)
+
+    @torch.no_grad()
+    def params_norm(self, params) -> float:
+        return float(
+            torch.stack(torch._foreach_norm(list(params))).square().sum().sqrt()
+        )
 
     def _lr_scale(self, lr: float) -> float:
         if self._wd_lr_exponent is None or self._wd_lr_max is None:
@@ -601,6 +648,18 @@ class ConvMuon(Optimizer):
             lr = float(self._lr_schedule(self._global_step))
             for group in self.param_groups:
                 group["lr"] = self._group_lr(group, lr)
+        if (
+            self._adaptive_params
+            and self._adaptive_baseline
+            and (self._global_step % self._adaptive_every == 0)
+        ):
+            ratio = self.params_norm(self._adaptive_params) / (
+                self._adaptive_baseline + 1e-30
+            )
+            self.last_norm_ratio = ratio
+            self._adaptive_scale = 2.0 ** (
+                2.0 * math.tanh(math.log(ratio + 1e-30) * 3.0)
+            )
         self._global_step += 1
 
         all_params = [
@@ -623,6 +682,11 @@ class ConvMuon(Optimizer):
                 self._muon_step(group, group["lr"], lr_scale)
             else:
                 self._adamw_step(group, group["lr"], lr_scale)
+
+        if self._center1_params and self._center1_rate > 0:
+            with torch.no_grad():
+                torch._foreach_mul_(self._center1_params, 1.0 - self._center1_rate)
+                torch._foreach_add_(self._center1_params, self._center1_rate)
 
         return loss
 

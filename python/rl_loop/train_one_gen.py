@@ -59,6 +59,32 @@ flags.DEFINE_float(
     "If > 0, set every trunk BN eps to this value (function-preserving gamma "
     "and optimizer-moment rescale; saved in the checkpoint config). 0 = keep.",
 )
+flags.DEFINE_string(
+    "adaptive_wd_baseline_path",
+    "",
+    "If set, KataGo-style adaptive WD on the trunk weight matrices: their decay "
+    "is scaled by 2^(2 tanh(3 ln(norm / baseline))). JSON {'norm': x}; written "
+    "from the starting live model if missing.",
+)
+flags.DEFINE_float(
+    "gamma_pull_tau_steps",
+    0.0,
+    "If > 0, trunk BN gammas are pulled toward 1 with this time constant in "
+    "steps (gamma -= (gamma - 1) / tau per step) instead of decaying toward 0.",
+)
+
+
+def _trunk_weight_params(model) -> list:
+    """Trunk weight matrices (ndim >= 2): the set whose norm adaptive WD holds."""
+    return [p for p in model.blocks.parameters() if p.requires_grad and p.ndim >= 2]
+
+
+def _trunk_gammas(model) -> list:
+    return [
+        m.weight
+        for m in model.blocks.modules()
+        if isinstance(m, torch.nn.BatchNorm2d) and m.weight is not None
+    ]
 
 
 def get_model_path(models_dir: str, gen: int) -> Tuple[str, int]:
@@ -150,6 +176,42 @@ def main(_):
             f"Trunk BN eps -> {FLAGS.trunk_bn_eps}: {n_live} live / {n_swa} SWA BNs "
             "(gamma + optimizer moments rescaled)"
         )
+    if FLAGS.adaptive_wd_baseline_path or FLAGS.gamma_pull_tau_steps > 0:
+        import json
+        from backend_shim import make_optimizer
+
+        if optimizer is None or isinstance(optimizer, dict):
+            optimizer = make_optimizer(
+                live_model,
+                config,
+                ConstantLRSchedule(rl_loop.train.get_lr(config, FLAGS.gen)),
+                is_gpu,
+                loaded_state=optimizer,
+            )
+        inner = getattr(optimizer, "inner_optimizer", optimizer)
+        weights, gammas, baseline = _trunk_weight_params(live_model), [], None
+        if FLAGS.adaptive_wd_baseline_path:
+            bp = Path(FLAGS.adaptive_wd_baseline_path)
+            if not bp.exists():
+                bp.write_text(
+                    json.dumps({"norm": inner.params_norm(weights), "gen": FLAGS.gen})
+                )
+            baseline = float(json.loads(bp.read_text())["norm"])
+        if FLAGS.gamma_pull_tau_steps > 0:
+            gammas = _trunk_gammas(live_model)
+        inner.configure_norm_control(
+            adaptive_params=weights if baseline else (),
+            baseline_norm=baseline,
+            center1_params=gammas,
+            center1_rate=1.0 / FLAGS.gamma_pull_tau_steps if gammas else 0.0,
+        )
+        g = torch.cat([x.detach().flatten() for x in gammas]) if gammas else None
+        logging.info(
+            f"Norm control: adaptive WD on {len(weights) if baseline else 0} trunk "
+            f"weights, baseline {baseline}, norm now {inner.params_norm(weights):.4f}; "
+            f"gamma pull on {len(gammas)} trunk BNs, tau {FLAGS.gamma_pull_tau_steps} steps"
+            + (f", |gamma| median {g.abs().median():.4f}" if g is not None else "")
+        )
     logging.info(f"Using Train Dataset: {FLAGS.chunk_path}")
     logging.info(f"Using Val Dataset: {FLAGS.val_ds_path}")
     logging.info(f"Using Model Checkpoint: {live_model_path}")
@@ -174,6 +236,15 @@ def main(_):
         batch_num=batch_num,
         chunk_size=FLAGS.chunk_size,
     )
+    if FLAGS.adaptive_wd_baseline_path or FLAGS.gamma_pull_tau_steps > 0:
+        inner = getattr(optimizer, "inner_optimizer", optimizer)
+        g = torch.cat([x.detach().flatten() for x in _trunk_gammas(live_model)])
+        logging.info(
+            f"Norm control end of gen: trunk weight norm "
+            f"{inner.params_norm(_trunk_weight_params(live_model)):.4f} "
+            f"(ratio {inner.last_norm_ratio}, adaptive scale {inner._adaptive_scale:.4f}); "
+            f"trunk |gamma| median {g.abs().median():.4f} mean {g.mean():.4f}"
+        )
     save_model(live_model, live_model_path, optimizer=optimizer)
 
     # save live checkpoint
