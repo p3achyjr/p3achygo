@@ -20,6 +20,15 @@ enum class TreeNodeState {
   kNnEvaluated = 2,  // NN evaluation has been done.
 };
 
+// A BiasCache entry, shared by every node whose local pattern maps to it.
+// Holds sums of the nodes' last contributions; `mu` guards both (KataGo: a lock
+// per subtree value bias entry).
+struct BiasCacheEntry final {
+  absl::Mutex mu;
+  float obs_bias_sum = 0;  // weighted observed error
+  float weight_sum = 0;    // weighted visits
+};
+
 struct TreeNode final {
   TreeNode(game::Zobrist::Hash board_hash) : board_hash(board_hash) {};
   ~TreeNode() {
@@ -28,9 +37,10 @@ struct TreeNode final {
       return;
     }
 
-    // TODO: make this thread-safe with BiasCache updates.
-    bias_cache_entry->first -= (kBiasCacheForgetWeight * last_obs_bias_term);
-    bias_cache_entry->second -= (kBiasCacheForgetWeight * last_weight_term);
+    absl::MutexLock l(&bias_cache_entry->mu);
+    bias_cache_entry->obs_bias_sum -=
+        (kBiasCacheForgetWeight * last_obs_bias_term);
+    bias_cache_entry->weight_sum -= (kBiasCacheForgetWeight * last_weight_term);
   }
 
   const game::Zobrist::Hash board_hash;
@@ -91,7 +101,6 @@ struct TreeNode final {
   }
 
   // Bias cache stuff.
-  using BiasCacheEntry = std::pair<float, float>;
   std::shared_ptr<BiasCacheEntry> bias_cache_entry;
   float last_obs_bias_term = 0;
   float last_weight_term = 0;
