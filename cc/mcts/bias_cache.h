@@ -1,8 +1,11 @@
 #pragma once
 
+#include <array>
+#include <cstdint>
 #include <sstream>
 #include <string>
 
+#include "absl/synchronization/mutex.h"
 #include "cc/constants/constants.h"
 #include "cc/core/lru_cache.h"
 #include "cc/core/probability.h"
@@ -129,7 +132,7 @@ class BiasCache final {
   // alpha = how much to attenuate visit counts.
   // lambda = how much of the bias to adjust root value estimate by.
   BiasCache(float alpha = 0.8f, float lambda = 0.4f)
-      : alpha_(alpha), lambda_(lambda){};
+      : alpha_(alpha), lambda_(lambda) {};
   ~BiasCache() = default;
 
   BiasCache(const BiasCache&) = delete;
@@ -152,9 +155,9 @@ class BiasCache final {
   }
 
   // Updates the node's cache entry and last observed terms, and returns the
-  // weighted overall bias.
+  // weighted overall bias. Callers serialize updates of the same node (backup
+  // protocol), so only the shared entry needs a lock.
   inline float UpdateAndFetch(TreeNode* node) {
-    absl::MutexLock l(&mu_);
     // assumes node is fully updated.
     float weighted_child_utility = 0;
     for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
@@ -177,6 +180,7 @@ class BiasCache final {
     const float obs_bias_term_delta = obs_bias_term - node->last_obs_bias_term;
 
     std::shared_ptr<Entry>& entry = node->bias_cache_entry;
+    absl::MutexLock l(&EntryMu(entry.get()));
     entry->first += obs_bias_term_delta;
     entry->second += weight_term_delta;
     node->last_weight_term = weight_term;
@@ -186,9 +190,10 @@ class BiasCache final {
 
   // Reads the current weighted bias for the node without updating anything.
   inline float Fetch(const TreeNode* node) const {
-    absl::MutexLock l(&mu_);
     const std::shared_ptr<Entry>& entry = node->bias_cache_entry;
-    if (!entry || entry->second == 0.0f) return 0.0f;
+    if (!entry) return 0.0f;
+    absl::MutexLock l(&EntryMu(entry.get()));
+    if (entry->second == 0.0f) return 0.0f;
     return lambda_ * (entry->first / entry->second);
   }
 
@@ -199,10 +204,19 @@ class BiasCache final {
   }
 
  private:
+  // Striped locks for entry sums, keyed by entry address (KataGo uses a lock
+  // per subtree value bias entry).
+  static constexpr size_t kNumEntryStripes = 1024;
+  absl::Mutex& EntryMu(const Entry* entry) const {
+    return entry_mu_[(reinterpret_cast<uintptr_t>(entry) >> 4) %
+                     kNumEntryStripes];
+  }
+
   absl::flat_hash_map<Key, std::shared_ptr<Entry>> cache_;
   const float alpha_;
   const float lambda_;
-  mutable absl::Mutex mu_;
+  mutable absl::Mutex mu_;  // guards cache_
+  mutable std::array<absl::Mutex, kNumEntryStripes> entry_mu_;
 };
 
 inline std::string ToString(const LocalPattern& pattern) {
