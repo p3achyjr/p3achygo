@@ -40,6 +40,8 @@ class LeafEvaluator final {
   // Disable Copy and Move.
   LeafEvaluator(LeafEvaluator const&) = delete;
   LeafEvaluator& operator=(LeafEvaluator const&) = delete;
+
+  const ScoreUtilityParams& score_params() const { return score_params_; }
   LeafEvaluator(LeafEvaluator&&) = delete;
   LeafEvaluator& operator=(LeafEvaluator&&) = delete;
 

@@ -16,6 +16,7 @@
 #include "cc/game/loc.h"
 #include "cc/mcts/bias_cache.h"
 #include "cc/mcts/node_table.h"
+#include "cc/mcts/search.h"
 #include "cc/mcts/tree.h"
 #include "cc/nn/nn_interface.h"
 
@@ -617,6 +618,18 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
     leaf_evaluator_.EvaluateRoot(probability, game, root, color_to_move);
   }
 
+  // Score utility center; see Search::Run. Serial backups do not use
+  // value_weight_exponent (SingleBackup), so neither does the recompute.
+  float score_center = root->init_score_est;
+  if (leaf_evaluator_.score_params().searched_score_center) {
+    score_center = root->score;
+    if (root->n > 1) {
+      RecenterTree(root, color_to_move, score_center,
+                   leaf_evaluator_.score_params(), bias_cache_,
+                   /*value_weight_exponent=*/0.0f, /*num_threads=*/1);
+    }
+  }
+
   // Freeze visit counts, so we can reconstruct stats later.
   std::array<float, constants::kMaxMovesPerPosition> visit_counts_pre_search;
   for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
@@ -629,7 +642,7 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
     Game search_game = game;
     SearchPath search_path =
         Search(probability, search_game, node_table, root, color_to_move,
-               color_to_move, root->init_score_est, &search_policy,
+               color_to_move, score_center, &search_policy,
                /*first_is_root=*/true);
     const bool use_idempotent_updates =
         node_table->is_graph() || (bias_cache_ != nullptr);

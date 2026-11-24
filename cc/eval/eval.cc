@@ -235,22 +235,16 @@ void PlayEvalGame(size_t seed, int game_id, int total_num_workers,
               ? gumbel.SearchRootPuct(
                     probability, game, player_table, player_tree, color_to_move,
                     active_cfg.n,
-                    PuctParams::Builder()
-                        .set_kind(active_cfg.use_lcb
-                                      ? PuctRootSelectionPolicy::kLcb
-                                      : PuctRootSelectionPolicy::kVisitCount)
-                        .set_c_puct(active_cfg.c_puct)
-                        .set_c_puct_v_2(active_cfg.c_puct_v_2)
-                        .set_use_puct_v(active_cfg.use_puct_v)
-                        .set_enable_var_scaling(active_cfg.var_scale_cpuct)
-                        .set_var_scale_prior_visits(
-                            active_cfg.var_scale_prior_visits)
-                        .set_enable_m3_bonus(active_cfg.enable_m3_bonus)
-                        .set_m3_prior_visits(active_cfg.m3_prior_visits)
-                        .set_p_opt_weight(active_cfg.p_opt_weight)
-                        .set_root_fpu(active_cfg.root_fpu)
-                        .set_lcb_min_visit_frac(active_cfg.lcb_min_visit_frac)
-                        .build())
+                    [&]() {
+                      // Same as GTP's serial path: every PuctParams key, and
+                      // visit-count sampling for the first sampling_num_moves.
+                      PuctParams p = MakePuctParams(active_cfg);
+                      if (game.num_moves() < active_cfg.sampling_num_moves) {
+                        p.kind = PuctRootSelectionPolicy::kVisitCountSample;
+                        p.tau = active_cfg.sampling_temperature;
+                      }
+                      return p;
+                    }())
               : gumbel.SearchRoot(
                     probability, game, player_table, player_tree, color_to_move,
                     mcts::GumbelSearchParams::Builder()
