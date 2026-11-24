@@ -224,6 +224,7 @@ void LeafEvaluator::FetchRootEval(TreeNode* node, const game::Game& game,
   node->v = node->init_util_est;
   node->w_outcome = node->init_outcome_est;
   node->v_outcome = node->init_outcome_est;
+  node->score = node->init_score_est;
   node->n = 1;
 }
 }  // namespace mcts

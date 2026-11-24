@@ -557,6 +557,11 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
       root->v = root_ratio * root->v + child_ratio * child_stat.q;
       root->v_outcome =
           root_ratio * root->v_outcome + child_ratio * child_stat.qz;
+      if (root->child(result.mcts_move) != nullptr) {
+        // Backed-up child score (ChildScore is the child's raw NN estimate).
+        root->score = root_ratio * root->score +
+                      child_ratio * -root->child(result.mcts_move)->score;
+      }
 
       // This is imprecise but probably good enough.
       if (root->child(result.mcts_move) != nullptr) {
