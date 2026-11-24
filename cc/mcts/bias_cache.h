@@ -126,8 +126,7 @@ class BiasCache final {
   // (last_player, last_move, two_moves_ago, pattern_hash, atari_hash, ko_hash)
   using Key = std::tuple<game::Color, game::Loc, game::Loc, uint64_t, uint64_t,
                          uint64_t>;
-  // (weighted L1 error, weighted visits)
-  using Entry = std::pair<float, float>;
+  using Entry = BiasCacheEntry;
 
   // alpha = how much to attenuate visit counts.
   // lambda = how much of the bias to adjust root value estimate by.
@@ -149,14 +148,14 @@ class BiasCache final {
       return cache_[key];
     }
 
-    std::shared_ptr<Entry> entry = std::make_shared<Entry>(0.0f, 0.0f);
+    std::shared_ptr<Entry> entry = std::make_shared<Entry>();
     cache_[key] = entry;
     return entry;
   }
 
   // Updates the node's cache entry and last observed terms, and returns the
   // weighted overall bias. Callers serialize updates of the same node (backup
-  // protocol), so only the shared entry needs a lock.
+  // protocol), so only the shared entry needs its lock.
   inline float UpdateAndFetch(TreeNode* node) {
     // assumes node is fully updated.
     float weighted_child_utility = 0;
@@ -180,43 +179,35 @@ class BiasCache final {
     const float obs_bias_term_delta = obs_bias_term - node->last_obs_bias_term;
 
     std::shared_ptr<Entry>& entry = node->bias_cache_entry;
-    absl::MutexLock l(&EntryMu(entry.get()));
-    entry->first += obs_bias_term_delta;
-    entry->second += weight_term_delta;
+    absl::MutexLock l(&entry->mu);
+    entry->obs_bias_sum += obs_bias_term_delta;
+    entry->weight_sum += weight_term_delta;
     node->last_weight_term = weight_term;
     node->last_obs_bias_term = obs_bias_term;
-    return lambda_ * (entry->first / entry->second);
+    return lambda_ * (entry->obs_bias_sum / entry->weight_sum);
   }
 
   // Reads the current weighted bias for the node without updating anything.
   inline float Fetch(const TreeNode* node) const {
     const std::shared_ptr<Entry>& entry = node->bias_cache_entry;
     if (!entry) return 0.0f;
-    absl::MutexLock l(&EntryMu(entry.get()));
-    if (entry->second == 0.0f) return 0.0f;
-    return lambda_ * (entry->first / entry->second);
+    absl::MutexLock l(&entry->mu);
+    if (entry->weight_sum == 0.0f) return 0.0f;
+    return lambda_ * (entry->obs_bias_sum / entry->weight_sum);
   }
 
   inline uint32_t PruneUnused() {
+    absl::MutexLock l(&mu_);
     return absl::erase_if(cache_, [&](const auto& entry) {
       return entry.second.use_count() <= 1;
     });
   }
 
  private:
-  // Striped locks for entry sums, keyed by entry address (KataGo uses a lock
-  // per subtree value bias entry).
-  static constexpr size_t kNumEntryStripes = 1024;
-  absl::Mutex& EntryMu(const Entry* entry) const {
-    return entry_mu_[(reinterpret_cast<uintptr_t>(entry) >> 4) %
-                     kNumEntryStripes];
-  }
-
   absl::flat_hash_map<Key, std::shared_ptr<Entry>> cache_;
   const float alpha_;
   const float lambda_;
-  mutable absl::Mutex mu_;  // guards cache_
-  mutable std::array<absl::Mutex, kNumEntryStripes> entry_mu_;
+  mutable absl::Mutex mu_;  // guards cache_; entries have their own lock
 };
 
 inline std::string ToString(const LocalPattern& pattern) {
