@@ -22,8 +22,10 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <random>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
@@ -41,6 +43,13 @@ ABSL_FLAG(std::string, chunks, "", "Comma-separated golden chunk paths.");
 ABSL_FLAG(std::string, ids, "", "Comma-separated golden ids (same order).");
 ABSL_FLAG(std::string, out_path, "", "Output JSON.");
 ABSL_FLAG(int, top, 10, "Rows per category.");
+ABSL_FLAG(std::string, mode, "top",
+          "top: heaviest tails / clearest two humps (rules above). bands: "
+          "analysis-rule heavy tail (>5% of leaves beyond median +- 3 robust "
+          "sd in atanh space) and two peaks (modes at 10% mass, valley <= "
+          "0.5); random rows from the middle 5% and the 5% nearest the "
+          "cutoff of each strength, plus shares of moves.");
+ABSL_FLAG(uint64_t, seed, 20261125, "Sampling seed (bands mode).");
 
 namespace {
 
@@ -136,7 +145,9 @@ void Gmm2(const std::array<double, kNB>& P, double w[2], double mu[2],
   }
 }
 
-int NModes(const std::array<uint32_t, kNB>& H, int N, double frac, double dip) {
+// *ratio (if given): min over adjacent kept modes of valley / smaller peak.
+int NModes(const std::array<uint32_t, kNB>& H, int N, double frac, double dip,
+           double* ratio = nullptr) {
   std::array<double, kNB> S;
   for (int i = 0; i < kNB; ++i) {
     const double l = i > 0 ? H[i - 1] : 0, r = i < kNB - 1 ? H[i + 1] : 0;
@@ -162,6 +173,14 @@ int NModes(const std::array<uint32_t, kNB>& H, int N, double frac, double dip) {
       kept.push_back(p);
     } else if (S[p] > S[q]) {
       kept.back() = p;
+    }
+  }
+  if (ratio != nullptr) {
+    *ratio = 1e9;
+    for (size_t k = 1; k < kept.size(); ++k) {
+      const int q = kept[k - 1], p = kept[k];
+      const double valley = *std::min_element(S.begin() + q, S.begin() + p + 1);
+      *ratio = std::min(*ratio, valley / std::min(S[q], S[p]));
     }
   }
   return kept.size();
@@ -321,6 +340,194 @@ std::string RowJson(const Pick& p, const std::string& cat, int rank) {
   return j + buf;
 }
 
+// ---- bands mode ----
+
+struct BandRow {
+  uint64_t hash;
+  int golden;
+  int row;
+  float far_z;  // share of leaves beyond median +- 3 robust sd, atanh space
+  float ratio;  // valley / smaller peak (two-peak rows only)
+  bool n50;
+  bool two;
+};
+
+double FarZ(const std::array<uint32_t, kNB>& H, int N) {
+  static const std::array<double, kNB> kZ = [] {
+    std::array<double, kNB> z;
+    for (int i = 0; i < kNB; ++i) z[i] = std::atanh(Center(i));
+    return z;
+  }();
+  double min_gap = 1e9;
+  for (int i = 1; i < kNB; ++i) min_gap = std::min(min_gap, kZ[i] - kZ[i - 1]);
+  std::array<double, kNB> cs;
+  double acc = 0;
+  for (int i = 0; i < kNB; ++i) cs[i] = acc += double(H[i]) / N;
+  const double med = kZ[QIdx(cs, .5)];
+  const double rsd =
+      std::max((kZ[QIdx(cs, .75)] - kZ[QIdx(cs, .25)]) / 1.349, min_gap);
+  double far = 0;
+  for (int i = 0; i < kNB; ++i)
+    if (std::abs(kZ[i] - med) > 3 * rsd) far += H[i];
+  return far / N;
+}
+
+void BandScan(const std::string& path, int golden, std::vector<BandRow>* out) {
+  data::SequentialRecordReader reader(path, data::RecordReaderOptions::Zlib());
+  CHECK(reader.Init().ok()) << path;
+  std::string record;
+  for (int row = 0; reader.ReadRecord(&record).ok(); ++row) {
+    Example ex;
+    CHECK(ex.ParseFromString(record));
+    const std::string& d =
+        GetFeatureValues<std::string>("mcts_value_dist", ex).Get(0);
+    std::array<uint32_t, kNB> H;
+    std::memcpy(H.data(), d.data(), d.size());
+    int N = 0;
+    for (uint32_t x : H) N += x;
+    uint64_t h = 1469598103934665603ULL;
+    h = Fnv(h, GetFeatureValues<std::string>("board", ex).Get(0));
+    h = Fnv(h, GetFeatureValues<std::string>("color", ex).Get(0));
+    const float komi = GetFeatureValues<float>("komi", ex).Get(0);
+    h = Fnv(h, std::string(reinterpret_cast<const char*>(&komi), 4));
+    h = Fnv(h, GetFeatureValues<std::string>("last_moves", ex).Get(0));
+    h = Fnv(h, d);
+    BandRow r{h, golden, row, 0, 0, N >= 50, false};
+    if (r.n50) {
+      r.far_z = FarZ(H, N);
+      double ratio;
+      r.two = NModes(H, N, 0.10, 0.5, &ratio) >= 2;
+      if (r.two) r.ratio = ratio;
+    }
+    out->push_back(r);
+  }
+}
+
+void FetchRecords(const std::string& path, int golden,
+                  std::vector<Pick*> picks) {
+  data::SequentialRecordReader reader(path, data::RecordReaderOptions::Zlib());
+  CHECK(reader.Init().ok());
+  std::string record;
+  int max_row = 0;
+  for (Pick* p : picks) max_row = std::max(max_row, p->row);
+  for (int row = 0; row <= max_row && reader.ReadRecord(&record).ok(); ++row) {
+    for (Pick* p : picks)
+      if (p->golden == golden && p->row == row) p->record = record;
+  }
+}
+
+int RunBands(const std::vector<std::string>& chunks,
+             const std::vector<std::string>& ids) {
+  const int n = chunks.size();
+  std::vector<std::vector<BandRow>> per(n);
+  std::vector<std::thread> threads;
+  for (int g = 0; g < n; ++g)
+    threads.emplace_back(BandScan, chunks[g], std::stoi(ids[g]), &per[g]);
+  for (auto& t : threads) t.join();
+  threads.clear();
+
+  absl::flat_hash_set<uint64_t> seen;
+  std::vector<BandRow> rows;
+  int64_t total = 0;
+  for (const auto& v : per) {
+    for (const BandRow& r : v) {
+      ++total;
+      if (seen.insert(r.hash).second && r.n50) rows.push_back(r);
+    }
+  }
+  int64_t n_heavy = 0, n_two = 0, n_either = 0, n_both = 0;
+  std::vector<const BandRow*> heavy, two;
+  for (const BandRow& r : rows) {
+    const bool hv = r.far_z > 0.05;
+    n_heavy += hv;
+    n_two += r.two;
+    n_either += hv || r.two;
+    n_both += hv && r.two;
+    if (hv) heavy.push_back(&r);
+    if (r.two) two.push_back(&r);
+  }
+  // Strength order: heavy by far_z descending; two-peak by ratio ascending
+  // (lower valley = clearer). "slight" = the 5% of qualifiers nearest the
+  // cutoff; "median" = the middle 5% (47.5-52.5th percentile).
+  std::stable_sort(heavy.begin(), heavy.end(),
+                   [](auto a, auto b) { return a->far_z > b->far_z; });
+  std::stable_sort(two.begin(), two.end(),
+                   [](auto a, auto b) { return a->ratio < b->ratio; });
+  std::mt19937_64 rng(absl::GetFlag(FLAGS_seed));
+  const int top = absl::GetFlag(FLAGS_top);
+  std::vector<std::pair<std::string, std::vector<Pick>>> cats;
+  std::string windows;
+  char buf[512];
+  for (auto [name, v, is_heavy] : {std::tuple{"heavy", &heavy, true},
+                                   std::tuple{"bimodal", &two, false}}) {
+    const size_t m = v->size();
+    for (auto [suffix, lo, hi] :
+         {std::tuple{"_med", size_t(m * 0.475), size_t(m * 0.525)},
+          std::tuple{"_slight", size_t(m * 0.95), m}}) {
+      std::vector<const BandRow*> win(v->begin() + lo, v->begin() + hi);
+      std::shuffle(win.begin(), win.end(), rng);
+      win.resize(std::min<size_t>(top, win.size()));
+      std::vector<Pick> picks;
+      for (const BandRow* r : win) {
+        Pick p{is_heavy ? r->far_z : r->ratio,
+               r->hash,
+               r->golden,
+               r->row,
+               {},
+               {},
+               {},
+               {}};
+        picks.push_back(p);
+      }
+      std::sort(picks.begin(), picks.end(), [&](auto& a, auto& b) {
+        return is_heavy ? a.metric > b.metric : a.metric < b.metric;
+      });
+      auto val = [&](size_t i) {
+        return is_heavy ? (*v)[i]->far_z : (*v)[i]->ratio;
+      };
+      std::snprintf(buf, sizeof buf,
+                    "%s\"%s%s\":{\"from\":%.4f,\"to\":%.4f,\"n\":%zu}",
+                    windows.empty() ? "" : ",", name, suffix, val(lo),
+                    val(hi - 1), hi - lo);
+      windows += buf;
+      cats.push_back({std::string(name) + suffix, std::move(picks)});
+    }
+  }
+  for (int g = 0; g < n; ++g) {
+    std::vector<Pick*> want;
+    for (auto& [c, ps] : cats)
+      for (Pick& p : ps)
+        if (p.golden == std::stoi(ids[g])) want.push_back(&p);
+    if (!want.empty())
+      threads.emplace_back(FetchRecords, chunks[g], std::stoi(ids[g]), want);
+  }
+  for (auto& t : threads) t.join();
+
+  std::string out = "{\"rows\":[";
+  bool first = true;
+  for (auto& [c, ps] : cats) {
+    int rank = 0;
+    for (const Pick& p : ps) {
+      CHECK(!p.record.empty());
+      out += (first ? "" : ",") + RowJson(p, c, ++rank);
+      first = false;
+    }
+  }
+  std::snprintf(buf, sizeof buf,
+                "],\"total\":%lld,\"rows_n50\":%zu,\"n_heavy\":%lld,"
+                "\"n_two\":%lld,\"n_either\":%lld,\"n_both\":%lld,"
+                "\"windows\":{",
+                (long long)total, rows.size(), (long long)n_heavy,
+                (long long)n_two, (long long)n_either, (long long)n_both);
+  out += buf + windows + "}}";
+  std::FILE* f = std::fopen(absl::GetFlag(FLAGS_out_path).c_str(), "w");
+  CHECK(f);
+  std::fputs(out.c_str(), f);
+  std::fclose(f);
+  std::printf("%s windows {%s}\n", buf + 2, windows.c_str());
+  return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -331,6 +538,7 @@ int main(int argc, char** argv) {
   const std::vector<std::string> ids =
       absl::StrSplit(absl::GetFlag(FLAGS_ids), ',');
   CHECK_EQ(chunks.size(), ids.size());
+  if (absl::GetFlag(FLAGS_mode) == "bands") return RunBands(chunks, ids);
   const int n = chunks.size();
   std::vector<std::vector<Pick>> heavy(n), bimodal(n);
   std::vector<std::vector<Stats>> stats(n);
