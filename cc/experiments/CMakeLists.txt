@@ -64,6 +64,41 @@ if(BUILD_BINARIES)
         dl
     )
 
+    add_executable(root_net_err
+        root_net_err.cc
+    )
+    target_link_libraries(root_net_err PRIVATE
+        core_impl
+        game
+        nn_interface
+        engine_factory
+        tfrecord
+        tf_example_proto
+        absl::flags
+        absl::flags_parse
+        absl::log
+        absl::log_initialize
+        absl::synchronization
+        m
+        dl
+    )
+
+    add_executable(value_dist_gallery
+        value_dist_gallery.cc
+    )
+    target_link_libraries(value_dist_gallery PRIVATE
+        tfrecord
+        tf_example_proto
+        absl::flags
+        absl::flags_parse
+        absl::log
+        absl::log_initialize
+        absl::flat_hash_set
+        absl::strings
+        absl::check
+        m
+    )
+
     add_executable(value_visit_study
         value_visit_study.cc
     )
