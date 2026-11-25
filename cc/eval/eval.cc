@@ -249,6 +249,7 @@ void PlayEvalGame(size_t seed, int game_id, int total_num_workers,
                         .set_m3_prior_visits(active_cfg.m3_prior_visits)
                         .set_p_opt_weight(active_cfg.p_opt_weight)
                         .set_root_fpu(active_cfg.root_fpu)
+                        .set_lcb_min_visit_frac(active_cfg.lcb_min_visit_frac)
                         .build())
               : gumbel.SearchRoot(
                     probability, game, player_table, player_tree, color_to_move,

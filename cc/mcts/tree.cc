@@ -64,6 +64,42 @@ float Lcb(const TreeNode* node, int action, float alpha) {
   return ConfidenceInterval(node, action, alpha).first;
 }
 
+float OutcomeWinrateLcb(const TreeNode* node, int action) {
+  const float n = NAction(node, action);
+  if (!node->child(action) || n < 2) return 0.0f;
+  const float stddev = std::sqrt(QOutcomeVar(node, action) / n);
+  const float lcb = QOutcome(node, action) - CachedQuantile(n - 1) * stddev;
+  return std::clamp((lcb + 1.0f) / 2.0f, 0.0f, 1.0f);
+}
+
+int BestLcbAction(const TreeNode* node, const float min_visit_frac,
+                  const std::function<bool(int)>& is_valid) {
+  // Below the gate: far below any real LCB, ordered by visits.
+  constexpr float kGatedOut = -1e7f;
+  std::array<std::pair<int, float>, constants::kMaxMovesPerPosition> move_lcbs;
+  float max_n = 0.0f;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    max_n = std::max(max_n, NAction(node, a));
+  }
+  const float min_n = min_visit_frac * max_n;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    const float n_a = NAction(node, a);
+    move_lcbs[a] = {a, n_a >= min_n ? Lcb(node, a) : kGatedOut + n_a};
+  }
+  // Exact LCB ties (children with < 2 visits share a placeholder bound, e.g. a
+  // 16-visit search with one visit per child) go to the higher prior; the sort
+  // is not stable, so they were otherwise picked in arbitrary order.
+  std::sort(move_lcbs.begin(), move_lcbs.end(),
+            [node](const auto& p0, const auto& p1) {
+              if (p0.second != p1.second) return p1.second < p0.second;
+              return node->move_probs[p0.first] > node->move_probs[p1.first];
+            });
+  for (const auto& [a, _] : move_lcbs) {
+    if (is_valid(a)) return a;
+  }
+  return -1;
+}
+
 float Ucb(const TreeNode* node, int action, float alpha) {
   return ConfidenceInterval(node, action, alpha).second;
 }

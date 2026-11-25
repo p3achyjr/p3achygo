@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -22,6 +23,11 @@ struct PlayerSearchConfig {
 
   // Gumbel
   int n = 128;
+  // GTP only: if true, `n` is the root's total visit count after the search
+  // (visits reused from the previous move's tree count, like KataGo's
+  // maxVisits); each move searches max(1, n - root visits) new playouts.
+  // If false, each move searches `n` new playouts (KataGo's maxPlayouts).
+  bool n_counts_reused_visits = false;
   int k = 8;
   float noise_scaling = 1.0f;
   bool early_stopping_for_gumbel = false;
@@ -60,7 +66,11 @@ struct PlayerSearchConfig {
   bool enable_v_cat_var_scaling = false;
   int v_cat_var_scale_prior_visits = 10;
   float p_opt_weight = 0.0f;
+  float root_p_opt_weight = -1.0f;  // < 0: same as p_opt_weight
+  bool p_opt_geometric = false;
+  float value_weight_exponent = 0.0f;  // KataGo valueWeightExponent; 0: off
   float root_fpu = 0.1f;
+  float lcb_min_visit_frac = 0.0f;
   int sampling_num_moves = 0;
   float sampling_temperature = 0.0f;
 
@@ -74,6 +84,14 @@ struct PlayerSearchConfig {
 
   // Enable pondering (search on opponent's time).
   bool enable_pondering = false;
+
+  // cgos-genmove_analyze: also send the network's root ownership map (one
+  // extra NN eval per move, after the search).
+  bool cgos_ownership = false;
+
+  // GTP `komi` is territory komi (e.g. Japanese 6.5). The net is area-trained,
+  // so search with the area equivalent, komi + 1 (6.5 -> 7.5).
+  bool territory_komi = false;
 
   // TimeControl::Flags bitmask. 0 = all factors disabled (fixed-visit mode).
   // Pass an integer literal or "all" (= ~0u, all flags on).
@@ -125,6 +143,11 @@ struct PlayerSearchConfig {
   // GTP round-free search: the shared NN cache has 2^nn_cache_log2_size slots
   // (0 disables it).
   int nn_cache_log2_size = 18;
+
+  // GTP only: pondering stops once the tree holds this many MB of nodes.
+  // 0 = auto: min(3/4 of RAM, RAM - 4 GiB) minus the NN cache's maximum size,
+  // where RAM is physical RAM or the cgroup memory limit if lower.
+  int ponder_max_tree_mb = 0;
 };
 
 namespace internal {
@@ -154,6 +177,20 @@ inline bool ParseBool(const std::string& val) {
  * Unknown keys are silently ignored.
  * The `name` field is never set from the file; callers set it after parsing.
  */
+// New playouts for a fixed-visit move: cfg.n, or with n_counts_reused_visits
+// enough to bring a root with `root_n` visits to cfg.n (at least 1, so the
+// search always produces fresh visit counts). An unevaluated root (n = 0) gains
+// 1 visit from its own evaluation, so it counts as 1.
+inline int NewPlayouts(const PlayerSearchConfig& cfg, const int root_n) {
+  if (!cfg.n_counts_reused_visits) return cfg.n;
+  return std::max(1, cfg.n - std::max(root_n, 1));
+}
+
+// Komi the search uses for a GTP `komi` value.
+inline float SearchKomi(const PlayerSearchConfig& cfg, const float komi) {
+  return cfg.territory_komi ? komi + 1.0f : komi;
+}
+
 inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
   std::ifstream f(path);
   if (!f.is_open()) {
@@ -175,6 +212,8 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
     // Gumbel
     if (key == "n")
       cfg.n = std::stoi(val);
+    else if (key == "n_counts_reused_visits")
+      cfg.n_counts_reused_visits = internal::ParseBool(val);
     else if (key == "k")
       cfg.k = std::stoi(val);
     else if (key == "noise_scaling")
@@ -214,6 +253,8 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.nn_batch_size = std::stoi(val);
     else if (key == "nn_cache_log2_size")
       cfg.nn_cache_log2_size = std::stoi(val);
+    else if (key == "ponder_max_tree_mb")
+      cfg.ponder_max_tree_mb = std::stoi(val);
     else if (key == "use_bias_cache")
       cfg.use_bias_cache = internal::ParseBool(val);
     else if (key == "bias_cache_alpha")
@@ -234,6 +275,14 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.p_opt_weight = std::stof(val);
     else if (key == "root_fpu")
       cfg.root_fpu = std::stof(val);
+    else if (key == "root_p_opt_weight")
+      cfg.root_p_opt_weight = std::stof(val);
+    else if (key == "p_opt_geometric")
+      cfg.p_opt_geometric = internal::ParseBool(val);
+    else if (key == "value_weight_exponent")
+      cfg.value_weight_exponent = std::stof(val);
+    else if (key == "lcb_min_visit_frac")
+      cfg.lcb_min_visit_frac = std::stof(val);
     else if (key == "sampling_temperature")
       cfg.sampling_temperature = std::stof(val);
     else if (key == "sampling_num_moves")
@@ -245,6 +294,10 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.time_ms = val == "auto" ? -1 : std::stoi(val);
     else if (key == "enable_pondering")
       cfg.enable_pondering = internal::ParseBool(val);
+    else if (key == "cgos_ownership")
+      cfg.cgos_ownership = internal::ParseBool(val);
+    else if (key == "territory_komi")
+      cfg.territory_komi = internal::ParseBool(val);
     else if (key == "time_control_flags")
       cfg.time_control_flags =
           (val == "all") ? ~0u : static_cast<uint32_t>(std::stoul(val));
@@ -327,11 +380,17 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
   ROW(v_cat_var_scale_prior_visits, i_);
   ROW(p_opt_weight, f);
   ROW(root_fpu, f);
+  ROW(root_p_opt_weight, f);
+  ROW(p_opt_geometric, b);
+  ROW(value_weight_exponent, f);
+  ROW(lcb_min_visit_frac, f);
   ROW(sampling_temperature, f);
   ROW(sampling_num_moves, i_);
   ROW(num_threads_per_game, i_);
   ROW(time_ms, i_);
   ROW(enable_pondering, b);
+  ROW(cgos_ownership, b);
+  ROW(territory_komi, b);
   ROW(time_control_flags, i_);
   ROW(q_fn, s);
   ROW(n_fn, s);
@@ -347,6 +406,8 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
   ROW(round_free, b);
   ROW(nn_batch_size, i_);
   ROW(nn_cache_log2_size, i_);
+  ROW(ponder_max_tree_mb, i_);
+  ROW(n_counts_reused_visits, b);
 #undef ROW
 
   // Compute column widths.

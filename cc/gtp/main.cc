@@ -1,3 +1,4 @@
+#include <cstring>
 #include <iostream>
 #include <thread>
 
@@ -6,10 +7,66 @@
 #include "cc/eval/player_config.h"
 #include "cc/gtp/client.h"
 
-ABSL_FLAG(std::string, model_path, "", "Path to model.");
-ABSL_FLAG(std::string, config, "", "Path to player config file.");
-ABSL_FLAG(int, n, 0, "Number of visits (overrides config).");
-ABSL_FLAG(bool, verbose, false, "Log config on startup.");
+ABSL_FLAG(std::string, model_path, "", "Path to the TensorRT engine (.trt).");
+ABSL_FLAG(std::string, config, "", "Path to a player config file.");
+ABSL_FLAG(int, n, 0, "Visit budget per move; overrides `n` in the config.");
+ABSL_FLAG(bool, verbose, false,
+          "Log the config at startup and per-move search details (stderr).");
+
+namespace {
+constexpr char kUsage[] =
+    R"(p3achygo: a Go engine that speaks GTP on stdin/stdout.
+
+Usage:
+  p3achygo --model_path=<engine.trt> [--config=<player.cfg>] [--n=<visits>]
+           [--verbose]
+
+Flags:
+  --model_path  TensorRT engine (.trt) to play with. Required.
+  --config      Player config: one `key: value` per line; lines starting
+                with `#` are comments.
+                Unset keys keep their defaults; unknown keys are ignored.
+                All keys are in cc/eval/player_config.h. Common ones:
+                  time_ms: auto | 0 | <ms>  auto = budget from the GTP clock
+                                            (time_settings / time_left;
+                                            1 s per move without one);
+                                            0 = fixed visit budget `n`;
+                                            <ms> = fixed time per move
+                  n: <int>                  visit budget per move when
+                                            time_ms is 0
+                  n_counts_reused_visits: true | false
+                                            true: stop at n root visits,
+                                            counting the reused tree;
+                                            false: n new playouts
+                  num_threads_per_game: <int>
+                  enable_pondering: true | false
+                  ponder_max_tree_mb: <int> 0 = size to fit in RAM
+                  territory_komi: true | false
+                                            true: GTP `komi` is territory
+                                            komi; search with komi + 1
+                                            (Japanese 6.5 -> area 7.5)
+  --n           Visit budget per move; overrides `n` in the config.
+  --verbose     Log the config at startup, and each move's search
+                details, to stderr.
+
+Example:
+  p3achygo --model_path=model.trt --config=tournament.cfg --verbose
+
+Once running, send `list_commands` for the supported GTP commands.
+--helpfull lists every flag from every linked library.
+)";
+
+bool WantsHelp(int argc, char** argv) {
+  for (int i = 1; i < argc; ++i) {
+    if (std::strcmp(argv[i], "-h") == 0 ||
+        std::strcmp(argv[i], "--help") == 0 ||
+        std::strcmp(argv[i], "-help") == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+}  // namespace
 
 // GTP-specific defaults that differ from PlayerSearchConfig defaults.
 eval::PlayerSearchConfig GtpDefaultConfig() {
@@ -44,6 +101,11 @@ void LogConfig(const eval::PlayerSearchConfig& cfg) {
   }
   std::cerr << "  use_lcb:              " << b(cfg.use_lcb) << "\n";
   std::cerr << "  p_opt_weight:         " << cfg.p_opt_weight << "\n";
+  std::cerr << "  root_p_opt_weight:    " << cfg.root_p_opt_weight << "\n";
+  std::cerr << "  p_opt_geometric:      " << cfg.p_opt_geometric << "\n";
+  std::cerr << "  value_weight_exponent:" << cfg.value_weight_exponent << "\n";
+  std::cerr << "  root_fpu:             " << cfg.root_fpu << "\n";
+  std::cerr << "  round_free:           " << cfg.round_free << "\n";
   std::cerr << "  use_bias_cache:       " << b(cfg.use_bias_cache) << "\n";
   if (cfg.use_bias_cache) {
     std::cerr << "  bias_cache_alpha:     " << cfg.bias_cache_alpha << "\n";
@@ -81,11 +143,16 @@ void InputLoop(gtp::Client* client) {
 }
 
 int main(int argc, char** argv) {
+  // absl's --help lists the flags of every linked library; ours is short.
+  if (WantsHelp(argc, argv)) {
+    std::cout << kUsage;
+    return 0;
+  }
   absl::ParseCommandLine(argc, argv);
 
   std::string model_path = absl::GetFlag(FLAGS_model_path);
   if (model_path.empty()) {
-    std::cerr << "No Model Path (--model_path) specified.\n";
+    std::cerr << "No model path (--model_path) specified. See --help.\n";
     return 1;
   }
 

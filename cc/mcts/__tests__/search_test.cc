@@ -4,6 +4,7 @@
 #include "cc/mcts/search.h"
 
 #include <filesystem>
+#include <limits>
 #include <random>
 #include <thread>
 #include <unordered_map>
@@ -17,6 +18,8 @@
 #include "cc/game/color.h"
 #include "cc/game/game.h"
 #include "cc/game/loc.h"
+#include "cc/mcts/bias_cache.h"
+#include "cc/mcts/gumbel.h"
 #include "cc/mcts/node_table.h"
 #include "cc/mcts/search_policy.h"
 #include "cc/mcts/tree.h"
@@ -247,8 +250,8 @@ TreeCheck CheckTree(TreeNode* root, bool mcts) {
     }
     Exp e;
     if (sum_cv == 0) {
-      // The leaf backup branch does not write `score` (stays 0).
-      e = {node->init_util_est, node->init_outcome_est, 0.0f,
+      // Leaf backup: every stat is the node's own NN estimate.
+      e = {node->init_util_est, node->init_outcome_est, node->init_score_est,
            node->init_err_est};
     } else {
       float w = node->init_util_est, w_outcome = node->init_outcome_est,
@@ -565,6 +568,67 @@ TEST_CASE("RoundFreeSearch - exact stat recompute") {
           CHECK(c.max_ds == 0.0);
           CHECK(c.max_de == 0.0);
         }
+      }
+    }
+  }
+}
+
+// Single-threaded search (GumbelEvaluator, PUCT and Gumbel root): every
+// node's backed-up score equals the bottom-up recompute, with incremental
+// updates (no bias cache) and with idempotent recompute (bias cache on, as in
+// self-play and GTP).
+TEST_CASE("GumbelEvaluator - score recompute") {
+  for (const bool gumbel_root : {false, true}) {
+    for (const bool bias : {false, true}) {
+      for (int pos = 0; pos < 4; ++pos) {
+        NNInterface nn_interface(1, std::numeric_limits<int64_t>::max(),
+                                 /*cache_size=*/4096,
+                                 std::make_unique<HashEngine>(1, 8.0f));
+        BiasCache bias_cache(0.85f, 0.45f);
+        GumbelEvaluator gumbel(&nn_interface, 0, bias ? &bias_cache : nullptr);
+        MctsNodeTable node_table;
+        Game game;
+        game::Color to_move;
+        RandomOpening(game, 20 + 3 * pos, 91 + pos, &to_move);
+        core::Probability probability;
+        TreeNode* root =
+            node_table.GetOrCreate(game.board().hash(), to_move, false);
+        if (!gumbel_root) {
+          gumbel.SearchRootPuct(probability, game, &node_table, root, to_move,
+                                800, PuctParams{});
+          const TreeCheck c = CheckTree(root, /*mcts=*/true);
+          INFO("puct bias=" << bias << " pos=" << pos << " nodes=" << c.nodes
+                            << " max_ds=" << c.max_ds);
+          CHECK(c.stat_nodes > 0);
+          CHECK(c.max_ds < 1e-3);
+          continue;
+        }
+        // Gumbel root: every child subtree is exact; the root mixes its own
+        // estimate with the selected child's backed-up score (like v).
+        const GumbelResult res =
+            gumbel.SearchRoot(probability, game, &node_table, root, to_move,
+                              GumbelSearchParams{800, 16});
+        double max_ds = 0;
+        int subtrees = 0;
+        for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+          TreeNode* child = root->child(a);
+          if (child == nullptr || child->n == 0) continue;
+          const TreeCheck c = CheckTree(child, /*mcts=*/true);
+          max_ds = std::max(max_ds, c.max_ds);
+          ++subtrees;
+        }
+        const TreeNode* sel = root->child(res.mcts_move);
+        REQUIRE(sel != nullptr);
+        const float n_sel =
+            root->child_visits[game::AsIndex(res.mcts_move, BOARD_LEN)];
+        const float want =
+            (root->init_score_est + n_sel * -sel->score) / (1.0f + n_sel);
+        INFO("gumbel bias=" << bias << " pos=" << pos
+                            << " subtrees=" << subtrees << " max_ds=" << max_ds
+                            << " root=" << root->score << " want=" << want);
+        CHECK(subtrees > 1);
+        CHECK(max_ds < 1e-3);
+        CHECK(root->score == doctest::Approx(want).epsilon(1e-4));
       }
     }
   }

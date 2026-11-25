@@ -69,7 +69,7 @@ TEST_CASE("SgfSerializer") {
     game::Game game = GameFromMoves({});
 
     CHECK_EQ(serializer.Serialize(ToSgfNode(game).get()),
-             "(;FF[4]GM[1]KM[7.5]RE[?]PB[testB]PW[testW])\n");
+             "(;FF[4]GM[1]KM[7.5]RE[?]PB[testB]PW[testW])");
   }
 
   SUBCASE("EmptyResult") {
@@ -78,7 +78,7 @@ TEST_CASE("SgfSerializer") {
     game.WriteResult();
 
     CHECK_EQ(serializer.Serialize(ToSgfNode(game).get()),
-             "(;FF[4]GM[1]KM[7.5]RE[W+7.5]PB[testB]PW[testW])\n");
+             "(;FF[4]GM[1]KM[7.5]RE[W+7.5]PB[testB]PW[testW])");
   }
 
   SUBCASE("Moves") {
@@ -89,7 +89,7 @@ TEST_CASE("SgfSerializer") {
 
     CHECK_EQ(serializer.Serialize(ToSgfNode(game).get()),
              "(;FF[4]GM[1]KM[7.5]RE[?]PB[testB]PW[testW];B[aa];W[ba];B[ab]"
-             ";W[bb])\n");
+             ";W[bb])");
   }
 
   // . . o x . x
@@ -106,7 +106,7 @@ TEST_CASE("SgfSerializer") {
 
     CHECK_EQ(serializer.Serialize(ToSgfNode(game).get()),
              "(;FF[4]GM[1]KM[7.5]RE[W+5.5]PB[testB]PW[testW];B[ac];W[ad];B[bc]"
-             ";W[bd];B[cc];W[ce];B[ca];W[bf];B[cb];W[af])\n");
+             ";W[bd];B[cc];W[ce];B[ca];W[bf];B[cb];W[af])");
   }
 
   // . . o .
@@ -126,7 +126,7 @@ TEST_CASE("SgfSerializer") {
 
     CHECK_EQ(serializer.Serialize(ToSgfNode(game).get()),
              "(;FF[4]GM[1]KM[7.5]RE[B+0.5]PB[testB]PW[testW];B[ac];B[bc];B[cc]"
-             ";B[ca];B[cb];W[cd])\n");
+             ";B[ca];B[cb];W[cd])");
   }
 
   SUBCASE("Branch") {
@@ -148,7 +148,7 @@ TEST_CASE("SgfSerializer") {
     root->AddChild(std::move(nodeB));
 
     CHECK_EQ(serializer.Serialize(root.get()),
-             "(;FF[4]GM[1](;B[aa])(;B[ab](;W[ac])(;W[ad])))\n");
+             "(;FF[4]GM[1](;B[aa])(;B[ab](;W[ac])(;W[ad])))");
   }
 }
 }  // namespace sgf

@@ -2,6 +2,7 @@
 #define MCTS_TREE_H_
 
 #include <cmath>
+#include <functional>
 #include <memory>
 
 #include "absl/synchronization/mutex.h"
@@ -19,6 +20,15 @@ enum class TreeNodeState {
   kNnEvaluated = 2,  // NN evaluation has been done.
 };
 
+// A BiasCache entry, shared by every node whose local pattern maps to it.
+// Holds sums of the nodes' last contributions; `mu` guards both (KataGo: a lock
+// per subtree value bias entry).
+struct BiasCacheEntry final {
+  absl::Mutex mu;
+  float obs_bias_sum = 0;  // weighted observed error
+  float weight_sum = 0;    // weighted visits
+};
+
 struct TreeNode final {
   TreeNode(game::Zobrist::Hash board_hash) : board_hash(board_hash) {};
   ~TreeNode() {
@@ -27,9 +37,10 @@ struct TreeNode final {
       return;
     }
 
-    // TODO: make this thread-safe with BiasCache updates.
-    bias_cache_entry->first -= (kBiasCacheForgetWeight * last_obs_bias_term);
-    bias_cache_entry->second -= (kBiasCacheForgetWeight * last_weight_term);
+    absl::MutexLock l(&bias_cache_entry->mu);
+    bias_cache_entry->obs_bias_sum -=
+        (kBiasCacheForgetWeight * last_obs_bias_term);
+    bias_cache_entry->weight_sum -= (kBiasCacheForgetWeight * last_weight_term);
   }
 
   const game::Zobrist::Hash board_hash;
@@ -90,7 +101,6 @@ struct TreeNode final {
   }
 
   // Bias cache stuff.
-  using BiasCacheEntry = std::pair<float, float>;
   std::shared_ptr<BiasCacheEntry> bias_cache_entry;
   float last_obs_bias_term = 0;
   float last_weight_term = 0;
@@ -149,7 +159,9 @@ inline float QOutcomeVar(const TreeNode* node, int action) {
 }
 
 inline float Score(const TreeNode* node) {
-  return node == nullptr ? 0 : node->score;
+  // 0.0f, not 0: RelaxedAtomic's ctor is explicit, so `? 0 :` makes the
+  // conditional int and truncates the score.
+  return node == nullptr ? 0.0f : node->score;
 }
 
 inline float MaxN(const TreeNode* node) {
@@ -175,6 +187,17 @@ inline float ChildScore(const TreeNode* node, int action) {
 float Lcb(const TreeNode* node, int action);
 float Ucb(const TreeNode* node, int action);
 float Lcb(const TreeNode* node, int action, float alpha);
+// Lower 95% (two-sided t) bound of the outcome winrate in [0, 1] of child
+// `action`, parent's perspective: (QOutcome - t * sqrt(QOutcomeVar / N) + 1)
+// / 2. 0 when the child has fewer than 2 visits.
+float OutcomeWinrateLcb(const TreeNode* node, int action);
+// Root move pick by LCB: the action with the highest Lcb() among those with at
+// least `min_visit_frac` of the most-visited action's visits; actions below
+// that rank after every action above it, by visits. Exact ties go to the higher
+// prior (move_probs). Returns the best-ranked action for which `is_valid`
+// holds, or -1 if none does.
+int BestLcbAction(const TreeNode* node, float min_visit_frac,
+                  const std::function<bool(int)>& is_valid);
 float Ucb(const TreeNode* node, int action, float alpha);
 
 inline void AdvanceState(TreeNode* node) {
@@ -182,7 +205,48 @@ inline void AdvanceState(TreeNode* node) {
   node->state.store(TreeNodeState::kNnEvaluated, std::memory_order_release);
 }
 
-inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f) {
+// CDF of Student's t with 3 degrees of freedom.
+inline double TDist3Cdf(const double t) {
+  const double x = t / std::sqrt(3.0);
+  return 0.5 + (x / (1.0 + x * x) + std::atan(x)) / M_PI;
+}
+
+// KataGo's value weighting (Search::downweightBadChildrenAndNormalizeWeight):
+// a child's weight is its edge visits scaled by p^exponent, where p is the t3
+// CDF of how far the child's utility (parent's perspective) sits from
+// `mean_util`, the visit-weighted mean child utility, in units of a visit-based
+// stdev. The caller rescales the weights to the visits' total.
+inline float ValueWeight(const float visits, const float child_util,
+                         const double mean_util, const float exponent) {
+  const double precision = 1.5 * std::sqrt(visits);
+  const double stdev = std::sqrt(0.00000001 + 1.0 / precision);
+  const double z = (child_util - mean_util) / stdev;
+  return visits * std::pow(TDist3Cdf(z) + 0.0001, exponent);
+}
+
+// Visit-weighted mean utility of the visited children, parent's perspective.
+inline double MeanChildUtility(const TreeNode* node) {
+  double total_visits = 0.0, weighted_utility = 0.0;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    const TreeNode* child = node->child(a);
+    if (child == nullptr || node->child_visits[a] == 0) continue;
+    total_visits += node->child_visits[a];
+    weighted_utility += node->child_visits[a] * -child->v;
+  }
+  return total_visits > 0.0 ? weighted_utility / total_visits : 0.0;
+}
+
+inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f,
+                               const float value_weight_exponent = 0.0f) {
+  // Children are weighted by their edge visits. With value_weight_exponent > 0
+  // they are weighted by ValueWeight() instead, rescaled to the same total.
+  // That needs the mean child utility first (one extra pass); the weights are
+  // computed in the accumulation loop and the rescale applied to the sums.
+  const bool value_weighted = value_weight_exponent > 0.0f;
+  const double mean_child_util = value_weighted ? MeanChildUtility(node) : 0.0;
+  std::array<float, constants::kMaxMovesPerPosition> weights;  // if weighted
+  float visit_sum = 0.0f, weight_sum = 0.0f;
+
   const float adj_init_util_est = node->init_util_est - obs_bias;
   float w = adj_init_util_est, w_outcome = node->init_outcome_est,
         total_score = node->init_score_est, w_err = node->init_err_est;
@@ -193,12 +257,30 @@ inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f) {
     if (child == nullptr) {
       continue;
     }
-    w -= (node->child_visits[a] * child->v);
-    w_outcome -= (node->child_visits[a] * child->v_outcome);
-    total_score -= (node->child_visits[a] * child->score);
+    float n_a = node->child_visits[a];
+    if (value_weighted && n_a > 0) {
+      visit_sum += n_a;
+      n_a = ValueWeight(n_a, -child->v, mean_child_util, value_weight_exponent);
+      weight_sum += n_a;
+      weights[a] = n_a;
+    }
+    w -= (n_a * child->v);
+    w_outcome -= (n_a * child->v_outcome);
+    total_score -= (n_a * child->score);
     max_child_n = node->child_visits[a] > max_child_n ? node->child_visits[a]
                                                       : max_child_n;
-    w_err += node->child_visits[a] * child->v_err;
+    w_err += n_a * child->v_err;
+  }
+  // Rescale the children's part of each sum so the weights total the visits.
+  const float weight_scale =
+      value_weighted && weight_sum > 0.0f ? visit_sum / weight_sum : 1.0f;
+  if (weight_scale != 1.0f) {
+    w = adj_init_util_est + weight_scale * (w - adj_init_util_est);
+    w_outcome = node->init_outcome_est +
+                weight_scale * (w_outcome - node->init_outcome_est);
+    total_score = node->init_score_est +
+                  weight_scale * (total_score - node->init_score_est);
+    w_err = node->init_err_est + weight_scale * (w_err - node->init_err_est);
   }
   float v = w / node->n;
   float v_outcome = w_outcome / node->n;
@@ -218,11 +300,12 @@ inline void RecomputeNodeStats(TreeNode* node, const float obs_bias = 0.0f) {
   double m3 = m2 * m;
   double m3_outcome = m2_outcome * m_outcome;
   for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
-    const int n_a = node->child_visits[a];
-    if (n_a == 0) {
+    if (node->child_visits[a] == 0) {
       continue;
     }
 
+    const float n_a =
+        value_weighted ? weights[a] * weight_scale : node->child_visits[a];
     const TreeNode* child = node->child(a);
     const float dv = -child->v - v;
     const float dv_outcome = -child->v_outcome - v_outcome;

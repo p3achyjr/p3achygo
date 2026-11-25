@@ -270,7 +270,8 @@ std::pair<SearchPath, std::optional<CollisionResult>> Descend(
 // values) on the last pop for each node (old n_in_flight == 1). The heap
 // processes nodes deepest-first, so all children of a node are guaranteed to
 // be fully updated before the node itself is finalized.
-void TopologicalBackup(BackupPriorityQueue& backup_pq, BiasCache* bias_cache) {
+void TopologicalBackup(BackupPriorityQueue& backup_pq, BiasCache* bias_cache,
+                       const float value_weight_exponent) {
   while (backup_pq.Size() > 0) {
     auto [_, node, action, is_leaf] = backup_pq.PopHeap();
     node->n += 1;
@@ -285,9 +286,10 @@ void TopologicalBackup(BackupPriorityQueue& backup_pq, BiasCache* bias_cache) {
         node->w_outcome = node->init_outcome_est;
         node->v = node->init_util_est;
         node->v_outcome = node->init_outcome_est;
+        node->score = node->init_score_est;
       } else {
         const float obs_bias = FetchObsBias(bias_cache, node);
-        RecomputeNodeStats(node, obs_bias);
+        RecomputeNodeStats(node, obs_bias, value_weight_exponent);
       }
       node->is_pending_update.store(false, std::memory_order_relaxed);
     }
@@ -331,9 +333,10 @@ void BackupStep(int worker_id, TreeNode* node, game::Loc action, bool is_leaf,
       node->v = node->init_util_est;
       node->v_outcome = node->init_outcome_est;
       node->v_err = node->init_err_est;
+      node->score = node->init_score_est;
     } else {
       const float obs_bias = FetchObsBias(bias_cache, node);
-      RecomputeNodeStats(node, obs_bias);
+      RecomputeNodeStats(node, obs_bias, puct_params.value_weight_exponent);
     }
     RecomputeVCategoricalStats(node, puct_params.v_cat_var_scale_prior_visits);
     node->is_pending_update.store(false, std::memory_order_release);
@@ -511,8 +514,10 @@ void BackupStepRoundFree(TreeNode* node, game::Loc action, bool is_leaf,
     node->v = node->init_util_est;
     node->v_outcome = node->init_outcome_est;
     node->v_err = node->init_err_est;
+    node->score = node->init_score_est;
   } else {
-    RecomputeNodeStats(node, FetchObsBias(bias_cache, node));
+    RecomputeNodeStats(node, FetchObsBias(bias_cache, node),
+                       puct_params.value_weight_exponent);
   }
   RecomputeVCategoricalStats(node, puct_params.v_cat_var_scale_prior_visits);
   node->is_pending_update.store(false, std::memory_order_release);
@@ -766,7 +771,8 @@ void BatchSearch(GlobalSearchState& global_state, NNInterface::Slot slot,
     }
 
     // topological backprop.
-    TopologicalBackup(backup_pq, global_state.bias_cache);
+    TopologicalBackup(backup_pq, global_state.bias_cache,
+                      puct_params.value_weight_exponent);
 
     // reset state.
     fork_points.Clear();
@@ -891,24 +897,10 @@ Search::Result Search::Run(core::Probability& probability, Game& game,
                            Color color_to_move, Params params) {
   // TODO: centralize.
   const auto best_lcb_move = [&](const TreeNode* node) {
-    std::array<std::pair<int, float>, constants::kMaxMovesPerPosition>
-        move_lcbs;
-    for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
-      move_lcbs[a] = {a, Lcb(node, a)};
-    }
-
-    std::sort(
-        move_lcbs.begin(), move_lcbs.end(),
-        [](const auto& p0, const auto& p1) { return p1.second < p0.second; });
-
-    for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
-      auto [a, _] = move_lcbs[i];
-      if (game.IsValidMove(a, color_to_move)) {
-        return game::AsLoc(a);
-      }
-    }
-
-    return game::kPassLoc;
+    const int a = BestLcbAction(
+        node, params.puct_params.lcb_min_visit_frac,
+        [&](int a) { return game.IsValidMove(a, color_to_move); });
+    return a < 0 ? game::kPassLoc : game::AsLoc(a);
   };
 
   const auto search_begin = std::chrono::steady_clock::now();

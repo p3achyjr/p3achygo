@@ -557,6 +557,11 @@ GumbelResult GumbelEvaluator::SearchRoot(core::Probability& probability,
       root->v = root_ratio * root->v + child_ratio * child_stat.q;
       root->v_outcome =
           root_ratio * root->v_outcome + child_ratio * child_stat.qz;
+      if (root->child(result.mcts_move) != nullptr) {
+        // Backed-up child score (ChildScore is the child's raw NN estimate).
+        root->score = root_ratio * root->score +
+                      child_ratio * -root->child(result.mcts_move)->score;
+      }
 
       // This is imprecise but probably good enough.
       if (root->child(result.mcts_move) != nullptr) {
@@ -602,24 +607,10 @@ GumbelResult GumbelEvaluator::SearchRootPuct(core::Probability& probability,
                                              game::Color color_to_move, int n,
                                              const PuctParams puct_params) {
   auto best_lcb_move = [&](const TreeNode* node) {
-    std::array<std::pair<int, float>, constants::kMaxMovesPerPosition>
-        move_lcbs;
-    for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
-      move_lcbs[a] = {a, Lcb(node, a)};
-    }
-
-    std::sort(
-        move_lcbs.begin(), move_lcbs.end(),
-        [](const auto& p0, const auto& p1) { return p1.second < p0.second; });
-
-    for (int i = 0; i < constants::kMaxMovesPerPosition; ++i) {
-      auto [a, _] = move_lcbs[i];
-      if (game.IsValidMove(a, color_to_move)) {
-        return game::AsLoc(a);
-      }
-    }
-
-    return game::kPassLoc;
+    const int a = BestLcbAction(
+        node, puct_params.lcb_min_visit_frac,
+        [&](int a) { return game.IsValidMove(a, color_to_move); });
+    return a < 0 ? game::kPassLoc : game::AsLoc(a);
   };
 
   if (root->state == TreeNodeState::kNew) {
@@ -799,6 +790,7 @@ void GumbelEvaluator::SingleBackup(TreeNode* node, game::Loc action,
     node->w_outcome = node->init_outcome_est;
     node->v = node->init_util_est;
     node->v_outcome = node->init_outcome_est;
+    node->score = node->init_score_est;
     UpdateVCategorial(node, leaf_q_outcome);
     RecomputeVCategoricalStats(node, puct_params.v_cat_var_scale_prior_visits);
     return;

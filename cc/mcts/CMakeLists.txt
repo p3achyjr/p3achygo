@@ -104,6 +104,22 @@ if(BUILD_TESTS)
         doctest::doctest
     )
     add_test(NAME mcts_search_test COMMAND mcts_search_test)
+
+    add_executable(mcts_bias_cache_test __tests__/bias_cache_test.cc)
+    target_link_libraries(mcts_bias_cache_test PRIVATE
+        gumbel
+        core_impl
+        engine_factory
+        doctest::doctest
+    )
+    add_test(NAME mcts_bias_cache_test COMMAND mcts_bias_cache_test)
+
+    add_executable(mcts_tree_test __tests__/tree_test.cc)
+    target_link_libraries(mcts_tree_test PRIVATE
+        mcts_tree
+        core_doctest
+    )
+    add_test(NAME mcts_tree_test COMMAND mcts_tree_test)
 endif()
 
 # Benchmarks

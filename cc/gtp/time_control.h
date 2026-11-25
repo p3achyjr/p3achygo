@@ -32,6 +32,9 @@ class TimeControl {
     // What the attenuator actually saw pre-search. -1 means the root was null
     // or unevaluated, in which case the attenuator is skipped.
     float pre_search_winrate;
+    // Logging only.
+    float stddev_ema;  // after this move's update.
+    int main_time_left_secs;
   };
   TimeControl(uint32_t flags) : flags_(flags) {}
 
@@ -53,6 +56,14 @@ class TimeControl {
   std::pair<int, Metadata> ComputeMoveTimeMs(const game::Game& game,
                                              const mcts::TreeNode* root);
 
+  // Clears per-game heuristic state (not the clock or time settings).
+  // Called on clear_board and time_settings; otherwise the previous game's
+  // endgame stddev seeds the next game's EMA.
+  void ResetGame() {
+    stddev_ema_ = 0;
+    root_n_ema_ = 0;
+  }
+
   void Enable(bool enable) { enabled_ = enable; }
   bool IsEnabled() const { return enabled_; }
 
@@ -71,8 +82,9 @@ class TimeControl {
   bool enabled_ = false;
   const uint32_t flags_;
 
-  // track stddev ema
+  // Per-game heuristic state; see ResetGame().
   float stddev_ema_ = 0;
+  float root_n_ema_ = 0;  // EMA of pre-search root n (obvious-move check)
 };
 
 }  // namespace gtp

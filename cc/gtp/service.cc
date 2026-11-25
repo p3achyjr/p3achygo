@@ -1,10 +1,13 @@
 #include "cc/gtp/service.h"
 
+#include <unistd.h>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <fstream>
 #include <iomanip>
 #include <sstream>
 #include <stop_token>
@@ -16,6 +19,7 @@
 #include "cc/core/probability.h"
 #include "cc/eval/player_config.h"
 #include "cc/game/game.h"
+#include "cc/gtp/pass_guard.h"
 #include "cc/gtp/time_control.h"
 #include "cc/mcts/bias_cache.h"
 #include "cc/mcts/gumbel.h"
@@ -130,6 +134,7 @@ class ServiceImpl final : public Service {
 
  private:
   game::Loc GenMoveCommon(game::Color color);
+  game::Loc GuardPass(game::Color color, game::Loc move);
   std::string BuildExplainComment();
   std::vector<std::pair<game::Loc, float>> GetTopPolicyMoves(
       const std::array<float, constants::kMaxMovesPerPosition>& pi);
@@ -161,12 +166,71 @@ class ServiceImpl final : public Service {
   Color current_color_;
   Search::Params search_params_;
   std::string last_explain_comment_;
+  // Pondering stops at this many root visits. Each visit adds at most one
+  // node and the tree outside current_root() is reaped on every move, so root
+  // visits bound the tree's node count.
+  int ponder_max_root_visits_;
 
   std::atomic<bool> analysis_running_;
   std::thread analysis_thread_;
 
   std::jthread ponder_thread_;
+  // True once a move has been played since the last clear_board, until we
+  // resign. Only read/written on the command thread. Gates pondering.
+  bool game_in_progress_ = false;
 };
+
+// Physical RAM, or the container's cgroup memory limit if lower. sysconf
+// reports the host's RAM inside a container.
+int64_t AvailableRamBytes() {
+  int64_t ram = static_cast<int64_t>(sysconf(_SC_PHYS_PAGES)) *
+                static_cast<int64_t>(sysconf(_SC_PAGE_SIZE));
+  // cgroup v2, then v1. v2 writes "max" when unlimited; v1 writes a huge
+  // number. Either way the min() below keeps the physical RAM.
+  for (const char* path : {"/sys/fs/cgroup/memory.max",
+                           "/sys/fs/cgroup/memory/memory.limit_in_bytes"}) {
+    std::ifstream f(path);
+    int64_t limit;
+    if (f >> limit && limit > 0) ram = std::min(ram, limit);
+  }
+  return ram;
+}
+
+// Root-visit cap for pondering. ponder_max_tree_mb > 0 sets the tree budget
+// directly; 0 sizes it so that tree + NN cache (at its maximum) take at most
+// min(3/4 of physical RAM, RAM - 4 GiB).
+int PonderMaxRootVisits(const eval::PlayerSearchConfig& cfg) {
+  static constexpr int64_t kMiB = int64_t{1} << 20;
+  static constexpr int64_t kGiB = int64_t{1} << 30;
+  int64_t tree_bytes;
+  if (cfg.ponder_max_tree_mb > 0) {
+    tree_bytes = int64_t{cfg.ponder_max_tree_mb} * kMiB;
+  } else {
+    const int64_t ram = AvailableRamBytes();
+    // Mirrors the cache sizes chosen in NewGtpService.
+    const int64_t cache_entries =
+        cfg.round_free && cfg.num_threads_per_game > 1
+            ? (cfg.nn_cache_log2_size == 0
+                   ? 0
+                   : int64_t{1} << cfg.nn_cache_log2_size)
+            : 16384;
+    // Entry payload + shared_ptr control block + slot.
+    const int64_t cache_bytes =
+        cache_entries *
+        static_cast<int64_t>(sizeof(std::pair<nn::NNKey, nn::NNInferResult>) +
+                             2 * sizeof(std::shared_ptr<int>));
+    tree_bytes = std::max<int64_t>(
+        0, std::min(ram / 4 * 3, ram - 4 * kGiB) - cache_bytes);
+    LOG(INFO) << "Ponder tree budget (auto): RAM " << ram / kMiB
+              << " MiB, NN cache max " << cache_bytes / kMiB << " MiB";
+  }
+  const int64_t visits = std::min<int64_t>(std::numeric_limits<int>::max(),
+                                           tree_bytes / sizeof(TreeNode));
+  LOG(INFO) << "Ponder tree budget: " << tree_bytes / kMiB
+            << " MiB = " << visits << " root visits (" << sizeof(TreeNode)
+            << " B per node)";
+  return static_cast<int>(visits);
+}
 
 ServiceImpl::ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
                          eval::PlayerSearchConfig cfg, bool verbose)
@@ -181,6 +245,7 @@ ServiceImpl::ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
               : std::unique_ptr<NodeTable>(std::make_unique<MctsNodeTable>())),
       current_color_(BLACK),
       search_params_(MakeSearchParams(cfg)),
+      ponder_max_root_visits_(PonderMaxRootVisits(cfg)),
       analysis_running_(false) {
   if (cfg_.use_bias_cache) {
     bias_cache_.emplace(cfg_.bias_cache_alpha, cfg_.bias_cache_lambda);
@@ -189,7 +254,7 @@ ServiceImpl::ServiceImpl(std::unique_ptr<NNInterface> nn_interface,
       nn_interface_.get(), 0, MakeScoreUtilityParams(cfg_),
       bias_cache_ ? &*bias_cache_ : nullptr);
   current_root_ = node_table_->GetOrCreate(game_->board().hash(), BLACK, false);
-  StartPondering();
+  // No pondering until a game is in progress (see game_in_progress_).
 }
 
 Response<int> ServiceImpl::GtpProtocolVersion(std::optional<int> id) {
@@ -237,8 +302,11 @@ Response<> ServiceImpl::GtpClearBoard(std::optional<int> id) {
 }
 
 Response<> ServiceImpl::GtpKomi(std::optional<int> id, float komi) {
-  komi_ = komi;
-  game_->SetKomi(komi);
+  komi_ = eval::SearchKomi(cfg_, komi);
+  if (komi_ != komi) {
+    LOG(INFO) << "komi " << komi << " (territory) -> " << komi_ << " (area)";
+  }
+  game_->SetKomi(komi_);
   return MakeResponse(id);
 }
 
@@ -256,6 +324,7 @@ Response<> ServiceImpl::GtpPlay(std::optional<int> id, Move move) {
 Response<Loc> ServiceImpl::GtpGenMove(std::optional<int> id, Color color) {
   const auto mcts_move = GenMoveCommon(color);
   if (V(current_root()) < -0.96f && game_->num_moves() > 50) {
+    game_in_progress_ = false;  // resigning
     return MakeResponse(id, kNoopLoc);
   }
 
@@ -357,16 +426,72 @@ game::Loc ServiceImpl::GtpCgosGenmoveAnalyze(game::Color color,
                                              std::string* analysis_json) {
   const auto mcts_move = GenMoveCommon(color);
   if (V(current_root()) < -0.96f && game_->num_moves() > 50) {
+    game_in_progress_ = false;  // resigning
     return kNoopLoc;
   }
 
+  // Runs on the command thread: pondering is paused for the whole command and
+  // GenMoveCommon's search workers have been joined, so nothing else touches
+  // the tree or the NN interface here.
   TreeNode* root = current_root();
   float winrate = (VOutcome(root) + 1.0f) / 2.0f;
   float score = Score(root);
 
+  // Top 10 root children by visits; values are from the mover's view.
+  static constexpr int kNumMoves = 10;
+  static constexpr int kMaxPvDepth = 10;
+  std::vector<int> actions;
+  for (int a = 0; a < constants::kMaxMovesPerPosition; ++a) {
+    if (root->child_visits[a] > 0) actions.push_back(a);
+  }
+  std::sort(actions.begin(), actions.end(), [root](int x, int y) {
+    return root->child_visits[x] > root->child_visits[y];
+  });
+  if (actions.size() > kNumMoves) actions.resize(kNumMoves);
+
   std::stringstream ss;
   ss << std::fixed << std::setprecision(4);
-  ss << "{\"winrate\":" << winrate << ",\"score\":" << score << "}";
+  ss << "{\"winrate\":" << winrate << ",\"score\":" << score
+     << ",\"visits\":" << root->n << ",\"moves\":[";
+  for (size_t i = 0; i < actions.size(); ++i) {
+    const int a = actions[i];
+    // PV: this move, then the most-visited child at each level.
+    std::string pv = GtpValueString(AsLoc(a));
+    const TreeNode* node = root->children[a];
+    for (int d = 1; d < kMaxPvDepth && node != nullptr; ++d) {
+      int best = -1;
+      for (int b = 0; b < constants::kMaxMovesPerPosition; ++b) {
+        if (node->child_visits[b] > 0 &&
+            (best == -1 || node->child_visits[b] > node->child_visits[best])) {
+          best = b;
+        }
+      }
+      if (best == -1) break;
+      pv += " " + GtpValueString(AsLoc(best));
+      node = node->children[best];
+    }
+    ss << (i ? "," : "") << "{\"move\":\"" << GtpValueString(AsLoc(a))
+       << "\",\"visits\":" << root->child_visits[a]
+       << ",\"winrate\":" << (QOutcome(root, a) + 1.0f) / 2.0f
+       << ",\"score\":" << ChildScore(root, a)
+       << ",\"prior\":" << root->move_probs[a] << ",\"pv\":\"" << pv << "\"}";
+  }
+  ss << "]";
+
+  if (cfg_.cgos_ownership) {
+    // Network ownership at the root, mover's view (positive = mover owns),
+    // row-major from A19. CGOS encoding: CHARS[round((o + 1) / 2 * 62)].
+    static constexpr char kChars[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const auto own = nn_interface_->LoadAndGetOwnership(0, *game_, color);
+    std::string enc(own.size(), 'A');
+    for (size_t i = 0; i < own.size(); ++i) {
+      const float x = std::clamp((own[i] + 1.0f) / 2.0f, 0.0f, 1.0f);
+      enc[i] = kChars[static_cast<int>(std::lround(x * 62))];
+    }
+    ss << ",\"ownership\":\"" << enc << "\"";
+  }
+  ss << "}";
   *analysis_json = ss.str();
 
   MakeMove(color, mcts_move);
@@ -427,6 +552,8 @@ std::string ServiceImpl::BuildExplainComment() {
     float qstd;
     float prior;
     float opt_prior;
+    float wr;
+    float wr_lcb;
   };
 
   std::vector<ChildInfo> visited_children;
@@ -440,6 +567,8 @@ std::string ServiceImpl::BuildExplainComment() {
         std::sqrt(QVar(root, a)),
         root->move_probs[a],
         root->opt_probs[a],
+        (QOutcome(root, a) + 1.0f) / 2.0f,
+        OutcomeWinrateLcb(root, a),
     });
   }
 
@@ -447,14 +576,37 @@ std::string ServiceImpl::BuildExplainComment() {
       visited_children.begin(), visited_children.end(),
       [](const ChildInfo& x, const ChildInfo& y) { return x.lcb > y.lcb; });
 
-  static constexpr int kNumTopMoves = 8;
+  static constexpr int kNumTopMoves = 10;
   int num_to_show = std::min((int)visited_children.size(), kNumTopMoves);
+  ss << "Root n=" << root->n << "\n";
+  if (!visited_children.empty()) {
+    // PV: the top-LCB move, then the most-visited child at each level.
+    static constexpr int kMaxPvDepth = 10;
+    ss << "PV:";
+    int a = visited_children[0].action;
+    const TreeNode* node = root;
+    for (int d = 0; d < kMaxPvDepth && a >= 0; ++d) {
+      ss << " " << GtpValueString(AsLoc(a));
+      node = node->children[a];
+      if (node == nullptr) break;
+      a = -1;
+      for (int b = 0; b < constants::kMaxMovesPerPosition; ++b) {
+        if (node->child_visits[b] > 0 &&
+            (a == -1 || node->child_visits[b] > node->child_visits[a])) {
+          a = b;
+        }
+      }
+    }
+    ss << "\n";
+  }
   ss << "Top Moves (by LCB):\n";
+  ss << std::defaultfloat << std::setprecision(3);
   for (int i = 0; i < num_to_show; ++i) {
     const auto& c = visited_children[i];
     ss << "  " << GtpValueString(AsLoc(c.action)) << "  n=" << c.n
        << "  q=" << c.q << "  qstd=" << c.qstd << "  lcb=" << c.lcb
-       << "  prior=" << c.prior << "  opt_prior=" << c.opt_prior << "\n";
+       << "  wr=" << c.wr << "  wr_lcb=" << c.wr_lcb << "  p=" << c.prior
+       << "  p_opt=" << c.opt_prior << "\n";
   }
 
   return ss.str();
@@ -638,13 +790,17 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
                   << "  stddev_factor=" << time_metadata.stddev_factor
                   << "  middlegame_factor=" << time_metadata.middlegame_factor
                   << "  winning_attenuator=" << time_metadata.winning_attenuator
-                  << "  pre_search_wr=" << time_metadata.pre_search_winrate
+                  << "  pre_search_best_lcb="
+                  << time_metadata.pre_search_winrate
                   << "  root_n=" << (current_root() ? current_root()->n : -1)
+                  << "  stddev_ema=" << time_metadata.stddev_ema
+                  << "  clock_left_s=" << time_metadata.main_time_left_secs
                   << "\n";
       }
     }
     Search::Params search_params = search_params_;
-    search_params.total_visit_budget = use_visit_budget ? cfg_.n : 1 << 20;
+    search_params.total_visit_budget =
+        use_visit_budget ? eval::NewPlayouts(cfg_, current_root()->n) : 1 << 20;
     search_params.total_visit_time_ms = time_ms;
     Search::Result res;
     {
@@ -659,7 +815,24 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
       std::cerr << "Thought for " << res.time_ms
                 << "ms. Visits=" << res.num_visits << "\n";
     }
-    move = res.move;
+    move = GuardPass(color, res.move);
+    if (verbose_) {
+      // One grep-friendly line per move.
+      TreeNode* root = current_root();
+      const int a = move;
+      const bool has_child = a >= 0 && a < constants::kMaxMovesPerPosition &&
+                             root->child_visits[a] > 0;
+      std::cerr << std::defaultfloat << std::setprecision(4)
+                << "MOVE_SUMMARY ply=" << game_->num_moves() + 1
+                << " color=" << (color == BLACK ? "B" : "W")
+                << " move=" << GtpValueString(move) << " target_ms=" << time_ms
+                << " ms=" << res.time_ms << " visits=" << res.num_visits
+                << " root_n=" << root->n << " V=" << V(root) << " wr="
+                << (has_child ? (QOutcome(root, a) + 1.0f) / 2.0f : -1)
+                << " wr_lcb=" << (has_child ? OutcomeWinrateLcb(root, a) : -1)
+                << " clock_left_s=" << time_metadata.main_time_left_secs
+                << "\n";
+    }
   } else {
     CHECK(cfg_.use_puct || cfg_.sampling_num_moves == 0) << "Not Supported";
     GumbelResult res = [&]() {
@@ -676,9 +849,9 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
 
       return gumbel_evaluator_->SearchRootPuct(
           probability_, *game_, node_table_.get(), current_root(), color,
-          cfg_.n, puct_params);
+          eval::NewPlayouts(cfg_, current_root()->n), puct_params);
     }();
-    move = res.mcts_move;
+    move = GuardPass(color, res.mcts_move);
   }
 
   if (verbose_) {
@@ -686,6 +859,16 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
   }
 
   return move;
+}
+
+game::Loc ServiceImpl::GuardPass(Color color, Loc move) {
+  const Loc guarded = AvoidLosingPass(*game_, current_root(), color,
+                                      cfg_.lcb_min_visit_frac, move);
+  if (verbose_ && guarded != move) {
+    std::cerr << "PASS_GUARD: pass does not win on the current board; playing "
+              << GtpValueString(guarded) << " instead\n";
+  }
+  return guarded;
 }
 
 std::vector<std::pair<game::Loc, float>> ServiceImpl::GetTopPolicyMoves(
@@ -710,6 +893,7 @@ void ServiceImpl::MakeMove(Color color, Loc loc) {
                         " moves=" + std::to_string(game_->num_moves()));
   game_->PlayMove(loc, color);
   current_color_ = game::OppositeColor(color);
+  game_in_progress_ = true;
 
   TreeNode* next_root = current_root_->children[loc];
   if (!next_root) {
@@ -743,6 +927,8 @@ void ServiceImpl::ClearBoard() {
   current_root_ = node_table_->GetOrCreate(game_->board().hash(), BLACK, false);
   node_table_->Reap(current_root_);
   if (bias_cache_) bias_cache_->PruneUnused();
+  game_in_progress_ = false;
+  time_control_.ResetGame();
 }
 
 void ServiceImpl::PausePondering() {
@@ -754,6 +940,10 @@ void ServiceImpl::EnsurePondering() {
   // Nothing to think about once the game is finished. Search::Run() would
   // return immediately anyway; this just avoids spawning a thread per command.
   if (game_->IsGameOver()) return;
+  // Do not ponder between games (after startup, clear_board, or our resign).
+  // GTP has no game-over signal, so an opponent resignation is not seen here;
+  // that ponder stays bounded by the tree-size limit.
+  if (!game_in_progress_) return;
   StartPondering();
 }
 
@@ -788,7 +978,8 @@ void ServiceImpl::Ponder(std::stop_token token) {
   }
 
   Search::Params params = search_params_;
-  params.total_visit_budget = 1 << 17;
+  params.total_visit_budget =
+      std::max(0, ponder_max_root_visits_ - current_root()->n);
   params.total_visit_time_ms = -1;
   {
     ponder_trace::SearchScope scope(
