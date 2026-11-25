@@ -86,9 +86,14 @@ int BestLcbAction(const TreeNode* node, const float min_visit_frac,
     const float n_a = NAction(node, a);
     move_lcbs[a] = {a, n_a >= min_n ? Lcb(node, a) : kGatedOut + n_a};
   }
-  std::sort(
-      move_lcbs.begin(), move_lcbs.end(),
-      [](const auto& p0, const auto& p1) { return p1.second < p0.second; });
+  // Exact LCB ties (children with < 2 visits share a placeholder bound, e.g. a
+  // 16-visit search with one visit per child) go to the higher prior; the sort
+  // is not stable, so they were otherwise picked in arbitrary order.
+  std::sort(move_lcbs.begin(), move_lcbs.end(),
+            [node](const auto& p0, const auto& p1) {
+              if (p0.second != p1.second) return p1.second < p0.second;
+              return node->move_probs[p0.first] > node->move_probs[p1.first];
+            });
   for (const auto& [a, _] : move_lcbs) {
     if (is_valid(a)) return a;
   }

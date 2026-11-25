@@ -184,8 +184,9 @@ float Lcb(const TreeNode* node, int action, float alpha);
 float OutcomeWinrateLcb(const TreeNode* node, int action);
 // Root move pick by LCB: the action with the highest Lcb() among those with at
 // least `min_visit_frac` of the most-visited action's visits; actions below
-// that rank after every action above it, by visits. Returns the best-ranked
-// action for which `is_valid` holds, or -1 if none does.
+// that rank after every action above it, by visits. Exact ties go to the higher
+// prior (move_probs). Returns the best-ranked action for which `is_valid`
+// holds, or -1 if none does.
 int BestLcbAction(const TreeNode* node, float min_visit_frac,
                   const std::function<bool(int)>& is_valid);
 float Ucb(const TreeNode* node, int action, float alpha);
