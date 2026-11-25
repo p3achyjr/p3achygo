@@ -43,6 +43,27 @@ if(BUILD_BINARIES)
         dl
     )
 
+    add_executable(reuse_visits_study
+        reuse_visits_study.cc
+    )
+    target_link_libraries(reuse_visits_study PRIVATE
+        core_impl
+        game
+        gumbel
+        node_table
+        nn_interface
+        engine_factory
+        tfrecord
+        tf_example_proto
+        absl::flags
+        absl::flags_parse
+        absl::log
+        absl::log_initialize
+        absl::synchronization
+        m
+        dl
+    )
+
     add_executable(value_visit_study
         value_visit_study.cc
     )
