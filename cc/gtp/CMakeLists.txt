@@ -7,6 +7,8 @@ add_library(gtp
     command.h
     parse.cc
     parse.h
+    pass_guard.cc
+    pass_guard.h
     service.cc
     service.h
     time_control.cc
@@ -34,6 +36,13 @@ if(BUILD_TESTS)
         core_doctest
     )
     add_test(NAME gtp_time_control_test COMMAND gtp_time_control_test)
+
+    add_executable(gtp_pass_guard_test __tests__/pass_guard_test.cc)
+    target_link_libraries(gtp_pass_guard_test PRIVATE
+        gtp
+        core_doctest
+    )
+    add_test(NAME gtp_pass_guard_test COMMAND gtp_pass_guard_test)
 endif()
 
 # GTP binary

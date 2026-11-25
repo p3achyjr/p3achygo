@@ -98,6 +98,21 @@ TEST_CASE("BestLcbAction") {
   }
 }
 
+TEST_CASE("BestLcbAction breaks exact ties by prior") {
+  // One visit each: every child has the same placeholder LCB.
+  Tree t({{0, 1, 0, 0, 0}, {1, 1, 0, 0, 0}, {2, 1, 0, 0, 0}});
+  t.root.move_probs[0] = 0.1f;
+  t.root.move_probs[1] = 0.6f;
+  t.root.move_probs[2] = 0.3f;
+  CHECK(BestLcbAction(&t.root, 0.1f, kAllValid) == 1);
+  CHECK(BestLcbAction(&t.root, 0.1f, [](int a) { return a != 1; }) == 2);
+
+  // Unvisited actions below the gate also tie (on visits) and go by prior.
+  t.root.move_probs[300] = 0.05f;
+  t.root.move_probs[301] = 0.07f;
+  CHECK(BestLcbAction(&t.root, 0.1f, [](int a) { return a >= 300; }) == 301);
+}
+
 TEST_CASE("RecomputeNodeStats: visit weighting") {
   Tree t({{0, 30, -0.2f, -0.1f, 0.01f}, {1, 10, 0.4f, 0.3f, 0.01f}});
   t.root.init_util_est = 0.05f;

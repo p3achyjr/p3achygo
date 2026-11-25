@@ -19,6 +19,7 @@
 #include "cc/core/probability.h"
 #include "cc/eval/player_config.h"
 #include "cc/game/game.h"
+#include "cc/gtp/pass_guard.h"
 #include "cc/gtp/time_control.h"
 #include "cc/mcts/bias_cache.h"
 #include "cc/mcts/gumbel.h"
@@ -133,6 +134,7 @@ class ServiceImpl final : public Service {
 
  private:
   game::Loc GenMoveCommon(game::Color color);
+  game::Loc GuardPass(game::Color color, game::Loc move);
   std::string BuildExplainComment();
   std::vector<std::pair<game::Loc, float>> GetTopPolicyMoves(
       const std::array<float, constants::kMaxMovesPerPosition>& pi);
@@ -810,7 +812,7 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
       std::cerr << "Thought for " << res.time_ms
                 << "ms. Visits=" << res.num_visits << "\n";
     }
-    move = res.move;
+    move = GuardPass(color, res.move);
     if (verbose_) {
       // One grep-friendly line per move.
       TreeNode* root = current_root();
@@ -846,7 +848,7 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
           probability_, *game_, node_table_.get(), current_root(), color,
           eval::NewPlayouts(cfg_, current_root()->n), puct_params);
     }();
-    move = res.mcts_move;
+    move = GuardPass(color, res.mcts_move);
   }
 
   if (verbose_) {
@@ -854,6 +856,16 @@ game::Loc ServiceImpl::GenMoveCommon(Color color) {
   }
 
   return move;
+}
+
+game::Loc ServiceImpl::GuardPass(Color color, Loc move) {
+  const Loc guarded = AvoidLosingPass(*game_, current_root(), color,
+                                      cfg_.lcb_min_visit_frac, move);
+  if (verbose_ && guarded != move) {
+    std::cerr << "PASS_GUARD: pass does not win on the current board; playing "
+              << GtpValueString(guarded) << " instead\n";
+  }
+  return guarded;
 }
 
 std::vector<std::pair<game::Loc, float>> ServiceImpl::GetTopPolicyMoves(
