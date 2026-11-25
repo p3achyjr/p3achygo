@@ -6,9 +6,11 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
+#include <mutex>
 #include <sstream>
 #include <stop_token>
 #include <thread>
@@ -120,6 +122,12 @@ class ServiceImpl final : public Service {
   game::Loc GtpGenMoveAnalyze(game::Color color) override;
   game::Loc GtpCgosGenmoveAnalyze(game::Color color,
                                   std::string* analysis_json) override;
+  absl::Status GtpStartAnalyze(const AnalyzeArgs& args,
+                               std::function<void(std::string)> emit) override;
+  void GtpStopAnalyze() override;
+  bool IsAnalyzing() const override {
+    return analyze_search_thread_.joinable();
+  }
 
   // Private Commands.
   Response<std::string> GtpPlayDbg(std::optional<int> id,
@@ -175,6 +183,9 @@ class ServiceImpl final : public Service {
   std::thread analysis_thread_;
 
   std::jthread ponder_thread_;
+  // lz-analyze / kata-analyze: search, and periodic output.
+  std::jthread analyze_search_thread_;
+  std::jthread analyze_emit_thread_;
   // True once a move has been played since the last clear_board, until we
   // resign. Only read/written on the command thread. Gates pondering.
   bool game_in_progress_ = false;
@@ -262,11 +273,12 @@ Response<int> ServiceImpl::GtpProtocolVersion(std::optional<int> id) {
 }
 
 Response<std::string> ServiceImpl::GtpName(std::optional<int> id) {
-  return MakeResponse(id, std::string("p3achygo"));
+  return MakeResponse(id, cfg_.gtp_name);
 }
 
 Response<std::string> ServiceImpl::GtpVersion(std::optional<int> id) {
-  return MakeResponse(id, std::string(""));
+  // GUIs such as LizzieYzy parse this as "major.minor".
+  return MakeResponse(id, std::string("1.0"));
 }
 
 Response<bool> ServiceImpl::GtpKnownCommand(std::optional<int> id,
@@ -500,6 +512,61 @@ game::Loc ServiceImpl::GtpCgosGenmoveAnalyze(game::Color color,
               << GtpBoardString(game_->board()) << "\n";
   }
   return mcts_move;
+}
+
+absl::Status ServiceImpl::GtpStartAnalyze(
+    const AnalyzeArgs& args, std::function<void(std::string)> emit) {
+  if (args.color && *args.color != current_color_) {
+    return absl::InvalidArgumentError("can only analyze the side to move");
+  }
+  GtpStopAnalyze();
+
+  // Root ownership is one NN eval of this position; do it before the search
+  // takes NN slot 0.
+  std::vector<float> ownership;
+  if (args.kata && args.ownership) {
+    const auto own =
+        nn_interface_->LoadAndGetOwnership(0, *game_, current_color_);
+    ownership.assign(own.begin(), own.end());
+  }
+
+  analyze_search_thread_ = std::jthread([this](std::stop_token token) {
+    BiasCache* bias_cache = bias_cache_.has_value() ? &*bias_cache_ : nullptr;
+    Search s(nn_interface_->MakeSlot(0), bias_cache);
+    std::stop_callback stop_cb(token, [&s] { s.StopSearch(); });
+    // Bounded like pondering, so the tree fits in RAM.
+    Search::Params params = search_params_;
+    params.total_visit_budget =
+        std::max(0, ponder_max_root_visits_ - current_root()->n);
+    params.total_visit_time_ms = -1;
+    s.Run(probability_, *game_, node_table_.get(), current_root(),
+          current_color_, params);
+  });
+
+  // Reads the tree while the search grows it, as ConstructAnalysisSnapshot
+  // does: tree stats are relaxed atomics and nodes are not freed mid-search.
+  analyze_emit_thread_ =
+      std::jthread([this, args, emit = std::move(emit),
+                    ownership = std::move(ownership)](std::stop_token token) {
+        std::mutex mu;
+        std::condition_variable_any cv;
+        const auto interval = std::chrono::milliseconds(args.interval_cs * 10);
+        while (true) {
+          {
+            std::unique_lock l(mu);
+            cv.wait_for(l, token, interval, [] { return false; });
+          }
+          if (token.stop_requested()) return;
+          const std::string line = AnalyzeLine(current_root(), args, ownership);
+          if (!line.empty()) emit(line + "\n");
+        }
+      });
+  return absl::OkStatus();
+}
+
+void ServiceImpl::GtpStopAnalyze() {
+  analyze_emit_thread_ = {};    // request_stop() + join()
+  analyze_search_thread_ = {};  // request_stop() + join()
 }
 
 Response<std::string> ServiceImpl::GtpPlayDbg(std::optional<int> id,

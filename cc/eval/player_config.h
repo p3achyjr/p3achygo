@@ -93,6 +93,10 @@ struct PlayerSearchConfig {
   // so search with the area equivalent, komi + 1 (6.5 -> 7.5).
   bool territory_komi = false;
 
+  // GTP `name` reply. LizzieYzy uses its kata-analyze mode (score, ownership)
+  // only for names starting with "kata".
+  std::string gtp_name = "p3achygo";
+
   // TimeControl::Flags bitmask. 0 = all factors disabled (fixed-visit mode).
   // Pass an integer literal or "all" (= ~0u, all flags on).
   uint32_t time_control_flags = 0;
@@ -298,6 +302,8 @@ inline PlayerSearchConfig ParsePlayerConfigFile(const std::string& path) {
       cfg.cgos_ownership = internal::ParseBool(val);
     else if (key == "territory_komi")
       cfg.territory_komi = internal::ParseBool(val);
+    else if (key == "gtp_name")
+      cfg.gtp_name = val;
     else if (key == "time_control_flags")
       cfg.time_control_flags =
           (val == "all") ? ~0u : static_cast<uint32_t>(std::stoul(val));
@@ -391,6 +397,7 @@ inline std::string FormatPlayerConfigs(const PlayerSearchConfig& cur,
   ROW(enable_pondering, b);
   ROW(cgos_ownership, b);
   ROW(territory_komi, b);
+  ROW(gtp_name, s);
   ROW(time_control_flags, i_);
   ROW(q_fn, s);
   ROW(n_fn, s);

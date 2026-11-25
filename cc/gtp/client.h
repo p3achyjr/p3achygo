@@ -52,6 +52,13 @@ class Client final {
   // genmove_analyze Command
   void GenmoveAnalyze(game::Color color, int centiseconds);
 
+  // lz-analyze / kata-analyze.
+  void StartAnalyze(const Command& cmd, bool kata)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
+  // Stops lz-analyze / kata-analyze output, if live, and ends its response.
+  // Releases mu_ while joining the service's output thread, which takes mu_.
+  void EndAnalyze() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
+
   // Main command handler.
   void HandleCommand(Command cmd) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
 
@@ -100,6 +107,9 @@ class Client final {
 
   bool genmove_analyze_running_;
   std::thread genmove_analyze_thread_;
+
+  // lz-analyze / kata-analyze output is live (its response is open).
+  bool lz_analyze_live_ ABSL_GUARDED_BY(mu_) = false;
 };
 
 }  // namespace gtp

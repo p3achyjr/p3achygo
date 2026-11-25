@@ -46,6 +46,12 @@ GTPCode StringToGTPCode(std::string token) {
     return GTPCode::kTimeLeft;
   } else if (token == "cgos-genmove_analyze") {
     return GTPCode::kCgosGenmoveAnalyze;
+  } else if (token == "lz-analyze") {
+    return GTPCode::kLzAnalyze;
+  } else if (token == "kata-analyze") {
+    return GTPCode::kKataAnalyze;
+  } else if (token == "stop") {
+    return GTPCode::kStop;
   } else if (token == "play_dbg") {
     return GTPCode::kPlayDbg;
   } else if (token == "genmove_dbg") {
@@ -103,6 +109,12 @@ std::string GTPCodeToString(GTPCode code) {
       return "time_left";
     case GTPCode::kCgosGenmoveAnalyze:
       return "cgos-genmove_analyze";
+    case GTPCode::kLzAnalyze:
+      return "lz-analyze";
+    case GTPCode::kKataAnalyze:
+      return "kata-analyze";
+    case GTPCode::kStop:
+      return "stop";
     case GTPCode::kPlayDbg:
       return "play_dbg";
     case GTPCode::kGenMoveDbg:

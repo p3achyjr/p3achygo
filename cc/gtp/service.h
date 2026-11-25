@@ -1,6 +1,7 @@
 #ifndef GTP_SERVICE_H_
 #define GTP_SERVICE_H_
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -9,6 +10,7 @@
 #include "cc/eval/player_config.h"
 #include "cc/game/loc.h"
 #include "cc/game/move.h"
+#include "cc/gtp/analyze.h"
 #include "cc/gtp/command.h"
 
 namespace gtp {
@@ -47,6 +49,16 @@ class Service {
   virtual game::Loc GtpGenMoveAnalyze(game::Color color) = 0;
   virtual game::Loc GtpCgosGenmoveAnalyze(game::Color color,
                                           std::string* analysis_json) = 0;
+
+  // `lz-analyze` / `kata-analyze`. Searches the current position in the
+  // background (bounded like pondering) and calls `emit` with an AnalyzeLine
+  // plus "\n" every `args.interval_cs`, from a service thread, until
+  // GtpStopAnalyze(). Only the side to move can be analyzed.
+  virtual absl::Status GtpStartAnalyze(
+      const AnalyzeArgs& args, std::function<void(std::string)> emit) = 0;
+  // Stops the search. Returns after the last `emit` call. No-op if idle.
+  virtual void GtpStopAnalyze() = 0;
+  virtual bool IsAnalyzing() const = 0;
 
   // Private Commands.
   virtual Response<std::string> GtpPlayDbg(std::optional<int> id,

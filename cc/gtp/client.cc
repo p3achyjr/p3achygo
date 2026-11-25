@@ -8,6 +8,7 @@
 #include "absl/log/check.h"
 #include "absl/strings/numbers.h"
 #include "absl/synchronization/mutex.h"
+#include "cc/gtp/analyze.h"
 #include "cc/gtp/parse.h"
 
 #define ARITY_CHECK(cmd, arity)                                     \
@@ -104,6 +105,11 @@ InputLoopStatus Client::ParseAndAddCommand(std::string cmd_string) {
 }
 
 void Client::StopAnalysis() {
+  {
+    absl::MutexLock l(&mu_);
+    EndAnalyze();
+  }
+
   if (genmove_analyze_thread_.joinable()) {
     // This is basically just a synchronous thread. Wait for it to end.
     genmove_analyze_thread_.join();
@@ -130,8 +136,10 @@ void Client::ClientLoop() {
       cmd_queue_.pop_front();
     }
 
-    // Handle all commands in order.
+    // Handle all commands in order. A command ends lz/kata-analyze output
+    // even when it was queued before the analysis started.
     for (const Command& cmd : cmds) {
+      EndAnalyze();
       HandleCommand(cmd);
     }
   }
@@ -179,6 +187,39 @@ void Client::AnalysisSnapshotLoop(game::Color color, int centiseconds,
   }
 }
 
+void Client::StartAnalyze(const Command& cmd, bool kata) {
+  const auto args = ParseAnalyzeArgs(kata, cmd.arg_tokens);
+  const std::string name = GTPCodeToString(cmd.code);
+  if (!args.ok()) {
+    AddResponse(MakeErrorResponse(
+        cmd.id, name + ": " + std::string(args.status().message())));
+    return;
+  }
+  // The service's output thread blocks on mu_, which we hold, so the header
+  // is queued before any `info` line.
+  const absl::Status status =
+      service_->GtpStartAnalyze(*args, [this](std::string line) {
+        absl::MutexLock l(&mu_);
+        AddRawResponse(std::move(line));
+      });
+  if (!status.ok()) {
+    AddResponse(
+        MakeErrorResponse(cmd.id, name + ": " + std::string(status.message())));
+    return;
+  }
+  AddRawResponse("=" + (cmd.id ? std::to_string(*cmd.id) : "") + "\n");
+  lz_analyze_live_ = true;
+}
+
+void Client::EndAnalyze() {
+  if (!lz_analyze_live_) return;
+  lz_analyze_live_ = false;
+  mu_.Unlock();
+  service_->GtpStopAnalyze();
+  mu_.Lock();
+  AddRawResponse("\n");  // Ends the response.
+}
+
 void Client::GenmoveAnalyze(game::Color color, int centiseconds) {
   DCHECK(genmove_analyze_running_);
   analyze_thread_ = std::thread(&Client::AnalysisSnapshotLoop, this, color,
@@ -213,6 +254,8 @@ bool ShouldResumePonderingAfter(GTPCode code) {
     // would run two searches over the same tree and NN slot.
     case GTPCode::kAnalyze:
     case GTPCode::kGenMoveAnalyze:
+    case GTPCode::kLzAnalyze:
+    case GTPCode::kKataAnalyze:
     // Shutting down -- do not start work we are about to join.
     case GTPCode::kQuit:
       return false;
@@ -256,7 +299,7 @@ void Client::HandleCommand(Command cmd) {
   // flags are guarded by mu_, which is held for all of HandleCommand.
   ScopedPonderPause ponder_pause(service_.get(), [this, code = cmd.code] {
     return ShouldResumePonderingAfter(code) && !analyze_running_ &&
-           !genmove_analyze_running_;
+           !genmove_analyze_running_ && !lz_analyze_live_;
   });
   switch (cmd.code) {
     case GTPCode::kProtocolVersion:
@@ -409,6 +452,16 @@ void Client::HandleCommand(Command cmd) {
         AddRawResponse(ss.str());
         return;
       }
+    case GTPCode::kLzAnalyze:
+      StartAnalyze(cmd, /*kata=*/false);
+      return;
+    case GTPCode::kKataAnalyze:
+      StartAnalyze(cmd, /*kata=*/true);
+      return;
+    case GTPCode::kStop:
+      // Analysis was already ended before this command was handled.
+      AddResponse(MakeResponse(cmd.id));
+      return;
     case GTPCode::kUndo:
       AddResponse(service_->GtpUndo(cmd.id));
       return;

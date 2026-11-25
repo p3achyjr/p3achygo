@@ -45,6 +45,10 @@ Flags:
                                             true: GTP `komi` is territory
                                             komi; search with komi + 1
                                             (Japanese 6.5 -> area 7.5)
+                  gtp_name: <string>        GTP `name` reply (default
+                                            p3achygo). LizzieYzy uses
+                                            kata-analyze if it starts
+                                            with "kata".
   --n           Visit budget per move; overrides `n` in the config.
   --verbose     Log the config at startup, and each move's search
                 details, to stderr.
