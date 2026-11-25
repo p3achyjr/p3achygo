@@ -358,6 +358,58 @@ def test_multistep():
     return all_ok
 
 
+# ------------------------------------------------------------------ #
+# Test 7: center-1 gamma WD (KataGo gamma_weight_decay_center_1)      #
+# ------------------------------------------------------------------ #
+
+
+def test_gamma_center1():
+    print("\nTest 7: center-1 gamma WD")
+    from backend_torch.model_layers_common import FixScaleNorm
+
+    class Net(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.conv = torch.nn.Conv2d(8, 8, 3, bias=False)
+            self.norm = FixScaleNorm(8, use_gamma=True)
+
+    lr, wd, exp, lr_max = 1e-4, 0.1, 1.0, 2e-4
+    all_ok = True
+    for enabled in (False, True):
+        net = Net()
+        with torch.no_grad():
+            net.norm.gamma.copy_(torch.linspace(0.0, 2.0, 8))
+        groups, wd_factors = build_convmuon_param_groups(net, lr=lr)
+        opt = ConvMuon(
+            groups,
+            wd_factors=wd_factors,
+            weight_decay=wd,
+            adam_weight_decay=wd,
+            wd_lr_exponent=exp,
+            wd_lr_max=lr_max,
+            global_clipnorm=None,
+        )
+        opt.set_gamma_center1(net, enabled)
+        g0, w0 = net.norm.gamma.detach().clone(), net.conv.weight.detach().clone()
+        for p in net.parameters():
+            p.grad = torch.zeros_like(p)
+        opt.step()
+        # gamma: AdamW path, WD tag ("muon", 0.1); zero grad => only decay.
+        c = lr * wd * 0.1 * (lr / lr_max) ** exp
+        center = 1.0 if enabled else 0.0
+        want_g = center + (g0 - center) * (1 - c)
+        ok_g = torch.allclose(net.norm.gamma.detach(), want_g, atol=1e-7, rtol=0)
+        # conv weight is unaffected by the center-1 setting: decays toward 0.
+        ratio = (net.conv.weight.detach() / w0).flatten()
+        ok_w = float((ratio - ratio[0]).abs().max()) < 1e-6 and float(ratio[0]) < 1.0
+        ok = ok_g and ok_w and (len(opt._center1_ids) == (1 if enabled else 0))
+        print(
+            f"  [{'PASS' if ok else 'FAIL'}] center1={enabled}: gamma toward {center}, conv toward 0"
+        )
+        all_ok &= ok
+    return all_ok
+
+
 if __name__ == "__main__":
     results = [
         test_ns_singular_values(),
@@ -366,6 +418,7 @@ if __name__ == "__main__":
         test_wd_lr_scaling(),
         test_wd_categories(),
         test_multistep(),
+        test_gamma_center1(),
     ]
     results = [r for r in results if r is not None]
     print(f"\n{'All targeted tests passed.' if all(results) else 'Some tests FAILED.'}")

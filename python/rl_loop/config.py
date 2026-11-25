@@ -61,6 +61,8 @@ class RunConfig(object):
     nn_timeout_us: int
     # Use the Aurora polar factor (leverage-uniform Muon) for non-square Muon params.
     muon_aurora: bool = False
+    # Decay "gamma"-category params toward 1 instead of 0 (KataGo center-1).
+    gamma_center1_wd: bool = False
     # LR multiplier for policy/value head params (AdamW path), relative to the
     # global LR. None = heads use adam_lr_ratio like other AdamW params.
     head_lr_factor: Optional[float] = None
@@ -129,6 +131,7 @@ def parse(run_id: str) -> RunConfig:
         nonroot_var_scale_prior_visits = obj.get("nonroot_var_scale_prior_visits", 10)
         nn_timeout_us = obj.get("nn_timeout_us", 400)
         muon_aurora = obj.get("muon_aurora", False)
+        gamma_center1_wd = obj.get("gamma_center1_wd", False)
         sgfpos_path = obj.get("sgfpos_path", "")
 
         return RunConfig(
@@ -177,6 +180,7 @@ def parse(run_id: str) -> RunConfig:
             nonroot_var_scale_prior_visits,
             nn_timeout_us,
             muon_aurora=muon_aurora,
+            gamma_center1_wd=gamma_center1_wd,
             head_lr_factor=head_lr_factor,
             sgfpos_path=sgfpos_path,
         )

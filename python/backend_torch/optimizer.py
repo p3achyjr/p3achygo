@@ -428,6 +428,8 @@ class ConvMuon(Optimizer):
         self._global_step = 0
         self._lr_schedule = None
         self.last_grad_norm: float = 0.0
+        # Params whose decay pulls toward 1 instead of 0 (set_gamma_center1).
+        self._center1_ids: set = set()
 
         # Default any unmapped param to ("muon", 1.0) so out-of-band uses
         # (e.g. unit tests that pass a single Parameter without going through
@@ -446,6 +448,28 @@ class ConvMuon(Optimizer):
         kind, factor = self._wd_factors[id(param)]
         base = self._base_muon_wd if kind == "muon" else self._base_adam_wd
         return base * factor
+
+    def set_gamma_center1(self, model, enabled: bool) -> None:
+        """KataGo gamma_weight_decay_center_1: params in the "gamma" WD category
+        decay (p - 1) instead of p, at their usual WD. AdamW path only."""
+        self._center1_ids = set()
+        if not enabled:
+            return
+        named, bn_ids = _collect_named_params(model)
+        self._center1_ids = {
+            id(p)
+            for n, p in named
+            if p.requires_grad and _wd_category(n, is_bn=id(p) in bn_ids) == "gamma"
+        }
+        muon_ids = {
+            id(p)
+            for g in self.param_groups
+            if g.get("group") == "muon"
+            for p in g["params"]
+        }
+        assert not (
+            self._center1_ids & muon_ids
+        ), "center-1 gamma WD is AdamW-path only"
 
     def _lr_scale(self, lr: float) -> float:
         if self._wd_lr_exponent is None or self._wd_lr_max is None:
@@ -767,6 +791,10 @@ class ConvMuon(Optimizer):
         # param *= (1 - lr * wd)  per-param scalar
         wd_factors_list = [self._wd_for(p) * lr_scale for p in params]
         torch._foreach_mul_(params, [1.0 - lr * wd for wd in wd_factors_list])
+        # Center-1 params: p = p*(1 - lr*wd) + lr*wd, i.e. (p - 1) decays.
+        for p, wd in zip(params, wd_factors_list):
+            if id(p) in self._center1_ids:
+                p.add_(lr * wd)
 
         # param += -lr * bias_corr * m / (sqrt(v) + eps)
         denom = torch._foreach_sqrt(vs)
@@ -1001,6 +1029,7 @@ def make_optimizer(model, config, lr_schedule, is_gpu, *, loaded_state=None):
         inner.wd_lr_exponent = config.wd_lr_exponent
         inner.wd_lr_max = config.wd_lr_max
         inner.aurora = getattr(config, "muon_aurora", False)
+        inner.set_gamma_center1(model, getattr(config, "gamma_center1_wd", False))
     inner.global_clipnorm = config.global_clipnorm
 
     return optimizer
