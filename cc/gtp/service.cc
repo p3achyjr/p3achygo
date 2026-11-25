@@ -534,11 +534,17 @@ absl::Status ServiceImpl::GtpStartAnalyze(
     BiasCache* bias_cache = bias_cache_.has_value() ? &*bias_cache_ : nullptr;
     Search s(nn_interface_->MakeSlot(0), bias_cache);
     std::stop_callback stop_cb(token, [&s] { s.StopSearch(); });
-    // Bounded like pondering, so the tree fits in RAM.
+    // Bounded like pondering, so the tree fits in RAM, and by the analyze
+    // limits.
+    const int max_root_visits =
+        cfg_.analyze_max_visits > 0
+            ? std::min(ponder_max_root_visits_, cfg_.analyze_max_visits)
+            : ponder_max_root_visits_;
     Search::Params params = search_params_;
     params.total_visit_budget =
-        std::max(0, ponder_max_root_visits_ - current_root()->n);
-    params.total_visit_time_ms = -1;
+        std::max(0, max_root_visits - current_root()->n);
+    params.total_visit_time_ms =
+        cfg_.analyze_max_time_s > 0 ? cfg_.analyze_max_time_s * 1000 : -1;
     s.Run(probability_, *game_, node_table_.get(), current_root(),
           current_color_, params);
   });

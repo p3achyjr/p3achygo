@@ -10,6 +10,10 @@
 ABSL_FLAG(std::string, model_path, "", "Path to the TensorRT engine (.trt).");
 ABSL_FLAG(std::string, config, "", "Path to a player config file.");
 ABSL_FLAG(int, n, 0, "Visit budget per move; overrides `n` in the config.");
+ABSL_FLAG(int, analyze_max_visits, 1000000,
+          "lz-/kata-analyze stop at this many root visits (<= 0: no limit).");
+ABSL_FLAG(int, analyze_max_time_s, 60,
+          "lz-/kata-analyze stop after this many seconds (<= 0: no limit).");
 ABSL_FLAG(bool, verbose, false,
           "Log the config at startup and per-move search details (stderr).");
 
@@ -19,6 +23,7 @@ constexpr char kUsage[] =
 
 Usage:
   p3achygo --model_path=<engine.trt> [--config=<player.cfg>] [--n=<visits>]
+           [--analyze_max_visits=<visits>] [--analyze_max_time_s=<s>]
            [--verbose]
 
 Flags:
@@ -50,6 +55,10 @@ Flags:
                                             kata-analyze if it starts
                                             with "kata".
   --n           Visit budget per move; overrides `n` in the config.
+  --analyze_max_visits, --analyze_max_time_s
+                lz-analyze / kata-analyze (e.g. LizzieYzy) stop at this
+                many root visits or seconds, whichever comes first.
+                Defaults 1000000 and 60; <= 0 disables a limit.
   --verbose     Log the config at startup, and each move's search
                 details, to stderr.
 
@@ -174,6 +183,8 @@ int main(int argc, char** argv) {
   if (n != 0) {
     cfg.n = absl::GetFlag(FLAGS_n);
   }
+  cfg.analyze_max_visits = absl::GetFlag(FLAGS_analyze_max_visits);
+  cfg.analyze_max_time_s = absl::GetFlag(FLAGS_analyze_max_time_s);
 
   if (absl::GetFlag(FLAGS_verbose)) {
     LogConfig(cfg);

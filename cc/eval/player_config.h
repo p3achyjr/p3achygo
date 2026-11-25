@@ -97,6 +97,12 @@ struct PlayerSearchConfig {
   // only for names starting with "kata".
   std::string gtp_name = "p3achygo";
 
+  // lz-analyze / kata-analyze stop at this many root visits or this many
+  // seconds per command, whichever comes first (and within the ponder tree
+  // budget). <= 0 disables that limit. Set by the --analyze_* flags.
+  int analyze_max_visits = 1000000;
+  int analyze_max_time_s = 60;
+
   // TimeControl::Flags bitmask. 0 = all factors disabled (fixed-visit mode).
   // Pass an integer literal or "all" (= ~0u, all flags on).
   uint32_t time_control_flags = 0;
