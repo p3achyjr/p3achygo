@@ -111,6 +111,7 @@ class ServiceImpl final : public Service {
                              int byoyomi_periods) override;
   Response<> GtpTimeLeft(std::optional<int> id, Color color, int seconds,
                          int stones) override;
+  Response<> GtpCgosGameover(std::optional<int> id) override;
 
   // Analysis methods. Call these from separate threads.
   Response<> GtpStartAnalysis(std::optional<int> id,
@@ -671,6 +672,13 @@ Response<> ServiceImpl::GtpTimeSettings(std::optional<int> id,
   return MakeResponse(id);
 }
 
+Response<> ServiceImpl::GtpCgosGameover(std::optional<int> id) {
+  // The dispatcher has already paused pondering; with no game in progress,
+  // EnsurePondering() will not restart it until the next game's first move.
+  game_in_progress_ = false;
+  return MakeResponse(id);
+}
+
 Response<> ServiceImpl::GtpTimeLeft(std::optional<int> id, Color color,
                                     int seconds, int stones) {
   time_control_.Enable(true);
@@ -941,7 +949,8 @@ void ServiceImpl::EnsurePondering() {
   // return immediately anyway; this just avoids spawning a thread per command.
   if (game_->IsGameOver()) return;
   // Do not ponder between games (after startup, clear_board, or our resign).
-  // GTP has no game-over signal, so an opponent resignation is not seen here;
+  // Plain GTP has no game-over signal; CGOS sends cgos-gameover (see
+  // GtpCgosGameover). Without it an opponent resignation is not seen here, and
   // that ponder stays bounded by the tree-size limit.
   if (!game_in_progress_) return;
   StartPondering();
