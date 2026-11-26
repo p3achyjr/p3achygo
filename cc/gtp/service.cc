@@ -111,6 +111,7 @@ class ServiceImpl final : public Service {
                              int byoyomi_periods) override;
   Response<> GtpTimeLeft(std::optional<int> id, Color color, int seconds,
                          int stones) override;
+  Response<> GtpCgosGameover(std::optional<int> id) override;
 
   // Analysis methods. Call these from separate threads.
   Response<> GtpStartAnalysis(std::optional<int> id,
@@ -668,6 +669,13 @@ Response<> ServiceImpl::GtpTimeSettings(std::optional<int> id,
   time_control_.Enable(true);
   time_control_.SetTimeSettings(main_time_secs, byoyomi_time_secs,
                                 byoyomi_periods);
+  return MakeResponse(id);
+}
+
+Response<> ServiceImpl::GtpCgosGameover(std::optional<int> id) {
+  // The dispatcher has already paused pondering; with no game in progress,
+  // EnsurePondering() will not restart it until the next game's first move.
+  game_in_progress_ = false;
   return MakeResponse(id);
 }
 

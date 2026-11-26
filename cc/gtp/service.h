@@ -38,6 +38,10 @@ class Service {
                                      int byoyomi_periods) = 0;
   virtual Response<> GtpTimeLeft(std::optional<int> id, game::Color color,
                                  int seconds, int stones) = 0;
+  // CGOS sends `cgos-gameover <result>` when a game ends (if listed in
+  // list_commands). Ends the game for pondering purposes, e.g. when the
+  // opponent resigns, which plain GTP never tells the engine.
+  virtual Response<> GtpCgosGameover(std::optional<int> id) = 0;
 
   // Analysis methods. Call these from separate threads.
   virtual Response<> GtpStartAnalysis(std::optional<int> id,

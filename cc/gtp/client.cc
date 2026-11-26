@@ -388,6 +388,10 @@ void Client::HandleCommand(Command cmd) {
             std::thread(&Client::GenmoveAnalyze, this, color, centiseconds);
         return;
       }
+    case GTPCode::kCgosGameover:
+      // Argument is the result (e.g. B+Resign); not needed.
+      AddResponse(service_->GtpCgosGameover(cmd.id));
+      return;
     case GTPCode::kCgosGenmoveAnalyze:
       ARITY_CHECK(cmd, 1);
       {
