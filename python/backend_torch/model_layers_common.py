@@ -113,8 +113,13 @@ class BatchRenorm2d(nn.BatchNorm2d):
             self.running_mean.lerp_(mean, self.momentum)
             self.running_var.lerp_(var * n / (n - 1), self.momentum)
             self.num_batches_tracked.add_(1)
-        scale = self.weight * r / std
-        shift = self.bias + self.weight * (d - mean * r / std)
+        scale = r / std
+        shift = d - mean * r / std
+        if (
+            self.weight is not None
+        ):  # affine=False (FixScaleBatchRenorm): no gamma/beta here
+            scale = self.weight * scale
+            shift = self.bias + self.weight * shift
         return (xf * scale[None, :, None, None] + shift[None, :, None, None]).to(
             x.dtype
         )
@@ -131,8 +136,10 @@ def enable_batch_renorm(
     Checkpoint-compatible: no new persistent state. Returns the count."""
     n = 0
     for m in module.modules():
-        if type(m) is nn.BatchNorm2d:
-            m.__class__ = BatchRenorm2d
+        if type(m) is nn.BatchNorm2d or type(m) is FixScaleBatchNorm:
+            m.__class__ = (
+                BatchRenorm2d if type(m) is nn.BatchNorm2d else FixScaleBatchRenorm
+            )
             m.rmax, m.dmax, m.ramp_batches = float(rmax), float(dmax), int(ramp_batches)
             m.ramp_exp = bool(ramp_exp)
             m.register_buffer(
@@ -165,6 +172,14 @@ def set_bn_eps(module: nn.Module, eps: float, opt_state=None) -> int:
     n = 0
     for m in module.modules():
         if isinstance(m, nn.BatchNorm2d) and m.eps != eps:
+            if m.weight is None:
+                # No gamma to absorb the change (FixScaleBatchNorm): only safe on
+                # a BN that has never been trained.
+                if int(m.num_batches_tracked) > 0:
+                    raise ValueError("set_bn_eps: affine-free BN already trained")
+                m.eps = eps
+                n += 1
+                continue
             s = ((m.running_var + eps) / (m.running_var + m.eps)).sqrt()
             m.weight.mul_(s)
             st = opt_state.get(m.weight) if opt_state is not None else None
@@ -239,6 +254,13 @@ class FixScaleBatchNorm(nn.BatchNorm2d):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return super().forward(x) * self.scale + self.beta[None, :, None, None]
+
+
+class FixScaleBatchRenorm(FixScaleBatchNorm, BatchRenorm2d):
+    """FixScaleBatchNorm trained with Batch Renorm: y = BRN(x) * scale + beta.
+    MRO puts BatchRenorm2d.forward under FixScaleBatchNorm.forward, and with
+    affine=False it applies no gamma/beta itself. Same state_dict and eval
+    forward as FixScaleBatchNorm. Created only by `enable_batch_renorm`."""
 
 
 def make_norm(

@@ -83,10 +83,41 @@ R2_BUCKET = "p3achygo"
 POLL_INTERVAL_S = 60
 
 
+def _trunk_roots(model) -> list:
+    """Trunk modules: the blocks, plus fixscaleonenorm's trunk-final BN."""
+    tfb = getattr(model, "trunk_final_bn", None)
+    return [model.blocks] + ([tfb] if tfb is not None else [])
+
+
 def _trunk_bns(model) -> list:
     import torch
 
-    return [m for m in model.blocks.modules() if isinstance(m, torch.nn.BatchNorm2d)]
+    return [
+        m
+        for r in _trunk_roots(model)
+        for m in r.modules()
+        if isinstance(m, torch.nn.BatchNorm2d)
+    ]
+
+
+def _trunk_gammas_betas(model) -> tuple:
+    """Trunk norm gammas and betas: BatchNorm weight/bias, FixScaleNorm
+    gamma/beta, FixScaleBatchNorm beta (it has no gamma)."""
+    import torch
+    from backend_torch.model_layers_common import FixScaleBatchNorm, FixScaleNorm
+
+    gammas, betas = [], []
+    for r in _trunk_roots(model):
+        for m in r.modules():
+            if isinstance(m, FixScaleNorm):
+                gammas += [m.gamma] if m.gamma is not None else []
+                betas.append(m.beta)
+            elif isinstance(m, FixScaleBatchNorm):
+                betas.append(m.beta)
+            elif isinstance(m, torch.nn.BatchNorm2d):
+                gammas.append(m.weight)
+                betas.append(m.bias)
+    return gammas, betas
 
 
 def _trunk_weight_params(model) -> list:
@@ -129,9 +160,9 @@ def _configure_norm_control(live_model, optimizer, config, model_gen, batch_num)
                 )
             )
         baseline = float(json.loads(bp.read_text())["norm"])
-    bns = _trunk_bns(live_model)
-    gammas = [m.weight for m in bns] if FLAGS.gamma_center1_wd_factor > 0 else []
-    betas = [m.bias for m in bns] if FLAGS.trunk_beta_noreg else []
+    all_gammas, all_betas = _trunk_gammas_betas(live_model)
+    gammas = all_gammas if FLAGS.gamma_center1_wd_factor > 0 else []
+    betas = all_betas if FLAGS.trunk_beta_noreg else []
     inner.configure_norm_control(
         adaptive_params=weights if baseline else (),
         baseline_norm=baseline,
@@ -152,8 +183,9 @@ def _log_norms(live_model, optimizer, gen):
     import torch
 
     inner = getattr(optimizer, "inner_optimizer", optimizer)
-    g = torch.cat([m.weight.detach().flatten() for m in _trunk_bns(live_model)])
-    b = torch.cat([m.bias.detach().flatten() for m in _trunk_bns(live_model)])
+    gammas, betas = _trunk_gammas_betas(live_model)
+    g = torch.cat([p.detach().flatten() for p in gammas])
+    b = torch.cat([p.detach().flatten() for p in betas])
     logging.info(
         f"Norm control end of gen {gen}: trunk weight norm "
         f"{inner.params_norm(_trunk_weight_params(live_model)):.4f} "
@@ -243,7 +275,7 @@ def _train_loop():
         if FLAGS.trunk_bn_eps > 0:
             from backend_torch.model_layers_common import set_bn_eps
 
-            n = set_bn_eps(live_model.blocks, FLAGS.trunk_bn_eps)
+            n = sum(set_bn_eps(r, FLAGS.trunk_bn_eps) for r in _trunk_roots(live_model))
             live_model._config["trunk_bn_eps"] = FLAGS.trunk_bn_eps
             logging.info(f"Trunk BN eps -> {FLAGS.trunk_bn_eps} on {n} BNs")
         save_model(live_model, live_model_path)
@@ -266,12 +298,15 @@ def _train_loop():
         from backend_torch.model_layers_common import enable_batch_renorm
 
         brn_ramp_batches = int(round(FLAGS.brn_ramp_samples / config.batch_size))
-        n = enable_batch_renorm(
-            live_model.blocks,
-            FLAGS.brn_rmax,
-            FLAGS.brn_dmax,
-            brn_ramp_batches,
-            ramp_exp=True,
+        n = sum(
+            enable_batch_renorm(
+                r,
+                FLAGS.brn_rmax,
+                FLAGS.brn_dmax,
+                brn_ramp_batches,
+                ramp_exp=True,
+            )
+            for r in _trunk_roots(live_model)
         )
         logging.info(
             f"Batch Renorm on {n} trunk BNs: rmax {FLAGS.brn_rmax} dmax "
@@ -314,7 +349,8 @@ def _train_loop():
         if FLAGS.batch_renorm:
             from backend_torch.model_layers_common import set_brn_step
 
-            set_brn_step(live_model.blocks, batch_num)
+            for r in _trunk_roots(live_model):
+                set_brn_step(r, batch_num)
 
         batch_num, live_model, swa_model, optimizer = rl_loop.train.train_one_gen(
             live_model,

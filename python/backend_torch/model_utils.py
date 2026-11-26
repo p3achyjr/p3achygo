@@ -300,7 +300,8 @@ def _model_from_config(config: Dict) -> P3achyGoModel:
     if trunk_bn_eps is not None:
         # Trunk BN eps saved by train_one_gen --trunk_bn_eps (gammas already
         # rescaled in the checkpoint); round-trips through config_dict().
-        for m in model.blocks.modules():
+        tfb = getattr(model, "trunk_final_bn", None)  # fixscaleonenorm's one BN
+        for m in list(model.blocks.modules()) + ([tfb] if tfb is not None else []):
             if isinstance(m, torch.nn.BatchNorm2d):
                 m.eps = float(trunk_bn_eps)
         model._config["trunk_bn_eps"] = float(trunk_bn_eps)
