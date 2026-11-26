@@ -949,7 +949,8 @@ void ServiceImpl::EnsurePondering() {
   // return immediately anyway; this just avoids spawning a thread per command.
   if (game_->IsGameOver()) return;
   // Do not ponder between games (after startup, clear_board, or our resign).
-  // GTP has no game-over signal, so an opponent resignation is not seen here;
+  // Plain GTP has no game-over signal; CGOS sends cgos-gameover (see
+  // GtpCgosGameover). Without it an opponent resignation is not seen here, and
   // that ponder stays bounded by the tree-size limit.
   if (!game_in_progress_) return;
   StartPondering();
